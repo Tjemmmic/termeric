@@ -144,7 +144,6 @@ fn delayed_notification_effects_follow_only_the_same_surviving_owner() {
     }
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn notification_show_close_and_alive_commands_capture_stable_owner_keys() {
     let (mut app, directory, entry, _) = harvest_rerun_capture_fixture_in(false);

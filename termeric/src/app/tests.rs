@@ -20,7 +20,6 @@ fn stale_hyperlink_activation_is_rejected_before_opener_validation() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn hyperlink_owner_gate_rejects_closed_routes_but_allows_live_inactive_read_only_owners() {
     for split in [false, true] {
@@ -100,7 +99,6 @@ fn hyperlink_owner_gate_rejects_closed_routes_but_allows_live_inactive_read_only
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn hyperlink_owner_gate_rejects_closed_panes_and_obsolete_collapse_routes() {
     let mut app = divider_owner_fixture();
@@ -144,7 +142,6 @@ fn hyperlink_owner_gate_rejects_closed_panes_and_obsolete_collapse_routes() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn hyperlink_open_context_uses_presented_local_directory_without_hidden_fallback() {
     use termeric_core::Point;
@@ -185,7 +182,6 @@ fn hyperlink_open_context_uses_presented_local_directory_without_hidden_fallback
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn routed_hyperlink_directory_does_not_follow_focus_to_another_pane() {
     use termeric_core::Point;
@@ -229,7 +225,6 @@ fn routed_hyperlink_directory_does_not_follow_focus_to_another_pane() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn relative_hyperlink_without_trusted_directory_is_refused_before_launch() {
     let mut app = scrollbar_owner_fixture();
@@ -242,7 +237,6 @@ fn relative_hyperlink_without_trusted_directory_is_refused_before_launch() {
     assert!(toast.message.contains("trusted local terminal directory"));
 }
 
-#[cfg(unix)]
 #[test]
 fn quick_select_reconciles_live_targets_and_viewport_before_render_or_activation() {
     let patterns = vec![("path".into(), regex::Regex::new(r"/\w+").unwrap())];
@@ -281,7 +275,6 @@ fn quick_select_reconciles_live_targets_and_viewport_before_render_or_activation
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn copy_mode_follows_live_output_before_navigation_with_or_without_selection() {
     use crate::terminal::copy_mode::CopyMotion;
@@ -310,7 +303,6 @@ fn copy_mode_follows_live_output_before_navigation_with_or_without_selection() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn copy_mode_output_damage_cannot_resurrect_ranges_and_preserves_intact_cursor() {
     use crate::terminal::copy_mode::CopyMotion;
@@ -349,7 +341,6 @@ fn copy_mode_output_damage_cannot_resurrect_ranges_and_preserves_intact_cursor()
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn copy_mode_anchor_cleanup_targets_original_pane_and_screen_changes_reset_mode() {
     use crate::terminal::copy_mode::CopyMotion;
@@ -416,7 +407,6 @@ fn copy_mode_anchor_cleanup_targets_original_pane_and_screen_changes_reset_mode(
     assert!(app.active_terminal().unwrap().selection().is_some());
 }
 
-#[cfg(unix)]
 #[test]
 fn copy_mode_resize_does_not_restore_evicted_ranges_over_canonical_selection() {
     use crate::terminal::copy_mode::CopyMotion;
@@ -472,7 +462,6 @@ fn copy_mode_resize_does_not_restore_evicted_ranges_over_canonical_selection() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn native_width_resize_retains_reflowed_text_without_restoring_old_drag_geometry() {
     use termeric_core::Point;
@@ -502,7 +491,6 @@ fn native_width_resize_retains_reflowed_text_without_restoring_old_drag_geometry
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn native_height_resize_keeps_canonical_text_but_cancels_old_drag_coordinates() {
     use termeric_core::Point;
@@ -540,7 +528,6 @@ fn native_height_resize_keeps_canonical_text_but_cancels_old_drag_coordinates() 
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn native_selection_follows_grapheme_growth_collision_and_skip_policy() {
     use termeric_core::Point;
@@ -572,7 +559,6 @@ fn native_selection_follows_grapheme_growth_collision_and_skip_policy() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn native_selection_tracks_horizontal_motion_and_cannot_restore_deleted_cells() {
     use termeric_core::Point;
@@ -613,7 +599,6 @@ fn native_selection_tracks_horizontal_motion_and_cannot_restore_deleted_cells() 
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn native_selection_cannot_return_after_printed_output_replaces_selected_cells() {
     use termeric_core::Point;
@@ -643,7 +628,6 @@ fn native_selection_cannot_return_after_printed_output_replaces_selected_cells()
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn native_selection_follows_partial_scroll_and_cannot_revive_a_split_range() {
     use termeric_core::Point;
@@ -683,7 +667,6 @@ fn native_selection_follows_partial_scroll_and_cannot_revive_a_split_range() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn native_drag_keeps_the_terminal_shifted_anchor_after_output_scrolls() {
     use termeric_core::Point;
@@ -709,7 +692,6 @@ fn native_drag_keeps_the_terminal_shifted_anchor_after_output_scrolls() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn native_release_keeps_scrolled_forward_reverse_block_word_and_line_selections() {
     use termeric_core::{Point, SelectionType};
@@ -778,7 +760,6 @@ fn native_release_keeps_scrolled_forward_reverse_block_word_and_line_selections(
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn native_drag_cannot_resurrect_evicted_cleared_or_reset_selection() {
     use termeric_core::Point;
@@ -819,7 +800,6 @@ fn native_drag_cannot_resurrect_evicted_cleared_or_reset_selection() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn native_drag_tracks_archived_viewport_and_user_scrollback_without_reanchoring() {
     use termeric_core::Point;
@@ -845,7 +825,6 @@ fn native_drag_tracks_archived_viewport_and_user_scrollback_without_reanchoring(
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn native_completed_selection_cache_tracks_scroll_and_eviction_without_breaking_double_click() {
     use termeric_core::{Point, SelectionType};
@@ -878,7 +857,6 @@ fn native_completed_selection_cache_tracks_scroll_and_eviction_without_breaking_
     assert!(app.native_selection_text().is_none());
 }
 
-#[cfg(unix)]
 #[test]
 fn live_search_discards_completed_results_after_same_shape_text_changes() {
     let mut app = scrollbar_owner_fixture();
@@ -901,7 +879,6 @@ fn live_search_discards_completed_results_after_same_shape_text_changes() {
     assert_eq!(app.search.match_count(), 0);
 }
 
-#[cfg(unix)]
 #[test]
 fn live_search_refresh_preserves_controls_confirmation_and_frozen_results() {
     for split in [false, true] {
@@ -955,7 +932,6 @@ fn live_search_refresh_preserves_controls_confirmation_and_frozen_results() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn live_command_search_rescans_in_place_but_rejects_moved_scope_rows() {
     let mut app = scrollbar_owner_fixture();
@@ -981,7 +957,6 @@ fn live_command_search_rescans_in_place_but_rejects_moved_scope_rows() {
     assert!(!app.search.is_active());
 }
 
-#[cfg(unix)]
 #[test]
 fn live_search_ignores_inactive_output_and_viewport_navigation() {
     let mut app = scrollbar_owner_fixture();
@@ -1008,7 +983,6 @@ fn live_search_ignores_inactive_output_and_viewport_navigation() {
     assert!(!app.search.is_searching());
 }
 
-#[cfg(unix)]
 #[test]
 fn live_search_invalidates_filtered_copy_before_the_next_render() {
     use termeric_core::Point;
@@ -1037,7 +1011,6 @@ fn live_search_invalidates_filtered_copy_before_the_next_render() {
     assert!(app.search.is_searching());
 }
 
-#[cfg(unix)]
 #[test]
 fn filtered_links_resolve_the_displayed_semantic_target_not_an_intervening_row() {
     let mut app = scrollbar_owner_fixture();
@@ -1075,7 +1048,6 @@ fn filtered_links_resolve_the_displayed_semantic_target_not_an_intervening_row()
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn mixed_case_unicode_detected_targets_use_filtered_and_frozen_display_cells() {
     use termeric_core::Point;
@@ -1124,7 +1096,6 @@ fn mixed_case_unicode_detected_targets_use_filtered_and_frozen_display_cells() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn filtered_detected_links_refresh_at_activation_after_scrolling_or_query_change() {
     use termeric_core::Point;
@@ -1177,7 +1148,6 @@ fn filtered_detected_links_refresh_at_activation_after_scrolling_or_query_change
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn filtered_links_use_frozen_rows_despite_hidden_replacements_and_live_scroll() {
     use termeric_core::Point;
@@ -1213,7 +1183,6 @@ fn filtered_links_use_frozen_rows_despite_hidden_replacements_and_live_scroll() 
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn filtered_selection_points_follow_noncontiguous_displayed_rows() {
     use termeric_core::Point;
@@ -1266,7 +1235,6 @@ fn filtered_selection_points_follow_noncontiguous_displayed_rows() {
     assert_eq!(app.copy_mode_selection_text().as_deref(), Some("match one"));
 }
 
-#[cfg(unix)]
 #[test]
 fn filtered_selection_scrolls_across_result_pages_without_copying_hidden_rows() {
     use termeric_core::Point;
@@ -1310,7 +1278,6 @@ fn filtered_selection_scrolls_across_result_pages_without_copying_hidden_rows() 
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn filtered_selection_invalidates_on_query_restart_toggle_or_focus_change() {
     use termeric_core::Point;
@@ -1373,7 +1340,6 @@ fn filtered_selection_invalidates_on_query_restart_toggle_or_focus_change() {
         );
     }
 }
-#[cfg(unix)]
 #[test]
 fn native_selection_release_clears_plain_clicks_but_keeps_one_cell_explicit_selections() {
     use termeric_core::Point;
@@ -1402,7 +1368,6 @@ fn native_selection_release_clears_plain_clicks_but_keeps_one_cell_explicit_sele
         );
     }
 }
-#[cfg(unix)]
 #[test]
 fn native_selection_uses_scrolled_frozen_text_for_drag_word_line_and_block() {
     use termeric_core::Point;
@@ -1466,7 +1431,6 @@ fn native_selection_uses_scrolled_frozen_text_for_drag_word_line_and_block() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn native_selection_drag_rejects_snapshot_resize_and_owner_replacement() {
     use termeric_core::Point;
@@ -1532,7 +1496,6 @@ fn native_selection_drag_rejects_snapshot_resize_and_owner_replacement() {
         }
     }
 }
-#[cfg(unix)]
 #[test]
 fn standalone_search_does_not_find_hidden_synchronized_output() {
     let mut app = scrollbar_owner_fixture();
@@ -1547,7 +1510,6 @@ fn standalone_search_does_not_find_hidden_synchronized_output() {
     assert_eq!(app.search.match_count(), 0);
 }
 
-#[cfg(unix)]
 #[test]
 fn standalone_search_restarts_partial_and_confirmed_results_at_snapshot_boundaries() {
     for split in [false, true] {
@@ -1595,7 +1557,6 @@ fn standalone_search_restarts_partial_and_confirmed_results_at_snapshot_boundari
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn standalone_search_navigation_preserves_hidden_live_scroll_and_reflows_results() {
     let mut app = scrollbar_owner_fixture();
@@ -1626,7 +1587,6 @@ fn standalone_search_navigation_preserves_hidden_live_scroll_and_reflows_results
     assert_eq!((found.row, found.start_col), (1, 0));
 }
 
-#[cfg(unix)]
 #[test]
 fn command_output_search_never_rebinds_a_live_row_scope_to_a_frozen_viewport() {
     let mut app = scrollbar_owner_fixture();
@@ -1663,7 +1623,6 @@ fn command_output_search_never_rebinds_a_live_row_scope_to_a_frozen_viewport() {
     assert!(!app.search.is_scoped());
 }
 
-#[cfg(unix)]
 #[test]
 fn standalone_search_drops_completed_results_when_the_displayed_screen_switches() {
     let mut app = scrollbar_owner_fixture();
@@ -1691,7 +1650,6 @@ fn standalone_search_drops_completed_results_when_the_displayed_screen_switches(
     assert_eq!(app.search.match_count(), 0);
 }
 
-#[cfg(unix)]
 #[test]
 fn copy_mode_enters_at_the_presented_cursor_during_synchronized_output() {
     let mut app = scrollbar_owner_fixture();
@@ -1702,7 +1660,6 @@ fn copy_mode_enters_at_the_presented_cursor_during_synchronized_output() {
     assert_eq!(app.copy_mode.cursor(), termeric_core::Point::new(0, 0));
 }
 
-#[cfg(unix)]
 #[test]
 fn copy_mode_keeps_live_selection_scroll_tracking_outside_synchronized_output() {
     use crate::terminal::copy_mode::CopyMotion;
@@ -1729,7 +1686,6 @@ fn copy_mode_keeps_live_selection_scroll_tracking_outside_synchronized_output() 
     assert_eq!(app.copy_mode_selection_text().as_deref(), Some("visible"));
 }
 
-#[cfg(unix)]
 #[test]
 fn copy_mode_selection_search_and_reflow_use_the_frozen_view_in_each_pane_layout() {
     use crate::terminal::copy_mode::CopyMotion;
@@ -1775,7 +1731,6 @@ fn copy_mode_selection_search_and_reflow_use_the_frozen_view_in_each_pane_layout
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn copy_mode_snapshot_boundaries_reset_selection() {
     use crate::terminal::copy_mode::CopyMotion;
@@ -1813,7 +1768,6 @@ fn copy_mode_snapshot_boundaries_reset_selection() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn quick_select_pins_presented_targets_and_cwd_and_expires_without_activation() {
     let patterns = vec![("path".into(), regex::Regex::new(r"\./[^ ]+").unwrap())];
@@ -1860,7 +1814,6 @@ fn quick_select_pins_presented_targets_and_cwd_and_expires_without_activation() 
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn focused_url_refresh_uses_the_synchronized_presentation() {
     for split in [false, true] {
@@ -1918,7 +1871,6 @@ fn focused_url_refresh_uses_the_synchronized_presentation() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn option_shaped_hyperlink_activation_is_refused_with_visible_feedback() {
     let mut app = scrollbar_owner_fixture();
@@ -1934,7 +1886,6 @@ fn option_shaped_hyperlink_activation_is_refused_with_visible_feedback() {
     assert!(toast.message.contains("./-name"));
 }
 
-#[cfg(unix)]
 fn overflow_drag_fixture() -> App {
     let mut app = scrollbar_owner_fixture();
     let tabs = app.tabs.as_mut().unwrap();
@@ -1948,7 +1899,6 @@ fn overflow_drag_fixture() -> App {
     app
 }
 
-#[cfg(unix)]
 fn live_tab_drag_fixture() -> App {
     let mut app = overflow_drag_fixture();
     for (index, tab) in app
@@ -1973,7 +1923,6 @@ fn live_tab_drag_fixture() -> App {
     app
 }
 
-#[cfg(unix)]
 #[test]
 fn direct_tab_drag_stops_when_domain_control_becomes_pending() {
     let mut app = live_tab_drag_fixture();
@@ -2008,7 +1957,6 @@ fn direct_tab_drag_stops_when_domain_control_becomes_pending() {
     assert!(app.pending_live_domain_controls.contains(&pending));
 }
 
-#[cfg(unix)]
 #[test]
 fn direct_tab_drag_refuses_closed_or_closing_targets() {
     for closing in [false, true] {
@@ -2025,7 +1973,6 @@ fn direct_tab_drag_refuses_closed_or_closing_targets() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn direct_tab_drag_accepts_pointer_only_input_but_repeat_requires_keyboard_focus() {
     use crate::renderer::TabBarClick::NextTab;
@@ -2048,7 +1995,6 @@ fn direct_tab_drag_accepts_pointer_only_input_but_repeat_requires_keyboard_focus
     assert!(app.tab_dragging.is_none());
 }
 
-#[cfg(unix)]
 #[test]
 fn tab_drag_revalidates_captured_domain_route_for_motion_dwell_and_finalization() {
     use crate::renderer::TabBarClick::NextTab;
@@ -2093,7 +2039,6 @@ fn tab_drag_revalidates_captured_domain_route_for_motion_dwell_and_finalization(
     assert!(app.tab_drag_scroll.is_none());
 }
 
-#[cfg(unix)]
 #[test]
 fn direct_tab_drag_preserves_pinned_groups_and_ignores_unrelated_domain_requests() {
     let mut app = live_tab_drag_fixture();
@@ -2116,7 +2061,6 @@ fn direct_tab_drag_preserves_pinned_groups_and_ignores_unrelated_domain_requests
     assert_eq!(app.pending_live_domain_controls.len(), 1);
 }
 
-#[cfg(unix)]
 #[test]
 fn occlusion_ends_native_and_application_gestures_without_focus_loss() {
     use crate::renderer::TabBarClick::NextTab;
@@ -2170,7 +2114,6 @@ fn occlusion_ends_native_and_application_gestures_without_focus_loss() {
     assert!(app.take_native_drag_controls().is_empty());
 }
 
-#[cfg(unix)]
 #[test]
 fn overflow_drag_dwell_repeats_without_motion_or_catchup_and_keeps_owner() {
     use crate::renderer::TabBarClick::NextTab;
@@ -2202,7 +2145,6 @@ fn overflow_drag_dwell_repeats_without_motion_or_catchup_and_keeps_owner() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn overflow_drag_leaving_or_reversing_controls_starts_a_fresh_dwell() {
     use crate::renderer::TabBarClick::{NextTab, PreviousTab};
@@ -2227,7 +2169,6 @@ fn overflow_drag_leaving_or_reversing_controls_starts_a_fresh_dwell() {
     assert!(app.tab_drag_scroll.is_none());
 }
 
-#[cfg(unix)]
 #[test]
 fn overflow_drag_revalidates_ownership_visibility_and_boundaries_before_each_step() {
     use crate::renderer::TabBarClick::NextTab;
@@ -2297,7 +2238,6 @@ fn overflow_drag_revalidates_ownership_visibility_and_boundaries_before_each_ste
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn overflow_drag_live_preview_finalizes_once_and_respects_pending_control() {
     use crate::renderer::TabBarClick::NextTab;
@@ -2341,7 +2281,6 @@ fn overflow_drag_live_preview_finalizes_once_and_respects_pending_control() {
     assert!(app.take_native_drag_controls().is_empty());
 }
 
-#[cfg(unix)]
 fn scrollbar_owner_fixture() -> App {
     let mut app = App::new_headless(Config::default()).unwrap();
     let shell = ShellConfig {
@@ -2363,7 +2302,6 @@ fn scrollbar_owner_fixture() -> App {
     app
 }
 
-#[cfg(unix)]
 #[test]
 fn scrollbar_drag_is_canceled_when_keyboard_changes_tabs() {
     let mut app = scrollbar_owner_fixture();
@@ -2372,7 +2310,6 @@ fn scrollbar_drag_is_canceled_when_keyboard_changes_tabs() {
     assert!(app.scrollbar_dragging.is_none());
 }
 
-#[cfg(unix)]
 fn divider_owner_fixture() -> App {
     let mut app = scrollbar_owner_fixture();
     let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
@@ -2396,7 +2333,6 @@ fn divider_owner_fixture() -> App {
     app
 }
 
-#[cfg(unix)]
 fn domain_divider_pending_fixture() -> App {
     use crate::domain::model::{DomainSnapshot, LivePaneLayout, LiveTab};
     let mut tab = LiveTab::fixture(
@@ -2434,7 +2370,6 @@ fn domain_divider_pending_fixture() -> App {
     app
 }
 
-#[cfg(unix)]
 #[test]
 fn divider_drag_pending_request_interrupts_preview_and_preserves_earlier_authority() {
     for refresh in [false, true] {
@@ -2495,7 +2430,6 @@ fn divider_drag_pending_request_interrupts_preview_and_preserves_earlier_authori
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn divider_drag_unrelated_domain_requests_do_not_block_preview() {
     for mut app in [domain_divider_pending_fixture(), divider_owner_fixture()] {
@@ -2511,7 +2445,6 @@ fn divider_drag_unrelated_domain_requests_do_not_block_preview() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn occlusion_finalizes_divider_previews_and_preserves_pending_domain_authority() {
     for remote in [false, true] {
@@ -2577,7 +2510,6 @@ fn occlusion_finalizes_divider_previews_and_preserves_pending_domain_authority()
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn divider_drag_cannot_follow_a_rebound_remote_owner() {
     for change in ["domain", "remote-tab", "detached"] {
@@ -2619,7 +2551,6 @@ fn divider_drag_cannot_follow_a_rebound_remote_owner() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn divider_drag_finalization_refuses_closed_remote_sources() {
     for closing in [false, true] {
@@ -2635,7 +2566,6 @@ fn divider_drag_finalization_refuses_closed_remote_sources() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn local_divider_drag_cannot_acquire_a_remote_owner() {
     let mut app = divider_owner_fixture();
@@ -2670,7 +2600,6 @@ fn local_divider_drag_cannot_acquire_a_remote_owner() {
     assert!(app.pending_live_domain_controls.is_empty());
 }
 
-#[cfg(unix)]
 #[test]
 fn divider_drag_finishes_when_keyboard_changes_tabs() {
     let mut app = divider_owner_fixture();
@@ -2678,7 +2607,6 @@ fn divider_drag_finishes_when_keyboard_changes_tabs() {
     assert!(app.divider_dragging.is_none());
 }
 
-#[cfg(unix)]
 #[test]
 fn divider_drag_mutation_revalidates_owner_and_cannot_resume() {
     for transition in [
@@ -2752,7 +2680,6 @@ fn divider_drag_mutation_revalidates_owner_and_cannot_resume() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn divider_drag_survives_pane_focus_within_its_selected_tab() {
     let mut app = divider_owner_fixture();
@@ -2793,7 +2720,6 @@ fn divider_drag_survives_pane_focus_within_its_selected_tab() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn scrollbar_drag_updates_only_its_live_selected_owner() {
     for transition in ["tab", "closed", "closing", "missing", "wrong-pane"] {
@@ -2837,7 +2763,6 @@ fn scrollbar_drag_updates_only_its_live_selected_owner() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn scrollbar_drag_cannot_migrate_between_panes_in_the_same_tab() {
     let mut app = scrollbar_owner_fixture();
@@ -3134,7 +3059,6 @@ fn losing_window_focus_finishes_native_pointer_gestures_without_a_release_event(
     assert!(app.tab_dragging.is_none());
 }
 
-#[cfg(unix)]
 #[test]
 fn finishing_native_drags_extracts_exact_live_domain_controls_once() {
     let mut app = App::new_headless(Config::default()).unwrap();
@@ -3280,12 +3204,8 @@ fn third_party_command_suffixes_do_not_invoke_builtin_ai_actions() {
     assert!(!app.diff_review.is_active());
 }
 
-#[cfg(unix)]
 #[test]
 fn local_file_drop_is_quoted_and_refuses_unsafe_terminal_routes() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let config = Config {
         shell: crate::test_support::sleeping_shell(),
         ..Config::default()
@@ -3341,12 +3261,8 @@ fn local_file_drop_is_quoted_and_refuses_unsafe_terminal_routes() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn local_file_drop_writes_one_bracketed_payload_without_enter() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("project file's.txt");
     std::fs::write(&path, b"contents-must-not-be-read").unwrap();
@@ -3416,12 +3332,8 @@ fn local_file_drop_writes_one_bracketed_payload_without_enter() {
     panic!("exact drop payload did not arrive without Enter: {output:?}");
 }
 
-#[cfg(unix)]
 #[test]
 fn live_domain_drop_requires_request_scoped_confirmation_without_reading_contents() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("upload λ.bin");
     std::fs::write(&source, b"never sent by this headless test").unwrap();
@@ -3498,12 +3410,8 @@ fn live_domain_drop_requires_request_scoped_confirmation_without_reading_content
     assert!(app.pending_file_upload().is_none());
 }
 
-#[cfg(unix)]
 #[test]
 fn kitty_download_consent_is_request_scoped_and_terminal_type_gated() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let config = Config {
         shell: crate::test_support::sleeping_shell(),
         ..Config::default()
@@ -3602,12 +3510,8 @@ fn kitty_download_consent_is_request_scoped_and_terminal_type_gated() {
     assert!(app.kitty_file_transfers.active.is_empty());
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn kitty_upload_collects_exact_paths_before_request_scoped_consent() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let config = Config {
         shell: crate::test_support::sleeping_shell(),
         ..Config::default()
@@ -3684,7 +3588,6 @@ fn kitty_upload_collects_exact_paths_before_request_scoped_consent() {
     assert!(app.kitty_file_transfers.active_uploads.is_empty());
 }
 
-#[cfg(unix)]
 #[test]
 fn kitty_transfer_confirmation_never_replies_to_a_replacement_owner() {
     let (mut app, directory, entry, _) = harvest_rerun_capture_fixture_in(false);
@@ -3711,7 +3614,6 @@ fn kitty_transfer_confirmation_never_replies_to_a_replacement_owner() {
     );
 }
 
-#[cfg(unix)]
 pub(super) fn kitty_capture_command(
     action: termeric_core::KittyFileTransferAction,
 ) -> termeric_core::KittyFileTransferCommand {
@@ -3934,12 +3836,8 @@ fn desktop_delivery_failures_become_deduplicated_visible_toasts() {
     assert_eq!(app.toasts.iter().count(), 2);
 }
 
-#[cfg(unix)]
 #[test]
 fn notification_occasions_use_exact_tab_pane_zoom_focus_and_visibility_state() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     use termeric_core::NotificationOccasion::{Always, Invisible, Unfocused};
 
     let shell = crate::test_support::sleeping_shell();
@@ -4010,12 +3908,8 @@ fn notification_occasions_use_exact_tab_pane_zoom_focus_and_visibility_state() {
     assert!(app.should_present_terminal_notification(split_focused, Invisible));
 }
 
-#[cfg(all(unix, target_os = "linux"))]
 #[test]
 fn suppressed_notification_has_no_delivery_or_tracked_worker_side_effects() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let config = Config {
         shell: crate::test_support::sleeping_shell(),
         ..Config::default()
@@ -4045,7 +3939,6 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use termeric_core::event::ClipboardRequest;
 
-#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
 /// The `action-result` a plugin receives for one action targeting `app`, its
@@ -4463,12 +4356,8 @@ fn control_pane_and_tab_closure_leave_the_survivor_addressable_and_reject_repeat
     assert!(app.close_tab_for(Requester::Control, first as u64).is_err());
 }
 
-#[cfg(unix)]
 #[test]
 fn plugin_pane_creation_is_exact_correlated_and_rejects_unsupported_tabs() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let shell = crate::test_support::sleeping_shell();
     let mut tabs = TabManager::for_test(shell.clone());
     let tab_id = tabs.new_tab().unwrap();
@@ -4609,12 +4498,8 @@ fn plugin_pane_creation_is_exact_correlated_and_rejects_unsupported_tabs() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn plugin_pane_movement_preserves_pty_and_returns_exact_destination_state() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let shell = crate::test_support::sleeping_shell();
     let mut tabs = TabManager::for_test(shell.clone());
     let source_tab_id = tabs.new_tab().unwrap();
@@ -4691,12 +4576,8 @@ fn plugin_pane_movement_preserves_pty_and_returns_exact_destination_state() {
     assert_eq!(observed.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
-#[cfg(unix)]
 #[test]
 fn plugin_pane_layout_controls_background_tab_without_changing_terminal_owners() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let shell = crate::test_support::sleeping_shell();
     let mut tabs = TabManager::for_test(shell.clone());
     let target_tab_id = tabs.new_tab().unwrap();
@@ -4831,12 +4712,8 @@ fn plugin_pane_layout_controls_background_tab_without_changing_terminal_owners()
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn plugin_pane_layout_refuses_unsupported_or_incomplete_tabs_atomically() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let shell = crate::test_support::sleeping_shell();
     let mut tabs = TabManager::for_test(shell.clone());
     let tab_id = tabs.new_tab().unwrap();
@@ -4943,13 +4820,8 @@ fn plugin_pane_layout_refuses_unsupported_or_incomplete_tabs_atomically() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn plugin_pane_movement_refuses_unsupported_targets_before_detaching() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
-
     fn fixture() -> (App, usize, usize, PaneId) {
         let shell = crate::test_support::sleeping_shell();
         let mut tabs = TabManager::for_test(shell.clone());
@@ -5179,12 +5051,8 @@ fn plugin_pane_movement_refuses_unsupported_targets_before_detaching() {
     assert_source_intact(&last, source);
 }
 
-#[cfg(unix)]
 #[test]
 fn plugin_pane_closure_is_exact_correlated_and_preserves_last_pane() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let shell = crate::test_support::sleeping_shell();
     let mut tabs = TabManager::for_test(shell.clone());
     let target_tab_id = tabs.new_tab().unwrap();
@@ -5418,12 +5286,8 @@ fn plugin_pane_closure_is_exact_correlated_and_preserves_last_pane() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn plugin_tab_closure_is_scheduled_exact_bounded_and_hook_suppressed() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let shell = crate::test_support::sleeping_shell();
     let mut tabs = TabManager::for_test(shell);
     let survivor = tabs.new_tab().unwrap();
@@ -5657,12 +5521,8 @@ fn plugin_tab_closure_is_scheduled_exact_bounded_and_hook_suppressed() {
     assert_eq!(observed.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
-#[cfg(unix)]
 #[test]
 fn control_tab_closure_retains_final_tab_authority() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let shell = crate::test_support::sleeping_shell();
     let mut tabs = TabManager::for_test(shell);
     let tab_id = tabs.new_tab().unwrap();
@@ -5691,13 +5551,8 @@ fn control_tab_closure_retains_final_tab_authority() {
     assert_eq!(observed.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
-#[cfg(unix)]
 #[test]
 fn plugin_tab_creation_returns_stable_identity_without_lifecycle_redispatch() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
-
     let shell = crate::test_support::sleeping_shell();
     let mut tabs = TabManager::for_test(shell);
     let initial_tab_id = tabs.new_tab().unwrap();
@@ -5813,12 +5668,8 @@ fn plugin_tab_creation_returns_stable_identity_without_lifecycle_redispatch() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn control_input_is_opt_in_exact_paste_aware_and_guarded_without_provider_execution() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let script = concat!(
         "stty raw -echo; ",
         "printf '\rREADY\r\n'; ",
@@ -5941,12 +5792,8 @@ fn control_input_is_opt_in_exact_paste_aware_and_guarded_without_provider_execut
     assert!(!app.guardrail.is_awaiting(confirmation_id));
 }
 
-#[cfg(unix)]
 #[test]
 fn diff_review_done_marks_only_its_original_tab_and_exact_diff() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let mut tabs = TabManager::for_test(ShellConfig::default());
     for title in ["first-diff-tab", "active-other-tab"] {
         tabs.new_tab_with_command(
@@ -6000,12 +5847,8 @@ fn diff_review_done_marks_only_its_original_tab_and_exact_diff() {
     assert_eq!(tabs.next().unwrap().1.unreviewed_diff_count(), 1);
 }
 
-#[cfg(unix)]
 #[test]
 fn harvest_search_switches_to_the_exact_producing_terminal() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let mut tabs = TabManager::for_test(ShellConfig::default());
     let source_tab = tabs
         .new_tab_with_command(
@@ -6127,7 +5970,6 @@ fn harvest_search_switches_to_the_exact_producing_terminal() {
     assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(source_tab));
 }
 
-#[cfg(unix)]
 fn harvest_rerun_capture_fixture() -> (
     App,
     tempfile::TempDir,
@@ -6137,7 +5979,6 @@ fn harvest_rerun_capture_fixture() -> (
     harvest_rerun_capture_fixture_in(true)
 }
 
-#[cfg(unix)]
 pub(super) fn harvest_rerun_capture_fixture_in(
     split: bool,
 ) -> (
@@ -6240,7 +6081,6 @@ pub(super) fn harvest_rerun_capture_fixture_in(
     (app, directory, entry, captures)
 }
 
-#[cfg(unix)]
 pub(super) fn fenced_harvest_capture(
     app: &mut App,
     captures: &[(crate::tabs::TerminalEventOrigin, std::path::PathBuf)],
@@ -6281,7 +6121,6 @@ pub(super) fn fenced_harvest_capture(
     }
 }
 
-#[cfg(unix)]
 pub(super) fn split_harvest_capture_owner(app: &mut App, directory: &std::path::Path) -> PaneId {
     let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
     let shell = ShellConfig {
@@ -6310,7 +6149,6 @@ pub(super) fn split_harvest_capture_owner(app: &mut App, directory: &std::path::
     sibling
 }
 
-#[cfg(unix)]
 pub(super) fn current_harvest_capture_routes(
     app: &mut App,
     directory: &std::path::Path,
@@ -6352,7 +6190,6 @@ pub(super) fn current_harvest_capture_routes(
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn harvest_source_survives_single_split_and_collapse() {
     use crate::harvest::sprouts::SproutAction;
@@ -6432,7 +6269,6 @@ fn harvest_source_survives_single_split_and_collapse() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn harvest_nonzero_survivor_keeps_live_regions_and_rerun_after_collapse() {
     use crate::harvest::sprouts::SproutAction;
@@ -6477,7 +6313,6 @@ fn harvest_nonzero_survivor_keeps_live_regions_and_rerun_after_collapse() {
     assert_eq!(app.harvest.as_ref().unwrap().cellar.len(), 1);
 }
 
-#[cfg(unix)]
 #[test]
 fn harvest_rerun_never_broadcasts_the_source_command() {
     for excluded in [false, true] {
@@ -6500,7 +6335,6 @@ fn harvest_rerun_never_broadcasts_the_source_command() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn harvest_rerun_is_literal_and_reports_only_successful_delivery() {
     let (mut app, _directory, entry, captures) = harvest_rerun_capture_fixture();
@@ -6526,7 +6360,6 @@ fn harvest_rerun_is_literal_and_reports_only_successful_delivery() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn harvest_retained_rerun_never_uses_the_normalized_or_shortened_caption() {
     for command in [
@@ -6547,7 +6380,6 @@ fn harvest_retained_rerun_never_uses_the_normalized_or_shortened_caption() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn harvest_locally_truncated_snapshot_cannot_be_rerun_or_change_focus() {
     let (mut app, _directory, mut entry, captures) = harvest_rerun_capture_fixture();
@@ -6570,7 +6402,6 @@ fn harvest_locally_truncated_snapshot_cannot_be_rerun_or_change_focus() {
     assert_eq!(app.active_harvest_source(), before);
 }
 
-#[cfg(unix)]
 #[test]
 fn harvest_incomplete_command_refuses_live_retained_and_stale_menu_reruns() {
     for split in [false, true] {
@@ -6662,7 +6493,6 @@ fn harvest_incomplete_command_refuses_live_retained_and_stale_menu_reruns() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn harvest_rerun_refuses_armed_read_only_stale_and_closing_sources_without_writes() {
     for refusal in [
@@ -6729,7 +6559,6 @@ fn harvest_rerun_refuses_armed_read_only_stale_and_closing_sources_without_write
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn harvest_rerun_single_tab_origin_uses_the_same_exact_user_write_policy() {
     let (mut app, _directory, entry, captures) = harvest_rerun_capture_fixture_in(false);
@@ -6758,7 +6587,6 @@ fn harvest_rerun_single_tab_origin_uses_the_same_exact_user_write_policy() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn harvest_rerun_records_exact_user_input_once_but_not_protocol_fences_or_refusals() {
     for split in [false, true] {
@@ -6818,7 +6646,6 @@ fn harvest_rerun_records_exact_user_input_once_but_not_protocol_fences_or_refusa
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn external_confirmation_never_targets_a_replacement_single_owner() {
     use crate::terminal::guardrails::GuardrailAction;
@@ -6848,7 +6675,6 @@ fn external_confirmation_never_targets_a_replacement_single_owner() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn guarded_input_producers_follow_only_the_original_owner_through_topology_changes() {
     use crate::terminal::guardrails::GuardrailAction;
@@ -6990,7 +6816,6 @@ fn guarded_input_producers_follow_only_the_original_owner_through_topology_chang
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn closed_guarded_destination_rejects_the_whole_batch_before_any_user_write() {
     let (mut app, _directory, entry, captures) = harvest_rerun_capture_fixture();
@@ -7030,12 +6855,8 @@ fn closed_guarded_destination_rejects_the_whole_batch_before_any_user_write() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn prompt_actions_walk_the_focused_terminals_scrollback_in_both_directions() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let mut tabs = TabManager::new(14, 4, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
     tabs.new_tab_with_command(
         "/bin/sh",
@@ -7083,12 +6904,8 @@ fn prompt_actions_walk_the_focused_terminals_scrollback_in_both_directions() {
     assert_eq!(app.active_terminal().unwrap().grid().scroll_offset(), 0);
 }
 
-#[cfg(unix)]
 #[test]
 fn semantic_command_completion_reaches_plugins_with_exact_bounded_source_text() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     #[derive(Debug)]
     struct CommandCapture {
         captured: std::sync::Arc<std::sync::Mutex<Option<crate::plugin::Hook>>>,
@@ -7164,12 +6981,8 @@ fn semantic_command_completion_reaches_plugins_with_exact_bounded_source_text() 
     ));
 }
 
-#[cfg(unix)]
 #[test]
 fn clear_scrollback_action_retires_shell_metadata_with_the_erased_history() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let mut tabs = TabManager::new(16, 4, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
     tabs.new_tab_with_command(
         "/bin/sh",
@@ -7207,7 +7020,6 @@ fn clear_scrollback_action_retires_shell_metadata_with_the_erased_history() {
     assert!(terminal.prompt_tracker().all_prompts().all(|row| row >= 0));
 }
 
-#[cfg(unix)]
 #[test]
 fn unicode_picker_never_inserts_into_a_replacement_single_owner() {
     let (mut app, directory, entry, _) = harvest_rerun_capture_fixture_in(false);
@@ -7230,7 +7042,6 @@ fn unicode_picker_never_inserts_into_a_replacement_single_owner() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn plugin_context_command_never_targets_a_focused_shell_sibling() {
     let (mut app, _directory, _, captures) = harvest_rerun_capture_fixture();
@@ -7262,26 +7073,18 @@ fn plugin_context_command_never_targets_a_focused_shell_sibling() {
     );
 }
 
-#[cfg(unix)]
 mod plugin_terminal_tests;
 
-#[cfg(unix)]
 mod plugin_restart_tests;
 
-#[cfg(unix)]
-#[cfg(unix)]
 mod terminal_session_tests;
 
-#[cfg(unix)]
 mod workspace_plugin_tests;
 
-#[cfg(unix)]
 mod plugin_pane_creation_tests;
 
-#[cfg(unix)]
 mod plugin_pane_transfer_tests;
 
-#[cfg(unix)]
 #[test]
 fn context_picker_targets_the_plugin_owner_not_its_focused_shell_sibling() {
     let (mut app, _directory, _, captures) = harvest_rerun_capture_fixture();
@@ -7352,7 +7155,6 @@ fn context_picker_targets_the_plugin_owner_not_its_focused_shell_sibling() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn unicode_picker_tracks_only_the_same_focused_owner_through_topology_changes() {
     for transition in [
@@ -7449,7 +7251,6 @@ fn unicode_picker_tracks_only_the_same_focused_owner_through_topology_changes() 
     }
 }
 
-#[cfg(unix)]
 /// A custom agent definition with `id`, for fixtures that mark raw local
 /// capture shells as agents.
 fn synthetic_agent(id: &str) -> crate::agents::AgentDefinition {
@@ -7464,7 +7265,6 @@ fn synthetic_agent(id: &str) -> crate::agents::AgentDefinition {
 
 /// Make `plugin_id` a configured agent, so that the check made before each
 /// write to an agent recognizes the terminal Termeric launched it in.
-#[cfg(unix)]
 fn register_capture_agent(app: &mut App, plugin_id: &str) {
     app.agents = crate::agents::AgentCatalog::from_config(&std::collections::BTreeMap::from([(
         plugin_id.to_string(),
@@ -7508,7 +7308,6 @@ fn mark_capture_plugin_owner(app: &mut App, pane_id: PaneId, plugin_id: &str) {
     });
 }
 
-#[cfg(unix)]
 #[test]
 fn context_picker_completion_preserves_plugin_owner_across_topology_changes() {
     use crate::ui::context_picker::{ContextPickerAction, ContextSourceId};
@@ -7638,12 +7437,8 @@ fn context_picker_completion_preserves_plugin_owner_across_topology_changes() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn completed_context_never_falls_back_to_a_replacement_plugin_tab() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let mut tabs = TabManager::for_test(ShellConfig::default());
     for title in ["original-context-target", "replacement-context-target"] {
         tabs.new_tab_with_command(
@@ -7693,7 +7488,6 @@ fn completed_context_never_falls_back_to_a_replacement_plugin_tab() {
     assert!(!app.context_picker.is_awaiting(request));
 }
 
-#[cfg(unix)]
 #[test]
 fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
     use std::io::Read;
@@ -7924,7 +7718,6 @@ fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
     assert_eq!(app.next_agent_submit_deadline(), None);
 }
 
-#[cfg(unix)]
 #[test]
 fn hook_reports_track_an_agent_started_from_a_shell_until_it_exits() {
     use crate::agents::{AgentActivity, AgentReport};
@@ -7949,7 +7742,6 @@ fn hook_reports_track_an_agent_started_from_a_shell_until_it_exits() {
         )
         .unwrap();
     let mut app = App::new_headless(Config::default()).unwrap();
-    #[cfg(target_os = "linux")]
     let shown = app.notifications.capture_tracked_commands_for_test();
     app.tabs = Some(tabs);
     let terminal_id = app
@@ -8052,7 +7844,6 @@ fn hook_reports_track_an_agent_started_from_a_shell_until_it_exits() {
     ));
     let status = session(&app).1.unwrap();
     assert!(status.needs_attention());
-    #[cfg(target_os = "linux")]
     {
         let identity = crate::tabs::TerminalIdentity {
             tab_id,
@@ -8102,7 +7893,6 @@ fn hook_reports_track_an_agent_started_from_a_shell_until_it_exits() {
     assert_eq!(session(&app).1, None);
 }
 
-#[cfg(unix)]
 #[test]
 fn agent_list_puts_waiting_agents_first_and_answers_come_from_reports_or_logs() {
     use crate::agents::{AgentReport, AgentStatus};
@@ -8220,7 +8010,6 @@ fn agent_list_puts_waiting_agents_first_and_answers_come_from_reports_or_logs() 
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn agent_changes_are_listed_reviewed_staged_and_reverted_for_their_terminal() {
     use crate::ui::command_palette::palette::PickKind;
@@ -8382,7 +8171,6 @@ fn agent_changes_are_listed_reviewed_staged_and_reverted_for_their_terminal() {
 
 /// Two agent tabs: Codex working in the first, Claude Code waiting in the
 /// second, which is left active.
-#[cfg(unix)]
 pub(super) fn two_agent_tabs() -> (App, usize, usize) {
     use crate::agents::{AgentReport, AgentStatus};
     use crate::control::protocol::AgentEventKind;
@@ -8433,7 +8221,6 @@ pub(super) fn two_agent_tabs() -> (App, usize, usize) {
     (app, ids[0], ids[1])
 }
 
-#[cfg(unix)]
 #[test]
 fn the_agents_panel_lists_agents_by_urgency_and_shows_the_chosen_one() {
     use crate::ui::agents_panel::{AgentRowState, AgentsControl};
@@ -8497,7 +8284,6 @@ fn the_agents_panel_lists_agents_by_urgency_and_shows_the_chosen_one() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn a_transcript_can_be_stopped_after_its_agent_exits() {
     let temp = tempfile::tempdir().unwrap();
@@ -8553,7 +8339,6 @@ fn a_transcript_can_be_stopped_after_its_agent_exits() {
     crate::session::set_test_sessions_base_dir(None);
 }
 
-#[cfg(unix)]
 #[test]
 fn a_read_only_agent_refuses_context_with_its_own_reason() {
     // `sleep` invoked as `codex`, so the terminal is recognized as Codex.
@@ -8629,12 +8414,8 @@ fn fullscreen_is_window_local_transient_state_for_shortcut_and_palette_routes() 
     assert!(!first.fullscreen_requested);
 }
 
-#[cfg(unix)]
 #[test]
 fn plugin_context_cwd_follows_the_focused_pane_and_single_terminal() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let temporary = tempfile::tempdir().unwrap();
     let left_cwd = temporary.path().join("left-context");
     let right_cwd = temporary.path().join("right-context");
@@ -8723,12 +8504,8 @@ fn plugin_context_cwd_follows_the_focused_pane_and_single_terminal() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn idle_deadline_releases_stalled_synchronized_output_and_requests_the_final_frame() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let mut app = App::new_headless(Config::default()).unwrap();
     let mut tabs = TabManager::for_test(ShellConfig::default());
     tabs.new_tab_with_command(
@@ -8902,7 +8679,6 @@ fn cursor_motion_snaps_when_focus_moves_to_another_pane_of_the_tab() {
     assert!(app.cursor_position_animation_active());
 }
 
-#[cfg(unix)]
 #[test]
 fn cursor_motion_scheduler_follows_presented_state_during_synchronized_output() {
     let mut app = scrollbar_owner_fixture();
@@ -9048,12 +8824,8 @@ fn broadcast_arming_expiry_is_an_exact_idle_deadline_and_requests_cleanup_frame(
     assert!(app.redraw_scheduler.has_pending());
 }
 
-#[cfg(unix)]
 #[test]
 fn kitty_animation_uses_its_exact_deadline_and_requests_one_frame() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let mut app = App::new_headless(Config::default()).unwrap();
     let mut tabs = TabManager::new(8, 4, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
     tabs.new_tab_with_command(
@@ -9092,12 +8864,8 @@ fn kitty_animation_uses_its_exact_deadline_and_requests_one_frame() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn synchronized_output_timeout_is_terminal_local_even_when_its_pane_is_unfocused() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let mut app = App::new_headless(Config::default()).unwrap();
     let shell = crate::test_support::sleeping_shell();
     let mut panes = PaneManager::new(
@@ -9162,12 +8930,8 @@ fn synchronized_output_timeout_is_terminal_local_even_when_its_pane_is_unfocused
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn keyboard_mode_snapshot_follows_the_focused_pane() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let mut app = App::new_headless(Config::default()).unwrap();
     let shell = crate::test_support::sleeping_shell();
     let mut panes = PaneManager::new(
@@ -9381,12 +9145,8 @@ fn keyboard_mode_snapshot_follows_the_focused_pane() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn copy_mode_is_owned_by_one_focused_pane_and_disappears_after_focus_changes() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let mut app = App::new_headless(Config::default()).unwrap();
     let shell = crate::test_support::sleeping_shell();
     let mut panes = PaneManager::new(
@@ -9450,12 +9210,8 @@ fn copy_mode_is_owned_by_one_focused_pane_and_disappears_after_focus_changes() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn mouse_focus_and_bracketed_paste_reach_the_focused_pane_in_order() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let script = concat!(
         "stty raw -echo; ",
         "printf '\rREADY\r\n'; ",
@@ -9607,12 +9363,8 @@ fn mouse_focus_and_bracketed_paste_reach_the_focused_pane_in_order() {
     );
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn split_adopts_one_owner_and_dissolve_preserves_output_without_orphans() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let mut tab = Tab::new_with_command(
         0,
         80,
@@ -9741,12 +9493,8 @@ fn split_adopts_one_owner_and_dissolve_preserves_output_without_orphans() {
     assert!(!std::path::Path::new(&format!("/proc/{original_pid}")).exists());
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn pane_identity_survives_collapse_and_the_next_split() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let shell = crate::test_support::sleeping_shell();
     let mut tab = Tab::new_with_command(
         0,
@@ -9803,7 +9551,6 @@ fn pane_identity_survives_collapse_and_the_next_split() {
     assert_eq!(panes.split(SplitDirection::Horizontal).unwrap(), PaneId(2));
 }
 
-#[cfg(unix)]
 #[test]
 fn collapsed_tab_rejects_retired_pane_and_divider_requests_after_resplit() {
     let (mut app, directory, mut entry, original_captures) = harvest_rerun_capture_fixture();
@@ -9976,7 +9723,6 @@ fn collapsed_tab_rejects_retired_pane_and_divider_requests_after_resplit() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn pane_allocation_history_survives_failed_split_and_exhaustion() {
     for (next_pane, next_divider, expected_error) in [
@@ -10057,12 +9803,8 @@ fn pane_allocation_history_survives_failed_split_and_exhaustion() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn pane_read_only_blocks_user_routes_but_not_protocol_replies_and_follows_ownership() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let shell = crate::test_support::sleeping_shell();
     let mut tab = Tab::new_with_command(
         0,
@@ -10114,12 +9856,8 @@ fn pane_read_only_blocks_user_routes_but_not_protocol_replies_and_follows_owners
     assert!(tab.write(b"").is_ok());
 }
 
-#[cfg(unix)]
 #[test]
 fn read_only_focused_pane_rejects_keyboard_and_running_gui_control_input() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let mut config = Config {
         shell: crate::test_support::sleeping_shell(),
         ..Config::default()
@@ -10182,12 +9920,8 @@ fn read_only_focused_pane_rejects_keyboard_and_running_gui_control_input() {
     assert!(!app.guardrail.is_awaiting_current());
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn a_closed_split_tab_keeps_every_pane_and_is_named_for_the_focused_one() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let workspace = tempfile::tempdir().unwrap();
     let left_dir = workspace.path().join("left");
     let right_dir = workspace.path().join("right");
@@ -10297,12 +10031,8 @@ fn a_closed_split_tab_keeps_every_pane_and_is_named_for_the_focused_one() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn real_pty_unicode_clusters_preserve_width_and_content() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let expected = "界e\u{301}👩\u{200d}💻";
     let mut tab = Tab::new_with_command(
         0,
@@ -10344,12 +10074,8 @@ fn real_pty_unicode_clusters_preserve_width_and_content() {
     assert!(terminal.grid().cell(0, 4).unwrap().is_wide_char_spacer());
 }
 
-#[cfg(unix)]
 #[test]
 fn real_pty_sgr_attributes_reach_the_terminal_grid_without_leaking() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let command = "printf '\\033[1mA\\033[22mB\\033[6mC\\033[25mD\\033[8mE\\033[28;9mF\\033[29;4:3;58:2::12:34:56mG\\033[0mH'";
     let mut tab = Tab::new_with_command(
         0,
@@ -10427,7 +10153,6 @@ fn real_pty_sgr_attributes_reach_the_terminal_grid_without_leaking() {
     assert!(grid.cell(0, 7).unwrap().attrs.is_empty());
 }
 
-#[cfg(unix)]
 #[test]
 fn representative_git_color_output_maps_to_rendered_sgr_state() {
     if !std::path::Path::new("/etc/hostname").exists() {
@@ -10599,12 +10324,8 @@ fn structured_completion_hands_its_host_operation_to_the_application() {
     assert!(app.toasts.iter().any(|toast| toast.message == "selecting"));
 }
 
-#[cfg(unix)]
 #[test]
 fn plugin_window_close_validation_never_tears_down_the_window() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let shell = crate::test_support::sleeping_shell();
     let mut tabs = TabManager::for_test(shell);
     tabs.new_tab_with_command(
@@ -10715,12 +10436,8 @@ fn plugin_window_close_still_finishes_after_final_handler_failure() {
     assert!(app.pending_plugin_window_close.is_none());
 }
 
-#[cfg(unix)]
 #[test]
 fn structured_workspace_query_is_current_window_bounded_and_control_safe() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let shell = crate::test_support::sleeping_shell();
     let mut tabs = TabManager::for_test(shell);
     tabs.new_tab_with_command(
@@ -10967,7 +10684,6 @@ fn headless_font_settings_preserve_order_and_apply_without_a_window() {
     assert!(app.config.font.fallback.is_empty());
 }
 
-#[cfg(unix)]
 #[test]
 fn a_window_closed_beside_others_leaves_no_automatic_archive() {
     let temp = tempfile::tempdir().unwrap();
@@ -11220,7 +10936,6 @@ fn background_image_completion_does_not_mark_a_newer_file_as_loaded() {
     assert!(!app.poll_background_image());
 }
 
-#[cfg(unix)]
 #[test]
 fn background_image_same_time_replacements_coalesce_and_disabled_results_stay_stale() {
     let directory = tempfile::tempdir().unwrap();
@@ -11266,12 +10981,8 @@ fn background_image_same_time_replacements_coalesce_and_disabled_results_stay_st
     assert!(!app.poll_background_image());
 }
 
-#[cfg(unix)]
 #[test]
 fn config_reload_only_overrides_application_keyboard_type_when_profile_changes() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let mut config = Config::default();
     config.keyboard.xterm_type = crate::config::XtermKeyboardTypeConfig::Legacy;
     let mut app = App::new_headless(config).unwrap();
@@ -11326,7 +11037,6 @@ fn sending_to_an_agent_requires_one_to_be_running() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn context_output_comes_from_a_shell_never_from_another_agent() {
     let mut app = App::new_headless(Config::default()).unwrap();
@@ -11366,14 +11076,10 @@ fn context_output_comes_from_a_shell_never_from_another_agent() {
     assert!(!output.contains('\x1b'), "{output:?}");
 }
 
-#[cfg(unix)]
 #[test]
 fn plugin_launch_never_runs_a_synchronous_version_probe() {
     use std::os::unix::fs::PermissionsExt;
 
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let temp = tempfile::tempdir().unwrap();
     let executable = temp.path().join("probe-sensitive-plugin");
     let invocation = temp.path().join("invocation");
@@ -11426,7 +11132,6 @@ printf 'launch=%s\n' "${1-}" >> "$TERMERIC_PLUGIN_PROBE_LOG"
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn plugin_spawn_failure_is_visible_without_a_preflight_process() {
     let mut app = App::new_headless(Config::default()).unwrap();
@@ -11453,7 +11158,6 @@ fn plugin_spawn_failure_is_visible_without_a_preflight_process() {
     assert_eq!(app.tabs.as_ref().unwrap().count(), 0);
 }
 
-#[cfg(unix)]
 #[test]
 fn fake_agent_clis_exercise_every_agent_command_end_to_end() {
     use crate::ui::command_palette::palette::AgentPlacement;
@@ -11636,7 +11340,6 @@ done
     result.unwrap();
 }
 
-#[cfg(unix)]
 #[test]
 fn the_supervisor_hears_about_agents_and_sends_only_as_its_mode_allows() {
     use crate::agent_view::transcript::Item;
@@ -11925,7 +11628,6 @@ done
     );
 }
 
-#[cfg(unix)]
 fn wait_for_plugin_fixture(app: &mut App, plugin_id: &str, needle: &str) {
     let found = crate::test_support::poll_until(Duration::from_secs(5), || {
         if let Some(tabs) = &mut app.tabs {
@@ -11947,7 +11649,6 @@ fn wait_for_plugin_fixture(app: &mut App, plugin_id: &str, needle: &str) {
     );
 }
 
-#[cfg(unix)]
 fn tabs_at(app: &App, index: usize) -> Option<&Tab> {
     app.tabs
         .as_ref()?
@@ -11955,7 +11656,6 @@ fn tabs_at(app: &App, index: usize) -> Option<&Tab> {
         .find_map(|(candidate, tab)| (candidate == index).then_some(tab))
 }
 
-#[cfg(unix)]
 fn wait_for_file_text(path: &std::path::Path, needle: &str) {
     let found = crate::test_support::poll_until(Duration::from_secs(5), || {
         std::fs::read_to_string(path)
@@ -11969,7 +11669,6 @@ fn wait_for_file_text(path: &std::path::Path, needle: &str) {
     );
 }
 
-#[cfg(unix)]
 fn latest_toast(app: &App) -> Option<&str> {
     app.toasts.iter().last().map(|toast| toast.message.as_str())
 }
@@ -12016,12 +11715,8 @@ fn settings_toggle_switches_directly_from_peer_side_panels() {
     assert!(app.settings_panel.is_active());
 }
 
-#[cfg(unix)]
 #[test]
 fn app_mediated_clipboard_reply_returns_to_requesting_pane_not_focus() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let mut app = App::new_headless(Config::default()).unwrap();
     let mut tabs = TabManager::for_test(ShellConfig::default());
     let tab_id = tabs
@@ -12223,7 +11918,6 @@ fn app_mediated_clipboard_reply_returns_to_requesting_pane_not_focus() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn delayed_notification_completion_does_not_alias_a_replacement_single_owner() {
     let (mut app, directory, entry, _) = harvest_rerun_capture_fixture_in(false);
@@ -12257,15 +11951,10 @@ fn delayed_notification_completion_does_not_alias_a_replacement_single_owner() {
     );
 }
 
-#[cfg(unix)]
 mod notification_owner_tests;
 
-#[cfg(unix)]
 #[test]
 fn delayed_notification_reply_returns_to_requesting_pane_without_a_focus_fallback() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let data = b"\x1b]99;i=build;2\x1b\\".to_vec();
     let script = format!(
         "stty raw -echo; reply=$(dd bs=1 count={} 2>/dev/null); \
@@ -12389,12 +12078,8 @@ fn delayed_notification_reply_returns_to_requesting_pane_without_a_focus_fallbac
     assert_eq!(latest_toast(&app), latest_toast_before.as_deref());
 }
 
-#[cfg(unix)]
 #[test]
 fn notification_activation_selects_the_exact_origin_and_stale_origins_fail_closed() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let shell = crate::test_support::sleeping_shell();
     let mut tabs = TabManager::for_test(shell.clone());
     let origin_tab = tabs
@@ -12488,12 +12173,8 @@ fn notification_activation_selects_the_exact_origin_and_stale_origins_fail_close
     assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(active_tab));
 }
 
-#[cfg(unix)]
 #[test]
 fn osc_titles_and_dynamic_colors_apply_to_exact_inactive_tab_and_pane_origins() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let mut app = App::new_headless(Config::default()).unwrap();
     let mut tabs = TabManager::new(40, 8, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
     let dormant_tab_id = tabs
@@ -12617,12 +12298,8 @@ fn osc_titles_and_dynamic_colors_apply_to_exact_inactive_tab_and_pane_origins() 
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn complete_workspace_round_trip_restores_nested_panes_plugin_profile_and_focus() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let temp = tempfile::tempdir().unwrap();
     let fake_cli = temp.path().join("workspace-ai");
     std::fs::write(
@@ -12723,12 +12400,8 @@ fn complete_workspace_round_trip_restores_nested_panes_plugin_profile_and_focus(
     AppState::set_test_state_path(None);
 }
 
-#[cfg(unix)]
 #[test]
 fn workspace_restore_partially_recovers_missing_cwd_profile_and_cli() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let temp = tempfile::tempdir().unwrap();
     let fake_cli = temp.path().join("available-ai");
     std::fs::write(
@@ -12855,12 +12528,8 @@ fn workspace_restore_partially_recovers_missing_cwd_profile_and_cli() {
     AppState::set_test_state_path(None);
 }
 
-#[cfg(unix)]
 #[test]
 fn cli_launch_plan_creates_ordered_shell_and_arbitrary_command_tabs() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let temp = tempfile::tempdir().unwrap();
     let config = Config {
         shell: crate::test_support::sleeping_shell(),
@@ -12923,7 +12592,6 @@ fn cli_launch_plan_creates_ordered_shell_and_arbitrary_command_tabs() {
     panic!("CLI arbitrary-command output did not reach its tab");
 }
 
-#[cfg(unix)]
 #[test]
 fn background_command_launch_preserves_focused_pane_and_interaction_surfaces() {
     for copy_mode in [false, true] {
@@ -13090,12 +12758,8 @@ fn background_command_launch_preserves_focused_pane_and_interaction_surfaces() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn running_gui_launch_tab_preserves_argv_cwd_title_and_failure_atomicity() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let temp = tempfile::tempdir().unwrap();
     let cwd = temp.path().to_str().unwrap();
     let helper = temp.path().join("capture-argv.sh");
@@ -13104,7 +12768,6 @@ fn running_gui_launch_tab_preserves_argv_cwd_title_and_failure_atomicity() {
         "#!/bin/sh\nprintf '[%s]|[%s]|[%s]|[%s]\\n' \"$1\" \"$2\" \"$3\" \"$4\"\nprintf 'ENV=[%s]|[%s]|[%s]\\n' \"${EMPTY_VALUE-unset}\" \"${EXACT_VALUE-unset}\" \"${UNICODE_VALUE-unset}\"\npwd\nsleep 1\n",
     )
     .unwrap();
-    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mut permissions = std::fs::metadata(&helper).unwrap().permissions();
@@ -13235,12 +12898,8 @@ fn running_gui_launch_tab_preserves_argv_cwd_title_and_failure_atomicity() {
     assert_eq!(app.tabs.as_ref().unwrap().count(), count);
 }
 
-#[cfg(unix)]
 #[test]
 fn terminal_profile_cli_launch_applies_env_cwd_title_and_workspace_identity() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let temp = tempfile::tempdir().unwrap();
     let mut config = Config::default();
     config.profiles.insert(
@@ -13329,12 +12988,8 @@ fn terminal_profile_cli_launch_applies_env_cwd_title_and_workspace_identity() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn mixed_shell_and_profile_panes_restore_each_saved_launch() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let mut config = Config::default();
     config.shell.program = Some("/bin/sh".into());
     config.shell.args = vec!["-c".into(), "printf 'DEFAULT_PANE\\n'; sleep 2".into()];
@@ -13432,7 +13087,6 @@ fn mixed_shell_and_profile_panes_restore_each_saved_launch() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn terminal_profile_palette_entries_follow_live_config_replacement() {
     let mut config = Config::default();
@@ -13487,7 +13141,6 @@ fn terminal_profile_palette_entries_follow_live_config_replacement() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn cli_named_profile_launches_the_exact_builtin_plugin_profile() {
     let temp = tempfile::tempdir().unwrap();
@@ -13528,12 +13181,8 @@ fn cli_named_profile_launches_the_exact_builtin_plugin_profile() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn missing_automatic_multi_window_workspace_falls_back_but_explicit_cli_is_strict() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
     let temp = tempfile::tempdir().unwrap();
     crate::workspace::set_test_workspaces_base_dir(Some(temp.path().join("workspaces")));
     AppState::set_test_state_path(Some(temp.path().join("state/state.json")));
@@ -13576,7 +13225,6 @@ fn detected_url_cache_joins_soft_wrapped_visible_rows() {
     assert!(cache.url_at(3, 1).is_none());
 }
 
-#[cfg(unix)]
 #[test]
 fn codex_supervises_as_an_agent_view_conversation() {
     use crate::agent_view::agent::AgentKind;
