@@ -123,10 +123,7 @@ fn run(
             let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
             let _ = protocol::write_frame(
                 &mut stream,
-                &ServerFrame::Error {
-                    version: protocol::PROTOCOL_VERSION,
-                    message: "GUI control client limit reached".into(),
-                },
+                &ServerFrame::error("GUI control client limit reached"),
             );
             continue;
         }
@@ -178,584 +175,27 @@ fn serve_client(
     let peer_process = validate_peer(&stream)?;
     let request = protocol::read_frame::<ClientFrame>(&mut stream)?;
     if let Err(message) = validate_request(&request, expected_token) {
-        protocol::write_frame(
-            &mut stream,
-            &ServerFrame::Error {
-                version: protocol::PROTOCOL_VERSION,
-                message,
-            },
-        )?;
-        return Ok(());
+        return protocol::write_frame(&mut stream, &ServerFrame::error(bounded_error(&message)));
     }
 
-    let response = match respond(request.request, peer_process) {
-        Ok(response) => response,
-        Err(error) => {
-            return protocol::write_frame(
-                &mut stream,
-                &ServerFrame::Error {
-                    version: protocol::PROTOCOL_VERSION,
-                    message: bounded_error(&format!("{error:#}")),
-                },
-            );
-        }
+    let frame = match respond(request.request, peer_process) {
+        // The GUI may already have acted on the request, so a reply that
+        // fails validation is reported as such rather than dropping the
+        // connection, which the client would read as a request that never
+        // completed.
+        Ok(response) => match response.validate() {
+            Ok(()) => ServerFrame::new(response),
+            Err(error) => ServerFrame::error(bounded_error(&format!(
+                "the GUI's reply was invalid, so the request may already have taken effect: {error:#}"
+            ))),
+        },
+        Err(error) => ServerFrame::error(bounded_error(&format!("{error:#}"))),
     };
-    // The GUI may already have acted on the request, so a reply that fails
-    // validation is reported as such rather than dropping the connection,
-    // which the client would read as a request that never completed.
-    let frame = response_frame(response).unwrap_or_else(|error| ServerFrame::Error {
-        version: protocol::PROTOCOL_VERSION,
-        message: bounded_error(&format!(
-            "the GUI's reply was invalid, so the request may already have taken effect: {error:#}"
-        )),
-    });
     protocol::write_frame(&mut stream, &frame)
 }
 
-/// Re-validate the GUI's reply before it leaves the process.
-fn response_frame(response: Response) -> anyhow::Result<ServerFrame> {
-    Ok(match response {
-        Response::Agents {
-            process_id,
-            agents,
-            truncated,
-        } => {
-            if process_id == 0 || process_id > i32::MAX as u32 {
-                anyhow::bail!("GUI event loop returned an invalid agent list");
-            }
-            protocol::validate_agent_summaries(&agents)?;
-            ServerFrame::Agents {
-                version: protocol::PROTOCOL_VERSION,
-                process_id,
-                agents,
-                truncated,
-            }
-        }
-        Response::AgentInputAccepted {
-            process_id,
-            request_id,
-            window_id,
-            tab_id,
-            pane_id,
-            pending_approval,
-        } => {
-            validate_action_response(process_id, &request_id, window_id)?;
-            ServerFrame::AgentInputAccepted {
-                version: protocol::PROTOCOL_VERSION,
-                process_id,
-                request_id,
-                window_id,
-                tab_id,
-                pane_id,
-                pending_approval,
-            }
-        }
-        Response::Conversation {
-            process_id,
-            window_id,
-            session_id,
-            text,
-            truncated,
-        } => {
-            if process_id == 0
-                || window_id == 0
-                || session_id == 0
-                || text.len() > protocol::MAX_TERMINAL_TEXT_BYTES as usize
-            {
-                anyhow::bail!("GUI event loop returned an invalid conversation");
-            }
-            ServerFrame::Conversation {
-                version: protocol::PROTOCOL_VERSION,
-                process_id,
-                window_id,
-                session_id,
-                text,
-                truncated,
-            }
-        }
-        Response::ApprovalAnswered {
-            process_id,
-            request_id,
-            window_id,
-            session_id,
-            answered,
-        } => {
-            validate_action_response(process_id, &request_id, window_id)?;
-            ServerFrame::ApprovalAnswered {
-                version: protocol::PROTOCOL_VERSION,
-                process_id,
-                request_id,
-                window_id,
-                session_id,
-                answered,
-            }
-        }
-        Response::SessionInputAccepted {
-            process_id,
-            request_id,
-            window_id,
-            session_id,
-            pending_approval,
-        } => {
-            validate_action_response(process_id, &request_id, window_id)?;
-            ServerFrame::SessionInputAccepted {
-                version: protocol::PROTOCOL_VERSION,
-                process_id,
-                request_id,
-                window_id,
-                session_id,
-                pending_approval,
-            }
-        }
-        Response::AgentEventRecorded { process_id } => {
-            if process_id == 0 || process_id > i32::MAX as u32 {
-                anyhow::bail!("GUI event loop returned an invalid agent-event response");
-            }
-            ServerFrame::AgentEventRecorded {
-                version: protocol::PROTOCOL_VERSION,
-                process_id,
-            }
-        }
-        Response::LaunchStatus {
-            process_id,
-            launch_request_id,
-            state,
-            terminal_closed,
-        } => {
-            if process_id == 0 || !protocol::valid_request_id(&launch_request_id) {
-                anyhow::bail!("Invalid GUI launch-status identity");
-            }
-            state.validate().map_err(anyhow::Error::msg)?;
-            ServerFrame::LaunchStatus {
-                version: protocol::PROTOCOL_VERSION,
-                process_id,
-                launch_request_id,
-                state,
-                terminal_closed,
-            }
-        }
-        Response::Inventory(inventory) => {
-            inventory.validate()?;
-            ServerFrame::Inventory {
-                version: protocol::PROTOCOL_VERSION,
-                inventory,
-            }
-        }
-        Response::Text {
-            process_id,
-            window_id,
-            tab_id,
-            pane_id,
-            screen,
-            history_lines,
-            text,
-            truncated,
-        } => {
-            if process_id == 0
-                || process_id > i32::MAX as u32
-                || window_id == 0
-                || history_lines > protocol::MAX_TEXT_HISTORY_LINES
-                || text.len() > protocol::MAX_TERMINAL_TEXT_BYTES as usize
-            {
-                anyhow::bail!("GUI event loop returned an invalid terminal-text response");
-            }
-            ServerFrame::Text {
-                version: protocol::PROTOCOL_VERSION,
-                process_id,
-                window_id,
-                tab_id,
-                pane_id,
-                screen,
-                history_lines,
-                text,
-                truncated,
-            }
-        }
-        Response::InputAccepted {
-            process_id,
-            request_id,
-            window_id,
-            tab_id,
-            pane_id,
-            input_bytes,
-            wire_bytes,
-            paste,
-            enter,
-            disposition,
-            confirmation_id,
-        } => {
-            validate_action_response(process_id, &request_id, window_id)?;
-            let valid_disposition = match (disposition, confirmation_id) {
-                (protocol::InputDisposition::Sent, None) => true,
-                (protocol::InputDisposition::PendingConfirmation, Some(id)) => id != 0,
-                _ => false,
-            };
-            if input_bytes == 0
-                || input_bytes as usize > protocol::MAX_CONTROL_INPUT_BYTES + 1
-                || wire_bytes < input_bytes
-                || wire_bytes as usize > protocol::MAX_CONTROL_INPUT_BYTES + 13
-                || !valid_disposition
-            {
-                anyhow::bail!("GUI event loop returned an invalid terminal-input response");
-            }
-            ServerFrame::InputAccepted {
-                version: protocol::PROTOCOL_VERSION,
-                process_id,
-                request_id,
-                window_id,
-                tab_id,
-                pane_id,
-                input_bytes,
-                wire_bytes,
-                paste,
-                enter,
-                disposition,
-                confirmation_id,
-            }
-        }
-        Response::WindowCreated {
-            process_id,
-            request_id,
-            window_id,
-        } => {
-            if process_id == 0
-                || process_id > i32::MAX as u32
-                || !protocol::valid_request_id(&request_id)
-                || window_id == 0
-            {
-                anyhow::bail!("GUI event loop returned an invalid window-creation response");
-            }
-            ServerFrame::WindowCreated {
-                version: protocol::PROTOCOL_VERSION,
-                process_id,
-                request_id,
-                window_id,
-            }
-        }
-        Response::WindowLaunched {
-            process_id,
-            request_id,
-            window_id,
-            tab_id,
-        } => {
-            if process_id == 0
-                || process_id > i32::MAX as u32
-                || !protocol::valid_request_id(&request_id)
-                || window_id == 0
-            {
-                anyhow::bail!("GUI event loop returned an invalid window-launch response");
-            }
-            ServerFrame::WindowLaunched {
-                version: protocol::PROTOCOL_VERSION,
-                process_id,
-                request_id,
-                window_id,
-                tab_id,
-            }
-        }
-        Response::TabCreated {
-            process_id,
-            request_id,
-            window_id,
-            tab_id,
-        } => {
-            if process_id == 0
-                || process_id > i32::MAX as u32
-                || !protocol::valid_request_id(&request_id)
-                || window_id == 0
-            {
-                anyhow::bail!("GUI event loop returned an invalid tab-creation response");
-            }
-            ServerFrame::TabCreated {
-                version: protocol::PROTOCOL_VERSION,
-                process_id,
-                request_id,
-                window_id,
-                tab_id,
-            }
-        }
-        Response::PaneCreated {
-            process_id,
-            request_id,
-            window_id,
-            tab_id,
-            pane_id,
-        } => {
-            if process_id == 0
-                || process_id > i32::MAX as u32
-                || !protocol::valid_request_id(&request_id)
-                || window_id == 0
-                || pane_id == 0
-            {
-                anyhow::bail!("GUI event loop returned an invalid pane-creation response");
-            }
-            ServerFrame::PaneCreated {
-                version: protocol::PROTOCOL_VERSION,
-                process_id,
-                request_id,
-                window_id,
-                tab_id,
-                pane_id,
-            }
-        }
-        Response::WindowFocusRequested {
-            process_id,
-            request_id,
-            window_id,
-            already_focused,
-        } => {
-            validate_action_response(process_id, &request_id, window_id)?;
-            ServerFrame::WindowFocusRequested {
-                version: protocol::PROTOCOL_VERSION,
-                process_id,
-                request_id,
-                window_id,
-                already_focused,
-            }
-        }
-        Response::QuickAccessChanged {
-            process_id,
-            request_id,
-            window_id,
-            visible,
-        } => {
-            validate_action_response(process_id, &request_id, window_id)?;
-            ServerFrame::QuickAccessChanged {
-                version: protocol::PROTOCOL_VERSION,
-                process_id,
-                request_id,
-                window_id,
-                visible,
-            }
-        }
-        Response::TabSelected {
-            process_id,
-            request_id,
-            window_id,
-            tab_id,
-            changed,
-        } => {
-            validate_action_response(process_id, &request_id, window_id)?;
-            ServerFrame::TabSelected {
-                version: protocol::PROTOCOL_VERSION,
-                process_id,
-                request_id,
-                window_id,
-                tab_id,
-                changed,
-            }
-        }
-        Response::PaneFocused {
-            process_id,
-            request_id,
-            window_id,
-            tab_id,
-            pane_id,
-            tab_changed,
-            pane_changed,
-        } => {
-            validate_action_response(process_id, &request_id, window_id)?;
-            ServerFrame::PaneFocused {
-                version: protocol::PROTOCOL_VERSION,
-                process_id,
-                request_id,
-                window_id,
-                tab_id,
-                pane_id,
-                tab_changed,
-                pane_changed,
-            }
-        }
-        Response::WindowCloseRequested {
-            process_id,
-            request_id,
-            window_id,
-        } => {
-            validate_action_response(process_id, &request_id, window_id)?;
-            ServerFrame::WindowCloseRequested {
-                version: protocol::PROTOCOL_VERSION,
-                process_id,
-                request_id,
-                window_id,
-            }
-        }
-        Response::TabCloseRequested {
-            process_id,
-            request_id,
-            window_id,
-            tab_id,
-        } => {
-            validate_action_response(process_id, &request_id, window_id)?;
-            ServerFrame::TabCloseRequested {
-                version: protocol::PROTOCOL_VERSION,
-                process_id,
-                request_id,
-                window_id,
-                tab_id,
-            }
-        }
-        Response::PaneClosed {
-            process_id,
-            request_id,
-            window_id,
-            tab_id,
-            pane_id,
-            remaining_panes,
-            focused_pane_id,
-        } => {
-            validate_action_response(process_id, &request_id, window_id)?;
-            if remaining_panes == 0 || usize::from(remaining_panes) > protocol::MAX_PANES_PER_TAB {
-                anyhow::bail!("GUI event loop returned an invalid pane-close response");
-            }
-            ServerFrame::PaneClosed {
-                version: protocol::PROTOCOL_VERSION,
-                process_id,
-                request_id,
-                window_id,
-                tab_id,
-                pane_id,
-                remaining_panes,
-                focused_pane_id,
-            }
-        }
-        Response::TabMoved {
-            process_id,
-            request_id,
-            source_window_id,
-            source_tab_id,
-            destination_window_id,
-            destination_tab_id,
-            destination_index,
-            source_window_closing,
-            changed,
-        } => {
-            validate_action_response(process_id, &request_id, source_window_id)?;
-            if destination_window_id == 0
-                || usize::from(destination_index) >= protocol::MAX_TABS_PER_WINDOW
-            {
-                anyhow::bail!("GUI event loop returned an invalid tab-move response");
-            }
-            ServerFrame::TabMoved {
-                version: protocol::PROTOCOL_VERSION,
-                process_id,
-                request_id,
-                source_window_id,
-                source_tab_id,
-                destination_window_id,
-                destination_tab_id,
-                destination_index,
-                source_window_closing,
-                changed,
-            }
-        }
-        Response::PaneMoved {
-            process_id,
-            request_id,
-            source_window_id,
-            source_tab_id,
-            source_pane_id,
-            destination_window_id,
-            destination_tab_id,
-            destination_pane_id,
-            target_pane_id,
-        } => {
-            validate_action_response(process_id, &request_id, source_window_id)?;
-            if destination_window_id == 0 || destination_pane_id == target_pane_id {
-                anyhow::bail!("GUI event loop returned an invalid pane-move response");
-            }
-            ServerFrame::PaneMoved {
-                version: protocol::PROTOCOL_VERSION,
-                process_id,
-                request_id,
-                source_window_id,
-                source_tab_id,
-                source_pane_id,
-                destination_window_id,
-                destination_tab_id,
-                destination_pane_id,
-                target_pane_id,
-            }
-        }
-        Response::WindowResizeRequested {
-            process_id,
-            request_id,
-            window_id,
-            requested_width,
-            requested_height,
-            immediate_width,
-            immediate_height,
-        } => {
-            validate_action_response(process_id, &request_id, window_id)?;
-            if !(protocol::MIN_WINDOW_WIDTH..=protocol::MAX_WINDOW_DIMENSION)
-                .contains(&requested_width)
-                || !(protocol::MIN_WINDOW_HEIGHT..=protocol::MAX_WINDOW_DIMENSION)
-                    .contains(&requested_height)
-                || immediate_width.is_some() != immediate_height.is_some()
-                || immediate_width == Some(0)
-                || immediate_height == Some(0)
-            {
-                anyhow::bail!("GUI event loop returned an invalid window-resize response");
-            }
-            ServerFrame::WindowResizeRequested {
-                version: protocol::PROTOCOL_VERSION,
-                process_id,
-                request_id,
-                window_id,
-                requested_width,
-                requested_height,
-                immediate_width,
-                immediate_height,
-            }
-        }
-        Response::DividerResized {
-            process_id,
-            request_id,
-            window_id,
-            tab_id,
-            divider_id,
-            previous_ratio_millis,
-            ratio_millis,
-            changed,
-        } => {
-            validate_action_response(process_id, &request_id, window_id)?;
-            if !(100..=900).contains(&previous_ratio_millis)
-                || !(100..=900).contains(&ratio_millis)
-                || changed != (previous_ratio_millis != ratio_millis)
-            {
-                anyhow::bail!("GUI event loop returned an invalid divider-resize response");
-            }
-            ServerFrame::DividerResized {
-                version: protocol::PROTOCOL_VERSION,
-                process_id,
-                request_id,
-                window_id,
-                tab_id,
-                divider_id,
-                previous_ratio_millis,
-                ratio_millis,
-                changed,
-            }
-        }
-    })
-}
-
-fn validate_action_response(
-    process_id: u32,
-    request_id: &str,
-    window_id: u64,
-) -> anyhow::Result<()> {
-    if process_id == 0
-        || process_id > i32::MAX as u32
-        || !protocol::valid_request_id(request_id)
-        || window_id == 0
-    {
-        anyhow::bail!("GUI event loop returned an invalid control-action response");
-    }
-    Ok(())
-}
-
 fn bounded_error(error: &str) -> String {
-    let output = crate::safe_text::single_line_within(error, 1_024);
+    let output = crate::safe_text::single_line_within(error, protocol::MAX_ERROR_MESSAGE_BYTES);
     if output.is_empty() {
         "GUI control request failed".into()
     } else {
@@ -859,8 +299,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             protocol::read_frame::<ServerFrame>(&mut client).unwrap(),
-            ServerFrame::LaunchStatus {
-                version: protocol::PROTOCOL_VERSION,
+            ServerFrame::new(Response::LaunchStatus {
                 process_id: 42,
                 launch_request_id: id,
                 state: protocol::LaunchState::Exited {
@@ -868,7 +307,7 @@ mod tests {
                     success: false
                 },
                 terminal_closed: true,
-            }
+            })
         );
         worker.join().unwrap();
     }
@@ -904,10 +343,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             protocol::read_frame::<ServerFrame>(&mut client).unwrap(),
-            ServerFrame::AgentEventRecorded {
-                version: protocol::PROTOCOL_VERSION,
-                process_id: 4242,
-            }
+            ServerFrame::new(Response::AgentEventRecorded { process_id: 4242 })
         );
         worker.join().unwrap();
 
@@ -965,353 +401,158 @@ mod tests {
             )
             .is_err()
         );
-        assert!(validate_action_response(42, "0123456789abcdef0123456789abcdef", 7,).is_ok());
-        assert!(validate_action_response(0, "bad", 0).is_err());
+    }
+
+    /// Serves one authenticated `request` whose GUI answer is `answer`, and
+    /// returns the frame the client reads.
+    fn exchange(
+        request: Request,
+        answer: impl FnOnce(Request) -> anyhow::Result<Response> + Send + 'static,
+    ) -> ServerFrame {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let expected = request.clone();
+        let worker = thread::spawn(move || {
+            serve_client(server, "secret", |received, _| {
+                assert_eq!(received, expected);
+                answer(received)
+            })
+            .unwrap();
+        });
+        protocol::write_frame(
+            &mut client,
+            &ClientFrame {
+                version: protocol::PROTOCOL_VERSION,
+                token: "secret".into(),
+                request,
+            },
+        )
+        .unwrap();
+        let frame = protocol::read_frame::<ServerFrame>(&mut client).unwrap();
+        worker.join().unwrap();
+        frame
     }
 
     #[test]
-    fn authenticated_request_returns_only_the_supplied_bounded_inventory() {
-        let (mut probe, _peer) = UnixStream::pair().unwrap();
-        if let Err(error) = std::io::Write::write_all(&mut probe, &[0]) {
-            if error.kind() == std::io::ErrorKind::PermissionDenied {
-                eprintln!("skip GUI control socket exchange: sandbox denies AF_UNIX I/O");
-                return;
-            }
-            panic!("could not probe Unix-domain socket I/O: {error}");
-        }
-        let (mut client, server) = UnixStream::pair().unwrap();
-        let worker = thread::spawn(move || {
-            serve_client(server, "secret", |request, _| {
-                assert_eq!(request, Request::Inventory);
-                Ok(Response::Inventory(protocol::ProcessInventory {
+    fn authenticated_requests_carry_exactly_the_gui_reply() {
+        let request_id = || "0123456789abcdef0123456789abcdef".to_string();
+        let environment_policy = termeric_core::pty::EnvironmentPolicy {
+            clear: false,
+            unset: vec!["PATH".into()],
+        };
+        let environment = vec![protocol::EnvironmentVariable {
+            name: "MODE".into(),
+            value: "direct".into(),
+        }];
+        for (request, response) in [
+            (
+                Request::Inventory,
+                Response::Inventory(protocol::ProcessInventory {
                     process_id: 42,
                     windows: Vec::new(),
                     truncated: false,
-                }))
-            })
-            .unwrap();
-        });
-        protocol::write_frame(
-            &mut client,
-            &ClientFrame {
-                version: protocol::PROTOCOL_VERSION,
-                token: "secret".into(),
-                request: Request::Inventory,
-            },
-        )
-        .unwrap();
-        assert!(matches!(
-            protocol::read_frame::<ServerFrame>(&mut client).unwrap(),
-            ServerFrame::Inventory { inventory, .. }
-                if inventory.process_id == 42 && inventory.windows.is_empty()
-        ));
-        worker.join().unwrap();
-
-        let request_id = "0123456789abcdef0123456789abcdef".to_string();
-        let (mut client, server) = UnixStream::pair().unwrap();
-        let expected_id = request_id.clone();
-        let worker = thread::spawn(move || {
-            serve_client(server, "secret", |request, _| {
-                assert_eq!(
-                    request,
-                    Request::CreateWindow {
-                        request_id: expected_id.clone(),
-                        source_window: 7,
-                    }
-                );
-                Ok(Response::WindowCreated {
-                    process_id: 42,
-                    request_id: expected_id,
-                    window_id: 9,
-                })
-            })
-            .unwrap();
-        });
-        protocol::write_frame(
-            &mut client,
-            &ClientFrame {
-                version: protocol::PROTOCOL_VERSION,
-                token: "secret".into(),
-                request: Request::CreateWindow {
-                    request_id: request_id.clone(),
+                }),
+            ),
+            (
+                Request::CreateWindow {
+                    request_id: request_id(),
                     source_window: 7,
                 },
-            },
-        )
-        .unwrap();
-        assert!(matches!(
-            protocol::read_frame::<ServerFrame>(&mut client).unwrap(),
-            ServerFrame::WindowCreated {
-                process_id: 42,
-                request_id: returned,
-                window_id: 9,
-                ..
-            } if returned == request_id
-        ));
-        worker.join().unwrap();
-
-        let request_id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string();
-        let launch = Request::LaunchWindow {
-            request_id: request_id.clone(),
-            source_window: 7,
-            program: "/usr/bin/printf".into(),
-            args: vec!["%s".into(), "$HOME;🙂".into()],
-            working_directory: Some("/tmp".into()),
-            title: Some("exact window".into()),
-            environment_policy: termeric_core::pty::EnvironmentPolicy {
-                clear: true,
-                unset: vec![],
-            },
-            environment: vec![protocol::EnvironmentVariable {
-                name: "WINDOW_MODE".into(),
-                value: "direct".into(),
-            }],
-        };
-        let (mut client, server) = UnixStream::pair().unwrap();
-        let expected_request = launch.clone();
-        let expected_id = request_id.clone();
-        let worker = thread::spawn(move || {
-            serve_client(server, "secret", |request, _| {
-                assert_eq!(request, expected_request);
-                Ok(Response::WindowLaunched {
+                Response::WindowCreated {
                     process_id: 42,
-                    request_id: expected_id,
+                    request_id: request_id(),
+                    window_id: 9,
+                },
+            ),
+            (
+                Request::LaunchWindow {
+                    request_id: request_id(),
+                    source_window: 7,
+                    program: "/usr/bin/printf".into(),
+                    args: vec!["%s".into(), "$HOME;🙂".into()],
+                    working_directory: Some("/tmp".into()),
+                    title: Some("exact window".into()),
+                    environment: environment.clone(),
+                    environment_policy: environment_policy.clone(),
+                },
+                Response::WindowLaunched {
+                    process_id: 42,
+                    request_id: request_id(),
                     window_id: 9,
                     tab_id: 0,
-                })
-            })
-            .unwrap();
-        });
-        protocol::write_frame(
-            &mut client,
-            &ClientFrame {
-                version: protocol::PROTOCOL_VERSION,
-                token: "secret".into(),
-                request: launch,
-            },
-        )
-        .unwrap();
-        assert!(matches!(
-            protocol::read_frame::<ServerFrame>(&mut client).unwrap(),
-            ServerFrame::WindowLaunched {
-                process_id: 42,
-                request_id: returned,
-                window_id: 9,
-                tab_id: 0,
-                ..
-            } if returned == request_id
-        ));
-        worker.join().unwrap();
-
-        let request_id = "fedcba9876543210fedcba9876543210".to_string();
-        let (mut client, server) = UnixStream::pair().unwrap();
-        let expected_id = request_id.clone();
-        let worker = thread::spawn(move || {
-            serve_client(server, "secret", |request, _| {
-                assert_eq!(
-                    request,
-                    Request::CreateTab {
-                        request_id: expected_id.clone(),
-                        window_id: 7,
-                    }
-                );
-                Ok(Response::TabCreated {
-                    process_id: 42,
-                    request_id: expected_id,
-                    window_id: 7,
-                    tab_id: 3,
-                })
-            })
-            .unwrap();
-        });
-        protocol::write_frame(
-            &mut client,
-            &ClientFrame {
-                version: protocol::PROTOCOL_VERSION,
-                token: "secret".into(),
-                request: Request::CreateTab {
-                    request_id: request_id.clone(),
-                    window_id: 7,
                 },
-            },
-        )
-        .unwrap();
-        assert!(matches!(
-            protocol::read_frame::<ServerFrame>(&mut client).unwrap(),
-            ServerFrame::TabCreated {
-                process_id: 42,
-                request_id: returned,
-                window_id: 7,
-                tab_id: 3,
-                ..
-            } if returned == request_id
-        ));
-        worker.join().unwrap();
-
-        let request_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
-        let launch = Request::LaunchTab {
-            background: false,
-            request_id: request_id.clone(),
-            window_id: 7,
-            program: "/usr/bin/printf".into(),
-            args: vec!["%s".into(), "$HOME;🙂".into()],
-            working_directory: Some("/tmp".into()),
-            title: Some("exact".into()),
-            environment_policy: termeric_core::pty::EnvironmentPolicy {
-                clear: false,
-                unset: vec!["PATH".into()],
-            },
-            environment: vec![protocol::EnvironmentVariable {
-                name: "TAB_MODE".into(),
-                value: "direct".into(),
-            }],
-        };
-        let (mut client, server) = UnixStream::pair().unwrap();
-        let expected_request = launch.clone();
-        let expected_id = request_id.clone();
-        let worker = thread::spawn(move || {
-            serve_client(server, "secret", |request, _| {
-                assert_eq!(request, expected_request);
-                Ok(Response::TabCreated {
+            ),
+            (
+                Request::LaunchTab {
+                    background: false,
+                    request_id: request_id(),
+                    window_id: 7,
+                    program: "/usr/bin/printf".into(),
+                    args: vec!["%s".into(), "$HOME;🙂".into()],
+                    working_directory: Some("/tmp".into()),
+                    title: Some("exact".into()),
+                    environment,
+                    environment_policy,
+                },
+                Response::TabCreated {
                     process_id: 42,
-                    request_id: expected_id,
+                    request_id: request_id(),
                     window_id: 7,
                     tab_id: 4,
-                })
-            })
-            .unwrap();
-        });
-        protocol::write_frame(
-            &mut client,
-            &ClientFrame {
-                version: protocol::PROTOCOL_VERSION,
-                token: "secret".into(),
-                request: launch,
-            },
-        )
-        .unwrap();
-        assert!(matches!(
-            protocol::read_frame::<ServerFrame>(&mut client).unwrap(),
-            ServerFrame::TabCreated {
-                process_id: 42,
-                request_id: returned,
-                window_id: 7,
-                tab_id: 4,
-                ..
-            } if returned == request_id
-        ));
-        worker.join().unwrap();
-
-        let request_id = "1234567890abcdef1234567890abcdef".to_string();
-        let (mut client, server) = UnixStream::pair().unwrap();
-        let expected_id = request_id.clone();
-        let worker = thread::spawn(move || {
-            serve_client(server, "secret", |request, _| {
-                assert_eq!(
-                    request,
-                    Request::SplitPane {
-                        request_id: expected_id.clone(),
-                        window_id: 7,
-                        tab_id: 3,
-                        pane_id: 0,
-                        direction: crate::panes::SplitDirection::Vertical,
-                    }
-                );
-                Ok(Response::PaneCreated {
-                    process_id: 42,
-                    request_id: expected_id,
-                    window_id: 7,
-                    tab_id: 3,
-                    pane_id: 1,
-                })
-            })
-            .unwrap();
-        });
-        protocol::write_frame(
-            &mut client,
-            &ClientFrame {
-                version: protocol::PROTOCOL_VERSION,
-                token: "secret".into(),
-                request: Request::SplitPane {
-                    request_id: request_id.clone(),
+                },
+            ),
+            (
+                Request::SplitPane {
+                    request_id: request_id(),
                     window_id: 7,
                     tab_id: 3,
                     pane_id: 0,
                     direction: crate::panes::SplitDirection::Vertical,
                 },
-            },
-        )
-        .unwrap();
-        assert!(matches!(
-            protocol::read_frame::<ServerFrame>(&mut client).unwrap(),
-            ServerFrame::PaneCreated {
-                process_id: 42,
-                request_id: returned,
-                window_id: 7,
-                tab_id: 3,
-                pane_id: 1,
-                ..
-            } if returned == request_id
-        ));
-        worker.join().unwrap();
+                Response::PaneCreated {
+                    process_id: 42,
+                    request_id: request_id(),
+                    window_id: 7,
+                    tab_id: 3,
+                    pane_id: 1,
+                },
+            ),
+        ] {
+            let reply = response.clone();
+            assert_eq!(
+                exchange(request, move |_| Ok(reply)),
+                ServerFrame::new(response)
+            );
+        }
 
-        let (mut client, server) = UnixStream::pair().unwrap();
-        let worker = thread::spawn(move || {
-            serve_client(server, "secret", |_, _| anyhow::bail!("missing\nwindow")).unwrap();
-        });
-        protocol::write_frame(
-            &mut client,
-            &ClientFrame {
-                version: protocol::PROTOCOL_VERSION,
-                token: "secret".into(),
-                request: Request::Inventory,
-            },
-        )
-        .unwrap();
-        assert!(matches!(
-            protocol::read_frame::<ServerFrame>(&mut client).unwrap(),
-            ServerFrame::Error { message, .. }
-                if message == "missingwindow" && !message.chars().any(char::is_control)
-        ));
-        worker.join().unwrap();
+        // A GUI failure becomes one bounded, single-line error.
+        assert_eq!(
+            exchange(Request::Inventory, |_| anyhow::bail!("missing\nwindow")),
+            ServerFrame::error("missingwindow")
+        );
     }
 
     #[test]
     fn an_invalid_gui_reply_is_reported_as_possibly_applied_not_dropped() {
         const REQUEST_ID: &str = "0123456789abcdef0123456789abcdef";
-        let (mut client, server) = UnixStream::pair().unwrap();
-        let worker = thread::spawn(move || {
-            serve_client(server, "secret", |_, _| {
-                Ok(Response::PaneCreated {
-                    process_id: 42,
-                    request_id: REQUEST_ID.into(),
-                    window_id: 0,
-                    tab_id: 3,
-                    pane_id: 1,
-                })
+        let split = Request::SplitPane {
+            request_id: REQUEST_ID.into(),
+            window_id: 7,
+            tab_id: 3,
+            pane_id: 0,
+            direction: crate::panes::SplitDirection::Vertical,
+        };
+        let frame = exchange(split, |_| {
+            Ok(Response::PaneCreated {
+                process_id: 42,
+                request_id: REQUEST_ID.into(),
+                window_id: 0,
+                tab_id: 3,
+                pane_id: 1,
             })
-            .unwrap();
         });
-        protocol::write_frame(
-            &mut client,
-            &ClientFrame {
-                version: protocol::PROTOCOL_VERSION,
-                token: "secret".into(),
-                request: Request::SplitPane {
-                    request_id: REQUEST_ID.into(),
-                    window_id: 7,
-                    tab_id: 3,
-                    pane_id: 0,
-                    direction: crate::panes::SplitDirection::Vertical,
-                },
-            },
-        )
-        .unwrap();
         assert!(matches!(
-            protocol::read_frame::<ServerFrame>(&mut client).unwrap(),
-            ServerFrame::Error { message, .. }
-                if message.contains("may already have taken effect")
+            frame.response,
+            Response::Error { message } if message.contains("may already have taken effect")
         ));
-        worker.join().unwrap();
     }
 }

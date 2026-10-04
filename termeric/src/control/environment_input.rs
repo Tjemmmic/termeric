@@ -1,9 +1,6 @@
 //! Explicit environment-only stdin ingestion; never child terminal input.
 
-use super::{
-    ControlCommand,
-    protocol::{self, EnvironmentVariable, Request},
-};
+use super::protocol::{self, EnvironmentVariable, Request};
 use serde::Deserializer;
 use serde::de::{self, MapAccess, Visitor};
 use std::fmt;
@@ -11,41 +8,23 @@ use std::fmt;
 const MAX_INPUT_BYTES: usize = 256 * 1024;
 const INPUT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-pub(super) fn prepare(command: &mut ControlCommand) -> anyhow::Result<()> {
-    let (environment, policy) = match command {
-        ControlCommand::LaunchTab {
-            env_stdin: true,
-            environment,
-            environment_policy,
-            ..
-        }
-        | ControlCommand::LaunchWindow {
-            env_stdin: true,
-            environment,
-            environment_policy,
-            ..
-        } => (environment, environment_policy),
-        ControlCommand::LaunchAndWait {
-            env_stdin: true,
-            request,
-            ..
-        } => match request {
-            Request::LaunchTab {
-                environment,
-                environment_policy,
-                ..
-            }
-            | Request::LaunchWindow {
-                environment,
-                environment_policy,
-                ..
-            } => (environment, environment_policy),
-            _ => anyhow::bail!("--env-stdin requires an ordinary command launch"),
-        },
-        _ => return Ok(()),
+/// Add the variables of the JSON object on standard input to a launch.
+pub(super) fn merge_stdin(request: &mut Request) -> anyhow::Result<()> {
+    let (Request::LaunchTab {
+        environment,
+        environment_policy,
+        ..
+    }
+    | Request::LaunchWindow {
+        environment,
+        environment_policy,
+        ..
+    }) = request
+    else {
+        anyhow::bail!("--env-stdin requires an ordinary command launch");
     };
     let input = read_stdin()?;
-    merge(environment, policy, &input)
+    merge(environment, environment_policy, &input)
 }
 
 fn merge(

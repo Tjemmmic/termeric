@@ -74,6 +74,9 @@ sha2 = "0.10"
 log.workspace = true
 env_logger.workspace = true
 
+# Parsing the control, domain, and plugin subcommands
+clap = { version = "4.6", default-features = false, features = ["std", "derive", "help", "usage", "error-context", "suggestions"] }
+
 # Error handling
 anyhow.workspace = true
 

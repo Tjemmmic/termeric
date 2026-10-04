@@ -46,6 +46,8 @@ pub const MAX_APPROVAL_REASON_BYTES: usize = 2 * 1024;
 /// Longest approval-request identifier an agent uses.
 pub const MAX_APPROVAL_ID_BYTES: usize = 128;
 pub const MAX_AGENT_SUMMARY_MESSAGE_BYTES: usize = 16 * 1024;
+/// Longest error message a GUI sends back.
+pub const MAX_ERROR_MESSAGE_BYTES: usize = 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -426,7 +428,11 @@ pub enum InputDisposition {
     PendingConfirmation,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A GUI's reply to one request. It travels inside [`ServerFrame`], and
+/// `--json` prints it as is, beside a `schema_version`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
+#[serde(deny_unknown_fields)]
 pub enum Response {
     Inventory(ProcessInventory),
     LaunchStatus {
@@ -610,223 +616,257 @@ pub enum Response {
         /// Held until the person approves it.
         pending_approval: bool,
     },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "result", rename_all = "snake_case")]
-#[serde(deny_unknown_fields)]
-pub enum ServerFrame {
-    LaunchStatus {
-        version: u32,
-        process_id: u32,
-        launch_request_id: String,
-        state: LaunchState,
-        terminal_closed: bool,
-    },
-    Inventory {
-        version: u32,
-        inventory: ProcessInventory,
-    },
-    Text {
-        version: u32,
-        process_id: u32,
-        window_id: u64,
-        tab_id: u64,
-        pane_id: u32,
-        screen: TextScreen,
-        history_lines: u16,
-        text: String,
-        truncated: bool,
-    },
-    InputAccepted {
-        version: u32,
-        process_id: u32,
-        request_id: String,
-        window_id: u64,
-        tab_id: u64,
-        pane_id: u32,
-        input_bytes: u32,
-        wire_bytes: u32,
-        paste: bool,
-        enter: bool,
-        disposition: InputDisposition,
-        confirmation_id: Option<u64>,
-    },
-    WindowCreated {
-        version: u32,
-        process_id: u32,
-        request_id: String,
-        window_id: u64,
-    },
-    WindowLaunched {
-        version: u32,
-        process_id: u32,
-        request_id: String,
-        window_id: u64,
-        tab_id: u64,
-    },
-    TabCreated {
-        version: u32,
-        process_id: u32,
-        request_id: String,
-        window_id: u64,
-        tab_id: u64,
-    },
-    PaneCreated {
-        version: u32,
-        process_id: u32,
-        request_id: String,
-        window_id: u64,
-        tab_id: u64,
-        pane_id: u32,
-    },
-    WindowFocusRequested {
-        version: u32,
-        process_id: u32,
-        request_id: String,
-        window_id: u64,
-        already_focused: bool,
-    },
-    QuickAccessChanged {
-        version: u32,
-        process_id: u32,
-        request_id: String,
-        window_id: u64,
-        visible: bool,
-    },
-    TabSelected {
-        version: u32,
-        process_id: u32,
-        request_id: String,
-        window_id: u64,
-        tab_id: u64,
-        changed: bool,
-    },
-    PaneFocused {
-        version: u32,
-        process_id: u32,
-        request_id: String,
-        window_id: u64,
-        tab_id: u64,
-        pane_id: u32,
-        tab_changed: bool,
-        pane_changed: bool,
-    },
-    WindowCloseRequested {
-        version: u32,
-        process_id: u32,
-        request_id: String,
-        window_id: u64,
-    },
-    TabCloseRequested {
-        version: u32,
-        process_id: u32,
-        request_id: String,
-        window_id: u64,
-        tab_id: u64,
-    },
-    PaneClosed {
-        version: u32,
-        process_id: u32,
-        request_id: String,
-        window_id: u64,
-        tab_id: u64,
-        pane_id: u32,
-        remaining_panes: u16,
-        focused_pane_id: u32,
-    },
-    TabMoved {
-        version: u32,
-        process_id: u32,
-        request_id: String,
-        source_window_id: u64,
-        source_tab_id: u64,
-        destination_window_id: u64,
-        destination_tab_id: u64,
-        destination_index: u16,
-        source_window_closing: bool,
-        changed: bool,
-    },
-    PaneMoved {
-        version: u32,
-        process_id: u32,
-        request_id: String,
-        source_window_id: u64,
-        source_tab_id: u64,
-        source_pane_id: u32,
-        destination_window_id: u64,
-        destination_tab_id: u64,
-        destination_pane_id: u32,
-        target_pane_id: u32,
-    },
-    WindowResizeRequested {
-        version: u32,
-        process_id: u32,
-        request_id: String,
-        window_id: u64,
-        requested_width: u32,
-        requested_height: u32,
-        immediate_width: Option<u32>,
-        immediate_height: Option<u32>,
-    },
-    DividerResized {
-        version: u32,
-        process_id: u32,
-        request_id: String,
-        window_id: u64,
-        tab_id: u64,
-        divider_id: u64,
-        previous_ratio_millis: u16,
-        ratio_millis: u16,
-        changed: bool,
-    },
-    AgentEventRecorded {
-        version: u32,
-        process_id: u32,
-    },
-    Agents {
-        version: u32,
-        process_id: u32,
-        agents: Vec<AgentSummary>,
-        truncated: bool,
-    },
-    Conversation {
-        version: u32,
-        process_id: u32,
-        window_id: u64,
-        session_id: u64,
-        text: String,
-        truncated: bool,
-    },
-    ApprovalAnswered {
-        version: u32,
-        process_id: u32,
-        request_id: String,
-        window_id: u64,
-        session_id: u64,
-        answered: bool,
-    },
-    SessionInputAccepted {
-        version: u32,
-        process_id: u32,
-        request_id: String,
-        window_id: u64,
-        session_id: u64,
-        pending_approval: bool,
-    },
-    AgentInputAccepted {
-        version: u32,
-        process_id: u32,
-        request_id: String,
-        window_id: u64,
-        tab_id: u64,
-        pane_id: u32,
-        pending_approval: bool,
-    },
+    /// The request was refused or failed; nothing else in this frame.
     Error {
-        version: u32,
         message: String,
     },
+}
+
+/// What a GUI writes back on its control socket: exactly one reply.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServerFrame {
+    pub version: u32,
+    pub response: Response,
+}
+
+impl ServerFrame {
+    pub fn new(response: Response) -> Self {
+        Self {
+            version: PROTOCOL_VERSION,
+            response,
+        }
+    }
+
+    pub fn error(message: impl Into<String>) -> Self {
+        Self::new(Response::Error {
+            message: message.into(),
+        })
+    }
+}
+
+impl Response {
+    /// The process that answered; every reply but an error names it.
+    pub fn process_id(&self) -> Option<u32> {
+        match self {
+            Self::Inventory(inventory) => Some(inventory.process_id),
+            Self::LaunchStatus { process_id, .. }
+            | Self::Text { process_id, .. }
+            | Self::InputAccepted { process_id, .. }
+            | Self::WindowCreated { process_id, .. }
+            | Self::WindowLaunched { process_id, .. }
+            | Self::TabCreated { process_id, .. }
+            | Self::PaneCreated { process_id, .. }
+            | Self::WindowFocusRequested { process_id, .. }
+            | Self::QuickAccessChanged { process_id, .. }
+            | Self::TabSelected { process_id, .. }
+            | Self::PaneFocused { process_id, .. }
+            | Self::WindowCloseRequested { process_id, .. }
+            | Self::TabCloseRequested { process_id, .. }
+            | Self::PaneClosed { process_id, .. }
+            | Self::TabMoved { process_id, .. }
+            | Self::PaneMoved { process_id, .. }
+            | Self::WindowResizeRequested { process_id, .. }
+            | Self::DividerResized { process_id, .. }
+            | Self::AgentEventRecorded { process_id }
+            | Self::Agents { process_id, .. }
+            | Self::Conversation { process_id, .. }
+            | Self::ApprovalAnswered { process_id, .. }
+            | Self::SessionInputAccepted { process_id, .. }
+            | Self::AgentInputAccepted { process_id, .. } => Some(*process_id),
+            Self::Error { .. } => None,
+        }
+    }
+
+    /// The replay identity an action's reply echoes.
+    pub fn request_id(&self) -> Option<&str> {
+        match self {
+            Self::InputAccepted { request_id, .. }
+            | Self::WindowCreated { request_id, .. }
+            | Self::WindowLaunched { request_id, .. }
+            | Self::TabCreated { request_id, .. }
+            | Self::PaneCreated { request_id, .. }
+            | Self::WindowFocusRequested { request_id, .. }
+            | Self::QuickAccessChanged { request_id, .. }
+            | Self::TabSelected { request_id, .. }
+            | Self::PaneFocused { request_id, .. }
+            | Self::WindowCloseRequested { request_id, .. }
+            | Self::TabCloseRequested { request_id, .. }
+            | Self::PaneClosed { request_id, .. }
+            | Self::TabMoved { request_id, .. }
+            | Self::PaneMoved { request_id, .. }
+            | Self::WindowResizeRequested { request_id, .. }
+            | Self::DividerResized { request_id, .. }
+            | Self::ApprovalAnswered { request_id, .. }
+            | Self::SessionInputAccepted { request_id, .. }
+            | Self::AgentInputAccepted { request_id, .. } => Some(request_id),
+            Self::Inventory(_)
+            | Self::LaunchStatus { .. }
+            | Self::Text { .. }
+            | Self::AgentEventRecorded { .. }
+            | Self::Agents { .. }
+            | Self::Conversation { .. }
+            | Self::Error { .. } => None,
+        }
+    }
+
+    /// Checks that a reply is consistent in itself; whether it answers a
+    /// particular request is for the client that sent it to check. The GUI
+    /// checks before sending and the client again on receipt.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if let Self::Error { message } = self {
+            anyhow::ensure!(
+                message.len() <= MAX_ERROR_MESSAGE_BYTES,
+                "GUI control error message exceeds its limit"
+            );
+            return Ok(());
+        }
+        let process_id = self.process_id().unwrap_or_default();
+        anyhow::ensure!(
+            process_id != 0 && process_id <= i32::MAX as u32,
+            "GUI control reply names an invalid process"
+        );
+        if let Some(request_id) = self.request_id() {
+            anyhow::ensure!(
+                valid_request_id(request_id),
+                "GUI control reply carries an invalid request ID"
+            );
+        }
+        let consistent = match self {
+            Self::Inventory(inventory) => {
+                inventory.validate()?;
+                true
+            }
+            Self::Agents { agents, .. } => {
+                validate_agent_summaries(agents)?;
+                true
+            }
+            Self::LaunchStatus {
+                launch_request_id,
+                state,
+                ..
+            } => {
+                state.validate().map_err(anyhow::Error::msg)?;
+                valid_request_id(launch_request_id)
+            }
+            Self::AgentEventRecorded { .. } => true,
+            Self::Text {
+                window_id,
+                history_lines,
+                text,
+                ..
+            } => {
+                *window_id != 0
+                    && *history_lines <= MAX_TEXT_HISTORY_LINES
+                    && text.len() <= MAX_TERMINAL_TEXT_BYTES as usize
+            }
+            Self::Conversation {
+                window_id,
+                session_id,
+                text,
+                ..
+            } => {
+                *window_id != 0
+                    && *session_id != 0
+                    && text.len() <= MAX_TERMINAL_TEXT_BYTES as usize
+            }
+            Self::InputAccepted {
+                window_id,
+                input_bytes,
+                wire_bytes,
+                disposition,
+                confirmation_id,
+                ..
+            } => {
+                let valid_disposition = match (disposition, confirmation_id) {
+                    (InputDisposition::Sent, None) => true,
+                    (InputDisposition::PendingConfirmation, Some(id)) => *id != 0,
+                    _ => false,
+                };
+                *window_id != 0
+                    && *input_bytes != 0
+                    && *input_bytes as usize <= MAX_CONTROL_INPUT_BYTES + 1
+                    && *wire_bytes >= *input_bytes
+                    && *wire_bytes as usize <= MAX_CONTROL_INPUT_BYTES + 13
+                    && valid_disposition
+            }
+            Self::PaneCreated {
+                window_id, pane_id, ..
+            } => *window_id != 0 && *pane_id != 0,
+            Self::PaneClosed {
+                window_id,
+                remaining_panes,
+                ..
+            } => {
+                *window_id != 0
+                    && *remaining_panes != 0
+                    && usize::from(*remaining_panes) <= MAX_PANES_PER_TAB
+            }
+            Self::TabMoved {
+                source_window_id,
+                destination_window_id,
+                destination_index,
+                ..
+            } => {
+                *source_window_id != 0
+                    && *destination_window_id != 0
+                    && usize::from(*destination_index) < MAX_TABS_PER_WINDOW
+            }
+            Self::PaneMoved {
+                source_window_id,
+                destination_window_id,
+                destination_pane_id,
+                target_pane_id,
+                ..
+            } => {
+                *source_window_id != 0
+                    && *destination_window_id != 0
+                    && destination_pane_id != target_pane_id
+            }
+            Self::WindowResizeRequested {
+                window_id,
+                requested_width,
+                requested_height,
+                immediate_width,
+                immediate_height,
+                ..
+            } => {
+                *window_id != 0
+                    && (MIN_WINDOW_WIDTH..=MAX_WINDOW_DIMENSION).contains(requested_width)
+                    && (MIN_WINDOW_HEIGHT..=MAX_WINDOW_DIMENSION).contains(requested_height)
+                    && immediate_width.is_some() == immediate_height.is_some()
+                    && *immediate_width != Some(0)
+                    && *immediate_height != Some(0)
+            }
+            Self::DividerResized {
+                window_id,
+                previous_ratio_millis,
+                ratio_millis,
+                changed,
+                ..
+            } => {
+                *window_id != 0
+                    && (100..=900).contains(previous_ratio_millis)
+                    && (100..=900).contains(ratio_millis)
+                    && *changed == (previous_ratio_millis != ratio_millis)
+            }
+            Self::WindowCreated { window_id, .. }
+            | Self::WindowLaunched { window_id, .. }
+            | Self::TabCreated { window_id, .. }
+            | Self::WindowFocusRequested { window_id, .. }
+            | Self::QuickAccessChanged { window_id, .. }
+            | Self::TabSelected { window_id, .. }
+            | Self::PaneFocused { window_id, .. }
+            | Self::WindowCloseRequested { window_id, .. }
+            | Self::TabCloseRequested { window_id, .. }
+            | Self::ApprovalAnswered { window_id, .. }
+            | Self::SessionInputAccepted { window_id, .. }
+            | Self::AgentInputAccepted { window_id, .. } => *window_id != 0,
+            Self::Error { .. } => unreachable!("errors return above"),
+        };
+        anyhow::ensure!(consistent, "the GUI control reply is inconsistent");
+        Ok(())
+    }
 }
 
 impl Request {
@@ -1298,7 +1338,41 @@ impl Request {
         }
     }
 
+    /// The replay identity of an action; reads and reports have none.
     pub fn request_id(&self) -> Option<&str> {
+        match self {
+            Self::Inventory
+            | Self::ReadText { .. }
+            | Self::LaunchStatus { .. }
+            | Self::ListAgents { .. }
+            | Self::ReadConversation { .. }
+            | Self::AgentEvent { .. } => None,
+            Self::CreateWindow { request_id, .. }
+            | Self::JoinLaunch { request_id, .. }
+            | Self::LaunchWindow { request_id, .. }
+            | Self::CreateTab { request_id, .. }
+            | Self::LaunchTab { request_id, .. }
+            | Self::SplitPane { request_id, .. }
+            | Self::FocusWindow { request_id, .. }
+            | Self::SetQuickAccessVisibility { request_id, .. }
+            | Self::SelectTab { request_id, .. }
+            | Self::FocusPane { request_id, .. }
+            | Self::CloseWindow { request_id, .. }
+            | Self::CloseTab { request_id, .. }
+            | Self::ClosePane { request_id, .. }
+            | Self::MoveTab { request_id, .. }
+            | Self::MovePane { request_id, .. }
+            | Self::ResizeWindow { request_id, .. }
+            | Self::ResizeDivider { request_id, .. }
+            | Self::SendText { request_id, .. }
+            | Self::SubmitToAgent { request_id, .. }
+            | Self::AnswerApproval { request_id, .. }
+            | Self::SubmitToSession { request_id, .. } => Some(request_id),
+        }
+    }
+
+    /// [`Self::request_id`], for the client to fill in before sending.
+    pub fn request_id_mut(&mut self) -> Option<&mut String> {
         match self {
             // Agent events restate the agent's current state; repeating one
             // is harmless, so they carry no replay identity.
@@ -1731,12 +1805,11 @@ mod tests {
         assert!(fit_agent_summaries(&mut many));
         assert!(many.len() < 40 && !many.is_empty());
         assert_eq!(many.last().unwrap().tab_id, many.len() as u64);
-        let frame = ServerFrame::Agents {
-            version: PROTOCOL_VERSION,
+        let frame = ServerFrame::new(Response::Agents {
             process_id: 1,
             agents: many,
             truncated: true,
-        };
+        });
         let mut wire = Vec::new();
         write_frame(&mut wire, &frame).unwrap();
     }
@@ -1906,13 +1979,12 @@ mod tests {
                 success: false,
             },
         ] {
-            let response = ServerFrame::LaunchStatus {
-                version: PROTOCOL_VERSION,
+            let response = ServerFrame::new(Response::LaunchStatus {
                 process_id: 42,
                 launch_request_id: "1".repeat(32),
                 state,
                 terminal_closed: true,
-            };
+            });
             let mut wire = Vec::new();
             write_frame(&mut wire, &response).unwrap();
             assert_eq!(
@@ -1925,58 +1997,55 @@ mod tests {
 
     #[test]
     fn inventory_round_trips_with_stable_versioned_shape() {
-        let frame = ServerFrame::Inventory {
-            version: PROTOCOL_VERSION,
-            inventory: ProcessInventory {
-                process_id: 42,
-                windows: vec![WindowInventory {
-                    id: 7,
-                    focused: true,
-                    visible: true,
-                    quick_access: false,
-                    workspace_id: Some("daily".into()),
-                    pixel_width: 1_200,
-                    pixel_height: 800,
-                    tabs: vec![TabInventory {
-                        id: 3,
-                        title: "build".into(),
-                        kind: TabKind::Shell,
-                        active: true,
-                        pinned: false,
-                        activity: false,
-                        closed: false,
-                        domain_id: None,
-                        panes: vec![
-                            PaneInventory {
-                                id: 0,
-                                title: None,
-                                focused: true,
-                                closed: false,
-                                cols: 120,
-                                rows: 40,
-                            },
-                            PaneInventory {
-                                id: 1,
-                                title: Some("logs".into()),
-                                focused: false,
-                                closed: false,
-                                cols: 120,
-                                rows: 40,
-                            },
-                        ],
-                        dividers: vec![DividerInventory {
+        let frame = ServerFrame::new(Response::Inventory(ProcessInventory {
+            process_id: 42,
+            windows: vec![WindowInventory {
+                id: 7,
+                focused: true,
+                visible: true,
+                quick_access: false,
+                workspace_id: Some("daily".into()),
+                pixel_width: 1_200,
+                pixel_height: 800,
+                tabs: vec![TabInventory {
+                    id: 3,
+                    title: "build".into(),
+                    kind: TabKind::Shell,
+                    active: true,
+                    pinned: false,
+                    activity: false,
+                    closed: false,
+                    domain_id: None,
+                    panes: vec![
+                        PaneInventory {
+                            id: 0,
+                            title: None,
+                            focused: true,
+                            closed: false,
+                            cols: 120,
+                            rows: 40,
+                        },
+                        PaneInventory {
                             id: 1,
-                            kind: DividerKind::Local,
-                            direction: SplitDirection::Vertical,
-                            ratio_millis: 500,
-                        }],
-                        truncated: false,
+                            title: Some("logs".into()),
+                            focused: false,
+                            closed: false,
+                            cols: 120,
+                            rows: 40,
+                        },
+                    ],
+                    dividers: vec![DividerInventory {
+                        id: 1,
+                        kind: DividerKind::Local,
+                        direction: SplitDirection::Vertical,
+                        ratio_millis: 500,
                     }],
                     truncated: false,
                 }],
                 truncated: false,
-            },
-        };
+            }],
+            truncated: false,
+        }));
         let mut wire = Vec::new();
         write_frame(&mut wire, &frame).unwrap();
         assert_eq!(
@@ -2005,12 +2074,11 @@ mod tests {
             frame
         );
 
-        let response = ServerFrame::WindowCreated {
-            version: PROTOCOL_VERSION,
+        let response = ServerFrame::new(Response::WindowCreated {
             process_id: 42,
             request_id,
             window_id: 9,
-        };
+        });
         let mut wire = Vec::new();
         write_frame(&mut wire, &response).unwrap();
         assert_eq!(
@@ -2056,13 +2124,12 @@ mod tests {
             frame
         );
 
-        let response = ServerFrame::TabCreated {
-            version: PROTOCOL_VERSION,
+        let response = ServerFrame::new(Response::TabCreated {
             process_id: 42,
             request_id,
             window_id: 7,
             tab_id: 3,
-        };
+        });
         let mut wire = Vec::new();
         write_frame(&mut wire, &response).unwrap();
         assert_eq!(
@@ -2262,13 +2329,12 @@ mod tests {
         );
         assert_eq!(request.request_id(), Some(request_id.as_str()));
 
-        let response = ServerFrame::WindowLaunched {
-            version: PROTOCOL_VERSION,
+        let response = ServerFrame::new(Response::WindowLaunched {
             process_id: 42,
             request_id,
             window_id: 9,
             tab_id: 0,
-        };
+        });
         let mut wire = Vec::new();
         write_frame(&mut wire, &response).unwrap();
         assert_eq!(
@@ -2490,14 +2556,13 @@ mod tests {
             frame
         );
 
-        let response = ServerFrame::PaneCreated {
-            version: PROTOCOL_VERSION,
+        let response = ServerFrame::new(Response::PaneCreated {
             process_id: 42,
             request_id,
             window_id: 7,
             tab_id: 3,
             pane_id: 1,
-        };
+        });
         let mut wire = Vec::new();
         write_frame(&mut wire, &response).unwrap();
         assert_eq!(
@@ -2558,30 +2623,26 @@ mod tests {
         }
 
         for response in [
-            ServerFrame::WindowFocusRequested {
-                version: PROTOCOL_VERSION,
+            ServerFrame::new(Response::WindowFocusRequested {
                 process_id: 42,
                 request_id: request_id.clone(),
                 window_id: 7,
                 already_focused: false,
-            },
-            ServerFrame::QuickAccessChanged {
-                version: PROTOCOL_VERSION,
+            }),
+            ServerFrame::new(Response::QuickAccessChanged {
                 process_id: 42,
                 request_id: request_id.clone(),
                 window_id: 7,
                 visible: false,
-            },
-            ServerFrame::TabSelected {
-                version: PROTOCOL_VERSION,
+            }),
+            ServerFrame::new(Response::TabSelected {
                 process_id: 42,
                 request_id: request_id.clone(),
                 window_id: 7,
                 tab_id: 3,
                 changed: true,
-            },
-            ServerFrame::PaneFocused {
-                version: PROTOCOL_VERSION,
+            }),
+            ServerFrame::new(Response::PaneFocused {
                 process_id: 42,
                 request_id: request_id.clone(),
                 window_id: 7,
@@ -2589,7 +2650,7 @@ mod tests {
                 pane_id: 1,
                 tab_changed: true,
                 pane_changed: true,
-            },
+            }),
         ] {
             let mut wire = Vec::new();
             write_frame(&mut wire, &response).unwrap();
@@ -2635,21 +2696,18 @@ mod tests {
         }
 
         for response in [
-            ServerFrame::WindowCloseRequested {
-                version: PROTOCOL_VERSION,
+            ServerFrame::new(Response::WindowCloseRequested {
                 process_id: 42,
                 request_id: request_id.clone(),
                 window_id: 7,
-            },
-            ServerFrame::TabCloseRequested {
-                version: PROTOCOL_VERSION,
+            }),
+            ServerFrame::new(Response::TabCloseRequested {
                 process_id: 42,
                 request_id: request_id.clone(),
                 window_id: 7,
                 tab_id: 3,
-            },
-            ServerFrame::PaneClosed {
-                version: PROTOCOL_VERSION,
+            }),
+            ServerFrame::new(Response::PaneClosed {
                 process_id: 42,
                 request_id: request_id.clone(),
                 window_id: 7,
@@ -2657,7 +2715,7 @@ mod tests {
                 pane_id: 1,
                 remaining_panes: 1,
                 focused_pane_id: 0,
-            },
+            }),
         ] {
             let mut wire = Vec::new();
             write_frame(&mut wire, &response).unwrap();
@@ -2691,8 +2749,7 @@ mod tests {
             frame
         );
 
-        let response = ServerFrame::TabMoved {
-            version: PROTOCOL_VERSION,
+        let response = ServerFrame::new(Response::TabMoved {
             process_id: 42,
             request_id,
             source_window_id: 7,
@@ -2702,7 +2759,7 @@ mod tests {
             destination_index: 2,
             source_window_closing: false,
             changed: true,
-        };
+        });
         let mut wire = Vec::new();
         write_frame(&mut wire, &response).unwrap();
         assert_eq!(
@@ -2749,8 +2806,7 @@ mod tests {
             frame
         );
 
-        let response = ServerFrame::PaneMoved {
-            version: PROTOCOL_VERSION,
+        let response = ServerFrame::new(Response::PaneMoved {
             process_id: 42,
             request_id,
             source_window_id: 7,
@@ -2760,7 +2816,7 @@ mod tests {
             destination_tab_id: 4,
             destination_pane_id: 5,
             target_pane_id: 2,
-        };
+        });
         let mut wire = Vec::new();
         write_frame(&mut wire, &response).unwrap();
         assert_eq!(
@@ -2792,8 +2848,7 @@ mod tests {
             frame
         );
 
-        let response = ServerFrame::Text {
-            version: PROTOCOL_VERSION,
+        let response = ServerFrame::new(Response::Text {
             process_id: 42,
             window_id: 7,
             tab_id: 3,
@@ -2802,7 +2857,7 @@ mod tests {
             history_lines: 12,
             text: "recent output".into(),
             truncated: false,
-        };
+        });
         let mut wire = Vec::new();
         write_frame(&mut wire, &response).unwrap();
         assert_eq!(
@@ -2863,8 +2918,7 @@ mod tests {
             frame
         );
 
-        let response = ServerFrame::InputAccepted {
-            version: PROTOCOL_VERSION,
+        let response = ServerFrame::new(Response::InputAccepted {
             process_id: 42,
             request_id,
             window_id: 7,
@@ -2876,7 +2930,7 @@ mod tests {
             enter: true,
             disposition: InputDisposition::PendingConfirmation,
             confirmation_id: Some(9),
-        };
+        });
         let mut wire = Vec::new();
         write_frame(&mut wire, &response).unwrap();
         assert_eq!(
@@ -2947,8 +3001,7 @@ mod tests {
         }
 
         for response in [
-            ServerFrame::WindowResizeRequested {
-                version: PROTOCOL_VERSION,
+            ServerFrame::new(Response::WindowResizeRequested {
                 process_id: 42,
                 request_id: request_id.clone(),
                 window_id: 7,
@@ -2956,9 +3009,8 @@ mod tests {
                 requested_height: 600,
                 immediate_width: None,
                 immediate_height: None,
-            },
-            ServerFrame::DividerResized {
-                version: PROTOCOL_VERSION,
+            }),
+            ServerFrame::new(Response::DividerResized {
                 process_id: 42,
                 request_id: request_id.clone(),
                 window_id: 7,
@@ -2967,7 +3019,7 @@ mod tests {
                 previous_ratio_millis: 500,
                 ratio_millis: 650,
                 changed: true,
-            },
+            }),
         ] {
             let mut wire = Vec::new();
             write_frame(&mut wire, &response).unwrap();
@@ -3072,20 +3124,15 @@ mod tests {
             });
         }
         assert_eq!(tab_id, MAX_TOTAL_TABS);
-        let frame = ServerFrame::Inventory {
-            version: PROTOCOL_VERSION,
-            inventory: ProcessInventory {
-                process_id: i32::MAX as u32,
-                windows,
-                truncated: false,
-            },
-        };
+        let frame = ServerFrame::new(Response::Inventory(ProcessInventory {
+            process_id: i32::MAX as u32,
+            windows,
+            truncated: false,
+        }));
         let mut wire = Vec::new();
         write_frame(&mut wire, &frame).unwrap();
         assert!(wire.len() <= MAX_FRAME_BYTES + 4);
-        if let ServerFrame::Inventory { inventory, .. } = frame {
-            inventory.validate().unwrap();
-        }
+        frame.response.validate().unwrap();
     }
 
     #[test]

@@ -6,7 +6,7 @@
 
 Every running Termeric listens on a private socket in your runtime directory (`$XDG_RUNTIME_DIR/termeric`, or `/tmp/termeric-UID` without one). Only programs running as your user can connect. The `termeric control` commands find it on their own and never open a window.
 
-Every command takes `--json` to print its result as JSON for scripts, and every command that changes something takes `--request-id ID` (see [Retrying safely](#retrying-safely)).
+Every command takes `--json` to print its result as JSON for scripts, and every command that changes something takes `--request-id ID` (see [Retrying safely](#retrying-safely)). Apart from `list`, the JSON is one object: `schema_version`, a `result` naming what happened (such as `tab_created`, `tab_close_requested`, or `launch_status`), and that result's fields, such as `process_id`, `request_id`, and the IDs it acted on or created. `termeric control COMMAND --help` describes each command.
 
 ## Finding windows, tabs, and panes
 
@@ -129,7 +129,7 @@ A few things to know about waiting:
 | --- | --- |
 | `new-window PROCESS SOURCE_WINDOW` | Open a window like the source window, in its focused tab's directory. |
 | `new-tab PROCESS WINDOW` | Open a shell tab and print its ID. Refused while the window's selected tab belongs to a live domain. |
-| `split-pane PROCESS WINDOW TAB PANE horizontal\|vertical` | Split a pane (`horizontal` adds one below, `vertical` to the right) and print the new pane's ID. |
+| `split-pane PROCESS WINDOW TAB PANE horizontal\|vertical` | Split a pane (`horizontal`, or `h`, adds one below; `vertical`, or `v`, to the right) and print the new pane's ID. |
 | `select-tab PROCESS WINDOW TAB` | Select a tab, without raising its window. |
 | `focus-pane PROCESS WINDOW TAB PANE` | Select a tab and focus a pane. |
 | `focus-window PROCESS WINDOW` | Ask the desktop to focus a window. On Wayland the compositor decides, so this is refused. |

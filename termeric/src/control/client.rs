@@ -1,7 +1,7 @@
 //! Discovery client and safe command-line formatting for GUI inventory.
 
 use super::paths::ControlPaths;
-use super::protocol::{self, ClientFrame, ProcessInventory, Request, ServerFrame};
+use super::protocol::{self, ClientFrame, ProcessInventory, Request, Response, ServerFrame};
 use anyhow::Context;
 use serde::Serialize;
 use std::os::unix::net::UnixStream;
@@ -20,7 +20,6 @@ pub fn list(json: bool) -> anyhow::Result<String> {
     for endpoint in ControlPaths::discover_all()? {
         match request_inventory(&endpoint) {
             Ok(inventory) => {
-                inventory.validate()?;
                 if inventory.process_id != endpoint.process_id {
                     anyhow::bail!(
                         "GUI control endpoint {} answered for unexpected process {}",
@@ -70,7 +69,6 @@ fn toggle_existing_quick_access_at(endpoints: Vec<ControlPaths>) -> anyhow::Resu
     for endpoint in endpoints {
         match request_inventory(&endpoint) {
             Ok(inventory) => {
-                inventory.validate()?;
                 if inventory.process_id != endpoint.process_id {
                     anyhow::bail!(
                         "GUI control endpoint {} answered for unexpected process {}",
@@ -116,45 +114,28 @@ fn toggle_existing_quick_access_at(endpoints: Vec<ControlPaths>) -> anyhow::Resu
         return Ok(None);
     };
     let request_id = generate_request_id()?;
-    let request_frame = Request::SetQuickAccessVisibility {
+    let toggle = Request::SetQuickAccessVisibility {
         request_id: request_id.clone(),
         window_id,
         visible: desired_visible,
     };
-    let frame = match request(&endpoint, request_frame.clone()) {
-        Ok(frame) => frame,
-        Err(first_error) => request(&endpoint, request_frame).with_context(|| {
+    // The request ID makes the retry a replay, never a second toggle.
+    let response = match request(&endpoint, &toggle) {
+        Ok(response) => response,
+        Err(first_error) => request(&endpoint, &toggle).with_context(|| {
             format!(
                 "quick-access request {request_id} failed twice; first failure: {first_error:#}"
             )
         })?,
     };
-    match frame {
-        ServerFrame::QuickAccessChanged {
-            version,
-            process_id,
-            request_id: returned_request,
-            window_id: returned_window,
-            visible: returned_visible,
-        } if version == protocol::PROTOCOL_VERSION
-            && process_id == endpoint.process_id
-            && returned_request == request_id
-            && returned_window == window_id
-            && returned_visible == desired_visible =>
-        {
-            Ok(Some(format!(
-                "Quick-access terminal in process {process_id}, window {window_id} is now {} (request {request_id}).",
-                if returned_visible {
-                    "visible"
-                } else {
-                    "hidden"
-                }
-            )))
-        }
-        ServerFrame::Error { message, .. } => anyhow::bail!(
+    match response {
+        Response::Error { message } => anyhow::bail!(
             "{message} (request {request_id}; retry the same visibility action with a fresh invocation)"
         ),
-        frame => anyhow::bail!("invalid quick-access visibility response {frame:?}"),
+        response => {
+            let response = answer(endpoint.process_id, &toggle, response)?;
+            Ok(Some(describe(&toggle, &response)))
+        }
     }
 }
 
@@ -168,1395 +149,662 @@ fn endpoint_is_stale(error: &anyhow::Error, process_id: u32) -> bool {
 }
 
 fn request_inventory(endpoint: &ControlPaths) -> anyhow::Result<ProcessInventory> {
-    match request(endpoint, Request::Inventory)? {
-        ServerFrame::Inventory { version, inventory } if version == protocol::PROTOCOL_VERSION => {
-            Ok(inventory)
-        }
-        ServerFrame::Error { message, .. } => anyhow::bail!(message),
-        frame => anyhow::bail!("invalid GUI control inventory response {frame:?}"),
+    match request(endpoint, &Request::Inventory)? {
+        Response::Inventory(inventory) => Ok(inventory),
+        Response::Error { message } => anyhow::bail!(message),
+        _ => anyhow::bail!("invalid GUI control inventory response"),
     }
 }
 
-pub fn get_text(
+/// `--json` output: the reply as the GUI sent it, beside the schema version.
+#[derive(Serialize)]
+struct JsonOutput<'a> {
+    schema_version: u32,
+    #[serde(flatten)]
+    response: &'a Response,
+}
+
+fn json_output(response: &Response) -> anyhow::Result<String> {
+    Ok(serde_json::to_string_pretty(&JsonOutput {
+        schema_version: protocol::JSON_SCHEMA_VERSION,
+        response,
+    })?)
+}
+
+/// Send one `termeric control` request to GUI process `process_id` and print
+/// its reply. An action gets `request_id`, or a fresh one, so a retry with the
+/// same ID replays it instead of acting twice.
+pub fn send(
     process_id: u32,
-    window_id: u64,
-    tab_id: u64,
-    pane_id: u32,
-    history_lines: u16,
-    max_bytes: u32,
+    mut request: Request,
+    request_id: Option<String>,
     json: bool,
 ) -> anyhow::Result<String> {
-    if process_id == 0 || process_id > i32::MAX as u32 || window_id == 0 {
-        anyhow::bail!("process and window IDs must be nonzero runtime IDs");
+    if let Some(slot) = request.request_id_mut() {
+        *slot = match request_id {
+            Some(request_id) if protocol::valid_request_id(&request_id) => request_id,
+            Some(_) => anyhow::bail!("--request-id must be exactly 32 lowercase hex digits"),
+            None => generate_request_id()?,
+        };
     }
-    let endpoint = ControlPaths::discover_all()?
-        .into_iter()
-        .find(|endpoint| endpoint.process_id == process_id)
-        .ok_or_else(|| anyhow::anyhow!("running GUI process {process_id} was not found"))?;
-    let request_frame = Request::ReadText {
-        window_id,
-        tab_id,
-        pane_id,
-        history_lines,
-        max_bytes,
+    request.canonicalize();
+    let Some(id) = request.request_id().map(str::to_owned) else {
+        return print(&request, &ask(process_id, &request)?, json);
     };
-    request_frame.validate().map_err(anyhow::Error::msg)?;
-    match request(&endpoint, request_frame)? {
-        ServerFrame::Text {
-            version,
-            process_id: returned_process,
-            window_id: returned_window,
-            tab_id: returned_tab,
-            pane_id: returned_pane,
-            screen,
-            history_lines: returned_history,
-            text,
-            truncated,
-        } if version == protocol::PROTOCOL_VERSION
-            && returned_process == process_id
-            && returned_window == window_id
-            && returned_tab == tab_id
-            && returned_pane == pane_id
-            && returned_history <= history_lines
-            && text.len() <= max_bytes as usize =>
-        {
-            if json {
-                Ok(serde_json::to_string_pretty(&TextOutput {
-                    schema_version: protocol::JSON_SCHEMA_VERSION,
-                    process_id,
-                    window_id,
-                    tab_id,
-                    pane_id,
-                    screen,
-                    history_lines: returned_history,
-                    text,
-                    truncated,
-                })?)
-            } else if truncated {
-                Ok(format!("[older terminal text truncated]\n{text}"))
-            } else {
-                Ok(text)
-            }
+    // Typed text must never be typed twice, so a failed send is final; any
+    // other action replays under its ID.
+    let input = matches!(request, Request::SendText { .. });
+    let response = reply(process_id, &request).with_context(|| {
+        if input {
+            format!(
+                "request {id} did not complete; retry only with `--request-id {id}` so input cannot be duplicated"
+            )
+        } else {
+            format!(
+                "request {id} did not complete; retry with `--request-id {id}` to replay the same logical action"
+            )
         }
-        ServerFrame::Error { message, .. } => anyhow::bail!(message),
-        frame => anyhow::bail!("invalid GUI control terminal-text response {frame:?}"),
+    })?;
+    match response {
+        Response::Error { message } if input => anyhow::bail!(
+            "{message} (request {id} is terminal; use a new request ID after correcting the failure)"
+        ),
+        Response::Error { message } => {
+            anyhow::bail!("{message} (request {id}; retry the same logical action with this ID)")
+        }
+        response => print(&request, &answer(process_id, &request, response)?, json),
     }
 }
 
+/// `response` as `--json` output or as text for a person.
+pub(super) fn print(request: &Request, response: &Response, json: bool) -> anyhow::Result<String> {
+    if json {
+        json_output(response)
+    } else {
+        Ok(describe(request, response))
+    }
+}
+
+/// Send `request` to GUI process `process_id`; a refusal is an error, and
+/// the reply must answer this request.
+fn ask(process_id: u32, request: &Request) -> anyhow::Result<Response> {
+    answer(process_id, request, reply(process_id, request)?)
+}
+
+/// The GUI's validated reply to `request`, which may be a refusal.
+fn reply(process_id: u32, request: &Request) -> anyhow::Result<Response> {
+    if process_id == 0 || process_id > i32::MAX as u32 {
+        anyhow::bail!("process IDs must be nonzero runtime IDs");
+    }
+    request.validate().map_err(anyhow::Error::msg)?;
+    request_within(&endpoint_for(process_id)?, request, IO_TIMEOUT)
+}
+
+/// `response` from process `process_id` as the answer to `request`: a
+/// refusal becomes an error, and a reply to anything else is refused.
+pub(super) fn answer(
+    process_id: u32,
+    request: &Request,
+    response: Response,
+) -> anyhow::Result<Response> {
+    if let Response::Error { message } = response {
+        anyhow::bail!(message);
+    }
+    if !answers(request, process_id, &response) {
+        anyhow::bail!("the GUI's reply does not answer this request");
+    }
+    Ok(response)
+}
+
+/// Whether `response` from process `process_id` is the reply to `request`:
+/// the same process, replay identity, and targets, and results consistent
+/// with what was asked.
+fn answers(request: &Request, process_id: u32, response: &Response) -> bool {
+    if response.process_id() != Some(process_id) || response.request_id() != request.request_id() {
+        return false;
+    }
+    match (request, response) {
+        (Request::Inventory, Response::Inventory(_))
+        | (Request::ListAgents { .. }, Response::Agents { .. })
+        | (Request::AgentEvent { .. }, Response::AgentEventRecorded { .. })
+        | (Request::CreateWindow { .. }, Response::WindowCreated { .. })
+        | (Request::JoinLaunch { .. }, Response::WindowCreated { .. })
+        | (Request::LaunchWindow { .. }, Response::WindowLaunched { .. }) => true,
+        (
+            Request::LaunchStatus { launch_request_id },
+            Response::LaunchStatus {
+                launch_request_id: returned,
+                ..
+            },
+        ) => returned == launch_request_id,
+        (
+            Request::ReadText {
+                window_id,
+                tab_id,
+                pane_id,
+                history_lines,
+                max_bytes,
+            },
+            Response::Text {
+                window_id: returned_window,
+                tab_id: returned_tab,
+                pane_id: returned_pane,
+                history_lines: returned_history,
+                text,
+                ..
+            },
+        ) => {
+            (returned_window, returned_tab, returned_pane) == (window_id, tab_id, pane_id)
+                && returned_history <= history_lines
+                && text.len() <= *max_bytes as usize
+        }
+        (
+            Request::SendText {
+                window_id,
+                tab_id,
+                pane_id,
+                text,
+                paste,
+                enter,
+                ..
+            },
+            Response::InputAccepted {
+                window_id: returned_window,
+                tab_id: returned_tab,
+                pane_id: returned_pane,
+                input_bytes,
+                wire_bytes,
+                paste: returned_paste,
+                enter: returned_enter,
+                ..
+            },
+        ) => {
+            (returned_window, returned_tab, returned_pane) == (window_id, tab_id, pane_id)
+                && *input_bytes as usize == text.len() + usize::from(*enter)
+                && (returned_paste, returned_enter) == (paste, enter)
+                // A bracketed paste adds its 12 delimiter bytes.
+                && (wire_bytes == input_bytes || (*paste && *wire_bytes == input_bytes + 12))
+        }
+        (
+            Request::CreateTab { window_id, .. } | Request::LaunchTab { window_id, .. },
+            Response::TabCreated {
+                window_id: returned_window,
+                ..
+            },
+        )
+        | (
+            Request::FocusWindow { window_id, .. },
+            Response::WindowFocusRequested {
+                window_id: returned_window,
+                ..
+            },
+        )
+        | (
+            Request::CloseWindow { window_id, .. },
+            Response::WindowCloseRequested {
+                window_id: returned_window,
+                ..
+            },
+        ) => returned_window == window_id,
+        (
+            Request::SetQuickAccessVisibility {
+                window_id, visible, ..
+            },
+            Response::QuickAccessChanged {
+                window_id: returned_window,
+                visible: returned_visible,
+                ..
+            },
+        ) => (returned_window, returned_visible) == (window_id, visible),
+        (
+            Request::SplitPane {
+                window_id, tab_id, ..
+            },
+            Response::PaneCreated {
+                window_id: returned_window,
+                tab_id: returned_tab,
+                ..
+            },
+        )
+        | (
+            Request::SelectTab {
+                window_id, tab_id, ..
+            },
+            Response::TabSelected {
+                window_id: returned_window,
+                tab_id: returned_tab,
+                ..
+            },
+        )
+        | (
+            Request::CloseTab {
+                window_id, tab_id, ..
+            },
+            Response::TabCloseRequested {
+                window_id: returned_window,
+                tab_id: returned_tab,
+                ..
+            },
+        ) => (returned_window, returned_tab) == (window_id, tab_id),
+        (
+            Request::FocusPane {
+                window_id,
+                tab_id,
+                pane_id,
+                ..
+            },
+            Response::PaneFocused {
+                window_id: returned_window,
+                tab_id: returned_tab,
+                pane_id: returned_pane,
+                ..
+            },
+        )
+        | (
+            Request::ClosePane {
+                window_id,
+                tab_id,
+                pane_id,
+                ..
+            },
+            Response::PaneClosed {
+                window_id: returned_window,
+                tab_id: returned_tab,
+                pane_id: returned_pane,
+                ..
+            },
+        )
+        | (
+            Request::SubmitToAgent {
+                window_id,
+                tab_id,
+                pane_id,
+                ..
+            },
+            Response::AgentInputAccepted {
+                window_id: returned_window,
+                tab_id: returned_tab,
+                pane_id: returned_pane,
+                ..
+            },
+        ) => (returned_window, returned_tab, returned_pane) == (window_id, tab_id, pane_id),
+        (
+            Request::MoveTab {
+                source_window_id,
+                tab_id,
+                destination_window_id,
+                destination_index,
+                ..
+            },
+            Response::TabMoved {
+                source_window_id: returned_source,
+                source_tab_id,
+                destination_window_id: returned_destination,
+                destination_index: returned_index,
+                ..
+            },
+        ) => {
+            (returned_source, source_tab_id) == (source_window_id, tab_id)
+                && (returned_destination, returned_index)
+                    == (destination_window_id, destination_index)
+        }
+        (
+            Request::MovePane {
+                source_window_id,
+                source_tab_id,
+                pane_id,
+                destination_window_id,
+                destination_tab_id,
+                target_pane_id,
+                ..
+            },
+            Response::PaneMoved {
+                source_window_id: returned_source_window,
+                source_tab_id: returned_source_tab,
+                source_pane_id,
+                destination_window_id: returned_destination_window,
+                destination_tab_id: returned_destination_tab,
+                target_pane_id: returned_target,
+                ..
+            },
+        ) => {
+            (returned_source_window, returned_source_tab, source_pane_id)
+                == (source_window_id, source_tab_id, pane_id)
+                && (
+                    returned_destination_window,
+                    returned_destination_tab,
+                    returned_target,
+                ) == (destination_window_id, destination_tab_id, target_pane_id)
+        }
+        (
+            Request::ResizeWindow {
+                window_id,
+                width,
+                height,
+                ..
+            },
+            Response::WindowResizeRequested {
+                window_id: returned_window,
+                requested_width,
+                requested_height,
+                ..
+            },
+        ) => (returned_window, requested_width, requested_height) == (window_id, width, height),
+        (
+            Request::ResizeDivider {
+                window_id,
+                tab_id,
+                divider_id,
+                ratio_millis,
+                ..
+            },
+            Response::DividerResized {
+                window_id: returned_window,
+                tab_id: returned_tab,
+                divider_id: returned_divider,
+                ratio_millis: returned_ratio,
+                ..
+            },
+        ) => {
+            (
+                returned_window,
+                returned_tab,
+                returned_divider,
+                returned_ratio,
+            ) == (window_id, tab_id, divider_id, ratio_millis)
+        }
+        (
+            Request::ReadConversation {
+                window_id,
+                session_id,
+            },
+            Response::Conversation {
+                window_id: returned_window,
+                session_id: returned_session,
+                ..
+            },
+        )
+        | (
+            Request::AnswerApproval {
+                window_id,
+                session_id,
+                ..
+            },
+            Response::ApprovalAnswered {
+                window_id: returned_window,
+                session_id: returned_session,
+                ..
+            },
+        )
+        | (
+            Request::SubmitToSession {
+                window_id,
+                session_id,
+                ..
+            },
+            Response::SessionInputAccepted {
+                window_id: returned_window,
+                session_id: returned_session,
+                ..
+            },
+        ) => (returned_window, returned_session) == (window_id, session_id),
+        _ => false,
+    }
+}
+
+/// One line (or the terminal text) a person reads for `response`.
+fn describe(request: &Request, response: &Response) -> String {
+    match response {
+        Response::Text {
+            text, truncated, ..
+        } => {
+            if *truncated {
+                format!("[older terminal text truncated]\n{text}")
+            } else {
+                text.clone()
+            }
+        }
+        Response::LaunchStatus {
+            process_id,
+            launch_request_id,
+            state,
+            terminal_closed,
+        } => {
+            let result = match state {
+                protocol::LaunchState::Running {} => "running".to_string(),
+                protocol::LaunchState::Exited { exit_code, success } => {
+                    format!("exited with portable code {exit_code} (success: {success})")
+                }
+            };
+            format!(
+                "Launch {launch_request_id} in process {process_id}: {result}; terminal closed: {terminal_closed}."
+            )
+        }
+        Response::InputAccepted {
+            process_id,
+            request_id,
+            window_id,
+            tab_id,
+            pane_id,
+            input_bytes,
+            wire_bytes,
+            confirmation_id,
+            ..
+        } => match confirmation_id {
+            Some(confirmation_id) => format!(
+                "Input for pane {pane_id}, tab {tab_id}, window {window_id}, process {process_id} awaits visible destructive-command confirmation {confirmation_id} (request {request_id})."
+            ),
+            None => format!(
+                "Sent {input_bytes} UTF-8 input bytes to pane {pane_id}, tab {tab_id}, window {window_id}, process {process_id} ({wire_bytes} PTY bytes; request {request_id})."
+            ),
+        },
+        Response::WindowCreated {
+            process_id,
+            request_id,
+            window_id,
+        } => format!("Created window {window_id} in process {process_id} (request {request_id})."),
+        Response::WindowLaunched {
+            process_id,
+            request_id,
+            window_id,
+            tab_id,
+        } => format!(
+            "Launched tab {tab_id} in new window {window_id} of process {process_id} (request {request_id})."
+        ),
+        Response::TabCreated {
+            process_id,
+            request_id,
+            window_id,
+            tab_id,
+        } => {
+            let verb = if matches!(request, Request::LaunchTab { .. }) {
+                "Launched"
+            } else {
+                "Created"
+            };
+            format!(
+                "{verb} tab {tab_id} in window {window_id} of process {process_id} (request {request_id})."
+            )
+        }
+        Response::PaneCreated {
+            process_id,
+            request_id,
+            window_id,
+            tab_id,
+            pane_id,
+        } => format!(
+            "Created pane {pane_id} in tab {tab_id}, window {window_id}, process {process_id} (request {request_id})."
+        ),
+        Response::WindowFocusRequested {
+            process_id,
+            request_id,
+            window_id,
+            already_focused,
+        } => {
+            if *already_focused {
+                format!(
+                    "Window {window_id} in process {process_id} was already focused (request {request_id})."
+                )
+            } else {
+                format!(
+                    "Requested focus for window {window_id} in process {process_id} (request {request_id})."
+                )
+            }
+        }
+        Response::QuickAccessChanged {
+            process_id,
+            request_id,
+            window_id,
+            visible,
+        } => format!(
+            "Quick-access terminal in process {process_id}, window {window_id} is now {} (request {request_id}).",
+            if *visible { "visible" } else { "hidden" }
+        ),
+        Response::TabSelected {
+            process_id,
+            request_id,
+            window_id,
+            tab_id,
+            changed,
+        } => format!(
+            "{} tab {tab_id} in window {window_id}, process {process_id} (request {request_id}).",
+            if *changed {
+                "Selected"
+            } else {
+                "Already selected"
+            }
+        ),
+        Response::PaneFocused {
+            process_id,
+            request_id,
+            window_id,
+            tab_id,
+            pane_id,
+            tab_changed,
+            pane_changed,
+        } => format!(
+            "Focused pane {pane_id} in tab {tab_id}, window {window_id}, process {process_id} (tab changed: {tab_changed}; pane changed: {pane_changed}; request {request_id})."
+        ),
+        Response::WindowCloseRequested {
+            process_id,
+            request_id,
+            window_id,
+        } => format!(
+            "Scheduled window {window_id} in process {process_id} to close (request {request_id})."
+        ),
+        Response::TabCloseRequested {
+            process_id,
+            request_id,
+            window_id,
+            tab_id,
+        } => format!(
+            "Scheduled tab {tab_id} in window {window_id}, process {process_id} to close (request {request_id})."
+        ),
+        Response::PaneClosed {
+            process_id,
+            request_id,
+            window_id,
+            tab_id,
+            pane_id,
+            remaining_panes,
+            focused_pane_id,
+        } => format!(
+            "Closed pane {pane_id} in tab {tab_id}, window {window_id}, process {process_id}; {remaining_panes} pane(s) remain and pane {focused_pane_id} is focused (request {request_id})."
+        ),
+        Response::TabMoved {
+            process_id,
+            request_id,
+            source_window_id,
+            source_tab_id,
+            destination_window_id,
+            destination_tab_id,
+            destination_index,
+            source_window_closing,
+            changed,
+        } => {
+            if *changed {
+                format!(
+                    "Moved tab {source_tab_id} from window {source_window_id} to tab {destination_tab_id} at index {destination_index} in window {destination_window_id}, process {process_id}; source window closing: {source_window_closing} (request {request_id})."
+                )
+            } else {
+                format!(
+                    "Tab {source_tab_id} was already at index {destination_index} in window {source_window_id}, process {process_id} (request {request_id})."
+                )
+            }
+        }
+        Response::PaneMoved {
+            process_id,
+            request_id,
+            source_window_id,
+            source_tab_id,
+            source_pane_id,
+            destination_window_id,
+            destination_tab_id,
+            destination_pane_id,
+            target_pane_id,
+        } => format!(
+            "Moved pane {source_pane_id} from tab {source_tab_id}, window {source_window_id} to pane {destination_pane_id} beside pane {target_pane_id} in tab {destination_tab_id}, window {destination_window_id}, process {process_id} (request {request_id})."
+        ),
+        Response::WindowResizeRequested {
+            process_id,
+            request_id,
+            window_id,
+            requested_width,
+            requested_height,
+            immediate_width,
+            immediate_height,
+        } => match (immediate_width, immediate_height) {
+            (Some(applied_width), Some(applied_height)) => format!(
+                "Requested {requested_width}x{requested_height} physical pixels for window {window_id}, process {process_id}; the platform immediately reported {applied_width}x{applied_height} (request {request_id})."
+            ),
+            _ => format!(
+                "Requested {requested_width}x{requested_height} physical pixels for window {window_id}, process {process_id}; await the native resize event for the applied size (request {request_id})."
+            ),
+        },
+        Response::DividerResized {
+            process_id,
+            request_id,
+            window_id,
+            tab_id,
+            divider_id,
+            previous_ratio_millis,
+            ratio_millis,
+            changed,
+        } => {
+            if *changed {
+                format!(
+                    "Resized divider {divider_id} in tab {tab_id}, window {window_id}, process {process_id} from {previous_ratio_millis} to {ratio_millis} thousandths (request {request_id})."
+                )
+            } else {
+                format!(
+                    "Divider {divider_id} in tab {tab_id}, window {window_id}, process {process_id} was already at {ratio_millis} thousandths (request {request_id})."
+                )
+            }
+        }
+        Response::Inventory(inventory) => format_human(std::slice::from_ref(inventory)),
+        // Agent replies are read by the MCP server, not printed here.
+        Response::AgentEventRecorded { .. }
+        | Response::Agents { .. }
+        | Response::Conversation { .. }
+        | Response::ApprovalAnswered { .. }
+        | Response::SessionInputAccepted { .. }
+        | Response::AgentInputAccepted { .. }
+        | Response::Error { .. } => format!("{response:?}"),
+    }
+}
+
+/// One launch's state, as `control launch-status` prints it.
 pub fn launch_status(
     process_id: u32,
     launch_request_id: String,
     json: bool,
 ) -> anyhow::Result<String> {
-    let query = Request::LaunchStatus {
-        launch_request_id: launch_request_id.clone(),
-    };
-    query.validate().map_err(anyhow::Error::msg)?;
-    let endpoint = ControlPaths::discover_all()?
-        .into_iter()
-        .find(|endpoint| endpoint.process_id == process_id)
-        .ok_or_else(|| anyhow::anyhow!("GUI process {process_id} was not found"))?;
-    format_launch_status(
-        request(&endpoint, query)?,
+    send(
         process_id,
-        &launch_request_id,
+        Request::LaunchStatus { launch_request_id },
+        None,
         json,
     )
-}
-
-pub(super) fn format_launch_status(
-    frame: ServerFrame,
-    process_id: u32,
-    launch_request_id: &str,
-    json: bool,
-) -> anyhow::Result<String> {
-    match frame {
-        ServerFrame::LaunchStatus {
-            version,
-            process_id: returned_process,
-            launch_request_id: returned_id,
-            state,
-            terminal_closed,
-        } if version == protocol::PROTOCOL_VERSION
-            && process_id == returned_process
-            && launch_request_id == returned_id =>
-        {
-            state.validate().map_err(anyhow::Error::msg)?;
-            if json {
-                Ok(serde_json::to_string_pretty(&serde_json::json!({
-                    "schema_version": protocol::JSON_SCHEMA_VERSION,
-                    "process_id": process_id,
-                    "launch_request_id": launch_request_id,
-                    "state": state,
-                    "terminal_closed": terminal_closed,
-                }))?)
-            } else {
-                let result = match state {
-                    protocol::LaunchState::Running {} => "running".to_string(),
-                    protocol::LaunchState::Exited { exit_code, success } => {
-                        format!("exited with portable code {exit_code} (success: {success})")
-                    }
-                };
-                Ok(format!(
-                    "Launch {launch_request_id} in process {process_id}: {result}; terminal closed: {terminal_closed}."
-                ))
-            }
-        }
-        ServerFrame::Error { version, message } if version == protocol::PROTOCOL_VERSION => {
-            anyhow::bail!(message)
-        }
-        _ => anyhow::bail!("Invalid GUI launch-status response"),
-    }
-}
-
-pub fn send_text(
-    process_id: u32,
-    window_id: u64,
-    tab_id: u64,
-    pane_id: u32,
-    text: String,
-    paste: bool,
-    enter: bool,
-    request_id: Option<String>,
-    json: bool,
-) -> anyhow::Result<String> {
-    let (endpoint, request_id) = mutation_target(process_id, window_id, request_id)?;
-    let expected_input_bytes = text.len().saturating_add(usize::from(enter));
-    let request_frame = Request::SendText {
-        request_id: request_id.clone(),
-        window_id,
-        tab_id,
-        pane_id,
-        text,
-        paste,
-        enter,
-    };
-    request_frame.validate().map_err(anyhow::Error::msg)?;
-    let frame = request(&endpoint, request_frame).with_context(|| {
-        format!(
-            "send-text request {request_id} did not complete; retry only with `--request-id {request_id}` so input cannot be duplicated"
-        )
-    })?;
-    match frame {
-        ServerFrame::InputAccepted {
-            version,
-            process_id: returned_process,
-            request_id: returned_request,
-            window_id: returned_window,
-            tab_id: returned_tab,
-            pane_id: returned_pane,
-            input_bytes,
-            wire_bytes,
-            paste: returned_paste,
-            enter: returned_enter,
-            disposition,
-            confirmation_id,
-        } if version == protocol::PROTOCOL_VERSION
-            && returned_process == process_id
-            && returned_request == request_id
-            && returned_window == window_id
-            && returned_tab == tab_id
-            && returned_pane == pane_id
-            && input_bytes as usize == expected_input_bytes
-            && returned_paste == paste
-            && returned_enter == enter
-            && (wire_bytes == input_bytes || (paste && wire_bytes == input_bytes + 12))
-            && matches!(
-                (disposition, confirmation_id),
-                (protocol::InputDisposition::Sent, None)
-                    | (protocol::InputDisposition::PendingConfirmation, Some(_))
-            ) =>
-        {
-            if json {
-                Ok(serde_json::to_string_pretty(&InputOutput {
-                    schema_version: protocol::JSON_SCHEMA_VERSION,
-                    process_id,
-                    request_id,
-                    window_id,
-                    tab_id,
-                    pane_id,
-                    input_bytes,
-                    wire_bytes,
-                    paste,
-                    enter,
-                    disposition,
-                    confirmation_id,
-                })?)
-            } else if let Some(confirmation_id) = confirmation_id {
-                Ok(format!(
-                    "Input for pane {pane_id}, tab {tab_id}, window {window_id}, process {process_id} awaits visible destructive-command confirmation {confirmation_id} (request {request_id})."
-                ))
-            } else {
-                Ok(format!(
-                    "Sent {input_bytes} UTF-8 input bytes to pane {pane_id}, tab {tab_id}, window {window_id}, process {process_id} ({wire_bytes} PTY bytes; request {request_id})."
-                ))
-            }
-        }
-        ServerFrame::Error { message, .. } => anyhow::bail!(
-            "{message} (request {request_id} is terminal; use a new request ID after correcting the failure)"
-        ),
-        frame => anyhow::bail!("invalid GUI control terminal-input response {frame:?}"),
-    }
-}
-
-pub fn new_window(
-    process_id: u32,
-    source_window: u64,
-    request_id: Option<String>,
-    json: bool,
-) -> anyhow::Result<String> {
-    if process_id == 0 || process_id > i32::MAX as u32 || source_window == 0 {
-        anyhow::bail!("process and source-window IDs must be nonzero runtime IDs");
-    }
-    let request_id = match request_id {
-        Some(request_id) if protocol::valid_request_id(&request_id) => request_id,
-        Some(_) => anyhow::bail!("--request-id must be exactly 32 lowercase hex digits"),
-        None => generate_request_id()?,
-    };
-    let endpoint = ControlPaths::discover_all()?
-        .into_iter()
-        .find(|endpoint| endpoint.process_id == process_id)
-        .ok_or_else(|| anyhow::anyhow!("running GUI process {process_id} was not found"))?;
-    let frame = request(
-        &endpoint,
-        Request::CreateWindow {
-            request_id: request_id.clone(),
-            source_window,
-        },
-    )
-    .with_context(|| {
-        format!(
-            "new-window request {request_id} did not complete; retry with `--request-id {request_id}` to avoid duplicate creation"
-        )
-    })?;
-    match frame {
-        ServerFrame::WindowCreated {
-            version,
-            process_id: returned_process,
-            request_id: returned_request,
-            window_id,
-        } if version == protocol::PROTOCOL_VERSION
-            && returned_process == process_id
-            && returned_request == request_id
-            && window_id != 0 =>
-        {
-            if json {
-                Ok(serde_json::to_string_pretty(&WindowCreatedOutput {
-                    schema_version: protocol::JSON_SCHEMA_VERSION,
-                    process_id,
-                    request_id,
-                    window_id,
-                })?)
-            } else {
-                Ok(format!(
-                    "Created window {window_id} in process {process_id} (request {request_id})."
-                ))
-            }
-        }
-        ServerFrame::Error { message, .. } => anyhow::bail!(
-            "{message} (request {request_id}; retry the same logical action with this ID)"
-        ),
-        frame => anyhow::bail!("invalid GUI control window-creation response {frame:?}"),
-    }
-}
-
-pub fn launch_window(
-    process_id: u32,
-    source_window: u64,
-    program: String,
-    args: Vec<String>,
-    working_directory: Option<String>,
-    title: Option<String>,
-    environment: Vec<protocol::EnvironmentVariable>,
-    environment_policy: termeric_core::pty::EnvironmentPolicy,
-    request_id: Option<String>,
-    json: bool,
-) -> anyhow::Result<String> {
-    if process_id == 0 || process_id > i32::MAX as u32 || source_window == 0 {
-        anyhow::bail!("process and source-window IDs must be nonzero runtime IDs");
-    }
-    let request_id = match request_id {
-        Some(request_id) if protocol::valid_request_id(&request_id) => request_id,
-        Some(_) => anyhow::bail!("--request-id must be exactly 32 lowercase hex digits"),
-        None => generate_request_id()?,
-    };
-    let mut request_frame = Request::LaunchWindow {
-        request_id: request_id.clone(),
-        source_window,
-        program,
-        args,
-        working_directory,
-        title,
-        environment,
-        environment_policy,
-    };
-    request_frame.canonicalize();
-    request_frame.validate().map_err(anyhow::Error::msg)?;
-    let endpoint = ControlPaths::discover_all()?
-        .into_iter()
-        .find(|endpoint| endpoint.process_id == process_id)
-        .ok_or_else(|| anyhow::anyhow!("running GUI process {process_id} was not found"))?;
-    let frame = request(&endpoint, request_frame).with_context(|| {
-        format!(
-            "launch-window request {request_id} did not complete; retry with `--request-id {request_id}` to avoid duplicate creation"
-        )
-    })?;
-    match frame {
-        ServerFrame::WindowLaunched {
-            version,
-            process_id: returned_process,
-            request_id: returned_request,
-            window_id,
-            tab_id,
-        } if version == protocol::PROTOCOL_VERSION
-            && returned_process == process_id
-            && returned_request == request_id
-            && window_id != 0 =>
-        {
-            if json {
-                Ok(serde_json::to_string_pretty(&WindowLaunchedOutput {
-                    schema_version: protocol::JSON_SCHEMA_VERSION,
-                    process_id,
-                    request_id,
-                    window_id,
-                    tab_id,
-                })?)
-            } else {
-                Ok(format!(
-                    "Launched tab {tab_id} in new window {window_id} of process {process_id} (request {request_id})."
-                ))
-            }
-        }
-        ServerFrame::Error { message, .. } => anyhow::bail!(
-            "{message} (request {request_id}; retry the same logical action with this ID)"
-        ),
-        frame => anyhow::bail!("invalid GUI control window-launch response {frame:?}"),
-    }
-}
-
-pub fn new_tab(
-    process_id: u32,
-    window_id: u64,
-    request_id: Option<String>,
-    json: bool,
-) -> anyhow::Result<String> {
-    if process_id == 0 || process_id > i32::MAX as u32 || window_id == 0 {
-        anyhow::bail!("process and window IDs must be nonzero runtime IDs");
-    }
-    let request_id = match request_id {
-        Some(request_id) if protocol::valid_request_id(&request_id) => request_id,
-        Some(_) => anyhow::bail!("--request-id must be exactly 32 lowercase hex digits"),
-        None => generate_request_id()?,
-    };
-    let endpoint = ControlPaths::discover_all()?
-        .into_iter()
-        .find(|endpoint| endpoint.process_id == process_id)
-        .ok_or_else(|| anyhow::anyhow!("running GUI process {process_id} was not found"))?;
-    let frame = request(
-        &endpoint,
-        Request::CreateTab {
-            request_id: request_id.clone(),
-            window_id,
-        },
-    )
-    .with_context(|| {
-        format!(
-            "new-tab request {request_id} did not complete; retry with `--request-id {request_id}` to avoid duplicate creation"
-        )
-    })?;
-    match frame {
-        ServerFrame::TabCreated {
-            version,
-            process_id: returned_process,
-            request_id: returned_request,
-            window_id: returned_window,
-            tab_id,
-        } if version == protocol::PROTOCOL_VERSION
-            && returned_process == process_id
-            && returned_request == request_id
-            && returned_window == window_id =>
-        {
-            if json {
-                Ok(serde_json::to_string_pretty(&TabCreatedOutput {
-                    schema_version: protocol::JSON_SCHEMA_VERSION,
-                    process_id,
-                    request_id,
-                    window_id,
-                    tab_id,
-                })?)
-            } else {
-                Ok(format!(
-                    "Created tab {tab_id} in window {window_id} of process {process_id} (request {request_id})."
-                ))
-            }
-        }
-        ServerFrame::Error { message, .. } => anyhow::bail!(
-            "{message} (request {request_id}; retry the same logical action with this ID)"
-        ),
-        frame => anyhow::bail!("invalid GUI control tab-creation response {frame:?}"),
-    }
-}
-
-pub fn launch_tab(
-    background: bool,
-    process_id: u32,
-    window_id: u64,
-    program: String,
-    args: Vec<String>,
-    working_directory: Option<String>,
-    title: Option<String>,
-    environment: Vec<protocol::EnvironmentVariable>,
-    environment_policy: termeric_core::pty::EnvironmentPolicy,
-    request_id: Option<String>,
-    json: bool,
-) -> anyhow::Result<String> {
-    if process_id == 0 || process_id > i32::MAX as u32 || window_id == 0 {
-        anyhow::bail!("process and window IDs must be nonzero runtime IDs");
-    }
-    let request_id = match request_id {
-        Some(request_id) if protocol::valid_request_id(&request_id) => request_id,
-        Some(_) => anyhow::bail!("--request-id must be exactly 32 lowercase hex digits"),
-        None => generate_request_id()?,
-    };
-    let mut request_frame = Request::LaunchTab {
-        background,
-        request_id: request_id.clone(),
-        window_id,
-        program,
-        args,
-        working_directory,
-        title,
-        environment,
-        environment_policy,
-    };
-    request_frame.canonicalize();
-    request_frame.validate().map_err(anyhow::Error::msg)?;
-    let endpoint = ControlPaths::discover_all()?
-        .into_iter()
-        .find(|endpoint| endpoint.process_id == process_id)
-        .ok_or_else(|| anyhow::anyhow!("running GUI process {process_id} was not found"))?;
-    let frame = request(&endpoint, request_frame).with_context(|| {
-        format!(
-            "launch-tab request {request_id} did not complete; retry with `--request-id {request_id}` to avoid duplicate creation"
-        )
-    })?;
-    match frame {
-        ServerFrame::TabCreated {
-            version,
-            process_id: returned_process,
-            request_id: returned_request,
-            window_id: returned_window,
-            tab_id,
-        } if version == protocol::PROTOCOL_VERSION
-            && returned_process == process_id
-            && returned_request == request_id
-            && returned_window == window_id =>
-        {
-            if json {
-                Ok(serde_json::to_string_pretty(&TabCreatedOutput {
-                    schema_version: protocol::JSON_SCHEMA_VERSION,
-                    process_id,
-                    request_id,
-                    window_id,
-                    tab_id,
-                })?)
-            } else {
-                Ok(format!(
-                    "Launched tab {tab_id} in window {window_id} of process {process_id} (request {request_id})."
-                ))
-            }
-        }
-        ServerFrame::Error { message, .. } => anyhow::bail!(
-            "{message} (request {request_id}; retry the same logical action with this ID)"
-        ),
-        frame => anyhow::bail!("invalid GUI control tab-launch response {frame:?}"),
-    }
-}
-
-pub fn split_pane(
-    process_id: u32,
-    window_id: u64,
-    tab_id: u64,
-    pane_id: u32,
-    direction: crate::panes::SplitDirection,
-    request_id: Option<String>,
-    json: bool,
-) -> anyhow::Result<String> {
-    if process_id == 0 || process_id > i32::MAX as u32 || window_id == 0 {
-        anyhow::bail!("process and window IDs must be nonzero runtime IDs");
-    }
-    let request_id = match request_id {
-        Some(request_id) if protocol::valid_request_id(&request_id) => request_id,
-        Some(_) => anyhow::bail!("--request-id must be exactly 32 lowercase hex digits"),
-        None => generate_request_id()?,
-    };
-    let endpoint = ControlPaths::discover_all()?
-        .into_iter()
-        .find(|endpoint| endpoint.process_id == process_id)
-        .ok_or_else(|| anyhow::anyhow!("running GUI process {process_id} was not found"))?;
-    let frame = request(
-        &endpoint,
-        Request::SplitPane {
-            request_id: request_id.clone(),
-            window_id,
-            tab_id,
-            pane_id,
-            direction,
-        },
-    )
-    .with_context(|| {
-        format!(
-            "split-pane request {request_id} did not complete; retry with `--request-id {request_id}` to avoid duplicate creation"
-        )
-    })?;
-    match frame {
-        ServerFrame::PaneCreated {
-            version,
-            process_id: returned_process,
-            request_id: returned_request,
-            window_id: returned_window,
-            tab_id: returned_tab,
-            pane_id: created_pane,
-        } if version == protocol::PROTOCOL_VERSION
-            && returned_process == process_id
-            && returned_request == request_id
-            && returned_window == window_id
-            && returned_tab == tab_id
-            && created_pane != 0 =>
-        {
-            if json {
-                Ok(serde_json::to_string_pretty(&PaneCreatedOutput {
-                    schema_version: protocol::JSON_SCHEMA_VERSION,
-                    process_id,
-                    request_id,
-                    window_id,
-                    tab_id,
-                    pane_id: created_pane,
-                })?)
-            } else {
-                Ok(format!(
-                    "Created pane {created_pane} in tab {tab_id}, window {window_id}, process {process_id} (request {request_id})."
-                ))
-            }
-        }
-        ServerFrame::Error { message, .. } => anyhow::bail!(
-            "{message} (request {request_id}; retry the same logical action with this ID)"
-        ),
-        frame => anyhow::bail!("invalid GUI control pane-creation response {frame:?}"),
-    }
-}
-
-pub fn focus_window(
-    process_id: u32,
-    window_id: u64,
-    request_id: Option<String>,
-    json: bool,
-) -> anyhow::Result<String> {
-    let (endpoint, request_id) = mutation_target(process_id, window_id, request_id)?;
-    let frame = request(
-        &endpoint,
-        Request::FocusWindow {
-            request_id: request_id.clone(),
-            window_id,
-        },
-    )
-    .with_context(|| ambiguous_mutation("focus-window", &request_id))?;
-    match frame {
-        ServerFrame::WindowFocusRequested {
-            version,
-            process_id: returned_process,
-            request_id: returned_request,
-            window_id: returned_window,
-            already_focused,
-        } if version == protocol::PROTOCOL_VERSION
-            && returned_process == process_id
-            && returned_request == request_id
-            && returned_window == window_id =>
-        {
-            if json {
-                Ok(serde_json::to_string_pretty(&WindowFocusOutput {
-                    schema_version: protocol::JSON_SCHEMA_VERSION,
-                    process_id,
-                    request_id,
-                    window_id,
-                    already_focused,
-                })?)
-            } else if already_focused {
-                Ok(format!(
-                    "Window {window_id} in process {process_id} was already focused (request {request_id})."
-                ))
-            } else {
-                Ok(format!(
-                    "Requested focus for window {window_id} in process {process_id} (request {request_id})."
-                ))
-            }
-        }
-        ServerFrame::Error { message, .. } => mutation_error(message, &request_id),
-        frame => anyhow::bail!("invalid GUI control window-focus response {frame:?}"),
-    }
-}
-
-pub fn select_tab(
-    process_id: u32,
-    window_id: u64,
-    tab_id: u64,
-    request_id: Option<String>,
-    json: bool,
-) -> anyhow::Result<String> {
-    let (endpoint, request_id) = mutation_target(process_id, window_id, request_id)?;
-    let frame = request(
-        &endpoint,
-        Request::SelectTab {
-            request_id: request_id.clone(),
-            window_id,
-            tab_id,
-        },
-    )
-    .with_context(|| ambiguous_mutation("select-tab", &request_id))?;
-    match frame {
-        ServerFrame::TabSelected {
-            version,
-            process_id: returned_process,
-            request_id: returned_request,
-            window_id: returned_window,
-            tab_id: returned_tab,
-            changed,
-        } if version == protocol::PROTOCOL_VERSION
-            && returned_process == process_id
-            && returned_request == request_id
-            && returned_window == window_id
-            && returned_tab == tab_id =>
-        {
-            if json {
-                Ok(serde_json::to_string_pretty(&TabSelectedOutput {
-                    schema_version: protocol::JSON_SCHEMA_VERSION,
-                    process_id,
-                    request_id,
-                    window_id,
-                    tab_id,
-                    changed,
-                })?)
-            } else {
-                let state = if changed {
-                    "Selected"
-                } else {
-                    "Already selected"
-                };
-                Ok(format!(
-                    "{state} tab {tab_id} in window {window_id}, process {process_id} (request {request_id})."
-                ))
-            }
-        }
-        ServerFrame::Error { message, .. } => mutation_error(message, &request_id),
-        frame => anyhow::bail!("invalid GUI control tab-selection response {frame:?}"),
-    }
-}
-
-pub fn focus_pane(
-    process_id: u32,
-    window_id: u64,
-    tab_id: u64,
-    pane_id: u32,
-    request_id: Option<String>,
-    json: bool,
-) -> anyhow::Result<String> {
-    let (endpoint, request_id) = mutation_target(process_id, window_id, request_id)?;
-    let frame = request(
-        &endpoint,
-        Request::FocusPane {
-            request_id: request_id.clone(),
-            window_id,
-            tab_id,
-            pane_id,
-        },
-    )
-    .with_context(|| ambiguous_mutation("focus-pane", &request_id))?;
-    match frame {
-        ServerFrame::PaneFocused {
-            version,
-            process_id: returned_process,
-            request_id: returned_request,
-            window_id: returned_window,
-            tab_id: returned_tab,
-            pane_id: returned_pane,
-            tab_changed,
-            pane_changed,
-        } if version == protocol::PROTOCOL_VERSION
-            && returned_process == process_id
-            && returned_request == request_id
-            && returned_window == window_id
-            && returned_tab == tab_id
-            && returned_pane == pane_id =>
-        {
-            if json {
-                Ok(serde_json::to_string_pretty(&PaneFocusedOutput {
-                    schema_version: protocol::JSON_SCHEMA_VERSION,
-                    process_id,
-                    request_id,
-                    window_id,
-                    tab_id,
-                    pane_id,
-                    tab_changed,
-                    pane_changed,
-                })?)
-            } else {
-                Ok(format!(
-                    "Focused pane {pane_id} in tab {tab_id}, window {window_id}, process {process_id} (tab changed: {tab_changed}; pane changed: {pane_changed}; request {request_id})."
-                ))
-            }
-        }
-        ServerFrame::Error { message, .. } => mutation_error(message, &request_id),
-        frame => anyhow::bail!("invalid GUI control pane-focus response {frame:?}"),
-    }
-}
-
-pub fn close_window(
-    process_id: u32,
-    window_id: u64,
-    request_id: Option<String>,
-    json: bool,
-) -> anyhow::Result<String> {
-    let (endpoint, request_id) = mutation_target(process_id, window_id, request_id)?;
-    let frame = request(
-        &endpoint,
-        Request::CloseWindow {
-            request_id: request_id.clone(),
-            window_id,
-        },
-    )
-    .with_context(|| ambiguous_mutation("close-window", &request_id))?;
-    match frame {
-        ServerFrame::WindowCloseRequested {
-            version,
-            process_id: returned_process,
-            request_id: returned_request,
-            window_id: returned_window,
-        } if version == protocol::PROTOCOL_VERSION
-            && returned_process == process_id
-            && returned_request == request_id
-            && returned_window == window_id =>
-        {
-            if json {
-                Ok(serde_json::to_string_pretty(&WindowCloseOutput {
-                    schema_version: protocol::JSON_SCHEMA_VERSION,
-                    process_id,
-                    request_id,
-                    window_id,
-                    scheduled: true,
-                })?)
-            } else {
-                Ok(format!(
-                    "Scheduled window {window_id} in process {process_id} to close (request {request_id})."
-                ))
-            }
-        }
-        ServerFrame::Error { message, .. } => mutation_error(message, &request_id),
-        frame => anyhow::bail!("invalid GUI control window-close response {frame:?}"),
-    }
-}
-
-pub fn close_tab(
-    process_id: u32,
-    window_id: u64,
-    tab_id: u64,
-    request_id: Option<String>,
-    json: bool,
-) -> anyhow::Result<String> {
-    let (endpoint, request_id) = mutation_target(process_id, window_id, request_id)?;
-    let frame = request(
-        &endpoint,
-        Request::CloseTab {
-            request_id: request_id.clone(),
-            window_id,
-            tab_id,
-        },
-    )
-    .with_context(|| ambiguous_mutation("close-tab", &request_id))?;
-    match frame {
-        ServerFrame::TabCloseRequested {
-            version,
-            process_id: returned_process,
-            request_id: returned_request,
-            window_id: returned_window,
-            tab_id: returned_tab,
-        } if version == protocol::PROTOCOL_VERSION
-            && returned_process == process_id
-            && returned_request == request_id
-            && returned_window == window_id
-            && returned_tab == tab_id =>
-        {
-            if json {
-                Ok(serde_json::to_string_pretty(&TabCloseOutput {
-                    schema_version: protocol::JSON_SCHEMA_VERSION,
-                    process_id,
-                    request_id,
-                    window_id,
-                    tab_id,
-                    scheduled: true,
-                })?)
-            } else {
-                Ok(format!(
-                    "Scheduled tab {tab_id} in window {window_id}, process {process_id} to close (request {request_id})."
-                ))
-            }
-        }
-        ServerFrame::Error { message, .. } => mutation_error(message, &request_id),
-        frame => anyhow::bail!("invalid GUI control tab-close response {frame:?}"),
-    }
-}
-
-pub fn close_pane(
-    process_id: u32,
-    window_id: u64,
-    tab_id: u64,
-    pane_id: u32,
-    request_id: Option<String>,
-    json: bool,
-) -> anyhow::Result<String> {
-    let (endpoint, request_id) = mutation_target(process_id, window_id, request_id)?;
-    let frame = request(
-        &endpoint,
-        Request::ClosePane {
-            request_id: request_id.clone(),
-            window_id,
-            tab_id,
-            pane_id,
-        },
-    )
-    .with_context(|| ambiguous_mutation("close-pane", &request_id))?;
-    match frame {
-        ServerFrame::PaneClosed {
-            version,
-            process_id: returned_process,
-            request_id: returned_request,
-            window_id: returned_window,
-            tab_id: returned_tab,
-            pane_id: returned_pane,
-            remaining_panes,
-            focused_pane_id,
-        } if version == protocol::PROTOCOL_VERSION
-            && returned_process == process_id
-            && returned_request == request_id
-            && returned_window == window_id
-            && returned_tab == tab_id
-            && returned_pane == pane_id
-            && remaining_panes != 0
-            && usize::from(remaining_panes) <= protocol::MAX_PANES_PER_TAB =>
-        {
-            if json {
-                Ok(serde_json::to_string_pretty(&PaneCloseOutput {
-                    schema_version: protocol::JSON_SCHEMA_VERSION,
-                    process_id,
-                    request_id,
-                    window_id,
-                    tab_id,
-                    pane_id,
-                    remaining_panes,
-                    focused_pane_id,
-                })?)
-            } else {
-                Ok(format!(
-                    "Closed pane {pane_id} in tab {tab_id}, window {window_id}, process {process_id}; {remaining_panes} pane(s) remain and pane {focused_pane_id} is focused (request {request_id})."
-                ))
-            }
-        }
-        ServerFrame::Error { message, .. } => mutation_error(message, &request_id),
-        frame => anyhow::bail!("invalid GUI control pane-close response {frame:?}"),
-    }
-}
-
-pub fn move_tab(
-    process_id: u32,
-    source_window_id: u64,
-    tab_id: u64,
-    destination_window_id: u64,
-    destination_index: u16,
-    request_id: Option<String>,
-    json: bool,
-) -> anyhow::Result<String> {
-    let (endpoint, request_id) = mutation_target(process_id, source_window_id, request_id)?;
-    if destination_window_id == 0 || usize::from(destination_index) > protocol::MAX_TABS_PER_WINDOW
-    {
-        anyhow::bail!("destination window ID and tab index are outside control limits");
-    }
-    let frame = request(
-        &endpoint,
-        Request::MoveTab {
-            request_id: request_id.clone(),
-            source_window_id,
-            tab_id,
-            destination_window_id,
-            destination_index,
-        },
-    )
-    .with_context(|| ambiguous_mutation("move-tab", &request_id))?;
-    match frame {
-        ServerFrame::TabMoved {
-            version,
-            process_id: returned_process,
-            request_id: returned_request,
-            source_window_id: returned_source_window,
-            source_tab_id,
-            destination_window_id: returned_destination_window,
-            destination_tab_id,
-            destination_index: returned_destination_index,
-            source_window_closing,
-            changed,
-        } if version == protocol::PROTOCOL_VERSION
-            && returned_process == process_id
-            && returned_request == request_id
-            && returned_source_window == source_window_id
-            && source_tab_id == tab_id
-            && returned_destination_window == destination_window_id
-            && returned_destination_index == destination_index =>
-        {
-            if json {
-                Ok(serde_json::to_string_pretty(&TabMovedOutput {
-                    schema_version: protocol::JSON_SCHEMA_VERSION,
-                    process_id,
-                    request_id,
-                    source_window_id,
-                    source_tab_id,
-                    destination_window_id,
-                    destination_tab_id,
-                    destination_index,
-                    source_window_closing,
-                    changed,
-                })?)
-            } else if changed {
-                Ok(format!(
-                    "Moved tab {tab_id} from window {source_window_id} to tab {destination_tab_id} at index {destination_index} in window {destination_window_id}, process {process_id}; source window closing: {source_window_closing} (request {request_id})."
-                ))
-            } else {
-                Ok(format!(
-                    "Tab {tab_id} was already at index {destination_index} in window {source_window_id}, process {process_id} (request {request_id})."
-                ))
-            }
-        }
-        ServerFrame::Error { message, .. } => mutation_error(message, &request_id),
-        frame => anyhow::bail!("invalid GUI control tab-move response {frame:?}"),
-    }
-}
-
-pub fn move_pane(
-    process_id: u32,
-    source_window_id: u64,
-    source_tab_id: u64,
-    pane_id: u32,
-    destination_window_id: u64,
-    destination_tab_id: u64,
-    target_pane_id: u32,
-    direction: crate::panes::SplitDirection,
-    request_id: Option<String>,
-    json: bool,
-) -> anyhow::Result<String> {
-    let (endpoint, request_id) = mutation_target(process_id, source_window_id, request_id)?;
-    if destination_window_id == 0 {
-        anyhow::bail!("destination window ID must be nonzero");
-    }
-    let frame = request(
-        &endpoint,
-        Request::MovePane {
-            request_id: request_id.clone(),
-            source_window_id,
-            source_tab_id,
-            pane_id,
-            destination_window_id,
-            destination_tab_id,
-            target_pane_id,
-            direction,
-        },
-    )
-    .with_context(|| ambiguous_mutation("move-pane", &request_id))?;
-    match frame {
-        ServerFrame::PaneMoved {
-            version,
-            process_id: returned_process,
-            request_id: returned_request,
-            source_window_id: returned_source_window,
-            source_tab_id: returned_source_tab,
-            source_pane_id,
-            destination_window_id: returned_destination_window,
-            destination_tab_id: returned_destination_tab,
-            destination_pane_id,
-            target_pane_id: returned_target_pane,
-        } if version == protocol::PROTOCOL_VERSION
-            && returned_process == process_id
-            && returned_request == request_id
-            && returned_source_window == source_window_id
-            && returned_source_tab == source_tab_id
-            && source_pane_id == pane_id
-            && returned_destination_window == destination_window_id
-            && returned_destination_tab == destination_tab_id
-            && returned_target_pane == target_pane_id
-            && destination_pane_id != target_pane_id =>
-        {
-            if json {
-                Ok(serde_json::to_string_pretty(&PaneMovedOutput {
-                    schema_version: protocol::JSON_SCHEMA_VERSION,
-                    process_id,
-                    request_id,
-                    source_window_id,
-                    source_tab_id,
-                    source_pane_id: pane_id,
-                    destination_window_id,
-                    destination_tab_id,
-                    destination_pane_id,
-                    target_pane_id,
-                })?)
-            } else {
-                Ok(format!(
-                    "Moved pane {pane_id} from tab {source_tab_id}, window {source_window_id} to pane {destination_pane_id} beside pane {target_pane_id} in tab {destination_tab_id}, window {destination_window_id}, process {process_id} (request {request_id})."
-                ))
-            }
-        }
-        ServerFrame::Error { message, .. } => mutation_error(message, &request_id),
-        frame => anyhow::bail!("invalid GUI control pane-move response {frame:?}"),
-    }
-}
-
-pub fn resize_window(
-    process_id: u32,
-    window_id: u64,
-    width: u32,
-    height: u32,
-    request_id: Option<String>,
-    json: bool,
-) -> anyhow::Result<String> {
-    let (endpoint, request_id) = mutation_target(process_id, window_id, request_id)?;
-    let request_frame = Request::ResizeWindow {
-        request_id: request_id.clone(),
-        window_id,
-        width,
-        height,
-    };
-    request_frame.validate().map_err(anyhow::Error::msg)?;
-    let frame = request(&endpoint, request_frame)
-        .with_context(|| ambiguous_mutation("resize-window", &request_id))?;
-    match frame {
-        ServerFrame::WindowResizeRequested {
-            version,
-            process_id: returned_process,
-            request_id: returned_request,
-            window_id: returned_window,
-            requested_width,
-            requested_height,
-            immediate_width,
-            immediate_height,
-        } if version == protocol::PROTOCOL_VERSION
-            && returned_process == process_id
-            && returned_request == request_id
-            && returned_window == window_id
-            && requested_width == width
-            && requested_height == height
-            && immediate_width.is_some() == immediate_height.is_some()
-            && immediate_width != Some(0)
-            && immediate_height != Some(0) =>
-        {
-            if json {
-                Ok(serde_json::to_string_pretty(&WindowResizeOutput {
-                    schema_version: protocol::JSON_SCHEMA_VERSION,
-                    process_id,
-                    request_id,
-                    window_id,
-                    requested_width,
-                    requested_height,
-                    immediate_width,
-                    immediate_height,
-                })?)
-            } else if let (Some(applied_width), Some(applied_height)) =
-                (immediate_width, immediate_height)
-            {
-                Ok(format!(
-                    "Requested {width}x{height} physical pixels for window {window_id}, process {process_id}; the platform immediately reported {applied_width}x{applied_height} (request {request_id})."
-                ))
-            } else {
-                Ok(format!(
-                    "Requested {width}x{height} physical pixels for window {window_id}, process {process_id}; await the native resize event for the applied size (request {request_id})."
-                ))
-            }
-        }
-        ServerFrame::Error { message, .. } => mutation_error(message, &request_id),
-        frame => anyhow::bail!("invalid GUI control window-resize response {frame:?}"),
-    }
-}
-
-pub fn resize_divider(
-    process_id: u32,
-    window_id: u64,
-    tab_id: u64,
-    divider_id: u64,
-    ratio_millis: u16,
-    request_id: Option<String>,
-    json: bool,
-) -> anyhow::Result<String> {
-    let (endpoint, request_id) = mutation_target(process_id, window_id, request_id)?;
-    let request_frame = Request::ResizeDivider {
-        request_id: request_id.clone(),
-        window_id,
-        tab_id,
-        divider_id,
-        ratio_millis,
-    };
-    request_frame.validate().map_err(anyhow::Error::msg)?;
-    let frame = request(&endpoint, request_frame)
-        .with_context(|| ambiguous_mutation("resize-divider", &request_id))?;
-    match frame {
-        ServerFrame::DividerResized {
-            version,
-            process_id: returned_process,
-            request_id: returned_request,
-            window_id: returned_window,
-            tab_id: returned_tab,
-            divider_id: returned_divider,
-            previous_ratio_millis,
-            ratio_millis: returned_ratio,
-            changed,
-        } if version == protocol::PROTOCOL_VERSION
-            && returned_process == process_id
-            && returned_request == request_id
-            && returned_window == window_id
-            && returned_tab == tab_id
-            && returned_divider == divider_id
-            && returned_ratio == ratio_millis
-            && (100..=900).contains(&previous_ratio_millis)
-            && changed == (previous_ratio_millis != ratio_millis) =>
-        {
-            if json {
-                Ok(serde_json::to_string_pretty(&DividerResizeOutput {
-                    schema_version: protocol::JSON_SCHEMA_VERSION,
-                    process_id,
-                    request_id,
-                    window_id,
-                    tab_id,
-                    divider_id,
-                    previous_ratio_millis,
-                    ratio_millis,
-                    changed,
-                })?)
-            } else if changed {
-                Ok(format!(
-                    "Resized divider {divider_id} in tab {tab_id}, window {window_id}, process {process_id} from {previous_ratio_millis} to {ratio_millis} thousandths (request {request_id})."
-                ))
-            } else {
-                Ok(format!(
-                    "Divider {divider_id} in tab {tab_id}, window {window_id}, process {process_id} was already at {ratio_millis} thousandths (request {request_id})."
-                ))
-            }
-        }
-        ServerFrame::Error { message, .. } => mutation_error(message, &request_id),
-        frame => anyhow::bail!("invalid GUI control divider-resize response {frame:?}"),
-    }
-}
-
-fn mutation_target(
-    process_id: u32,
-    window_id: u64,
-    request_id: Option<String>,
-) -> anyhow::Result<(ControlPaths, String)> {
-    if process_id == 0 || process_id > i32::MAX as u32 || window_id == 0 {
-        anyhow::bail!("process and window IDs must be nonzero runtime IDs");
-    }
-    let request_id = match request_id {
-        Some(request_id) if protocol::valid_request_id(&request_id) => request_id,
-        Some(_) => anyhow::bail!("--request-id must be exactly 32 lowercase hex digits"),
-        None => generate_request_id()?,
-    };
-    let endpoint = ControlPaths::discover_all()?
-        .into_iter()
-        .find(|endpoint| endpoint.process_id == process_id)
-        .ok_or_else(|| anyhow::anyhow!("running GUI process {process_id} was not found"))?;
-    Ok((endpoint, request_id))
-}
-
-fn ambiguous_mutation(operation: &str, request_id: &str) -> String {
-    format!(
-        "{operation} request {request_id} did not complete; retry with `--request-id {request_id}` to replay the same logical action"
-    )
-}
-
-fn mutation_error(message: String, request_id: &str) -> anyhow::Result<String> {
-    anyhow::bail!("{message} (request {request_id}; retry the same logical action with this ID)")
-}
-
-#[derive(Serialize)]
-struct TextOutput {
-    schema_version: u32,
-    process_id: u32,
-    window_id: u64,
-    tab_id: u64,
-    pane_id: u32,
-    screen: protocol::TextScreen,
-    history_lines: u16,
-    text: String,
-    truncated: bool,
-}
-
-#[derive(Serialize)]
-struct InputOutput {
-    schema_version: u32,
-    process_id: u32,
-    request_id: String,
-    window_id: u64,
-    tab_id: u64,
-    pane_id: u32,
-    input_bytes: u32,
-    wire_bytes: u32,
-    paste: bool,
-    enter: bool,
-    disposition: protocol::InputDisposition,
-    confirmation_id: Option<u64>,
-}
-
-#[derive(Serialize)]
-struct WindowCreatedOutput {
-    schema_version: u32,
-    process_id: u32,
-    request_id: String,
-    window_id: u64,
-}
-
-#[derive(Serialize)]
-struct WindowLaunchedOutput {
-    schema_version: u32,
-    process_id: u32,
-    request_id: String,
-    window_id: u64,
-    tab_id: u64,
-}
-
-#[derive(Serialize)]
-struct TabCreatedOutput {
-    schema_version: u32,
-    process_id: u32,
-    request_id: String,
-    window_id: u64,
-    tab_id: u64,
-}
-
-#[derive(Serialize)]
-struct PaneCreatedOutput {
-    schema_version: u32,
-    process_id: u32,
-    request_id: String,
-    window_id: u64,
-    tab_id: u64,
-    pane_id: u32,
-}
-
-#[derive(Serialize)]
-struct WindowFocusOutput {
-    schema_version: u32,
-    process_id: u32,
-    request_id: String,
-    window_id: u64,
-    already_focused: bool,
-}
-
-#[derive(Serialize)]
-struct TabSelectedOutput {
-    schema_version: u32,
-    process_id: u32,
-    request_id: String,
-    window_id: u64,
-    tab_id: u64,
-    changed: bool,
-}
-
-#[derive(Serialize)]
-struct PaneFocusedOutput {
-    schema_version: u32,
-    process_id: u32,
-    request_id: String,
-    window_id: u64,
-    tab_id: u64,
-    pane_id: u32,
-    tab_changed: bool,
-    pane_changed: bool,
-}
-
-#[derive(Serialize)]
-struct WindowCloseOutput {
-    schema_version: u32,
-    process_id: u32,
-    request_id: String,
-    window_id: u64,
-    scheduled: bool,
-}
-
-#[derive(Serialize)]
-struct TabCloseOutput {
-    schema_version: u32,
-    process_id: u32,
-    request_id: String,
-    window_id: u64,
-    tab_id: u64,
-    scheduled: bool,
-}
-
-#[derive(Serialize)]
-struct PaneCloseOutput {
-    schema_version: u32,
-    process_id: u32,
-    request_id: String,
-    window_id: u64,
-    tab_id: u64,
-    pane_id: u32,
-    remaining_panes: u16,
-    focused_pane_id: u32,
-}
-
-#[derive(Serialize)]
-struct TabMovedOutput {
-    schema_version: u32,
-    process_id: u32,
-    request_id: String,
-    source_window_id: u64,
-    source_tab_id: u64,
-    destination_window_id: u64,
-    destination_tab_id: u64,
-    destination_index: u16,
-    source_window_closing: bool,
-    changed: bool,
-}
-
-#[derive(Serialize)]
-struct PaneMovedOutput {
-    schema_version: u32,
-    process_id: u32,
-    request_id: String,
-    source_window_id: u64,
-    source_tab_id: u64,
-    source_pane_id: u32,
-    destination_window_id: u64,
-    destination_tab_id: u64,
-    destination_pane_id: u32,
-    target_pane_id: u32,
-}
-
-#[derive(Serialize)]
-struct WindowResizeOutput {
-    schema_version: u32,
-    process_id: u32,
-    request_id: String,
-    window_id: u64,
-    requested_width: u32,
-    requested_height: u32,
-    immediate_width: Option<u32>,
-    immediate_height: Option<u32>,
-}
-
-#[derive(Serialize)]
-struct DividerResizeOutput {
-    schema_version: u32,
-    process_id: u32,
-    request_id: String,
-    window_id: u64,
-    tab_id: u64,
-    divider_id: u64,
-    previous_ratio_millis: u16,
-    ratio_millis: u16,
-    changed: bool,
 }
 
 /// Every running GUI process, by process ID.
@@ -1583,19 +831,11 @@ pub fn list_agents(
     let listing = Request::ListAgents {
         supervisor: supervisor.map(str::to_owned),
     };
-    listing.validate().map_err(anyhow::Error::msg)?;
-    match request(&endpoint_for(process_id)?, listing)? {
-        ServerFrame::Agents {
-            version,
-            process_id: returned,
-            agents,
-            truncated,
-        } if version == protocol::PROTOCOL_VERSION && returned == process_id => {
-            protocol::validate_agent_summaries(&agents)?;
-            Ok((agents, truncated))
-        }
-        ServerFrame::Error { message, .. } => anyhow::bail!(message),
-        _ => anyhow::bail!("Invalid agent list response"),
+    match ask(process_id, &listing)? {
+        Response::Agents {
+            agents, truncated, ..
+        } => Ok((agents, truncated)),
+        _ => unreachable!("ask returns only a reply that answers the request"),
     }
 }
 
@@ -1611,9 +851,8 @@ pub fn submit_to_agent(
     text: &str,
     supervisor: Option<&str>,
 ) -> anyhow::Result<bool> {
-    let request_id = generate_request_id()?;
     let submission = Request::SubmitToAgent {
-        request_id: request_id.clone(),
+        request_id: generate_request_id()?,
         window_id,
         tab_id,
         pane_id,
@@ -1621,25 +860,11 @@ pub fn submit_to_agent(
         text: text.into(),
         supervisor: supervisor.map(str::to_owned),
     };
-    submission.validate().map_err(anyhow::Error::msg)?;
-    match request(&endpoint_for(process_id)?, submission)? {
-        ServerFrame::AgentInputAccepted {
-            version,
-            process_id: returned,
-            request_id: returned_id,
-            window_id: returned_window,
-            tab_id: returned_tab,
-            pane_id: returned_pane,
-            pending_approval,
-        } if version == protocol::PROTOCOL_VERSION
-            && returned == process_id
-            && returned_id == request_id
-            && (returned_window, returned_tab, returned_pane) == (window_id, tab_id, pane_id) =>
-        {
-            Ok(pending_approval)
-        }
-        ServerFrame::Error { message, .. } => anyhow::bail!(message),
-        _ => anyhow::bail!("Invalid agent input response"),
+    match ask(process_id, &submission)? {
+        Response::AgentInputAccepted {
+            pending_approval, ..
+        } => Ok(pending_approval),
+        _ => unreachable!("ask returns only a reply that answers the request"),
     }
 }
 
@@ -1654,23 +879,11 @@ pub fn read_conversation(
         window_id,
         session_id,
     };
-    reading.validate().map_err(anyhow::Error::msg)?;
-    match request(&endpoint_for(process_id)?, reading)? {
-        ServerFrame::Conversation {
-            version,
-            process_id: returned,
-            window_id: returned_window,
-            session_id: returned_session,
-            text,
-            truncated,
-        } if version == protocol::PROTOCOL_VERSION
-            && returned == process_id
-            && (returned_window, returned_session) == (window_id, session_id) =>
-        {
-            Ok((text, truncated))
-        }
-        ServerFrame::Error { message, .. } => anyhow::bail!(message),
-        _ => anyhow::bail!("Invalid conversation response"),
+    match ask(process_id, &reading)? {
+        Response::Conversation {
+            text, truncated, ..
+        } => Ok((text, truncated)),
+        _ => unreachable!("ask returns only a reply that answers the request"),
     }
 }
 
@@ -1685,9 +898,8 @@ pub fn answer_approval(
     reason: &str,
     supervisor: Option<&str>,
 ) -> anyhow::Result<bool> {
-    let request_id = generate_request_id()?;
     let answer = Request::AnswerApproval {
-        request_id: request_id.clone(),
+        request_id: generate_request_id()?,
         window_id,
         session_id,
         approval_id: approval_id.into(),
@@ -1695,24 +907,9 @@ pub fn answer_approval(
         reason: reason.into(),
         supervisor: supervisor.map(str::to_owned),
     };
-    answer.validate().map_err(anyhow::Error::msg)?;
-    match request(&endpoint_for(process_id)?, answer)? {
-        ServerFrame::ApprovalAnswered {
-            version,
-            process_id: returned,
-            request_id: returned_id,
-            window_id: returned_window,
-            session_id: returned_session,
-            answered,
-        } if version == protocol::PROTOCOL_VERSION
-            && returned == process_id
-            && returned_id == request_id
-            && (returned_window, returned_session) == (window_id, session_id) =>
-        {
-            Ok(answered)
-        }
-        ServerFrame::Error { message, .. } => anyhow::bail!(message),
-        _ => anyhow::bail!("Invalid approval response"),
+    match ask(process_id, &answer)? {
+        Response::ApprovalAnswered { answered, .. } => Ok(answered),
+        _ => unreachable!("ask returns only a reply that answers the request"),
     }
 }
 
@@ -1725,32 +922,18 @@ pub fn submit_to_session(
     text: &str,
     supervisor: Option<&str>,
 ) -> anyhow::Result<bool> {
-    let request_id = generate_request_id()?;
     let submission = Request::SubmitToSession {
-        request_id: request_id.clone(),
+        request_id: generate_request_id()?,
         window_id,
         session_id,
         text: text.into(),
         supervisor: supervisor.map(str::to_owned),
     };
-    submission.validate().map_err(anyhow::Error::msg)?;
-    match request(&endpoint_for(process_id)?, submission)? {
-        ServerFrame::SessionInputAccepted {
-            version,
-            process_id: returned,
-            request_id: returned_id,
-            window_id: returned_window,
-            session_id: returned_session,
-            pending_approval,
-        } if version == protocol::PROTOCOL_VERSION
-            && returned == process_id
-            && returned_id == request_id
-            && (returned_window, returned_session) == (window_id, session_id) =>
-        {
-            Ok(pending_approval)
-        }
-        ServerFrame::Error { message, .. } => anyhow::bail!(message),
-        _ => anyhow::bail!("Invalid session input response"),
+    match ask(process_id, &submission)? {
+        Response::SessionInputAccepted {
+            pending_approval, ..
+        } => Ok(pending_approval),
+        _ => unreachable!("ask returns only a reply that answers the request"),
     }
 }
 
@@ -1765,14 +948,8 @@ pub fn report_agent_event(process_id: u32, report: Request) -> anyhow::Result<()
         crate::domain::paths::discover_runtime_directory(),
         process_id,
     )?;
-    match request_within(&endpoint, report, AGENT_EVENT_TIMEOUT)? {
-        ServerFrame::AgentEventRecorded {
-            version,
-            process_id: returned,
-        } if version == protocol::PROTOCOL_VERSION && returned == process_id => Ok(()),
-        ServerFrame::Error { message, .. } => anyhow::bail!(message),
-        _ => anyhow::bail!("Invalid agent-event response"),
-    }
+    let response = request_within(&endpoint, &report, AGENT_EVENT_TIMEOUT)?;
+    answer(process_id, &report, response).map(drop)
 }
 
 /// Asks a running Termeric on `display` to open a window of `tabs`, so the
@@ -1791,40 +968,22 @@ pub fn join_running(
         if !process_is_alive(endpoint.process_id) {
             continue;
         }
-        let request_id = generate_request_id()?;
-        let frame = request(
-            &endpoint,
-            Request::JoinLaunch {
-                request_id: request_id.clone(),
-                display: display.to_owned(),
-                activation_token: activation_token.clone(),
-                build: build.to_owned(),
-                tabs: tabs.clone(),
-            },
-        );
-        match frame {
-            Ok(ServerFrame::WindowCreated {
-                version,
-                process_id,
-                request_id: returned,
-                window_id,
-            }) if version == protocol::PROTOCOL_VERSION
-                && process_id == endpoint.process_id
-                && returned == request_id
-                && window_id != 0 =>
-            {
-                return Ok(Some((process_id, window_id)));
+        let join = Request::JoinLaunch {
+            request_id: generate_request_id()?,
+            display: display.to_owned(),
+            activation_token: activation_token.clone(),
+            build: build.to_owned(),
+            tabs: tabs.clone(),
+        };
+        let outcome = request(&endpoint, &join)
+            .and_then(|response| answer(endpoint.process_id, &join, response));
+        match outcome {
+            Ok(Response::WindowCreated { window_id, .. }) => {
+                return Ok(Some((endpoint.process_id, window_id)));
             }
-            Ok(ServerFrame::Error { message, .. }) => log::debug!(
-                "Termeric {} did not open the window: {message}",
-                endpoint.process_id
-            ),
-            Ok(frame) => log::debug!(
-                "Termeric {} answered a joining launch with {frame:?}",
-                endpoint.process_id
-            ),
+            Ok(response) => unreachable!("a joining launch is answered by a window: {response:?}"),
             Err(error) => log::debug!(
-                "Termeric {} did not answer a joining launch: {error:#}",
+                "Termeric {} did not open the window: {error:#}",
                 endpoint.process_id
             ),
         }
@@ -1832,15 +991,17 @@ pub fn join_running(
     Ok(None)
 }
 
-fn request(endpoint: &ControlPaths, request: Request) -> anyhow::Result<ServerFrame> {
+fn request(endpoint: &ControlPaths, request: &Request) -> anyhow::Result<Response> {
     request_within(endpoint, request, IO_TIMEOUT)
 }
 
+/// One exchange on `endpoint`: the GUI's reply, checked to be of this
+/// protocol version and consistent, though it may be a refusal.
 fn request_within(
     endpoint: &ControlPaths,
-    request: Request,
+    request: &Request,
     timeout: Duration,
-) -> anyhow::Result<ServerFrame> {
+) -> anyhow::Result<Response> {
     let token = endpoint.read_token()?;
     let mut stream = UnixStream::connect(&endpoint.socket)
         .with_context(|| format!("connect to {}", endpoint.socket.display()))?;
@@ -1852,10 +1013,24 @@ fn request_within(
         &ClientFrame {
             version: protocol::PROTOCOL_VERSION,
             token,
-            request,
+            request: request.clone(),
         },
     )?;
-    protocol::read_frame(&mut stream)
+    accept(protocol::read_frame(&mut stream)?)
+}
+
+/// The reply in `frame` once it is of this protocol version and consistent;
+/// a refusal stays a reply.
+pub(super) fn accept(frame: ServerFrame) -> anyhow::Result<Response> {
+    if frame.version != protocol::PROTOCOL_VERSION {
+        anyhow::bail!(
+            "GUI control protocol version {} is incompatible with client version {}",
+            frame.version,
+            protocol::PROTOCOL_VERSION
+        );
+    }
+    frame.response.validate()?;
+    Ok(frame.response)
 }
 
 pub(super) fn generate_request_id() -> anyhow::Result<String> {
@@ -2006,33 +1181,41 @@ mod tests {
     fn launch_status_output_validates_identity_and_separates_child_from_cli_result() {
         use super::*;
         let id = "a".repeat(32);
-        let frame = ServerFrame::LaunchStatus {
-            version: protocol::PROTOCOL_VERSION,
-            process_id: 42,
+        let query = Request::LaunchStatus {
             launch_request_id: id.clone(),
+        };
+        let status = Response::LaunchStatus {
+            process_id: 42,
+            launch_request_id: id,
             state: protocol::LaunchState::Exited {
                 exit_code: 7,
                 success: false,
             },
             terminal_closed: true,
         };
-        let json = format_launch_status(frame.clone(), 42, &id, true).unwrap();
+        let json = print(&query, &answer(42, &query, status.clone()).unwrap(), true).unwrap();
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(json["result"], "launch_status");
         assert_eq!(json["state"]["exit_code"], 7);
         assert_eq!(json["state"]["success"], false);
         assert_eq!(json["terminal_closed"], true);
         for private in ["program", "args", "environment", "cwd", "text"] {
             assert!(json.get(private).is_none());
         }
-        assert!(format_launch_status(frame.clone(), 43, &id, false).is_err());
-        assert!(format_launch_status(frame.clone(), 42, &"b".repeat(32), false).is_err());
-        let mut incompatible = frame.clone();
-        if let ServerFrame::LaunchStatus { version, .. } = &mut incompatible {
-            *version -= 1;
-        }
-        assert!(format_launch_status(incompatible, 42, &id, false).is_err());
+        assert!(answer(43, &query, status.clone()).is_err());
+        let other = Request::LaunchStatus {
+            launch_request_id: "b".repeat(32),
+        };
+        assert!(answer(42, &other, status.clone()).is_err());
         assert!(
-            format_launch_status(frame, 42, &id, false)
+            accept(ServerFrame {
+                version: protocol::PROTOCOL_VERSION + 1,
+                response: status.clone(),
+            })
+            .is_err()
+        );
+        assert!(
+            print(&query, &status, false)
                 .unwrap()
                 .contains("portable code 7")
         );
@@ -2073,24 +1256,21 @@ mod tests {
                     assert_eq!(frame.request, Request::Inventory);
                     protocol::write_frame(
                         &mut stream,
-                        &ServerFrame::Inventory {
-                            version: protocol::PROTOCOL_VERSION,
-                            inventory: ProcessInventory {
-                                process_id: std::process::id(),
-                                windows: vec![WindowInventory {
-                                    id: 9,
-                                    focused: true,
-                                    visible: true,
-                                    quick_access: true,
-                                    workspace_id: None,
-                                    pixel_width: 1_200,
-                                    pixel_height: 500,
-                                    tabs: Vec::new(),
-                                    truncated: false,
-                                }],
+                        &ServerFrame::new(Response::Inventory(ProcessInventory {
+                            process_id: std::process::id(),
+                            windows: vec![WindowInventory {
+                                id: 9,
+                                focused: true,
+                                visible: true,
+                                quick_access: true,
+                                workspace_id: None,
+                                pixel_width: 1_200,
+                                pixel_height: 500,
+                                tabs: Vec::new(),
                                 truncated: false,
-                            },
-                        },
+                            }],
+                            truncated: false,
+                        })),
                     )
                     .unwrap();
                 } else {
@@ -2106,13 +1286,12 @@ mod tests {
                     assert!(!visible);
                     protocol::write_frame(
                         &mut stream,
-                        &ServerFrame::QuickAccessChanged {
-                            version: protocol::PROTOCOL_VERSION,
+                        &ServerFrame::new(Response::QuickAccessChanged {
                             process_id: std::process::id(),
                             request_id,
                             window_id,
                             visible,
-                        },
+                        }),
                     )
                     .unwrap();
                 }
@@ -2154,24 +1333,21 @@ mod tests {
                     assert_eq!(frame.request, Request::Inventory);
                     protocol::write_frame(
                         &mut stream,
-                        &ServerFrame::Inventory {
-                            version: protocol::PROTOCOL_VERSION,
-                            inventory: ProcessInventory {
-                                process_id: std::process::id(),
-                                windows: vec![WindowInventory {
-                                    id: 9,
-                                    focused: false,
-                                    visible: false,
-                                    quick_access: true,
-                                    workspace_id: None,
-                                    pixel_width: 1_200,
-                                    pixel_height: 500,
-                                    tabs: Vec::new(),
-                                    truncated: false,
-                                }],
+                        &ServerFrame::new(Response::Inventory(ProcessInventory {
+                            process_id: std::process::id(),
+                            windows: vec![WindowInventory {
+                                id: 9,
+                                focused: false,
+                                visible: false,
+                                quick_access: true,
+                                workspace_id: None,
+                                pixel_width: 1_200,
+                                pixel_height: 500,
+                                tabs: Vec::new(),
                                 truncated: false,
-                            },
-                        },
+                            }],
+                            truncated: false,
+                        })),
                     )
                     .unwrap();
                     continue;
@@ -2196,13 +1372,12 @@ mod tests {
                 assert_eq!(first_visibility_request.as_ref(), Some(&frame.request));
                 protocol::write_frame(
                     &mut stream,
-                    &ServerFrame::QuickAccessChanged {
-                        version: protocol::PROTOCOL_VERSION,
+                    &ServerFrame::new(Response::QuickAccessChanged {
                         process_id: std::process::id(),
                         request_id: request_id.clone(),
                         window_id: *window_id,
                         visible: *visible,
-                    },
+                    }),
                 )
                 .unwrap();
             }
@@ -2287,187 +1462,69 @@ mod tests {
     }
 
     #[test]
-    fn generated_request_ids_are_canonical_and_action_output_is_versioned() {
+    fn json_output_is_the_reply_beside_the_schema_version() {
         let request_id = generate_request_id().unwrap();
         assert!(protocol::valid_request_id(&request_id));
-        let output = serde_json::to_value(WindowCreatedOutput {
-            schema_version: protocol::JSON_SCHEMA_VERSION,
+        let output: serde_json::Value = serde_json::from_str(
+            &json_output(&Response::TabCloseRequested {
+                process_id: 42,
+                request_id: request_id.clone(),
+                window_id: 9,
+                tab_id: 3,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            output,
+            serde_json::json!({
+                "schema_version": 1,
+                "result": "tab_close_requested",
+                "process_id": 42,
+                "request_id": request_id,
+                "window_id": 9,
+                "tab_id": 3,
+            })
+        );
+    }
+
+    #[test]
+    fn a_reply_answers_only_the_request_it_names() {
+        let request_id = "a".repeat(32);
+        let select = Request::SelectTab {
+            request_id: request_id.clone(),
+            window_id: 9,
+            tab_id: 3,
+        };
+        let selected = |process_id, request_id: &str, tab_id| Response::TabSelected {
+            process_id,
+            request_id: request_id.into(),
+            window_id: 9,
+            tab_id,
+            changed: true,
+        };
+        assert!(answers(&select, 42, &selected(42, &request_id, 3)));
+        assert!(!answers(&select, 43, &selected(42, &request_id, 3)));
+        assert!(!answers(&select, 42, &selected(42, &"b".repeat(32), 3)));
+        assert!(!answers(&select, 42, &selected(42, &request_id, 4)));
+        let closed = Response::TabCloseRequested {
             process_id: 42,
             request_id: request_id.clone(),
             window_id: 9,
-        })
-        .unwrap();
-        assert_eq!(output["schema_version"], 1);
-        assert_eq!(output["request_id"], request_id);
-        assert_eq!(output["window_id"], 9);
-
-        let output = serde_json::to_value(WindowLaunchedOutput {
-            schema_version: protocol::JSON_SCHEMA_VERSION,
-            process_id: 42,
-            request_id: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
-            window_id: 10,
-            tab_id: 0,
-        })
-        .unwrap();
-        assert_eq!(output["schema_version"], 1);
-        assert_eq!(output["window_id"], 10);
-        assert_eq!(output["tab_id"], 0);
-
-        let output = serde_json::to_value(TabCreatedOutput {
-            schema_version: protocol::JSON_SCHEMA_VERSION,
-            process_id: 42,
-            request_id: "fedcba9876543210fedcba9876543210".into(),
-            window_id: 9,
             tab_id: 3,
-        })
-        .unwrap();
-        assert_eq!(output["schema_version"], 1);
-        assert_eq!(output["window_id"], 9);
-        assert_eq!(output["tab_id"], 3);
-
-        let output = serde_json::to_value(PaneCreatedOutput {
-            schema_version: protocol::JSON_SCHEMA_VERSION,
-            process_id: 42,
-            request_id: "1234567890abcdef1234567890abcdef".into(),
-            window_id: 9,
-            tab_id: 3,
-            pane_id: 1,
-        })
-        .unwrap();
-        assert_eq!(output["schema_version"], 1);
-        assert_eq!(output["tab_id"], 3);
-        assert_eq!(output["pane_id"], 1);
-
-        let window_focus = serde_json::to_value(WindowFocusOutput {
-            schema_version: protocol::JSON_SCHEMA_VERSION,
-            process_id: 42,
-            request_id: "a".repeat(32),
-            window_id: 9,
-            already_focused: false,
-        })
-        .unwrap();
-        assert_eq!(window_focus["already_focused"], false);
-
-        let tab_selection = serde_json::to_value(TabSelectedOutput {
-            schema_version: protocol::JSON_SCHEMA_VERSION,
-            process_id: 42,
-            request_id: "b".repeat(32),
-            window_id: 9,
-            tab_id: 3,
-            changed: true,
-        })
-        .unwrap();
-        assert_eq!(tab_selection["changed"], true);
-
-        let pane_focus = serde_json::to_value(PaneFocusedOutput {
-            schema_version: protocol::JSON_SCHEMA_VERSION,
-            process_id: 42,
-            request_id: "c".repeat(32),
-            window_id: 9,
-            tab_id: 3,
-            pane_id: 1,
-            tab_changed: true,
-            pane_changed: false,
-        })
-        .unwrap();
-        assert_eq!(pane_focus["tab_changed"], true);
-        assert_eq!(pane_focus["pane_changed"], false);
-
-        let window_close = serde_json::to_value(WindowCloseOutput {
-            schema_version: protocol::JSON_SCHEMA_VERSION,
-            process_id: 42,
-            request_id: "d".repeat(32),
-            window_id: 9,
-            scheduled: true,
-        })
-        .unwrap();
-        assert_eq!(window_close["scheduled"], true);
-
-        let tab_close = serde_json::to_value(TabCloseOutput {
-            schema_version: protocol::JSON_SCHEMA_VERSION,
-            process_id: 42,
-            request_id: "e".repeat(32),
-            window_id: 9,
-            tab_id: 3,
-            scheduled: true,
-        })
-        .unwrap();
-        assert_eq!(tab_close["scheduled"], true);
-
-        let pane_close = serde_json::to_value(PaneCloseOutput {
-            schema_version: protocol::JSON_SCHEMA_VERSION,
-            process_id: 42,
-            request_id: "f".repeat(32),
-            window_id: 9,
-            tab_id: 3,
-            pane_id: 1,
-            remaining_panes: 1,
-            focused_pane_id: 0,
-        })
-        .unwrap();
-        assert_eq!(pane_close["remaining_panes"], 1);
-        assert_eq!(pane_close["focused_pane_id"], 0);
-
-        let tab_move = serde_json::to_value(TabMovedOutput {
-            schema_version: protocol::JSON_SCHEMA_VERSION,
-            process_id: 42,
-            request_id: "0".repeat(32),
-            source_window_id: 9,
-            source_tab_id: 3,
-            destination_window_id: 10,
-            destination_tab_id: 7,
-            destination_index: 2,
-            source_window_closing: false,
-            changed: true,
-        })
-        .unwrap();
-        assert_eq!(tab_move["destination_tab_id"], 7);
-        assert_eq!(tab_move["destination_index"], 2);
-        assert_eq!(tab_move["changed"], true);
-
-        let pane_move = serde_json::to_value(PaneMovedOutput {
-            schema_version: protocol::JSON_SCHEMA_VERSION,
-            process_id: 42,
-            request_id: "1".repeat(32),
-            source_window_id: 9,
-            source_tab_id: 3,
-            source_pane_id: 1,
-            destination_window_id: 10,
-            destination_tab_id: 7,
-            destination_pane_id: 5,
-            target_pane_id: 2,
-        })
-        .unwrap();
-        assert_eq!(pane_move["destination_pane_id"], 5);
-        assert_eq!(pane_move["target_pane_id"], 2);
-
-        let window_resize = serde_json::to_value(WindowResizeOutput {
-            schema_version: protocol::JSON_SCHEMA_VERSION,
-            process_id: 42,
-            request_id: "2".repeat(32),
-            window_id: 9,
-            requested_width: 900,
-            requested_height: 600,
-            immediate_width: None,
-            immediate_height: None,
-        })
-        .unwrap();
-        assert_eq!(window_resize["requested_width"], 900);
-        assert!(window_resize["immediate_width"].is_null());
-
-        let divider_resize = serde_json::to_value(DividerResizeOutput {
-            schema_version: protocol::JSON_SCHEMA_VERSION,
-            process_id: 42,
-            request_id: "3".repeat(32),
-            window_id: 9,
-            tab_id: 3,
-            divider_id: 11,
-            previous_ratio_millis: 500,
-            ratio_millis: 650,
-            changed: true,
-        })
-        .unwrap();
-        assert_eq!(divider_resize["divider_id"], 11);
-        assert_eq!(divider_resize["previous_ratio_millis"], 500);
+        };
+        assert!(!answers(&select, 42, &closed));
+        assert!(
+            answer(
+                42,
+                &select,
+                Response::Error {
+                    message: "tab not found".into()
+                }
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("tab not found")
+        );
     }
 }

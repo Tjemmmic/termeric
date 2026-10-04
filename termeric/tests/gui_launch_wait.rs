@@ -680,7 +680,11 @@ fn response(state: Value) -> Value {
         "launch_request_id": ID, "state": state, "terminal_closed": false})
 }
 
-fn send(mut stream: UnixStream, frame: Value) {
+/// Write `reply` as one server frame: its `version` key, and the rest as the
+/// frame's response.
+fn send(mut stream: UnixStream, mut reply: Value) {
+    let version = reply.as_object_mut().unwrap().remove("version").unwrap();
+    let frame = json!({"version": version, "response": reply});
     let bytes = serde_json::to_vec(&frame).unwrap();
     stream
         .write_all(&(bytes.len() as u32).to_be_bytes())

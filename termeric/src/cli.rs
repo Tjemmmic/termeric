@@ -1,5 +1,7 @@
 //! Deterministic command-line parsing into window-local startup plans.
 
+mod control_args;
+
 use crate::panes::SplitDirection;
 use anyhow::Context;
 use std::collections::HashMap;
@@ -571,783 +573,55 @@ General:\n  \
     )
 }
 
+/// A split's orientation on the command line; `h` and `v` work too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum Direction {
+    #[value(alias = "h")]
+    Horizontal,
+    #[value(alias = "v")]
+    Vertical,
+}
+
+impl From<Direction> for SplitDirection {
+    fn from(direction: Direction) -> Self {
+        match direction {
+            Direction::Horizontal => SplitDirection::Horizontal,
+            Direction::Vertical => SplitDirection::Vertical,
+        }
+    }
+}
+
+/// Parse a subcommand's `arguments` with clap: its arguments, the help it
+/// asked for (to print), or an error naming the mistake.
+fn parse_subcommand<C: clap::Parser>(arguments: &[OsString]) -> anyhow::Result<Result<C, String>> {
+    let name = <C as clap::CommandFactory>::command().get_name().to_owned();
+    match C::try_parse_from(std::iter::once(OsString::from(name)).chain(arguments.iter().cloned()))
+    {
+        Ok(parsed) => Ok(Ok(parsed)),
+        Err(error)
+            if matches!(
+                error.kind(),
+                clap::error::ErrorKind::DisplayHelp
+                    | clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+            ) =>
+        {
+            Ok(Err(error.render().to_string().trim_end().to_owned()))
+        }
+        Err(error) => {
+            let message = error.render().to_string();
+            let message = message.strip_prefix("error: ").unwrap_or(&message);
+            Err(anyhow::anyhow!("{}", message.trim_end()))
+        }
+    }
+}
+
 fn parse_control(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
-    let Some(command) = arguments.first().and_then(|argument| argument.to_str()) else {
-        return Ok(ParseOutcome::Print(control_help_text()));
-    };
-    if matches!(command, "-h" | "--help" | "help") {
-        return Ok(ParseOutcome::Print(control_help_text()));
-    }
-    match command {
-        "wait-launch" => {
-            let process_id = parse_control_process_id(arguments.get(1))?;
-            let launch_request_id =
-                domain_utf8(arguments.get(2), "wait-launch requires REQUEST_ID")?;
-            crate::control::protocol::Request::LaunchStatus {
-                launch_request_id: launch_request_id.clone(),
-            }
-            .validate()
-            .map_err(anyhow::Error::msg)?;
-            let mut json = false;
-            let mut timeout_seconds = None;
-            let mut index = 3;
-            while index < arguments.len() {
-                match arguments[index].to_str() {
-                    Some("--json") if !json => json = true,
-                    Some("--timeout") if timeout_seconds.is_none() => {
-                        index += 1;
-                        let value =
-                            domain_utf8(arguments.get(index), "--timeout requires SECONDS")?;
-                        let seconds = value
-                            .parse::<u32>()
-                            .ok()
-                            .filter(|seconds| (1..=86400).contains(seconds));
-                        timeout_seconds = Some(seconds.ok_or_else(|| {
-                            anyhow::anyhow!("--timeout must be 1–86400 whole seconds")
-                        })?);
-                    }
-                    _ => anyhow::bail!("unexpected or repeated control wait-launch option"),
-                }
-                index += 1;
-            }
-            Ok(ParseOutcome::Control(
-                crate::control::ControlCommand::WaitLaunch {
-                    process_id,
-                    launch_request_id,
-                    timeout_seconds,
-                    json,
-                },
-            ))
-        }
-        "launch-status" => {
-            let process_id = parse_control_process_id(arguments.get(1))?;
-            let launch_request_id =
-                domain_utf8(arguments.get(2), "launch-status requires REQUEST_ID")?;
-            crate::control::protocol::Request::LaunchStatus {
-                launch_request_id: launch_request_id.clone(),
-            }
-            .validate()
-            .map_err(anyhow::Error::msg)?;
-            let json = parse_only_json(&arguments[3..], "control launch-status")?;
-            Ok(ParseOutcome::Control(
-                crate::control::ControlCommand::LaunchStatus {
-                    process_id,
-                    launch_request_id,
-                    json,
-                },
-            ))
-        }
-        "list" => Ok(ParseOutcome::Control(
-            crate::control::ControlCommand::List {
-                json: parse_only_json(&arguments[1..], "control list")?,
-            },
-        )),
-        "get-text" => {
-            let process_id = parse_control_process_id(arguments.get(1))?;
-            let window_id = parse_control_window_id(arguments.get(2))?;
-            let tab_id = parse_control_tab_id(arguments.get(3))?;
-            let pane_id = parse_control_pane_id(arguments.get(4))?;
-            let mut history_lines = 0_u16;
-            let mut max_bytes = crate::control::protocol::MAX_TERMINAL_TEXT_BYTES;
-            let mut history_seen = false;
-            let mut bytes_seen = false;
-            let mut json = false;
-            let mut index = 5;
-            while index < arguments.len() {
-                match domain_utf8(arguments.get(index), "invalid get-text option")?.as_str() {
-                    "--history-lines" if !history_seen => {
-                        index += 1;
-                        history_lines = domain_utf8(
-                            arguments.get(index),
-                            "--history-lines requires a line count",
-                        )?
-                        .parse::<u16>()
-                        .context("invalid terminal-text history line count")?;
-                        if history_lines > crate::control::protocol::MAX_TEXT_HISTORY_LINES {
-                            anyhow::bail!(
-                                "terminal-text history is limited to {} lines",
-                                crate::control::protocol::MAX_TEXT_HISTORY_LINES
-                            );
-                        }
-                        history_seen = true;
-                    }
-                    "--bytes" if !bytes_seen => {
-                        index += 1;
-                        max_bytes =
-                            domain_utf8(arguments.get(index), "--bytes requires a byte count")?
-                                .parse::<u32>()
-                                .context("invalid terminal-text byte limit")?;
-                        if !(1..=crate::control::protocol::MAX_TERMINAL_TEXT_BYTES)
-                            .contains(&max_bytes)
-                        {
-                            anyhow::bail!(
-                                "terminal-text byte limit must be between 1 and {}",
-                                crate::control::protocol::MAX_TERMINAL_TEXT_BYTES
-                            );
-                        }
-                        bytes_seen = true;
-                    }
-                    "--json" if !json => json = true,
-                    option => anyhow::bail!("unknown or duplicate get-text option {option:?}"),
-                }
-                index += 1;
-            }
-            Ok(ParseOutcome::Control(
-                crate::control::ControlCommand::GetText {
-                    process_id,
-                    window_id,
-                    tab_id,
-                    pane_id,
-                    history_lines,
-                    max_bytes,
-                    json,
-                },
-            ))
-        }
-        "send-text" => {
-            let process_id = parse_control_process_id(arguments.get(1))?;
-            let window_id = parse_control_window_id(arguments.get(2))?;
-            let tab_id = parse_control_tab_id(arguments.get(3))?;
-            let pane_id = parse_control_pane_id(arguments.get(4))?;
-            let text = domain_utf8(arguments.get(5), "control send-text requires TEXT")?;
-            let mut paste = false;
-            let mut enter = false;
-            let mut request_id = None;
-            let mut json = false;
-            let mut index = 6;
-            while index < arguments.len() {
-                match domain_utf8(arguments.get(index), "invalid send-text option")?.as_str() {
-                    "--paste" if !paste => paste = true,
-                    "--enter" if !enter => enter = true,
-                    "--json" if !json => json = true,
-                    "--request-id" if request_id.is_none() => {
-                        index += 1;
-                        let value = domain_utf8(
-                            arguments.get(index),
-                            "--request-id requires 32 lowercase hex digits",
-                        )?;
-                        if !crate::control::protocol::valid_request_id(&value) {
-                            anyhow::bail!("--request-id must be exactly 32 lowercase hex digits");
-                        }
-                        request_id = Some(value);
-                    }
-                    option => anyhow::bail!("unknown or duplicate send-text option {option:?}"),
-                }
-                index += 1;
-            }
-            if text.len() > crate::control::protocol::MAX_CONTROL_INPUT_BYTES {
-                anyhow::bail!(
-                    "control input is limited to {} UTF-8 bytes",
-                    crate::control::protocol::MAX_CONTROL_INPUT_BYTES
-                );
-            }
-            if text.is_empty() && !enter {
-                anyhow::bail!("control input must include text or --enter");
-            }
-            if !crate::control::protocol::valid_control_input_text(&text) {
-                anyhow::bail!("control input permits printable UTF-8, tab, and newline only");
-            }
-            Ok(ParseOutcome::Control(
-                crate::control::ControlCommand::SendText {
-                    process_id,
-                    window_id,
-                    tab_id,
-                    pane_id,
-                    text,
-                    paste,
-                    enter,
-                    request_id,
-                    json,
-                },
-            ))
-        }
-        "new-window" => {
-            let process_id = parse_control_process_id(arguments.get(1))?;
-            let source_window = parse_control_window_id(arguments.get(2))?;
-            let (request_id, json) = parse_control_action_options(arguments, 3, "new-window")?;
-            Ok(ParseOutcome::Control(
-                crate::control::ControlCommand::NewWindow {
-                    process_id,
-                    source_window,
-                    request_id,
-                    json,
-                },
-            ))
-        }
-        "launch-window" => {
-            let process_id = parse_control_process_id(arguments.get(1))?;
-            let source_window = parse_control_window_id(arguments.get(2))?;
-            let launch = parse_control_launch(arguments, 3, "launch-window")?;
-            let request = crate::control::protocol::Request::LaunchWindow {
-                request_id: launch.request_id.clone().unwrap_or_else(|| "0".repeat(32)),
-                source_window,
-                program: launch.program.clone(),
-                args: launch.args.clone(),
-                working_directory: launch.working_directory.clone(),
-                title: launch.title.clone(),
-                environment: launch.environment.clone(),
-                environment_policy: launch.environment_policy.clone(),
-            };
-            request.validate().map_err(anyhow::Error::msg)?;
-            if launch.wait {
-                return Ok(ParseOutcome::Control(
-                    crate::control::ControlCommand::LaunchAndWait {
-                        env_stdin: launch.env_stdin,
-                        process_id,
-                        request,
-                        request_id: launch.request_id,
-                        timeout_seconds: launch.timeout_seconds,
-                        json: launch.json,
-                    },
-                ));
-            }
-            Ok(ParseOutcome::Control(
-                crate::control::ControlCommand::LaunchWindow {
-                    env_stdin: launch.env_stdin,
-                    process_id,
-                    source_window,
-                    program: launch.program,
-                    args: launch.args,
-                    working_directory: launch.working_directory,
-                    title: launch.title,
-                    environment: launch.environment,
-                    environment_policy: launch.environment_policy,
-                    request_id: launch.request_id,
-                    json: launch.json,
-                },
-            ))
-        }
-        "new-tab" => {
-            let process_id = parse_control_process_id(arguments.get(1))?;
-            let window_id = parse_control_window_id(arguments.get(2))?;
-            let (request_id, json) = parse_control_action_options(arguments, 3, "new-tab")?;
-            Ok(ParseOutcome::Control(
-                crate::control::ControlCommand::NewTab {
-                    process_id,
-                    window_id,
-                    request_id,
-                    json,
-                },
-            ))
-        }
-        "launch-tab" => {
-            let process_id = parse_control_process_id(arguments.get(1))?;
-            let window_id = parse_control_window_id(arguments.get(2))?;
-            let launch = parse_control_launch(arguments, 3, "launch-tab")?;
-            let request = crate::control::protocol::Request::LaunchTab {
-                background: launch.background,
-                request_id: launch.request_id.clone().unwrap_or_else(|| "0".repeat(32)),
-                window_id,
-                program: launch.program.clone(),
-                args: launch.args.clone(),
-                working_directory: launch.working_directory.clone(),
-                title: launch.title.clone(),
-                environment: launch.environment.clone(),
-                environment_policy: launch.environment_policy.clone(),
-            };
-            request.validate().map_err(anyhow::Error::msg)?;
-            if launch.wait {
-                return Ok(ParseOutcome::Control(
-                    crate::control::ControlCommand::LaunchAndWait {
-                        env_stdin: launch.env_stdin,
-                        process_id,
-                        request,
-                        request_id: launch.request_id,
-                        timeout_seconds: launch.timeout_seconds,
-                        json: launch.json,
-                    },
-                ));
-            }
-            Ok(ParseOutcome::Control(
-                crate::control::ControlCommand::LaunchTab {
-                    background: launch.background,
-                    env_stdin: launch.env_stdin,
-                    process_id,
-                    window_id,
-                    program: launch.program,
-                    args: launch.args,
-                    working_directory: launch.working_directory,
-                    title: launch.title,
-                    environment: launch.environment,
-                    environment_policy: launch.environment_policy,
-                    request_id: launch.request_id,
-                    json: launch.json,
-                },
-            ))
-        }
-        "split-pane" => {
-            let process_id = parse_control_process_id(arguments.get(1))?;
-            let window_id = parse_control_window_id(arguments.get(2))?;
-            let tab_id = parse_control_tab_id(arguments.get(3))?;
-            let pane_id = parse_control_pane_id(arguments.get(4))?;
-            let direction = match domain_utf8(
-                arguments.get(5),
-                "control split-pane requires horizontal or vertical",
-            )?
-            .as_str()
-            {
-                "horizontal" => SplitDirection::Horizontal,
-                "vertical" => SplitDirection::Vertical,
-                other => anyhow::bail!(
-                    "invalid split direction {other:?}; expected horizontal or vertical"
-                ),
-            };
-            let (request_id, json) = parse_control_action_options(arguments, 6, "split-pane")?;
-            Ok(ParseOutcome::Control(
-                crate::control::ControlCommand::SplitPane {
-                    process_id,
-                    window_id,
-                    tab_id,
-                    pane_id,
-                    direction,
-                    request_id,
-                    json,
-                },
-            ))
-        }
-        "focus-window" => {
-            let process_id = parse_control_process_id(arguments.get(1))?;
-            let window_id = parse_control_window_id(arguments.get(2))?;
-            let (request_id, json) = parse_control_action_options(arguments, 3, "focus-window")?;
-            Ok(ParseOutcome::Control(
-                crate::control::ControlCommand::FocusWindow {
-                    process_id,
-                    window_id,
-                    request_id,
-                    json,
-                },
-            ))
-        }
-        "select-tab" => {
-            let process_id = parse_control_process_id(arguments.get(1))?;
-            let window_id = parse_control_window_id(arguments.get(2))?;
-            let tab_id = parse_control_tab_id(arguments.get(3))?;
-            let (request_id, json) = parse_control_action_options(arguments, 4, "select-tab")?;
-            Ok(ParseOutcome::Control(
-                crate::control::ControlCommand::SelectTab {
-                    process_id,
-                    window_id,
-                    tab_id,
-                    request_id,
-                    json,
-                },
-            ))
-        }
-        "focus-pane" => {
-            let process_id = parse_control_process_id(arguments.get(1))?;
-            let window_id = parse_control_window_id(arguments.get(2))?;
-            let tab_id = parse_control_tab_id(arguments.get(3))?;
-            let pane_id = parse_control_pane_id(arguments.get(4))?;
-            let (request_id, json) = parse_control_action_options(arguments, 5, "focus-pane")?;
-            Ok(ParseOutcome::Control(
-                crate::control::ControlCommand::FocusPane {
-                    process_id,
-                    window_id,
-                    tab_id,
-                    pane_id,
-                    request_id,
-                    json,
-                },
-            ))
-        }
-        "close-window" => {
-            let process_id = parse_control_process_id(arguments.get(1))?;
-            let window_id = parse_control_window_id(arguments.get(2))?;
-            let (request_id, json) = parse_control_action_options(arguments, 3, "close-window")?;
-            Ok(ParseOutcome::Control(
-                crate::control::ControlCommand::CloseWindow {
-                    process_id,
-                    window_id,
-                    request_id,
-                    json,
-                },
-            ))
-        }
-        "close-tab" => {
-            let process_id = parse_control_process_id(arguments.get(1))?;
-            let window_id = parse_control_window_id(arguments.get(2))?;
-            let tab_id = parse_control_tab_id(arguments.get(3))?;
-            let (request_id, json) = parse_control_action_options(arguments, 4, "close-tab")?;
-            Ok(ParseOutcome::Control(
-                crate::control::ControlCommand::CloseTab {
-                    process_id,
-                    window_id,
-                    tab_id,
-                    request_id,
-                    json,
-                },
-            ))
-        }
-        "close-pane" => {
-            let process_id = parse_control_process_id(arguments.get(1))?;
-            let window_id = parse_control_window_id(arguments.get(2))?;
-            let tab_id = parse_control_tab_id(arguments.get(3))?;
-            let pane_id = parse_control_pane_id(arguments.get(4))?;
-            let (request_id, json) = parse_control_action_options(arguments, 5, "close-pane")?;
-            Ok(ParseOutcome::Control(
-                crate::control::ControlCommand::ClosePane {
-                    process_id,
-                    window_id,
-                    tab_id,
-                    pane_id,
-                    request_id,
-                    json,
-                },
-            ))
-        }
-        "move-tab" => {
-            let process_id = parse_control_process_id(arguments.get(1))?;
-            let source_window_id = parse_control_window_id(arguments.get(2))?;
-            let tab_id = parse_control_tab_id(arguments.get(3))?;
-            let destination_window_id = parse_control_window_id(arguments.get(4))?;
-            let destination_index = domain_utf8(
-                arguments.get(5),
-                "control move-tab requires DESTINATION_INDEX",
-            )?
-            .parse::<u16>()
-            .context("invalid destination tab index")?;
-            if usize::from(destination_index) > crate::control::protocol::MAX_TABS_PER_WINDOW {
-                anyhow::bail!("destination tab index exceeds the window tab limit");
-            }
-            let (request_id, json) = parse_control_action_options(arguments, 6, "move-tab")?;
-            Ok(ParseOutcome::Control(
-                crate::control::ControlCommand::MoveTab {
-                    process_id,
-                    source_window_id,
-                    tab_id,
-                    destination_window_id,
-                    destination_index,
-                    request_id,
-                    json,
-                },
-            ))
-        }
-        "move-pane" => {
-            let process_id = parse_control_process_id(arguments.get(1))?;
-            let source_window_id = parse_control_window_id(arguments.get(2))?;
-            let source_tab_id = parse_control_tab_id(arguments.get(3))?;
-            let pane_id = parse_control_pane_id(arguments.get(4))?;
-            let destination_window_id = parse_control_window_id(arguments.get(5))?;
-            let destination_tab_id = parse_control_tab_id(arguments.get(6))?;
-            let target_pane_id = parse_control_pane_id(arguments.get(7))?;
-            let direction = match domain_utf8(
-                arguments.get(8),
-                "control move-pane requires horizontal or vertical",
-            )?
-            .as_str()
-            {
-                "horizontal" => SplitDirection::Horizontal,
-                "vertical" => SplitDirection::Vertical,
-                other => anyhow::bail!(
-                    "invalid split direction {other:?}; expected horizontal or vertical"
-                ),
-            };
-            let (request_id, json) = parse_control_action_options(arguments, 9, "move-pane")?;
-            Ok(ParseOutcome::Control(
-                crate::control::ControlCommand::MovePane {
-                    process_id,
-                    source_window_id,
-                    source_tab_id,
-                    pane_id,
-                    destination_window_id,
-                    destination_tab_id,
-                    target_pane_id,
-                    direction,
-                    request_id,
-                    json,
-                },
-            ))
-        }
-        "resize-window" => {
-            let process_id = parse_control_process_id(arguments.get(1))?;
-            let window_id = parse_control_window_id(arguments.get(2))?;
-            let width = domain_utf8(arguments.get(3), "control resize-window requires WIDTH")?
-                .parse::<u32>()
-                .context("invalid window width")?;
-            let height = domain_utf8(arguments.get(4), "control resize-window requires HEIGHT")?
-                .parse::<u32>()
-                .context("invalid window height")?;
-            if !(crate::control::protocol::MIN_WINDOW_WIDTH
-                ..=crate::control::protocol::MAX_WINDOW_DIMENSION)
-                .contains(&width)
-                || !(crate::control::protocol::MIN_WINDOW_HEIGHT
-                    ..=crate::control::protocol::MAX_WINDOW_DIMENSION)
-                    .contains(&height)
-            {
-                anyhow::bail!(
-                    "window dimensions must be between {}x{} and {}x{} pixels",
-                    crate::control::protocol::MIN_WINDOW_WIDTH,
-                    crate::control::protocol::MIN_WINDOW_HEIGHT,
-                    crate::control::protocol::MAX_WINDOW_DIMENSION,
-                    crate::control::protocol::MAX_WINDOW_DIMENSION
-                );
-            }
-            let (request_id, json) = parse_control_action_options(arguments, 5, "resize-window")?;
-            Ok(ParseOutcome::Control(
-                crate::control::ControlCommand::ResizeWindow {
-                    process_id,
-                    window_id,
-                    width,
-                    height,
-                    request_id,
-                    json,
-                },
-            ))
-        }
-        "resize-divider" => {
-            let process_id = parse_control_process_id(arguments.get(1))?;
-            let window_id = parse_control_window_id(arguments.get(2))?;
-            let tab_id = parse_control_tab_id(arguments.get(3))?;
-            let divider_id =
-                domain_utf8(arguments.get(4), "control resize-divider requires DIVIDER")?
-                    .parse::<u64>()
-                    .context("invalid target divider ID")?;
-            let ratio_millis =
-                domain_utf8(arguments.get(5), "control resize-divider requires RATIO")?
-                    .parse::<u16>()
-                    .context("invalid divider ratio")?;
-            if !(100..=900).contains(&ratio_millis) {
-                anyhow::bail!("divider ratio must be between 100 and 900 thousandths");
-            }
-            let (request_id, json) = parse_control_action_options(arguments, 6, "resize-divider")?;
-            Ok(ParseOutcome::Control(
-                crate::control::ControlCommand::ResizeDivider {
-                    process_id,
-                    window_id,
-                    tab_id,
-                    divider_id,
-                    ratio_millis,
-                    request_id,
-                    json,
-                },
-            ))
-        }
-        _ => anyhow::bail!("unknown control command {command:?}; use `termeric control --help`"),
-    }
-}
-
-fn parse_control_action_options(
-    arguments: &[OsString],
-    start: usize,
-    command: &str,
-) -> anyhow::Result<(Option<String>, bool)> {
-    let mut request_id = None;
-    let mut json = false;
-    let mut index = start;
-    while index < arguments.len() {
-        let option = domain_utf8(arguments.get(index), "invalid control option")?;
-        match option.as_str() {
-            "--json" if !json => json = true,
-            "--request-id" if request_id.is_none() => {
-                index += 1;
-                let value = domain_utf8(
-                    arguments.get(index),
-                    "--request-id requires 32 lowercase hex digits",
-                )?;
-                if !crate::control::protocol::valid_request_id(&value) {
-                    anyhow::bail!("--request-id must be exactly 32 lowercase hex digits");
-                }
-                request_id = Some(value);
-            }
-            _ => anyhow::bail!("unknown or duplicate control {command} option {option:?}"),
-        }
-        index += 1;
-    }
-    Ok((request_id, json))
-}
-
-fn parse_control_process_id(value: Option<&OsString>) -> anyhow::Result<u32> {
-    let value = domain_utf8(value, "control action requires PROCESS")?;
-    let parsed = value.parse::<u32>().context("invalid GUI process ID")?;
-    if parsed == 0 || parsed > i32::MAX as u32 {
-        anyhow::bail!("GUI process ID must be between 1 and {}", i32::MAX);
-    }
-    Ok(parsed)
-}
-
-struct ParsedControlLaunch {
-    background: bool,
-    env_stdin: bool,
-    program: String,
-    args: Vec<String>,
-    working_directory: Option<String>,
-    title: Option<String>,
-    environment: Vec<crate::control::protocol::EnvironmentVariable>,
-    environment_policy: termeric_core::pty::EnvironmentPolicy,
-    request_id: Option<String>,
-    json: bool,
-    wait: bool,
-    timeout_seconds: Option<u32>,
-}
-
-fn parse_control_launch(
-    arguments: &[OsString],
-    mut index: usize,
-    command: &str,
-) -> anyhow::Result<ParsedControlLaunch> {
-    let mut working_directory = None;
-    let mut title = None;
-    let mut request_id = None;
-    let mut json = false;
-    let mut environment = Vec::new();
-    let mut background = false;
-    let mut env_stdin = false;
-    let mut wait = false;
-    let mut timeout_seconds = None;
-    let mut environment_policy = termeric_core::pty::EnvironmentPolicy::default();
-    let command_index = loop {
-        let option = domain_utf8(
-            arguments.get(index),
-            &format!("control {command} requires `-- PROGRAM [ARG ...]`"),
-        )?;
-        match option.as_str() {
-            "--" => break index + 1,
-            "--background" if command == "launch-tab" && !background => background = true,
-            "--env-stdin" if !env_stdin => env_stdin = true,
-            "--wait" if !wait => wait = true,
-            "--timeout" if timeout_seconds.is_none() => {
-                index += 1;
-                timeout_seconds = Some(
-                    domain_utf8(arguments.get(index), "--timeout requires SECONDS")?
-                        .parse::<u32>()
-                        .ok()
-                        .filter(|value| (1..=86400).contains(value))
-                        .ok_or_else(|| {
-                            anyhow::anyhow!("--timeout must be 1–86400 whole seconds")
-                        })?,
-                );
-            }
-            "--cwd" if working_directory.is_none() => {
-                index += 1;
-                working_directory = Some(domain_utf8(
-                    arguments.get(index),
-                    "--cwd requires an absolute directory",
-                )?);
-            }
-            "--title" if title.is_none() => {
-                index += 1;
-                title = Some(domain_utf8(
-                    arguments.get(index),
-                    "--title requires a title",
-                )?);
-            }
-            "--env" => {
-                index += 1;
-                let assignment = domain_utf8(arguments.get(index), "--env requires NAME=VALUE")?;
-                let (name, value) = assignment
-                    .split_once('=')
-                    .ok_or_else(|| anyhow::anyhow!("--env requires NAME=VALUE"))?;
-                environment.push(crate::control::protocol::EnvironmentVariable {
-                    name: name.to_string(),
-                    value: value.to_string(),
-                });
-            }
-            "--clear-env" if !environment_policy.clear => environment_policy.clear = true,
-            "--unset-env" => {
-                index += 1;
-                environment_policy.unset.push(domain_utf8(
-                    arguments.get(index),
-                    "--unset-env requires NAME",
-                )?);
-            }
-            "--request-id" if request_id.is_none() => {
-                index += 1;
-                let value = domain_utf8(
-                    arguments.get(index),
-                    "--request-id requires 32 lowercase hex digits",
-                )?;
-                if !crate::control::protocol::valid_request_id(&value) {
-                    anyhow::bail!("--request-id must be exactly 32 lowercase hex digits");
-                }
-                request_id = Some(value);
-            }
-            "--json" if !json => json = true,
-            option => anyhow::bail!(
-                "unknown or duplicate {command} option {option:?}; place PROGRAM and its arguments after `--`"
-            ),
-        }
-        index += 1;
-    };
-    if timeout_seconds.is_some() && !wait {
-        anyhow::bail!("launch --timeout requires --wait");
-    }
-    let program = domain_utf8(
-        arguments.get(command_index),
-        &format!("control {command} requires PROGRAM after `--`"),
-    )?;
-    let args = arguments[command_index + 1..]
-        .iter()
-        .map(|argument| {
-            argument
-                .to_str()
-                .map(str::to_string)
-                .ok_or_else(|| anyhow::anyhow!("launch arguments must be valid UTF-8"))
-        })
-        .collect::<anyhow::Result<Vec<_>>>()?;
-    Ok(ParsedControlLaunch {
-        background,
-        env_stdin,
-        program,
-        args,
-        working_directory,
-        title,
-        environment,
-        environment_policy,
-        request_id,
-        json,
-        wait,
-        timeout_seconds,
-    })
-}
-
-fn parse_control_window_id(value: Option<&OsString>) -> anyhow::Result<u64> {
-    let value = domain_utf8(value, "control action requires WINDOW")?;
-    let parsed = value.parse::<u64>().context("invalid GUI window ID")?;
-    if parsed == 0 {
-        anyhow::bail!("GUI window ID must be nonzero");
-    }
-    Ok(parsed)
-}
-
-fn parse_control_tab_id(value: Option<&OsString>) -> anyhow::Result<u64> {
-    domain_utf8(value, "control action requires TAB")?
-        .parse::<u64>()
-        .context("invalid target tab ID")
-}
-
-fn parse_control_pane_id(value: Option<&OsString>) -> anyhow::Result<u32> {
-    domain_utf8(value, "control action requires PANE")?
-        .parse::<u32>()
-        .context("invalid target pane ID")
-}
-
-fn control_help_text() -> String {
-    "Usage: termeric control SUBCOMMAND\n\n\
-Commands for already-running local GUI processes:\n  \
-  list [--json]\n      List bounded window, tab, and pane metadata\n  \
-  wait-launch PROCESS REQUEST_ID [--timeout SECONDS] [--json]\n      Wait for a retained child and return its exit code; timeout does not cancel it\n  \
-  launch-status PROCESS REQUEST_ID [--json]\n      Observe the initial child of a retained command launch\n  \
-  get-text PROCESS WINDOW TAB PANE [--history-lines N] [--bytes N] [--json]\n      Read bounded presented UTF-8 text from one exact pane\n  \
-  send-text PROCESS WINDOW TAB PANE TEXT [--paste] [--enter] [--request-id ID] [--json]\n      Send opt-in bounded UTF-8 text to one exact pane\n  \
-  new-window PROCESS SOURCE_WINDOW [--request-id ID] [--json]\n      Create a window using the exact source window's configuration and cwd\n  \
-  launch-window PROCESS SOURCE_WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--env-stdin] [--unset-env NAME ... | --clear-env] [--request-id ID] [--wait [--timeout SECONDS]] [--json] -- PROGRAM [ARG ...]\n      Launch exact argv and non-secret environment overrides in a new window\n  \
-  new-tab PROCESS WINDOW [--request-id ID] [--json]\n      Create a local tab in one exact stable window\n  \
-  launch-tab PROCESS WINDOW [--background] [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--env-stdin] [--unset-env NAME ... | --clear-env] [--request-id ID] [--wait [--timeout SECONDS]] [--json] -- PROGRAM [ARG ...]\n      Launch exact argv and non-secret environment overrides in a local tab\n  \
-  split-pane PROCESS WINDOW TAB PANE horizontal|vertical [--request-id ID] [--json]\n      Split one exact stable local pane and return the new pane ID\n  \
-  focus-window PROCESS WINDOW [--request-id ID] [--json]\n      Request native focus for one exact stable window\n  \
-  select-tab PROCESS WINDOW TAB [--request-id ID] [--json]\n      Select one exact stable tab without focusing its native window\n  \
-  focus-pane PROCESS WINDOW TAB PANE [--request-id ID] [--json]\n      Select the tab and focus one exact stable pane\n  \
-  close-window PROCESS WINDOW [--request-id ID] [--json]\n      Schedule one exact stable native window to close\n  \
-  close-tab PROCESS WINDOW TAB [--request-id ID] [--json]\n      Schedule one exact stable local tab to close\n  \
-  close-pane PROCESS WINDOW TAB PANE [--request-id ID] [--json]\n      Close one exact stable local pane immediately\n  \
-  move-tab PROCESS SOURCE_WINDOW TAB DESTINATION_WINDOW DESTINATION_INDEX [--request-id ID] [--json]\n      Move one exact local tab to a zero-based visual index\n  \
-  move-pane PROCESS SOURCE_WINDOW SOURCE_TAB PANE DESTINATION_WINDOW DESTINATION_TAB TARGET_PANE horizontal|vertical [--request-id ID] [--json]\n      Move one exact local pane beside an exact destination pane\n  \
-  resize-window PROCESS WINDOW WIDTH HEIGHT [--request-id ID] [--json]\n      Request an exact native window inner size in physical pixels\n  \
-  resize-divider PROCESS WINDOW TAB DIVIDER RATIO [--request-id ID] [--json]\n      Set one exact local divider to 100-900 thousandths\n\n\
-The endpoint is private to the current Unix user. Text access is explicit and\n\
-bounded; input is opt-in and typed, command launches use exact bounded argv, and\n\
-environment overrides, clipboard data, and provider credentials remain hidden."
-        .into()
+    Ok(
+        match parse_subcommand::<control_args::ControlCli>(arguments)? {
+            Ok(control) => ParseOutcome::Control(control.into_command()?),
+            Err(help) => ParseOutcome::Print(help),
+        },
+    )
 }
 
 fn parse_plugin(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
@@ -2133,18 +1407,22 @@ mod tests {
                 args.extend(flags);
                 args.extend(["--", "/bin/true"]);
                 let outcome = parse(args.into_iter().map(OsString::from)).unwrap();
-                let (environment, policy) = match outcome {
-                    ParseOutcome::Control(crate::control::ControlCommand::LaunchTab {
-                        environment,
-                        environment_policy,
-                        ..
-                    })
-                    | ParseOutcome::Control(crate::control::ControlCommand::LaunchWindow {
-                        environment,
-                        environment_policy,
-                        ..
-                    }) => (environment, environment_policy),
-                    _ => panic!("wrong launch command"),
+                let ParseOutcome::Control(crate::control::ControlCommand::Launch {
+                    request:
+                        crate::control::protocol::Request::LaunchTab {
+                            environment,
+                            environment_policy: policy,
+                            ..
+                        }
+                        | crate::control::protocol::Request::LaunchWindow {
+                            environment,
+                            environment_policy: policy,
+                            ..
+                        },
+                    ..
+                }) = outcome
+                else {
+                    panic!("wrong launch command");
                 };
                 assert_eq!(environment[0].value, "");
                 assert!(policy.clear || policy.unset == ["PATH"]);
@@ -2176,23 +1454,21 @@ mod tests {
                 args.push("--wait");
             }
             args.extend(["--", "/bin/true", "--background"]);
-            match parse(args.into_iter().map(OsString::from)).unwrap() {
-                ParseOutcome::Control(crate::control::ControlCommand::LaunchTab {
-                    background: true,
-                    args,
-                    ..
-                }) => assert_eq!(args, ["--background"]),
-                ParseOutcome::Control(crate::control::ControlCommand::LaunchAndWait {
-                    request:
-                        crate::control::protocol::Request::LaunchTab {
-                            background: true,
-                            args,
-                            ..
-                        },
-                    ..
-                }) => assert_eq!(args, ["--background"]),
-                _ => panic!("background flag lost"),
-            }
+            let ParseOutcome::Control(crate::control::ControlCommand::Launch {
+                request:
+                    crate::control::protocol::Request::LaunchTab {
+                        background: true,
+                        args,
+                        ..
+                    },
+                wait: launch_wait,
+                ..
+            }) = parse(args.into_iter().map(OsString::from)).unwrap()
+            else {
+                panic!("background flag lost");
+            };
+            assert_eq!(args, ["--background"]);
+            assert_eq!(launch_wait.is_some(), wait);
         }
         for args in [
             vec![
@@ -2256,12 +1532,15 @@ mod tests {
                 .into_iter()
                 .map(OsString::from),
             );
-            let ParseOutcome::Control(crate::control::ControlCommand::LaunchAndWait {
-                env_stdin: false,
+            let ParseOutcome::Control(crate::control::ControlCommand::Launch {
                 process_id: 42,
                 request,
                 request_id: None,
-                timeout_seconds: Some(1),
+                env_stdin: false,
+                wait:
+                    Some(crate::control::Wait {
+                        timeout_seconds: Some(1),
+                    }),
                 json: true,
             }) = result.unwrap()
             else {
@@ -2546,136 +1825,151 @@ mod tests {
             parse(["control", "--help"].into_iter().map(OsString::from)).unwrap(),
             ParseOutcome::Print(text) if text.contains("Text access is explicit")
         ));
-        assert!(matches!(
-            parse(
-                [
-                    "control",
-                    "get-text",
-                    "42",
-                    "7",
-                    "3",
-                    "1",
-                    "--history-lines",
-                    "40",
-                    "--bytes",
-                    "4096",
-                    "--json",
-                ]
-                .into_iter()
-                .map(OsString::from)
+
+        use crate::control::ControlCommand;
+        use crate::control::protocol::{EnvironmentVariable, Request};
+        let control = |arguments: &[&str]| {
+            let mut all = vec!["control"];
+            all.extend(arguments);
+            match parse(all.into_iter().map(OsString::from)).unwrap() {
+                ParseOutcome::Control(command) => command,
+                _ => panic!("expected a control command"),
+            }
+        };
+        let send = |request, request_id: Option<&str>, json| ControlCommand::Send {
+            process_id: 42,
+            request,
+            request_id: request_id.map(str::to_owned),
+            json,
+        };
+        assert_eq!(
+            control(&[
+                "get-text",
+                "42",
+                "7",
+                "3",
+                "1",
+                "--history-lines",
+                "40",
+                "--bytes",
+                "4096",
+                "--json",
+            ]),
+            send(
+                Request::ReadText {
+                    window_id: 7,
+                    tab_id: 3,
+                    pane_id: 1,
+                    history_lines: 40,
+                    max_bytes: 4096,
+                },
+                None,
+                true
             )
-            .unwrap(),
-            ParseOutcome::Control(crate::control::ControlCommand::GetText {
-                process_id: 42,
-                window_id: 7,
-                tab_id: 3,
-                pane_id: 1,
-                history_lines: 40,
-                max_bytes: 4096,
-                json: true,
-            })
-        ));
-        assert!(
-            parse(
-                ["control", "get-text", "42", "7", "3", "1", "--bytes", "0"]
-                    .into_iter()
-                    .map(OsString::from)
-            )
-            .is_err()
         );
-        assert!(matches!(
-            parse(
-                [
-                    "control",
-                    "send-text",
-                    "42",
-                    "7",
-                    "3",
-                    "1",
-                    "cargo test",
-                    "--paste",
-                    "--enter",
-                    "--request-id",
-                    "55555555555555555555555555555555",
-                    "--json",
-                ]
-                .into_iter()
-                .map(OsString::from)
+        let id = "55555555555555555555555555555555";
+        assert_eq!(
+            control(&[
+                "send-text",
+                "42",
+                "7",
+                "3",
+                "1",
+                "cargo test",
+                "--paste",
+                "--enter",
+                "--request-id",
+                id,
+                "--json",
+            ]),
+            send(
+                Request::SendText {
+                    request_id: String::new(),
+                    window_id: 7,
+                    tab_id: 3,
+                    pane_id: 1,
+                    text: "cargo test".into(),
+                    paste: true,
+                    enter: true,
+                },
+                Some(id),
+                true
             )
-            .unwrap(),
-            ParseOutcome::Control(crate::control::ControlCommand::SendText {
-                process_id: 42,
-                window_id: 7,
-                tab_id: 3,
-                pane_id: 1,
-                text,
-                paste: true,
-                enter: true,
-                request_id: Some(request_id),
-                json: true,
-            }) if text == "cargo test" && request_id == "55555555555555555555555555555555"
-        ));
-        assert!(
-            parse(
-                ["control", "send-text", "42", "7", "3", "1", "bad\rinput"]
-                    .into_iter()
-                    .map(OsString::from)
-            )
-            .is_err()
         );
-        assert!(
-            parse(["control", "send"].into_iter().map(OsString::from)).is_err(),
-            "arbitrary input must not become an implicit control mutation"
+        // Typed text may itself look like an option.
+        assert!(matches!(
+            control(&["send-text", "42", "7", "3", "1", "-n"]),
+            ControlCommand::Send {
+                request: Request::SendText { text, .. },
+                ..
+            } if text == "-n"
+        ));
+        assert_eq!(
+            control(&["new-window", "42", "7", "--request-id", id, "--json"]),
+            send(
+                Request::CreateWindow {
+                    request_id: String::new(),
+                    source_window: 7,
+                },
+                Some(id),
+                true
+            )
         );
-        assert!(matches!(
-            parse(
-                [
-                    "control",
-                    "new-window",
-                    "42",
-                    "7",
-                    "--request-id",
-                    "0123456789abcdef0123456789abcdef",
-                    "--json",
-                ]
-                .into_iter()
-                .map(OsString::from)
+        assert_eq!(
+            control(&["new-tab", "42", "7"]),
+            send(
+                Request::CreateTab {
+                    request_id: String::new(),
+                    window_id: 7,
+                },
+                None,
+                false
             )
-            .unwrap(),
-            ParseOutcome::Control(crate::control::ControlCommand::NewWindow {
-                process_id: 42,
-                source_window: 7,
-                request_id: Some(request_id),
-                json: true,
-            }) if request_id == "0123456789abcdef0123456789abcdef"
-        ));
-        assert!(matches!(
-            parse(
-                [
-                    "control",
-                    "new-tab",
-                    "42",
-                    "7",
-                    "--request-id",
-                    "fedcba9876543210fedcba9876543210",
-                    "--json",
-                ]
-                .into_iter()
-                .map(OsString::from)
-            )
-            .unwrap(),
-            ParseOutcome::Control(crate::control::ControlCommand::NewTab {
-                process_id: 42,
-                window_id: 7,
-                request_id: Some(request_id),
-                json: true,
-            }) if request_id == "fedcba9876543210fedcba9876543210"
-        ));
-        assert!(matches!(
-            parse(
-                [
-                    "control",
-                    "launch-tab",
+        );
+        let launch_place = (
+            Some("/tmp/two words".to_string()),
+            vec![
+                EnvironmentVariable {
+                    name: "EMPTY_VALUE".into(),
+                    value: String::new(),
+                },
+                EnvironmentVariable {
+                    name: "EXACT_VALUE".into(),
+                    value: "= two words $HOME;🙂".into(),
+                },
+            ],
+        );
+        let argv = ["", "two words", "$HOME;🙂", "--json"]
+            .map(String::from)
+            .to_vec();
+        for verb in ["launch-tab", "launch-window"] {
+            let request = if verb == "launch-tab" {
+                Request::LaunchTab {
+                    background: false,
+                    request_id: String::new(),
+                    window_id: 7,
+                    program: "/bin/printf".into(),
+                    args: argv.clone(),
+                    working_directory: launch_place.0.clone(),
+                    title: Some("Exact 🙂".into()),
+                    environment: launch_place.1.clone(),
+                    environment_policy: Default::default(),
+                }
+            } else {
+                Request::LaunchWindow {
+                    request_id: String::new(),
+                    source_window: 7,
+                    program: "/bin/printf".into(),
+                    args: argv.clone(),
+                    working_directory: launch_place.0.clone(),
+                    title: Some("Exact 🙂".into()),
+                    environment: launch_place.1.clone(),
+                    environment_policy: Default::default(),
+                }
+            };
+            assert_eq!(
+                control(&[
+                    verb,
                     "42",
                     "7",
                     "--cwd",
@@ -2683,67 +1977,11 @@ mod tests {
                     "--title",
                     "Exact 🙂",
                     "--env",
-                    "EMPTY_VALUE=",
-                    "--env",
                     "EXACT_VALUE== two words $HOME;🙂",
-                    "--request-id",
-                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                    "--json",
-                    "--",
-                    "/bin/printf",
-                    "",
-                    "two words",
-                    "$HOME;🙂",
-                    "--json",
-                ]
-                .into_iter()
-                .map(OsString::from)
-            )
-            .unwrap(),
-            ParseOutcome::Control(crate::control::ControlCommand::LaunchTab {
-                background: false,
-                env_stdin: false,
-                process_id: 42,
-                window_id: 7,
-                program,
-                args,
-                working_directory: Some(cwd),
-                title: Some(title),
-                environment,
-                environment_policy: _,
-                request_id: Some(request_id),
-                json: true,
-            }) if program == "/bin/printf"
-                && args == ["", "two words", "$HOME;🙂", "--json"]
-                && cwd == "/tmp/two words"
-                && title == "Exact 🙂"
-                && environment == [
-                    crate::control::protocol::EnvironmentVariable {
-                        name: "EMPTY_VALUE".into(),
-                        value: String::new(),
-                    },
-                    crate::control::protocol::EnvironmentVariable {
-                        name: "EXACT_VALUE".into(),
-                        value: "= two words $HOME;🙂".into(),
-                    },
-                ]
-                && request_id == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        ));
-        assert!(matches!(
-            parse(
-                [
-                    "control",
-                    "launch-window",
-                    "42",
-                    "7",
-                    "--cwd",
-                    "/tmp/two words",
-                    "--title",
-                    "Exact window 🙂",
                     "--env",
-                    "WINDOW_MODE=direct",
+                    "EMPTY_VALUE=",
                     "--request-id",
-                    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    id,
                     "--json",
                     "--",
                     "/bin/printf",
@@ -2751,172 +1989,98 @@ mod tests {
                     "two words",
                     "$HOME;🙂",
                     "--json",
-                ]
-                .into_iter()
-                .map(OsString::from)
-            )
-            .unwrap(),
-            ParseOutcome::Control(crate::control::ControlCommand::LaunchWindow {
-                env_stdin: false,
-                process_id: 42,
-                source_window: 7,
-                program,
-                args,
-                working_directory: Some(cwd),
-                title: Some(title),
-                environment,
-                environment_policy: _,
-                request_id: Some(request_id),
-                json: true,
-            }) if program == "/bin/printf"
-                && args == ["", "two words", "$HOME;🙂", "--json"]
-                && cwd == "/tmp/two words"
-                && title == "Exact window 🙂"
-                && environment == [crate::control::protocol::EnvironmentVariable {
-                    name: "WINDOW_MODE".into(),
-                    value: "direct".into(),
-                }]
-                && request_id == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-        ));
-        assert!(matches!(
-            parse(
-                [
-                    "control",
-                    "split-pane",
-                    "42",
-                    "7",
-                    "3",
-                    "0",
-                    "vertical",
-                    "--request-id",
-                    "1234567890abcdef1234567890abcdef",
-                    "--json",
-                ]
-                .into_iter()
-                .map(OsString::from)
-            )
-            .unwrap(),
-            ParseOutcome::Control(crate::control::ControlCommand::SplitPane {
-                process_id: 42,
-                window_id: 7,
-                tab_id: 3,
-                pane_id: 0,
-                direction: SplitDirection::Vertical,
-                request_id: Some(request_id),
-                json: true,
-            }) if request_id == "1234567890abcdef1234567890abcdef"
-        ));
-        assert!(matches!(
-            parse(
-                ["control", "focus-window", "42", "7", "--json"]
-                    .into_iter()
-                    .map(OsString::from)
-            )
-            .unwrap(),
-            ParseOutcome::Control(crate::control::ControlCommand::FocusWindow {
-                process_id: 42,
-                window_id: 7,
-                request_id: None,
-                json: true,
-            })
-        ));
-        assert!(matches!(
-            parse(
-                ["control", "select-tab", "42", "7", "3"]
-                    .into_iter()
-                    .map(OsString::from)
-            )
-            .unwrap(),
-            ParseOutcome::Control(crate::control::ControlCommand::SelectTab {
-                process_id: 42,
-                window_id: 7,
-                tab_id: 3,
-                request_id: None,
-                json: false,
-            })
-        ));
-        assert!(matches!(
-            parse(
-                ["control", "focus-pane", "42", "7", "3", "0"]
-                    .into_iter()
-                    .map(OsString::from)
-            )
-            .unwrap(),
-            ParseOutcome::Control(crate::control::ControlCommand::FocusPane {
-                process_id: 42,
-                window_id: 7,
-                tab_id: 3,
-                pane_id: 0,
-                request_id: None,
-                json: false,
-            })
-        ));
-        assert!(matches!(
-            parse(
-                ["control", "close-window", "42", "7", "--json"]
-                    .into_iter()
-                    .map(OsString::from)
-            )
-            .unwrap(),
-            ParseOutcome::Control(crate::control::ControlCommand::CloseWindow {
-                process_id: 42,
-                window_id: 7,
-                request_id: None,
-                json: true,
-            })
-        ));
-        assert!(matches!(
-            parse(
-                ["control", "close-tab", "42", "7", "3"]
-                    .into_iter()
-                    .map(OsString::from)
-            )
-            .unwrap(),
-            ParseOutcome::Control(crate::control::ControlCommand::CloseTab {
-                process_id: 42,
-                window_id: 7,
-                tab_id: 3,
-                request_id: None,
-                json: false,
-            })
-        ));
-        assert!(matches!(
-            parse(
-                ["control", "close-pane", "42", "7", "3", "1"]
-                    .into_iter()
-                    .map(OsString::from)
-            )
-            .unwrap(),
-            ParseOutcome::Control(crate::control::ControlCommand::ClosePane {
-                process_id: 42,
-                window_id: 7,
-                tab_id: 3,
-                pane_id: 1,
-                request_id: None,
-                json: false,
-            })
-        ));
-        assert!(matches!(
-            parse(
-                ["control", "move-tab", "42", "7", "3", "9", "2", "--json",]
-                    .into_iter()
-                    .map(OsString::from)
-            )
-            .unwrap(),
-            ParseOutcome::Control(crate::control::ControlCommand::MoveTab {
-                process_id: 42,
-                source_window_id: 7,
-                tab_id: 3,
-                destination_window_id: 9,
-                destination_index: 2,
-                request_id: None,
-                json: true,
-            })
-        ));
-        assert!(matches!(
-            parse(
-                [
-                    "control",
+                ]),
+                ControlCommand::Launch {
+                    process_id: 42,
+                    request,
+                    request_id: Some(id.into()),
+                    env_stdin: false,
+                    wait: None,
+                    json: true,
+                }
+            );
+        }
+        for (arguments, request) in [
+            (
+                vec!["split-pane", "42", "7", "3", "0", "vertical"],
+                Request::SplitPane {
+                    request_id: String::new(),
+                    window_id: 7,
+                    tab_id: 3,
+                    pane_id: 0,
+                    direction: SplitDirection::Vertical,
+                },
+            ),
+            (
+                vec!["split-pane", "42", "7", "3", "0", "h"],
+                Request::SplitPane {
+                    request_id: String::new(),
+                    window_id: 7,
+                    tab_id: 3,
+                    pane_id: 0,
+                    direction: SplitDirection::Horizontal,
+                },
+            ),
+            (
+                vec!["focus-window", "42", "7"],
+                Request::FocusWindow {
+                    request_id: String::new(),
+                    window_id: 7,
+                },
+            ),
+            (
+                vec!["select-tab", "42", "7", "3"],
+                Request::SelectTab {
+                    request_id: String::new(),
+                    window_id: 7,
+                    tab_id: 3,
+                },
+            ),
+            (
+                vec!["focus-pane", "42", "7", "3", "0"],
+                Request::FocusPane {
+                    request_id: String::new(),
+                    window_id: 7,
+                    tab_id: 3,
+                    pane_id: 0,
+                },
+            ),
+            (
+                vec!["close-window", "42", "7"],
+                Request::CloseWindow {
+                    request_id: String::new(),
+                    window_id: 7,
+                },
+            ),
+            (
+                vec!["close-tab", "42", "7", "3"],
+                Request::CloseTab {
+                    request_id: String::new(),
+                    window_id: 7,
+                    tab_id: 3,
+                },
+            ),
+            (
+                vec!["close-pane", "42", "7", "3", "1"],
+                Request::ClosePane {
+                    request_id: String::new(),
+                    window_id: 7,
+                    tab_id: 3,
+                    pane_id: 1,
+                },
+            ),
+            (
+                vec!["move-tab", "42", "7", "3", "9", "2"],
+                Request::MoveTab {
+                    request_id: String::new(),
+                    source_window_id: 7,
+                    tab_id: 3,
+                    destination_window_id: 9,
+                    destination_index: 2,
+                },
+            ),
+            (
+                vec![
                     "move-pane",
                     "42",
                     "7",
@@ -2926,67 +2090,44 @@ mod tests {
                     "4",
                     "2",
                     "horizontal",
-                    "--json",
-                ]
-                .into_iter()
-                .map(OsString::from)
-            )
-            .unwrap(),
-            ParseOutcome::Control(crate::control::ControlCommand::MovePane {
-                process_id: 42,
-                source_window_id: 7,
-                source_tab_id: 3,
-                pane_id: 1,
-                destination_window_id: 9,
-                destination_tab_id: 4,
-                target_pane_id: 2,
-                direction: SplitDirection::Horizontal,
-                request_id: None,
-                json: true,
-            })
-        ));
-        assert!(matches!(
-            parse(
-                [
-                    "control",
-                    "resize-window",
-                    "42",
-                    "7",
-                    "900",
-                    "600",
-                    "--json"
-                ]
-                .into_iter()
-                .map(OsString::from)
-            )
-            .unwrap(),
-            ParseOutcome::Control(crate::control::ControlCommand::ResizeWindow {
-                process_id: 42,
-                window_id: 7,
-                width: 900,
-                height: 600,
-                request_id: None,
-                json: true,
-            })
-        ));
-        assert!(matches!(
-            parse(
-                ["control", "resize-divider", "42", "7", "3", "0", "650"]
-                    .into_iter()
-                    .map(OsString::from)
-            )
-            .unwrap(),
-            ParseOutcome::Control(crate::control::ControlCommand::ResizeDivider {
-                process_id: 42,
-                window_id: 7,
-                tab_id: 3,
-                divider_id: 0,
-                ratio_millis: 650,
-                request_id: None,
-                json: false,
-            })
-        ));
+                ],
+                Request::MovePane {
+                    request_id: String::new(),
+                    source_window_id: 7,
+                    source_tab_id: 3,
+                    pane_id: 1,
+                    destination_window_id: 9,
+                    destination_tab_id: 4,
+                    target_pane_id: 2,
+                    direction: SplitDirection::Horizontal,
+                },
+            ),
+            (
+                vec!["resize-window", "42", "7", "900", "600"],
+                Request::ResizeWindow {
+                    request_id: String::new(),
+                    window_id: 7,
+                    width: 900,
+                    height: 600,
+                },
+            ),
+            (
+                vec!["resize-divider", "42", "7", "3", "0", "650"],
+                Request::ResizeDivider {
+                    request_id: String::new(),
+                    window_id: 7,
+                    tab_id: 3,
+                    divider_id: 0,
+                    ratio_millis: 650,
+                },
+            ),
+        ] {
+            assert_eq!(control(&arguments), send(request, None, false));
+        }
         for arguments in [
+            vec!["control", "get-text", "42", "7", "3", "1", "--bytes", "0"],
+            vec!["control", "send-text", "42", "7", "3", "1", "bad\rinput"],
+            vec!["control", "send"],
             vec!["control", "new-window", "0", "7"],
             vec!["control", "new-window", "42", "0"],
             vec!["control", "new-window", "42", "7", "--request-id", "short"],

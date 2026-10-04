@@ -3,7 +3,7 @@
 use super::{
     ControlOutput, client,
     paths::ControlPaths,
-    protocol::{self, ClientFrame, LaunchState, Request, ServerFrame},
+    protocol::{self, ClientFrame, LaunchState, Request, Response},
 };
 use anyhow::Context;
 use std::io::{self, Read, Write};
@@ -49,57 +49,16 @@ fn launch_at(
     deadline: Option<Instant>,
     json: bool,
 ) -> anyhow::Result<ControlOutput> {
-    let (id, target_window, fresh_window) = match &request {
-        Request::LaunchTab {
-            request_id,
-            window_id,
-            ..
-        } => (request_id.clone(), *window_id, false),
-        Request::LaunchWindow {
-            request_id,
-            source_window,
-            ..
-        } => (request_id.clone(), *source_window, true),
+    let id = match &request {
+        Request::LaunchTab { request_id, .. } | Request::LaunchWindow { request_id, .. } => {
+            request_id.clone()
+        }
         _ => anyhow::bail!("wait requires a tab or window command launch"),
     };
     request.validate().map_err(anyhow::Error::msg)?;
     let exchange_deadline = exchange_deadline(deadline);
-    let frame = exchange(endpoint, token, identity, request, exchange_deadline)?;
-    let valid = match frame {
-        ServerFrame::TabCreated {
-            version,
-            process_id,
-            request_id,
-            window_id,
-            ..
-        } => {
-            !fresh_window
-                && version == protocol::PROTOCOL_VERSION
-                && process_id == endpoint.process_id
-                && request_id == id
-                && window_id == target_window
-        }
-        ServerFrame::WindowLaunched {
-            version,
-            process_id,
-            request_id,
-            window_id,
-            ..
-        } => {
-            fresh_window
-                && version == protocol::PROTOCOL_VERSION
-                && process_id == endpoint.process_id
-                && request_id == id
-                && window_id != 0
-        }
-        ServerFrame::Error { version, message } if version == protocol::PROTOCOL_VERSION => {
-            anyhow::bail!(message)
-        }
-        _ => false,
-    };
-    if !valid {
-        anyhow::bail!("invalid GUI launch acknowledgement");
-    }
+    let response = exchange(endpoint, token, identity, &request, exchange_deadline)?;
+    client::answer(endpoint.process_id, &request, response)?;
     remaining(exchange_deadline)?;
     poll_launch(endpoint, token, identity, &id, deadline, json)
 }
@@ -162,27 +121,27 @@ fn poll_launch(
     deadline: Option<Instant>,
     json: bool,
 ) -> anyhow::Result<ControlOutput> {
+    let query = Request::LaunchStatus {
+        launch_request_id: launch_request_id.to_owned(),
+    };
     loop {
         let exchange_deadline = exchange_deadline(deadline);
         remaining(exchange_deadline)?;
-        let frame = query(
-            endpoint,
-            token,
-            identity,
-            launch_request_id,
-            exchange_deadline,
-        )?;
-        // Validate every running response too: waiting must not conceal wrong
+        // Check every running reply too: waiting must not conceal wrong
         // identities, unsupported versions, errors, or inconsistent exit state.
-        let exit_code = match &frame {
-            ServerFrame::LaunchStatus {
+        let response = client::answer(
+            endpoint.process_id,
+            &query,
+            exchange(endpoint, token, identity, &query, exchange_deadline)?,
+        )?;
+        let exit_code = match &response {
+            Response::LaunchStatus {
                 state: LaunchState::Exited { exit_code, .. },
                 ..
             } => Some(*exit_code),
             _ => None,
         };
-        let text =
-            client::format_launch_status(frame, endpoint.process_id, launch_request_id, json)?;
+        let text = client::print(&query, &response, json)?;
         remaining(exchange_deadline)?;
         if let Some(exit_code) = exit_code {
             return Ok(ControlOutput {
@@ -216,31 +175,15 @@ fn socket_identity(path: &Path) -> anyhow::Result<(u64, u64)> {
     Ok((metadata.dev(), metadata.ino()))
 }
 
-fn query(
-    endpoint: &ControlPaths,
-    token: &str,
-    identity: (u64, u64),
-    id: &str,
-    deadline: Instant,
-) -> anyhow::Result<ServerFrame> {
-    exchange(
-        endpoint,
-        token,
-        identity,
-        Request::LaunchStatus {
-            launch_request_id: id.to_owned(),
-        },
-        deadline,
-    )
-}
-
+/// One exchange on the endpoint first found, refused if it has since been
+/// replaced; the reply may still be a refusal.
 fn exchange(
     endpoint: &ControlPaths,
     token: &str,
     identity: (u64, u64),
-    request: Request,
+    request: &Request,
     deadline: Instant,
-) -> anyhow::Result<ServerFrame> {
+) -> anyhow::Result<Response> {
     let check_endpoint = || -> anyhow::Result<()> {
         if socket_identity(&endpoint.socket)? != identity || endpoint.read_token()? != token {
             anyhow::bail!("GUI wait endpoint changed; start a new query explicitly");
@@ -256,10 +199,10 @@ fn exchange(
         &ClientFrame {
             version: protocol::PROTOCOL_VERSION,
             token: token.to_owned(),
-            request,
+            request: request.clone(),
         },
     )?;
-    protocol::read_frame(&mut stream)
+    client::accept(protocol::read_frame(&mut stream)?)
 }
 
 fn remaining(deadline: Instant) -> io::Result<Duration> {
@@ -397,11 +340,13 @@ mod tests {
         } else {
             "a".repeat(token.len())
         };
-        let error = query(
+        let error = exchange(
             &endpoint,
             &different,
             identity,
-            &"a".repeat(32),
+            &Request::LaunchStatus {
+                launch_request_id: "a".repeat(32),
+            },
             Instant::now() + Duration::from_secs(1),
         )
         .unwrap_err();

@@ -68,8 +68,8 @@ impl Gui {
         (output, started.elapsed())
     }
 
-    /// Accept one request, answer it with `reply` (or not at all), and
-    /// return what was asked.
+    /// Accept one request, answer it with a frame holding `reply` (or not at
+    /// all), and return what was asked.
     fn serve(&self, reply: Option<Value>) -> Value {
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut stream = loop {
@@ -88,7 +88,8 @@ impl Gui {
         let mut payload = vec![0; u32::from_be_bytes(size) as usize];
         stream.read_exact(&mut payload).unwrap();
         if let Some(reply) = reply {
-            let bytes = serde_json::to_vec(&reply).unwrap();
+            let frame = json!({"version": VERSION, "response": reply});
+            let bytes = serde_json::to_vec(&frame).unwrap();
             stream
                 .write_all(&(bytes.len() as u32).to_be_bytes())
                 .unwrap();
@@ -122,7 +123,6 @@ fn a_finished_turn_reaches_the_gui_that_owns_the_terminal() {
         let server = scope.spawn(|| {
             gui.serve(Some(json!({
                 "result": "agent_event_recorded",
-                "version": VERSION,
                 "process_id": std::process::id(),
             })))
         });
@@ -178,7 +178,6 @@ fn a_missing_refusing_or_stuck_gui_never_fails_the_hook() {
         let server = scope.spawn(|| {
             gui.serve(Some(json!({
                 "result": "error",
-                "version": VERSION,
                 "message": "No terminal in this process has that identity",
             })))
         });
@@ -218,7 +217,6 @@ fn the_mcp_server_speaks_json_rpc_over_stdio_to_the_terminals_gui() {
         let server = scope.spawn(|| {
             gui.serve(Some(json!({
                 "result": "agents",
-                "version": VERSION,
                 "process_id": std::process::id(),
                 "truncated": false,
                 "agents": [{
@@ -291,7 +289,6 @@ fn the_hook_reads_every_payload_so_agents_never_see_a_broken_pipe() {
         let server = scope.spawn(|| {
             gui.serve(Some(json!({
                 "result": "agent_event_recorded",
-                "version": VERSION,
                 "process_id": std::process::id(),
             })))
         });
