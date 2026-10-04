@@ -17,34 +17,25 @@ pub(super) struct CompletionAnchor {
 }
 
 impl CompletionAnchor {
+    /// The rendered cursor of the one focused pane, at the same grid origin
+    /// `build_render_data` draws it from.
     pub(super) fn for_view(
-        single_cursor: (f32, f32),
         panes: &[PaneRenderData<'_>],
-        content_origin: (f32, f32),
+        lone_pane: bool,
+        placement: PanePlacement,
         cell_size: (f32, f32),
-        padding: f32,
     ) -> Option<Self> {
-        let (origin, cursor) = if panes.is_empty() {
-            (
-                (content_origin.0 + padding, content_origin.1 + padding),
-                single_cursor,
-            )
-        } else {
-            let mut focused = panes.iter().filter(|pane| pane.is_focused);
-            let pane = focused.next()?;
-            if focused.next().is_some() {
-                return None;
-            }
-            // Match the exact origins passed to build_pane_grid, including the
-            // asymmetry: pane y already includes its content-area placement.
-            (
-                (
-                    content_origin.0 + padding + pane.rect.x,
-                    content_origin.1 + pane.rect.y,
-                ),
-                pane.cursor_pos,
-            )
-        };
+        let mut focused = panes.iter().filter(|pane| pane.is_focused);
+        let pane = focused.next()?;
+        if focused.next().is_some() {
+            return None;
+        }
+        let bounds = placement.pane_bounds(pane.rect, lone_pane);
+        Self::at((bounds.x, bounds.y), pane.cursor_pos, cell_size)
+    }
+
+    /// The cursor cell `cursor` of a grid drawn from `origin`.
+    fn at(origin: (f32, f32), cursor: (f32, f32), cell_size: (f32, f32)) -> Option<Self> {
         let anchor = Self {
             x: origin.0 + cursor.0 * cell_size.0,
             y: origin.1 + cursor.1 * cell_size.1,
@@ -200,12 +191,14 @@ impl CompletionLayout {
         cursor: (f32, f32),
         view: CompletionViewport,
     ) -> Option<Self> {
-        let anchor = CompletionAnchor::for_view(
+        // An unsplit terminal's grid starts one padding inside the area.
+        let anchor = CompletionAnchor::at(
+            (
+                view.content_left + view.padding,
+                view.content_top + view.padding,
+            ),
             cursor,
-            &[],
-            (view.content_left, view.content_top),
             (view.cell_width, view.cell_height),
-            view.padding,
         )?;
         Self::calculate_at_anchor(info, anchor, view)
     }
@@ -391,6 +384,16 @@ mod tests {
         }
     }
 
+    fn placement(origin: (f32, f32), padding: f32) -> PanePlacement {
+        PanePlacement {
+            left: origin.0,
+            top: origin.1,
+            right: origin.0 + 1_000.0,
+            bottom: origin.1 + 1_000.0,
+            padding,
+        }
+    }
+
     fn view() -> CompletionViewport {
         CompletionViewport {
             content_left: 100.0,
@@ -449,16 +452,14 @@ mod tests {
                                 pane(&terminal, &urls, second_origin, (2.5, 3.25), focused == 1),
                             ];
                             let anchor = CompletionAnchor::for_view(
-                                (999.0, 999.0),
                                 &panes,
-                                origin,
+                                false,
+                                placement(origin, padding),
                                 cell,
-                                padding,
                             )
                             .unwrap();
                             let pane = &panes[focused];
-                            // Same pixel origin used by build_pane_grid; the
-                            // unrelated top-level cursor must never be used.
+                            // Same pixel origin used by build_pane_grid.
                             let expected_x =
                                 origin.0 + padding + pane.rect.x + pane.cursor_pos.0 * cell.0;
                             let expected_y = origin.1 + pane.rect.y + pane.cursor_pos.1 * cell.1;
@@ -489,7 +490,7 @@ mod tests {
     }
 
     #[test]
-    fn popup_anchor_follows_focus_resize_zoom_move_and_single_grid_collapse() {
+    fn popup_anchor_follows_focus_resize_zoom_move_and_a_lone_pane() {
         let terminal = termeric_core::Terminal::new(80, 24);
         let urls = crate::terminal::url::UrlCache::new(24);
         let mut panes = [
@@ -497,7 +498,7 @@ mod tests {
             pane(&terminal, &urls, (320.0, 240.0), (3.5, 4.25), false),
         ];
         let anchor = |panes: &[PaneRenderData<'_>]| {
-            CompletionAnchor::for_view((999.0, 999.0), panes, (100.0, 50.0), (10.0, 20.0), 8.0)
+            CompletionAnchor::for_view(panes, false, placement((100.0, 50.0), 8.0), (10.0, 20.0))
                 .unwrap()
         };
         assert_eq!(anchor(&panes), CompletionAnchor { x: 118.0, y: 90.0 });
@@ -511,15 +512,25 @@ mod tests {
         panes[1].rect.x = 0.0;
         panes[1].rect.y = 0.0;
         assert_eq!(anchor(&panes[1..]), CompletionAnchor { x: 143.0, y: 135.0 });
-        let moved =
-            CompletionAnchor::for_view((0.0, 0.0), &panes[1..], (230.0, 90.0), (10.0, 20.0), 8.0)
-                .unwrap();
+        let moved = CompletionAnchor::for_view(
+            &panes[1..],
+            false,
+            placement((230.0, 90.0), 8.0),
+            (10.0, 20.0),
+        )
+        .unwrap();
         assert_eq!(moved, CompletionAnchor { x: 273.0, y: 175.0 });
-        let collapsed =
-            CompletionAnchor::for_view(panes[1].cursor_pos, &[], (100.0, 50.0), (10.0, 20.0), 8.0)
-                .unwrap();
-        // Single-grid rendering has vertical outer padding, unlike pane origins.
-        assert_eq!(collapsed, CompletionAnchor { x: 143.0, y: 143.0 });
+        panes[1].is_zoomed = false;
+        let lone = CompletionAnchor::for_view(
+            &panes[1..],
+            true,
+            placement((100.0, 50.0), 8.0),
+            (10.0, 20.0),
+        )
+        .unwrap();
+        // A tab's only pane keeps an unsplit terminal's outer padding above
+        // its grid, unlike split pane origins.
+        assert_eq!(lone, CompletionAnchor { x: 143.0, y: 143.0 });
     }
 
     #[test]
@@ -531,7 +542,7 @@ mod tests {
             pane(&terminal, &urls, (320.0, 240.0), (3.0, 4.0), false),
         ];
         let anchor = |panes: &[PaneRenderData<'_>]| {
-            CompletionAnchor::for_view((0.0, 0.0), panes, (100.0, 50.0), (10.0, 20.0), 8.0)
+            CompletionAnchor::for_view(panes, false, placement((100.0, 50.0), 8.0), (10.0, 20.0))
         };
         assert!(anchor(&panes).is_none());
         panes[0].is_focused = true;
@@ -541,16 +552,8 @@ mod tests {
         panes[1].cursor_pos.0 = f32::NAN;
         assert!(anchor(&panes).is_none());
         panes[1].cursor_pos = (3.0, 4.0);
-        assert!(
-            CompletionAnchor::for_view(
-                (f32::NAN, f32::NAN),
-                &panes,
-                (100.0, 50.0),
-                (10.0, 20.0),
-                8.0,
-            )
-            .is_some()
-        );
+        assert!(anchor(&panes).is_some());
+        assert!(anchor(&[]).is_none());
     }
 
     #[test]
@@ -559,7 +562,7 @@ mod tests {
         let urls = crate::terminal::url::UrlCache::new(24);
         let panes = [pane(&terminal, &urls, (600.0, 700.0), (5.0, 10.0), true)];
         let anchor =
-            CompletionAnchor::for_view((0.0, 0.0), &panes, (100.0, 50.0), (10.0, 20.0), 8.0)
+            CompletionAnchor::for_view(&panes, false, placement((100.0, 50.0), 8.0), (10.0, 20.0))
                 .unwrap();
         assert_eq!(anchor, CompletionAnchor { x: 758.0, y: 950.0 });
         let layout =

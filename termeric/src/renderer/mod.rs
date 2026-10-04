@@ -27,7 +27,7 @@ mod device;
 mod drag_picture;
 pub(crate) mod draw;
 mod frame;
-pub use frame::{ChromeFrame, Frame, TerminalFrame};
+pub use frame::{ChromeFrame, Frame};
 mod git;
 mod grid;
 mod harvest;
@@ -441,6 +441,17 @@ impl Renderer {
             self.cell_width(),
             self.cell_height(),
         )
+    }
+
+    /// Where the terminal area sits in the window, which places its panes.
+    pub(crate) fn pane_placement(&self) -> PanePlacement {
+        PanePlacement {
+            left: self.tab_bar_width(),
+            top: self.content_top(),
+            right: self.content_right(),
+            bottom: self.size.1 as f32,
+            padding: self.padding,
+        }
     }
 
     /// Calculate terminal cell dimensions from window size.

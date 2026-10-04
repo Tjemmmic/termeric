@@ -10,11 +10,11 @@ fn hash_text_clip<H: Hasher>(clip: TextClip, hasher: &mut H) {
 }
 
 impl Renderer {
-    /// Render a single terminal grid within a pane viewport.
+    /// Render one pane's terminal grid within its viewport.
     ///
     /// This method handles cell rendering, cursor, scrollbar, selection, search
-    /// highlights, underlines, and URL detection for one grid. It is called once
-    /// in single-grid mode or once per pane in multi-pane mode.
+    /// highlights, underlines, and URL detection for one grid. It is called
+    /// once per visible pane.
     pub(super) fn build_pane_grid(
         &mut self,
         grid: &Grid,

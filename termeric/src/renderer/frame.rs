@@ -5,34 +5,16 @@ use super::*;
 /// Everything one frame draws, borrowed from the window's state.
 #[derive(Clone, Copy)]
 pub struct Frame<'a> {
-    /// The tab's terminal when it has no panes.
-    pub terminal: TerminalFrame<'a>,
-    /// The tab's panes; empty draws `terminal` instead.
+    /// The active tab's visible panes: one when it is unsplit or zoomed.
     pub panes: &'a [PaneRenderData<'a>],
+    /// Whether `panes` is the tab's only pane, which is drawn as an unsplit
+    /// terminal (see [`PanePlacement::pane_bounds`]).
+    pub lone_pane: bool,
     pub pane_dividers: &'a [crate::panes::Divider],
     /// Search state, for match highlighting in whichever terminal has focus.
     pub search: &'a Search,
     pub text_blink: TextBlinkPhases,
     pub chrome: ChromeFrame<'a>,
-}
-
-/// The single terminal a tab without panes draws.
-#[derive(Clone, Copy)]
-pub struct TerminalFrame<'a> {
-    /// Identifies the terminal across frames, for its row and image caches.
-    pub key: usize,
-    pub grid: &'a Grid,
-    pub selection: Option<&'a Selection>,
-    pub dynamic_colors: &'a termeric_core::DynamicColors,
-    pub extra_cursors: &'a termeric_core::ExtraCursorState,
-    /// 0.0 is invisible and 1.0 fully visible, for a smooth blink.
-    pub cursor_opacity: f32,
-    /// The animated cursor position as fractional (column, row).
-    pub cursor_pos: (f32, f32),
-    pub cursor_style: CursorStyle,
-    pub images: Option<&'a [termeric_core::PresentationImage]>,
-    pub url_cache: &'a UrlCache,
-    pub copy_mode: Option<&'a CopyModeRenderInfo>,
 }
 
 /// The chrome drawn around and above the terminals; `None` surfaces are
@@ -119,12 +101,7 @@ impl Renderer {
 
         // Build image render data if any
         self.build_background_image_data();
-        self.build_image_data(
-            frame.terminal.key,
-            frame.terminal.grid,
-            frame.terminal.images,
-            frame.panes,
-        );
+        self.build_image_data(frame.panes, frame.lone_pane);
 
         // Upload vertex data
         self.rect_pipeline.upload(&self.device, &self.queue);
@@ -212,57 +189,39 @@ impl Renderer {
     }
 
     /// Build image render data from placements
-    fn build_image_data(
-        &mut self,
-        terminal_key: usize,
-        grid: &Grid,
-        images: Option<&[termeric_core::PresentationImage]>,
-        panes: &[PaneRenderData],
-    ) {
+    fn build_image_data(&mut self, panes: &[PaneRenderData], lone_pane: bool) {
         self.image_pipeline.clear();
-        let active_keys: Vec<_> = if panes.is_empty() {
-            images
-                .unwrap_or_default()
-                .iter()
-                .map(|presentation| (terminal_key, presentation.image.id))
-                .collect()
-        } else {
-            panes
-                .iter()
-                .flat_map(|pane| {
-                    pane.images
-                        .iter()
-                        .map(move |presentation| (pane.terminal_key, presentation.image.id))
-                })
-                .collect()
-        };
+        let active_keys: Vec<_> = panes
+            .iter()
+            .flat_map(|pane| {
+                pane.images
+                    .iter()
+                    .map(move |presentation| (pane.terminal_key, presentation.image.id))
+            })
+            .collect();
         self.image_pipeline.gc_images(&active_keys);
 
-        let content_top = self.content_top();
-        let content_left = self.tab_bar_width();
-        if panes.is_empty() {
+        let placement = self.pane_placement();
+        for pane in panes {
+            let bounds = placement.pane_bounds(pane.rect, lone_pane);
+            // A lone pane's images are clipped to its grid's own cells, as an
+            // unsplit terminal's always were; a split pane's to its rectangle.
+            let viewport = if lone_pane {
+                (
+                    pane.grid.cols() as f32 * self.cell_width(),
+                    pane.grid.rows() as f32 * self.cell_height(),
+                )
+            } else {
+                (bounds.width, bounds.height)
+            };
             self.queue_terminal_images(
-                terminal_key,
-                images.unwrap_or_default(),
-                content_left + self.padding,
-                content_top + self.padding,
-                grid.scroll_offset(),
-                Some((
-                    grid.cols() as f32 * self.cell_width(),
-                    grid.rows() as f32 * self.cell_height(),
-                )),
+                pane.terminal_key,
+                &pane.images,
+                bounds.x,
+                bounds.y,
+                pane.grid.scroll_offset(),
+                Some(viewport),
             );
-        } else {
-            for pane in panes {
-                self.queue_terminal_images(
-                    pane.terminal_key,
-                    &pane.images,
-                    content_left + self.padding + pane.rect.x,
-                    content_top + pane.rect.y,
-                    pane.grid.scroll_offset(),
-                    Some((pane.rect.width, pane.rect.height)),
-                );
-            }
         }
     }
 
@@ -309,21 +268,8 @@ impl Renderer {
     /// Build render data from the grid and tabs
     fn build_render_data(&mut self, frame: &Frame<'_>) {
         let Frame {
-            terminal:
-                TerminalFrame {
-                    key: _,
-                    grid,
-                    selection,
-                    dynamic_colors,
-                    extra_cursors,
-                    cursor_opacity,
-                    cursor_pos,
-                    cursor_style,
-                    images: _,
-                    url_cache,
-                    copy_mode,
-                },
             panes,
+            lone_pane,
             pane_dividers,
             search,
             text_blink,
@@ -371,125 +317,89 @@ impl Renderer {
             self.build_tab_bar_keyboard_focus(target, tabs, window_width, window_height);
         }
 
-        // ── Render terminal grid(s) ──
-        // Multi-pane mode: render each pane's grid in its own viewport
-        // Single-grid mode: render one grid filling the content area
-        if !panes.is_empty() {
-            for pane in panes {
-                let pane_x = content_left + padding + pane.rect.x;
-                let pane_y = content_top + pane.rect.y;
-                let pane_cols = (pane.rect.width / cell_width).floor() as usize;
-                let pane_rows = (pane.rect.height / cell_height).floor() as usize;
-
-                // Use pre-computed cursor position (animated for focused, raw for unfocused)
-                let pane_cursor_pos = pane.cursor_pos;
-
-                self.build_pane_grid(
-                    pane.grid,
-                    pane.selection,
-                    pane.dynamic_colors,
-                    pane.extra_cursors,
-                    pane_x,
-                    pane_y,
-                    pane_cols.max(1),
-                    pane_rows.max(1),
-                    pane.is_focused,
-                    pane.cursor_style,
-                    pane.cursor_opacity,
-                    pane_cursor_pos,
-                    text_blink,
-                    copy_flash,
-                    brightness,
-                    search,
-                    pane.url_cache,
-                    window_height,
-                    pane.rect.width,
-                );
-                if let Some(copy_mode) = pane.copy_mode {
-                    self.build_copy_mode_overlay(
-                        copy_mode,
-                        pane.grid.scroll_offset(),
-                        pane_x,
-                        pane_y,
-                        pane.rect.width,
-                        pane_rows.max(1),
-                        window_height,
-                    );
-                }
-
-                // Broadcast is deliberately unmistakable; zoom and focus use
-                // progressively quieter outlines around the exact pane bounds.
-                if pane.broadcast_target.is_some()
-                    || pane.read_only
-                    || pane.is_zoomed
-                    || (panes.len() > 1 && pane.is_focused)
-                {
-                    let border_color = if let Some(state) = pane.broadcast_target {
-                        match state {
-                            BroadcastTargetState::Armed => [0.96, 0.68, 0.16, 1.0],
-                            BroadcastTargetState::Active => [0.95, 0.24, 0.12, 1.0],
-                        }
-                    } else if pane.read_only {
-                        [0.30, 0.78, 0.72, 1.0]
-                    } else if pane.is_zoomed {
-                        with_alpha(self.ui.palette_accent, 0.9)
-                    } else {
-                        with_alpha(self.ui.cursor, 0.5)
-                    };
-                    let bw = if pane.broadcast_target.is_some() || pane.read_only {
-                        4.0
-                    } else {
-                        2.0
-                    };
-                    self.rect_pipeline.push_rounded_outline(
-                        pane_x,
-                        pane_y,
-                        pane.rect.width,
-                        pane.rect.height,
-                        border_color,
-                        0.0,
-                        bw,
-                    );
-                }
-            }
-        } else {
-            // Single grid mode — full content area
-            let grid_x = content_left + padding;
-            let grid_y = content_top + padding;
-            let grid_cols = grid.cols();
-            let grid_rows = grid.rows();
-            let grid_width = (content_width - padding * 2.0).max(0.0);
+        // ── Render terminal grids, each in its own viewport ──
+        let placement = self.pane_placement();
+        for pane in panes {
+            let bounds = placement.pane_bounds(pane.rect, lone_pane);
+            // A lone pane shows every cell of its grid, as an unsplit terminal
+            // did; a split pane shows the whole cells its rectangle holds.
+            let (pane_cols, pane_rows) = if lone_pane {
+                (pane.grid.cols(), pane.grid.rows())
+            } else {
+                (
+                    ((pane.rect.width / cell_width).floor() as usize).max(1),
+                    ((pane.rect.height / cell_height).floor() as usize).max(1),
+                )
+            };
+            let pane_width = bounds.width.max(0.0);
 
             self.build_pane_grid(
-                grid,
-                selection,
-                dynamic_colors,
-                extra_cursors,
-                grid_x,
-                grid_y,
-                grid_cols,
-                grid_rows,
-                true, // always focused in single mode
-                cursor_style,
-                cursor_opacity,
-                cursor_pos,
+                pane.grid,
+                pane.selection,
+                pane.dynamic_colors,
+                pane.extra_cursors,
+                bounds.x,
+                bounds.y,
+                pane_cols,
+                pane_rows,
+                pane.is_focused,
+                pane.cursor_style,
+                pane.cursor_opacity,
+                pane.cursor_pos,
                 text_blink,
                 copy_flash,
                 brightness,
                 search,
-                url_cache,
+                pane.url_cache,
                 window_height,
-                grid_width,
+                pane_width,
             );
-            if let Some(copy_mode) = copy_mode {
+            if let Some(copy_mode) = pane.copy_mode {
                 self.build_copy_mode_overlay(
                     copy_mode,
-                    grid.scroll_offset(),
-                    grid_x,
-                    grid_y,
-                    grid_width,
-                    grid_rows,
+                    pane.grid.scroll_offset(),
+                    bounds.x,
+                    bounds.y,
+                    pane_width,
+                    pane_rows,
                     window_height,
+                );
+            }
+
+            // Broadcast is deliberately unmistakable; zoom and focus use
+            // progressively quieter outlines around the exact pane bounds. A
+            // lone pane has none: the tab bar shows its read-only state.
+            if !lone_pane
+                && (pane.broadcast_target.is_some()
+                    || pane.read_only
+                    || pane.is_zoomed
+                    || (panes.len() > 1 && pane.is_focused))
+            {
+                let border_color = if let Some(state) = pane.broadcast_target {
+                    match state {
+                        BroadcastTargetState::Armed => [0.96, 0.68, 0.16, 1.0],
+                        BroadcastTargetState::Active => [0.95, 0.24, 0.12, 1.0],
+                    }
+                } else if pane.read_only {
+                    [0.30, 0.78, 0.72, 1.0]
+                } else if pane.is_zoomed {
+                    with_alpha(self.ui.palette_accent, 0.9)
+                } else {
+                    with_alpha(self.ui.cursor, 0.5)
+                };
+                let bw = if pane.broadcast_target.is_some() || pane.read_only {
+                    4.0
+                } else {
+                    2.0
+                };
+                self.rect_pipeline.push_rounded_outline(
+                    bounds.x,
+                    bounds.y,
+                    pane.rect.width,
+                    pane.rect.height,
+                    border_color,
+                    0.0,
+                    bw,
                 );
             }
         }
@@ -536,11 +446,10 @@ impl Renderer {
         // building it can borrow the renderer without copying the state.
         if let Some(info) = self.git_completions.take() {
             if let Some(anchor) = git::CompletionAnchor::for_view(
-                cursor_pos,
                 panes,
-                (content_left, content_top),
+                lone_pane,
+                placement,
                 (cell_width, cell_height),
-                padding,
             ) {
                 self.build_git_completions(
                     &info,

@@ -2220,8 +2220,6 @@ impl App {
         // Pane geometry is read before the renderer is borrowed.
         let pane_info = self.pane_render_info();
 
-        // Get cursor target position and calculate animations before borrowing
-        let (cursor_style, _) = self.cursor_presentation();
         // While the agent view has the keyboard, the terminal cursor rests
         // dim and steady, so typing clearly goes to the panel.
         let terminal_keyboard = !self.agent_view.state.has_keyboard();
@@ -2232,7 +2230,6 @@ impl App {
                 AGENT_VIEW_RESTING_CURSOR
             }
         };
-        let cursor_opacity = resting_cursor(self.cursor_opacity());
         let cursor_elapsed = self.cursor_blink_start.elapsed().as_secs_f32();
         let configured_cursor_style = self.config.cursor.style;
         let configured_cursor_blink = self.config.cursor.blink;
@@ -2310,18 +2307,6 @@ impl App {
             }
         }
 
-        // Collect image placements for rendering
-        let image_data: Vec<_> = if tab.split_panes().is_none() {
-            terminal.presentation_images()
-        } else {
-            Vec::new()
-        };
-        let images = if image_data.is_empty() {
-            None
-        } else {
-            Some(image_data.as_slice())
-        };
-
         renderer.set_info_overlay(chrome.info_overlay);
         renderer.set_toasts(chrome.toasts);
         renderer.set_diff_review(chrome.diff_review);
@@ -2357,108 +2342,82 @@ impl App {
             log::trace!("URL cache metrics: {:?}", self.url_cache.metrics());
         }
 
-        // Build pane render data for multi-pane mode (per-tab)
-        let pane_render_data: Vec<PaneRenderData> = if let Some(pm) = tab.split_panes() {
-            let pane_grids = pm.iter_panes_identified();
-            let active_terminal_ids: std::collections::HashSet<usize> = pane_grids
-                .iter()
-                .map(|(_, pane_terminal, _, _)| *pane_terminal as *const _ as usize)
-                .collect();
-            self.pane_url_caches
-                .retain(|terminal_id, _| active_terminal_ids.contains(terminal_id));
-            for (_, pane_terminal, _, focused) in &pane_grids {
-                let grid = pane_terminal.presentation_grid();
-                let terminal_id = *pane_terminal as *const _ as usize;
-                let cache = self
-                    .pane_url_caches
-                    .entry(terminal_id)
-                    .or_insert_with(|| UrlCache::new(grid.rows()));
-                update_visible_url_cache(
-                    cache,
-                    grid,
-                    &self.url_detector,
-                    if *focused {
-                        self.search.filtered_rows(grid.rows())
-                    } else {
-                        &[]
-                    },
-                );
-            }
+        // The focused pane's URLs are `url_cache`, which hit tests read too;
+        // every other visible pane keeps its own.
+        let panes = &tab.panes;
+        let pane_grids = panes.iter_panes_identified();
+        let unfocused_terminals: std::collections::HashSet<usize> = pane_grids
+            .iter()
+            .filter(|(_, _, _, focused)| !focused)
+            .map(|(_, pane_terminal, _, _)| *pane_terminal as *const _ as usize)
+            .collect();
+        self.pane_url_caches
+            .retain(|terminal_id, _| unfocused_terminals.contains(terminal_id));
+        for (_, pane_terminal, _, _) in pane_grids.iter().filter(|(_, _, _, focused)| !focused) {
+            let grid = pane_terminal.presentation_grid();
+            let cache = self
+                .pane_url_caches
+                .entry(*pane_terminal as *const _ as usize)
+                .or_insert_with(|| UrlCache::new(grid.rows()));
+            update_visible_url_cache(cache, grid, &self.url_detector, &[]);
+        }
 
-            // Build per-pane render data with animated cursor for focused pane
-            pane_grids
-                .iter()
-                .map(|(pane_id, term, rect, focused)| {
-                    let cpos = if *focused {
-                        cursor_display_pos
+        // Every visible pane, the focused one with the animated cursor.
+        let pane_render_data: Vec<PaneRenderData> = pane_grids
+            .iter()
+            .map(|(pane_id, term, rect, focused)| {
+                let cpos = if *focused {
+                    cursor_display_pos
+                } else {
+                    let c = term.presentation_grid().cursor();
+                    (c.col as f32, c.row as f32)
+                };
+                let terminal_key = *term as *const _ as usize;
+                let (pane_cursor_style, pane_cursor_blink) = resolve_cursor_presentation(
+                    configured_cursor_style,
+                    configured_cursor_blink,
+                    term.presentation_cursor_style(),
+                    term.presentation_cursor_blink_override(),
+                );
+                PaneRenderData {
+                    terminal_key,
+                    grid: term.presentation_grid(),
+                    selection: if *focused && frozen_copy_selection {
+                        copy_mode_selection.as_ref()
                     } else {
-                        let c = term.presentation_grid().cursor();
-                        (c.col as f32, c.row as f32)
-                    };
-                    let terminal_key = *term as *const _ as usize;
-                    let (pane_cursor_style, pane_cursor_blink) = resolve_cursor_presentation(
-                        configured_cursor_style,
-                        configured_cursor_blink,
-                        term.presentation_cursor_style(),
-                        term.presentation_cursor_blink_override(),
-                    );
-                    PaneRenderData {
-                        terminal_key,
-                        grid: term.presentation_grid(),
-                        selection: if *focused && frozen_copy_selection {
-                            copy_mode_selection.as_ref()
-                        } else {
-                            term.selection()
-                        },
-                        dynamic_colors: term.presentation_dynamic_colors(),
-                        extra_cursors: term.presentation_extra_cursors(),
-                        rect: *rect,
-                        is_focused: *focused,
-                        broadcast_target: broadcast_render.as_ref().and_then(
-                            |(_, targets, state)| targets.contains(pane_id).then_some(*state),
-                        ),
-                        read_only: pm.get_pane(*pane_id).is_some_and(|pane| pane.read_only),
-                        is_zoomed: pm.zoomed_id() == Some(*pane_id),
-                        cursor_pos: cpos,
-                        cursor_style: pane_cursor_style,
-                        cursor_opacity: resting_cursor(cursor_opacity_at(
-                            pane_cursor_blink,
-                            cursor_elapsed,
-                            cursor_blink_period,
-                        )),
-                        url_cache: &self.pane_url_caches[&terminal_key],
-                        copy_mode: (*focused).then_some(copy_mode_info.as_ref()).flatten(),
-                        images: term.presentation_images(),
-                    }
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-        let pane_dividers = tab
-            .split_panes()
-            .map(crate::panes::PaneManager::get_dividers)
-            .unwrap_or_default();
+                        term.selection()
+                    },
+                    dynamic_colors: term.presentation_dynamic_colors(),
+                    extra_cursors: term.presentation_extra_cursors(),
+                    rect: *rect,
+                    is_focused: *focused,
+                    broadcast_target: broadcast_render.as_ref().and_then(|(_, targets, state)| {
+                        targets.contains(pane_id).then_some(*state)
+                    }),
+                    read_only: panes.get_pane(*pane_id).is_some_and(|pane| pane.read_only),
+                    is_zoomed: panes.zoomed_id() == Some(*pane_id),
+                    cursor_pos: cpos,
+                    cursor_style: pane_cursor_style,
+                    cursor_opacity: resting_cursor(cursor_opacity_at(
+                        pane_cursor_blink,
+                        cursor_elapsed,
+                        cursor_blink_period,
+                    )),
+                    url_cache: if *focused {
+                        &self.url_cache
+                    } else {
+                        &self.pane_url_caches[&terminal_key]
+                    },
+                    copy_mode: (*focused).then_some(copy_mode_info.as_ref()).flatten(),
+                    images: term.presentation_images(),
+                }
+            })
+            .collect();
+        let pane_dividers = panes.get_dividers();
 
         let frame = crate::renderer::Frame {
-            terminal: crate::renderer::TerminalFrame {
-                key: terminal as *const _ as usize,
-                grid: terminal.presentation_grid(),
-                selection: if frozen_copy_selection {
-                    copy_mode_selection.as_ref()
-                } else {
-                    terminal.selection()
-                },
-                dynamic_colors: terminal.presentation_dynamic_colors(),
-                extra_cursors: terminal.presentation_extra_cursors(),
-                cursor_opacity,
-                cursor_pos: cursor_display_pos,
-                cursor_style,
-                images,
-                url_cache: &self.url_cache,
-                copy_mode: copy_mode_info.as_ref(),
-            },
             panes: &pane_render_data,
+            lone_pane: panes.pane_count() == 1,
             pane_dividers: &pane_dividers,
             search: &self.search,
             text_blink,
@@ -2587,28 +2546,6 @@ impl App {
         let search = &mut self.search;
         let terminal = self.tabs.as_ref()?.active_tab()?.focused_terminal()?;
         Some(update(search, terminal.presentation_grid()))
-    }
-
-    /// Calculate cursor opacity for smooth blink animation
-    /// Returns a value between 0.0 (invisible) and 1.0 (fully visible)
-    fn cursor_opacity(&self) -> f32 {
-        let elapsed = self.cursor_blink_start.elapsed().as_secs_f32();
-        cursor_opacity_at(
-            self.cursor_presentation().1,
-            elapsed,
-            self.cursor_blink_period,
-        )
-    }
-
-    fn cursor_presentation(&self) -> (crate::config::CursorStyle, bool) {
-        resolve_cursor_presentation(
-            self.config.cursor.style,
-            self.config.cursor.blink,
-            self.active_terminal()
-                .and_then(termeric_core::Terminal::presentation_cursor_style),
-            self.active_terminal()
-                .and_then(termeric_core::Terminal::presentation_cursor_blink_override),
-        )
     }
 
     /// Whether any cursor currently painted in the active tab needs the

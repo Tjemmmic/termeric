@@ -242,10 +242,49 @@ pub enum BroadcastTargetState {
     Active,
 }
 
-/// Render data for a single pane in multi-pane mode.
-///
-/// Each pane holds a reference to its terminal grid and its pixel-space
-/// rectangle within the content area.
+/// Where the terminal area sits in the window, in physical pixels. It
+/// places every pane, and is the one place that says how a tab's only pane
+/// differs from split panes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PanePlacement {
+    /// Left edge of the terminal area: the width of a vertical tab rail.
+    pub left: f32,
+    /// Top edge of the terminal area: the height of the tab bar.
+    pub top: f32,
+    /// Right edge of the terminal area, left of the agent view's dock.
+    pub right: f32,
+    /// Bottom edge of the window.
+    pub bottom: f32,
+    pub padding: f32,
+}
+
+impl PanePlacement {
+    /// The window rectangle of the pane laid out at `rect`. A tab's `lone`
+    /// pane fills the terminal area inside the padding on every side, as an
+    /// unsplit terminal always has, so its grid sits one padding below the
+    /// tab bar. Split panes sit at their layout rectangles, which are
+    /// relative to the area's left padding and its top edge.
+    pub fn pane_bounds(self, rect: Bounds, lone: bool) -> Bounds {
+        if lone {
+            Bounds {
+                x: self.left + self.padding,
+                y: self.top + self.padding,
+                width: self.right - self.left - self.padding * 2.0,
+                height: self.bottom - self.top - self.padding * 2.0,
+            }
+        } else {
+            Bounds {
+                x: self.left + self.padding + rect.x,
+                y: self.top + rect.y,
+                width: rect.width,
+                height: rect.height,
+            }
+        }
+    }
+}
+
+/// One pane to draw: its terminal's presented state and its layout
+/// rectangle within the terminal area.
 pub struct PaneRenderData<'a> {
     /// Stable identity of the live terminal, independent of whether its live
     /// grid or a synchronized-output snapshot is being presented.
@@ -258,7 +297,8 @@ pub struct PaneRenderData<'a> {
     pub dynamic_colors: &'a termeric_core::DynamicColors,
     /// Kitty multiple cursors at the same presentation boundary as the grid.
     pub extra_cursors: &'a termeric_core::ExtraCursorState,
-    /// Pixel rectangle within the content area (relative to content_top)
+    /// Layout rectangle within the terminal area, placed in the window by
+    /// [`PanePlacement::pane_bounds`].
     pub rect: Bounds,
     /// Whether this pane currently has focus
     pub is_focused: bool,
@@ -364,4 +404,46 @@ pub struct SproutMenuRenderInfo {
     pub opacity: f32,
     /// Exact shared menu geometry.
     pub layout: crate::harvest::SproutMenuLayout,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_lone_pane_fills_the_padded_area_and_split_panes_sit_at_their_rectangles() {
+        let placement = PanePlacement {
+            left: 40.0,
+            top: 30.0,
+            right: 840.0,
+            bottom: 630.0,
+            padding: 8.0,
+        };
+        let rect = Bounds {
+            x: 100.0,
+            y: 50.0,
+            width: 300.0,
+            height: 200.0,
+        };
+        // An unsplit terminal's grid starts one padding below the tab bar and
+        // spans the padded width, whatever its layout rectangle.
+        let lone = Bounds {
+            x: 48.0,
+            y: 38.0,
+            width: 784.0,
+            height: 584.0,
+        };
+        assert_eq!(placement.pane_bounds(rect, true), lone);
+        assert_eq!(placement.pane_bounds(Bounds::default(), true), lone);
+        // Split panes have the left padding but no top padding.
+        assert_eq!(
+            placement.pane_bounds(rect, false),
+            Bounds {
+                x: 148.0,
+                y: 80.0,
+                width: 300.0,
+                height: 200.0,
+            }
+        );
+    }
 }
