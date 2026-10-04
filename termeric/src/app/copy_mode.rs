@@ -24,7 +24,11 @@ impl App {
                 } else {
                     quick.prefix.as_str()
                 },
-                " · TAB ACTION · ESC BACK"
+                if quick.entered_copy_mode {
+                    " · TAB ACTION · ESC CANCEL"
+                } else {
+                    " · TAB ACTION · ESC BACK"
+                }
             );
             let hints = quick
                 .matches
@@ -68,6 +72,16 @@ impl App {
     }
 
     pub(super) fn enter_copy_mode(&mut self) {
+        self.start_copy_mode();
+        if self.copy_mode.is_active() {
+            self.toasts
+                .info("Copy mode: move, v select, y copy, / search, Esc exit");
+        }
+    }
+
+    /// Enter copy mode without announcing it, for quick select, which
+    /// announces itself.
+    fn start_copy_mode(&mut self) {
         // Copy mode and search share the presented grid. Clear any previously
         // confirmed filter projection so modal coordinates always refer to
         // the terminal's scrollback-aware rows.
@@ -88,8 +102,6 @@ impl App {
         self.mouse_state.clear_selection();
         self.mouse_selection_source = None;
         self.mouse_pressed = false;
-        self.toasts
-            .info("Copy mode: move, v select, y copy, / search, Esc exit");
     }
 
     pub(super) fn leave_copy_mode(&mut self, clear_selection: bool) {
@@ -116,8 +128,14 @@ impl App {
 
     pub(super) fn begin_quick_select(&mut self) {
         self.reconcile_copy_mode_presentation();
+        // Quick select returns to the mode it started from. Restarting it
+        // keeps the first start's mode.
+        let entered_copy_mode = self
+            .copy_mode
+            .quick_select()
+            .map_or(!self.copy_mode.is_active(), |quick| quick.entered_copy_mode);
         if !self.copy_mode.is_active() {
-            self.enter_copy_mode();
+            self.start_copy_mode();
         }
         let patterns = &self.compiled_copy_patterns;
         let (copy_mode, tabs) = (&mut self.copy_mode, &self.tabs);
@@ -133,18 +151,27 @@ impl App {
             patterns,
             HintAction::Open,
             crate::tabs::presentation_working_directory(terminal),
+            entered_copy_mode,
         );
         let count = copy_mode
             .quick_select()
             .map_or(0, |quick| quick.matches.len());
         if count == 0 {
-            copy_mode.cancel_quick_select();
+            self.finish_quick_select();
             self.toasts
                 .warning("No links or configured patterns are visible");
         } else {
             self.toasts.info(format!(
                 "Quick select: type a hint to open; Tab switches to copy ({count} matches)"
             ));
+        }
+    }
+
+    /// End quick select, whichever way it ends. Copy mode that quick select
+    /// entered ends with it, back to the terminal; otherwise copy mode stays.
+    fn finish_quick_select(&mut self) {
+        if self.copy_mode.cancel_quick_select() {
+            self.leave_copy_mode(false);
         }
     }
 
@@ -208,6 +235,16 @@ impl App {
             }
             return false;
         }
+        // Hints never carry over to a new view. Copy mode that quick select
+        // entered ends with it rather than starting over.
+        if self.copy_mode.quick_select().is_some() {
+            self.finish_quick_select();
+            if !self.copy_mode.is_active() {
+                self.toasts
+                    .info("Quick select closed because its displayed targets changed");
+                return true;
+            }
+        }
         self.enter_copy_mode();
         self.toasts
             .info("Copy selection reset because the displayed terminal view changed");
@@ -239,13 +276,20 @@ impl App {
             &mut self.tabs,
             &self.compiled_copy_patterns,
         );
+        let mut targets_remain = true;
         if let Some(terminal) = tabs
             .as_mut()
             .and_then(crate::tabs::TabManager::active_tab_mut)
             .and_then(crate::tabs::Tab::focused_terminal_mut)
         {
             copy_mode.finish_reflow(terminal.presentation_grid_mut());
-            copy_mode.refresh_quick_select(terminal, patterns);
+            targets_remain = copy_mode.refresh_quick_select(terminal, patterns);
+        }
+        if !targets_remain {
+            self.finish_quick_select();
+            if !self.copy_mode.is_active() {
+                return;
+            }
         }
         self.sync_copy_mode_selection();
     }
@@ -292,7 +336,7 @@ impl App {
             .copy_mode
             .quick_select()
             .and_then(|quick| quick.working_directory.clone());
-        self.copy_mode.cancel_quick_select();
+        self.finish_quick_select();
         match action {
             HintAction::Copy => self.copy_to_clipboard(value, "Copied quick-select match"),
             HintAction::Open => {
@@ -321,7 +365,7 @@ impl App {
         }
         let plain = self.modifiers.is_empty() && !self.alt_graph_active;
         match key {
-            Key::Named(NamedKey::Escape) if plain => self.copy_mode.cancel_quick_select(),
+            Key::Named(NamedKey::Escape) if plain => self.finish_quick_select(),
             Key::Named(NamedKey::Tab) if plain => {
                 self.copy_mode.toggle_hint_action();
                 let action = self
@@ -348,27 +392,21 @@ impl App {
         if self.copy_mode.quick_select().is_none() {
             return false;
         }
-        if self.copy_mode_target == self.active_copy_target() {
+        let targets_remain = self.copy_mode_target == self.active_copy_target() && {
             let (copy_mode, tabs, patterns) = (
                 &mut self.copy_mode,
                 &self.tabs,
                 &self.compiled_copy_patterns,
             );
-            if let Some(terminal) = tabs
-                .as_ref()
+            tabs.as_ref()
                 .and_then(crate::tabs::TabManager::active_tab)
                 .and_then(crate::tabs::Tab::focused_terminal)
-            {
-                copy_mode.refresh_quick_select(terminal, patterns);
-            } else {
-                copy_mode.cancel_quick_select();
-            }
-        } else {
-            self.copy_mode.cancel_quick_select();
-        }
-        if self.copy_mode.quick_select().is_some() {
+                .is_some_and(|terminal| copy_mode.refresh_quick_select(terminal, patterns))
+        };
+        if targets_remain {
             return false;
         }
+        self.finish_quick_select();
         self.toasts
             .info("Quick select closed because its displayed targets changed");
         true

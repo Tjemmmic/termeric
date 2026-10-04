@@ -36,7 +36,10 @@ fn quick_select_reconciles_live_targets_and_viewport_before_render_or_activation
                 .push_hint_key(label.chars().next().unwrap())
                 .is_none()
         );
-        assert!(app.copy_mode.is_active());
+        assert!(
+            !app.copy_mode.is_active(),
+            "quick select entered copy mode, so it leaves it"
+        );
     }
 }
 
@@ -924,7 +927,10 @@ fn quick_select_pins_presented_targets_and_cwd_and_expires_without_activation() 
         assert!(terminal.expire_synchronized_output(deadline));
         assert!(app.reconcile_quick_select_presentation());
         assert!(app.copy_mode.quick_select().is_none());
-        assert!(app.copy_mode.is_active());
+        assert!(
+            !app.copy_mode.is_active(),
+            "quick select entered copy mode, so it leaves it"
+        );
         assert!(!app.reconcile_quick_select_presentation());
     }
 }
@@ -1024,4 +1030,98 @@ fn copy_mode_keys_never_reach_the_terminal() {
     // The reader's first byte is the one written now.
     app.write_to_pty(b"Z");
     app.wait_for_screen_text("5a");
+}
+
+#[test]
+fn quick_select_returns_to_the_mode_it_started_from() {
+    use winit::keyboard::{Key, NamedKey};
+    let none = ModifiersState::empty();
+    let start = |app: &mut App, from_copy_mode: bool| {
+        if from_copy_mode {
+            app.enter_copy_mode();
+        }
+        app.begin_quick_select();
+        assert!(app.copy_mode.quick_select().is_some());
+    };
+    let type_first_hint = |app: &mut App| {
+        let label = app.copy_mode.quick_select().unwrap().matches[0]
+            .label
+            .clone();
+        for hint in label.chars() {
+            assert!(press_in_copy_mode(app, character(&hint.to_string()), none));
+        }
+    };
+    // No shell reports a directory, so opening these relative paths is
+    // refused before anything is launched.
+    let patterns = vec![("path".into(), regex::Regex::new(r"\./\w+").unwrap())];
+    for from_copy_mode in [false, true] {
+        let mut app = scrollbar_owner_fixture();
+        app.compiled_copy_patterns = patterns.clone();
+        app.active_terminal_mut()
+            .unwrap()
+            .process(b"\x1bc\x1b[3J./one ./two");
+
+        // Escape, and the status line says where it goes.
+        start(&mut app, from_copy_mode);
+        let status = app.copy_mode_render_info().unwrap().status;
+        let escape = if from_copy_mode {
+            "ESC BACK"
+        } else {
+            "ESC CANCEL"
+        };
+        assert!(status.ends_with(escape), "{status}");
+        assert!(press_in_copy_mode(
+            &mut app,
+            Key::Named(NamedKey::Escape),
+            none
+        ));
+        assert!(app.copy_mode.quick_select().is_none());
+        assert_eq!(app.copy_mode.is_active(), from_copy_mode);
+        app.leave_copy_mode(true);
+
+        // Copying a match.
+        start(&mut app, from_copy_mode);
+        assert!(press_in_copy_mode(
+            &mut app,
+            Key::Named(NamedKey::Tab),
+            none
+        ));
+        type_first_hint(&mut app);
+        assert!(app.copy_mode.quick_select().is_none());
+        assert_eq!(app.copy_mode.is_active(), from_copy_mode);
+        app.leave_copy_mode(true);
+
+        // Opening a match.
+        start(&mut app, from_copy_mode);
+        type_first_hint(&mut app);
+        assert!(app.copy_mode.quick_select().is_none());
+        assert_eq!(app.copy_mode.is_active(), from_copy_mode);
+        app.leave_copy_mode(true);
+
+        // Nothing to select.
+        app.active_terminal_mut()
+            .unwrap()
+            .process(b"\x1bc\x1b[3Jnothing here");
+        if from_copy_mode {
+            app.enter_copy_mode();
+        }
+        app.begin_quick_select();
+        assert!(app.copy_mode.quick_select().is_none());
+        assert_eq!(app.copy_mode.is_active(), from_copy_mode);
+        app.leave_copy_mode(true);
+
+        // Restarting quick select keeps where the first start came from.
+        app.active_terminal_mut()
+            .unwrap()
+            .process(b"\x1bc\x1b[3J./one");
+        start(&mut app, from_copy_mode);
+        app.begin_quick_select();
+        assert!(press_in_copy_mode(
+            &mut app,
+            Key::Named(NamedKey::Escape),
+            none
+        ));
+        assert_eq!(app.copy_mode.is_active(), from_copy_mode);
+        app.leave_copy_mode(true);
+    }
 }

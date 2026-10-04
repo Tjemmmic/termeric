@@ -76,7 +76,7 @@ Quick select labels every link, file path, and commit hash on screen with a shor
 2. Type a hint to open that match. Press `Tab` first to switch between **OPEN** and **COPY**; the status line shows which one is active.
 3. Press `Backspace` to correct a partly typed hint, or `Escape` to cancel.
 
-Quick select runs inside copy mode. After you open or copy a match, or press `Escape`, you're back in copy mode; press `Escape` again to return to the terminal.
+Quick select returns you to where you started it. Started from the terminal, opening or copying a match, or pressing `Escape`, takes you straight back to the terminal. Started from copy mode, it takes you back to copy mode, where `Escape` then returns to the terminal. The status line shows `ESC CANCEL` or `ESC BACK` to tell the two apart.
 
 Opening uses your desktop's default handler (`xdg-open`). A relative path such as `./src/main.rs` opens relative to the directory the shell last reported, which requires [shell integration](shell-integration.md); without it, relative paths can be copied but not opened. Absolute paths and URLs always open. A target that begins with `-` is refused; write it as `./-name` instead.
 

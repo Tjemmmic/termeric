@@ -55,6 +55,9 @@ pub struct QuickSelect {
     pub prefix: String,
     pub action: HintAction,
     pub working_directory: Option<String>,
+    /// Quick select started outside copy mode and entered it, so copy mode
+    /// ends when quick select does.
+    pub entered_copy_mode: bool,
     synchronized_output_deadline: Option<std::time::Instant>,
     source: QuickSelectSource,
 }
@@ -291,6 +294,7 @@ impl CopyMode {
         patterns: &[(String, Regex)],
         action: HintAction,
         working_directory: Option<String>,
+        entered_copy_mode: bool,
     ) {
         if !self.active {
             self.enter_presentation(terminal);
@@ -300,6 +304,7 @@ impl CopyMode {
             prefix: String::new(),
             action,
             working_directory,
+            entered_copy_mode,
             synchronized_output_deadline: terminal.synchronized_output_deadline(),
             source: QuickSelectSource::capture(terminal),
         });
@@ -314,8 +319,13 @@ impl CopyMode {
         }
     }
 
-    pub fn cancel_quick_select(&mut self) {
-        self.quick_select = None;
+    /// End quick select. Returns true when it had entered copy mode, which
+    /// the caller then leaves too.
+    #[must_use = "copy mode that quick select entered ends with it"]
+    pub fn cancel_quick_select(&mut self) -> bool {
+        self.quick_select
+            .take()
+            .is_some_and(|quick| quick.entered_copy_mode)
     }
 
     pub fn quick_select_presentation_matches(&self, terminal: &Terminal) -> bool {
@@ -328,17 +338,24 @@ impl CopyMode {
     /// Revalidate captured targets after output, viewport movement, or reflow.
     /// Labels never transfer to a different payload/source. New targets require
     /// a fresh invocation, preserving the captured action and directory.
-    pub fn refresh_quick_select(&mut self, terminal: &Terminal, patterns: &[(String, Regex)]) {
+    ///
+    /// Returns false when quick select's targets are gone; the caller then
+    /// ends it with `cancel_quick_select`, the one way quick select ends.
+    #[must_use = "quick select whose targets are gone must be ended"]
+    pub fn refresh_quick_select(
+        &mut self,
+        terminal: &Terminal,
+        patterns: &[(String, Regex)],
+    ) -> bool {
         if !self.quick_select_presentation_matches(terminal) {
-            self.cancel_quick_select();
-            return;
+            return false;
         }
         let Some(quick) = self.quick_select.as_mut() else {
-            return;
+            return true;
         };
         let source = QuickSelectSource::capture(terminal);
         if quick.source == source {
-            return;
+            return true;
         }
         // Borrow payload keys from the bounded old match list. Reverse stacks
         // pair identical targets in display order without a quadratic search
@@ -368,11 +385,11 @@ impl CopyMode {
                 .iter()
                 .any(|candidate| candidate.label.starts_with(&quick.prefix))
         {
-            self.cancel_quick_select();
-            return;
+            return false;
         }
         quick.matches = matches;
         quick.source = source;
+        true
     }
 
     /// Add one label character. Returns the uniquely completed match and action.
@@ -774,9 +791,10 @@ mod tests {
                 &patterns,
                 HintAction::Copy,
                 Some("/visible".into()),
+                false,
             );
             terminal.resize(6, 4);
-            mode.refresh_quick_select(&terminal, &patterns);
+            assert!(mode.refresh_quick_select(&terminal, &patterns));
             assert_eq!(mode.quick_select().unwrap().matches[0].value, "./visible");
             assert_eq!(
                 mode.quick_select().unwrap().working_directory.as_deref(),
@@ -787,15 +805,13 @@ mod tests {
                 terminal.process(b"\x1b[?2026h");
             }
             assert!(!mode.quick_select_presentation_matches(&terminal));
-            mode.refresh_quick_select(&terminal, &patterns);
-            assert!(mode.quick_select().is_none());
+            assert!(!mode.refresh_quick_select(&terminal, &patterns));
 
             terminal.process(b"\x1b[?2026l");
-            mode.start_quick_select(&terminal, &patterns, HintAction::Copy, None);
+            mode.start_quick_select(&terminal, &patterns, HintAction::Copy, None, false);
             terminal.process(b"\x1b[?2026h");
             assert!(!mode.quick_select_presentation_matches(&terminal));
-            mode.refresh_quick_select(&terminal, &patterns);
-            assert!(mode.quick_select().is_none());
+            assert!(!mode.refresh_quick_select(&terminal, &patterns));
         }
     }
 
@@ -943,7 +959,7 @@ mod tests {
             terminal.process(b"\x1b]8;;\x1b\\");
             let mut mode = CopyMode::default();
             mode.enter(terminal.grid());
-            mode.start_quick_select(&terminal, &patterns, HintAction::Copy, None);
+            mode.start_quick_select(&terminal, &patterns, HintAction::Copy, None, false);
             for (cols, end) in [
                 (3, Point::new(1, 2)),
                 (1, Point::new(3, 0)),
@@ -952,7 +968,7 @@ mod tests {
                 mode.prepare_reflow(terminal.grid_mut());
                 terminal.resize(cols, 6);
                 mode.finish_reflow(terminal.grid_mut());
-                mode.refresh_quick_select(&terminal, &patterns);
+                assert!(mode.refresh_quick_select(&terminal, &patterns));
                 let quick = mode.quick_select().unwrap();
                 assert_eq!(quick.action, HintAction::Copy);
                 assert_eq!(quick.matches.len(), 1, "cols={cols} linked={linked}");
@@ -1007,10 +1023,10 @@ mod tests {
         terminal.process(b"/one /two");
         let patterns = vec![("path".into(), Regex::new(r"/\w+").unwrap())];
         let mut mode = CopyMode::default();
-        mode.start_quick_select(&terminal, &patterns, HintAction::Copy, None);
+        mode.start_quick_select(&terminal, &patterns, HintAction::Copy, None, false);
         let label = mode.quick_select().unwrap().matches[1].label.clone();
         terminal.process(b"\r\x1b[2K/two /new");
-        mode.refresh_quick_select(&terminal, &patterns);
+        assert!(mode.refresh_quick_select(&terminal, &patterns));
         let quick = mode.quick_select().unwrap();
         assert_eq!(
             quick.matches.len(),
@@ -1038,13 +1054,15 @@ mod tests {
                 &patterns,
                 HintAction::Copy,
                 Some("/captured".into()),
+                false,
             );
             let label = mode.quick_select().unwrap().matches[26].label.clone();
             assert_eq!(label.len(), 2);
             assert!(mode.push_hint_key(label.chars().next().unwrap()).is_none());
             terminal.process(b"\x1b[H\x1b[2J");
             terminal.process(if survives { b"/26 /99" } else { b"/00 /99" });
-            mode.refresh_quick_select(&terminal, &patterns);
+            let refreshed = mode.refresh_quick_select(&terminal, &patterns);
+            assert_eq!(refreshed, survives);
             if survives {
                 let quick = mode.quick_select().unwrap();
                 assert_eq!(quick.prefix.len(), 1);
@@ -1054,7 +1072,7 @@ mod tests {
                 assert_eq!(target.value, "/26");
                 assert_eq!(action, HintAction::Copy);
             } else {
-                assert!(mode.quick_select().is_none());
+                assert!(!mode.cancel_quick_select());
                 assert!(mode.push_hint_key(label.chars().nth(1).unwrap()).is_none());
             }
         }
@@ -1066,14 +1084,14 @@ mod tests {
         let mut terminal = Terminal::new(30, 3);
         terminal.process(b"/one\r\n/two\r\n/three");
         let mut mode = CopyMode::default();
-        mode.start_quick_select(&terminal, &patterns, HintAction::Open, None);
+        mode.start_quick_select(&terminal, &patterns, HintAction::Open, None, false);
         let label = mode.quick_select().unwrap().matches[1].label.clone();
         let allocation = mode.quick_select().unwrap().matches.as_ptr();
         terminal.process(b"\x1b[3;9H"); // Cursor movement is not a content change.
-        mode.refresh_quick_select(&terminal, &patterns);
+        assert!(mode.refresh_quick_select(&terminal, &patterns));
         assert_eq!(mode.quick_select().unwrap().matches.as_ptr(), allocation);
         terminal.process(b"\r\n/new");
-        mode.refresh_quick_select(&terminal, &patterns);
+        assert!(mode.refresh_quick_select(&terminal, &patterns));
         assert_eq!(mode.quick_select().unwrap().matches.len(), 2);
         assert_eq!(mode.quick_select().unwrap().matches[0].value, "/two");
         assert_eq!(mode.quick_select().unwrap().matches[0].label, label);
@@ -1082,7 +1100,7 @@ mod tests {
             Point::new(0, 0)
         );
         terminal.grid_mut().set_scroll_offset(1);
-        mode.refresh_quick_select(&terminal, &patterns);
+        assert!(mode.refresh_quick_select(&terminal, &patterns));
         assert_eq!(mode.quick_select().unwrap().source.viewport.2, 1);
         assert!(
             !mode
@@ -1095,14 +1113,13 @@ mod tests {
         );
 
         terminal.process(b"\x1b[?2026h");
-        mode.start_quick_select(&terminal, &patterns, HintAction::Copy, None);
+        mode.start_quick_select(&terminal, &patterns, HintAction::Copy, None, false);
         let frozen = mode.quick_select().unwrap().clone();
         terminal.process(b"\x1b[H\x1b[2J/hidden\r\nextra\r\nmore");
-        mode.refresh_quick_select(&terminal, &patterns);
+        assert!(mode.refresh_quick_select(&terminal, &patterns));
         assert_eq!(mode.quick_select(), Some(&frozen));
         terminal.process(b"\x1b[?2026l");
-        mode.refresh_quick_select(&terminal, &patterns);
-        assert!(mode.quick_select().is_none());
+        assert!(!mode.refresh_quick_select(&terminal, &patterns));
     }
 
     #[test]
@@ -1111,7 +1128,7 @@ mod tests {
         let mut terminal = Terminal::new(100, 50);
         terminal.process("a".repeat(5_000).as_bytes());
         let mut mode = CopyMode::default();
-        mode.start_quick_select(&terminal, &patterns, HintAction::Copy, None);
+        mode.start_quick_select(&terminal, &patterns, HintAction::Copy, None, false);
         let labels: Vec<_> = mode
             .quick_select()
             .unwrap()
@@ -1120,7 +1137,7 @@ mod tests {
             .map(|item| item.label.clone())
             .collect();
         terminal.process(b"\x1b[1;1Haa");
-        mode.refresh_quick_select(&terminal, &patterns);
+        assert!(mode.refresh_quick_select(&terminal, &patterns));
         let quick = mode.quick_select().unwrap();
         assert_eq!(quick.matches.len(), MAX_QUICK_SELECT_MATCHES);
         assert_eq!(
@@ -1151,6 +1168,7 @@ mod tests {
                 prefix: String::new(),
                 action: HintAction::Copy,
                 working_directory: None,
+                entered_copy_mode: false,
                 synchronized_output_deadline: None,
                 source: QuickSelectSource::capture(&Terminal::new(8, 3)),
             }),
@@ -1411,13 +1429,13 @@ mod tests {
         let patterns = vec![("path".into(), Regex::new(r"/[^ ]+").unwrap())];
         let mut mode = CopyMode::default();
         mode.enter(terminal.grid());
-        mode.start_quick_select(&terminal, &patterns, HintAction::Copy, None);
+        mode.start_quick_select(&terminal, &patterns, HintAction::Copy, None, false);
         assert_eq!(mode.quick_select().unwrap().matches[0].start.row, 0);
 
         mode.prepare_reflow(terminal.grid_mut());
         terminal.resize(12, 4);
         mode.finish_reflow(terminal.grid_mut());
-        mode.refresh_quick_select(&terminal, &patterns);
+        assert!(mode.refresh_quick_select(&terminal, &patterns));
 
         let quick = mode.quick_select().unwrap();
         assert_eq!(quick.action, HintAction::Copy);
