@@ -49,7 +49,7 @@ When the focused terminal runs an agent, the command palette adds commands for i
 | **Toggle Agent Transcript** | Starts or stops recording this terminal's raw output to a transcript. |
 | **Copy Last Agent Response** | Copies the agent's most recent answer, from its status report or else from the end of its own conversation log. Needs agent status. |
 
-**Review Agent Diff** and **Copy Agent Diff** appear only when the agent printed a diff Termeric recognized. For an agent you start from a shell, Termeric reads diffs once it has recognized the agent, so output from its first second or so can be missed.
+**Review Agent Diff** and **Copy Agent Diff** appear only when the agent printed a diff Termeric recognized. For an agent you start from a shell, Termeric reads diffs once it has recognized the agent, so output from its first second or so can be missed. A diff still being printed when the agent exits or another takes its place is dropped rather than finished from whatever comes next.
 
 Before Termeric types anything into an agent, it checks the terminal again. If the agent has exited, has handed the terminal to another program such as an editor, or the pane is read-only, you get a notice and nothing is typed. Text meant for an agent never lands in a shell.
 

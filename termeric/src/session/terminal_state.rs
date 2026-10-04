@@ -20,6 +20,13 @@ pub(crate) struct TerminalIntegration {
     notices: Vec<String>,
 }
 
+/// What the diff capture is told about this terminal's output.
+enum CaptureStep<'a> {
+    Output(&'a [u8]),
+    StreamEnd,
+    AgentChanged,
+}
+
 impl Default for TerminalIntegration {
     fn default() -> Self {
         Self {
@@ -53,6 +60,20 @@ impl TerminalIntegration {
         }
     }
 
+    /// Records the agent the latest scan found in this terminal's
+    /// foreground, returning whether it changed. A change ends the diff
+    /// capture in progress: output is captured from a shell-started agent
+    /// only while it is seen, so what one agent left half-printed must never
+    /// be resumed against the next agent's output.
+    pub fn set_agent(&mut self, agent: Option<AgentSession>) -> bool {
+        if self.agent == agent {
+            return false;
+        }
+        self.agent = agent;
+        self.capture_diffs(CaptureStep::AgentChanged);
+        true
+    }
+
     /// `plugin` is whether Termeric started this terminal as a plugin or
     /// agent. An agent started from a shell is captured too, once the agent
     /// scan has seen it, so its first diff can arrive a scan late.
@@ -62,14 +83,14 @@ impl TerminalIntegration {
             self.handle_write(result);
         }
         if plugin || self.agent.is_some() {
-            self.capture_diffs(Some(data));
+            self.capture_diffs(CaptureStep::Output(data));
         }
     }
 
     /// Called only once the owning PTY's output stream ends, not per poll.
     pub fn finish_stream(&mut self) {
         self.finish_recorded_text();
-        self.capture_diffs(None);
+        self.capture_diffs(CaptureStep::StreamEnd);
     }
 
     fn finish_recorded_text(&mut self) {
@@ -80,7 +101,7 @@ impl TerminalIntegration {
         }
     }
 
-    fn capture_diffs(&mut self, data: Option<&[u8]>) {
+    fn capture_diffs(&mut self, step: CaptureStep<'_>) {
         let recorder = &mut self.transcript;
         let mut write_problem = None;
         let completed = |diff: &crate::terminal::diff_detector::DetectedDiff| {
@@ -96,9 +117,10 @@ impl TerminalIntegration {
                 }
             }
         };
-        match data {
-            Some(data) => self.diff_detector.feed_bytes(data, completed),
-            None => self.diff_detector.finish_stream(completed),
+        match step {
+            CaptureStep::Output(data) => self.diff_detector.feed_bytes(data, completed),
+            CaptureStep::StreamEnd => self.diff_detector.finish_stream(completed),
+            CaptureStep::AgentChanged => self.diff_detector.end_capture(completed),
         }
         if let Some(result) = write_problem {
             self.handle_write(result);
@@ -406,6 +428,46 @@ mod tests {
             shell.diff_detector.latest_unreviewed().unwrap().filename,
             "file"
         );
+    }
+
+    #[test]
+    fn a_capture_never_continues_across_agents() {
+        let agent = |agent_id: &str| {
+            Some(AgentSession {
+                agent_id: agent_id.into(),
+                launched: false,
+                profile: None,
+                process: None,
+            })
+        };
+        let mut shell = TerminalIntegration::default();
+        assert!(shell.set_agent(agent("claude")));
+        assert!(!shell.set_agent(agent("claude")));
+        shell.observe_output(b"--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n", false);
+        assert!(shell.set_agent(None));
+        shell.observe_output(b"$ codex\n", false);
+        assert!(shell.set_agent(agent("codex")));
+        // Read on from the first agent's half, these lines would complete it.
+        shell.observe_output(b"+new\nfinished\n", false);
+        assert_eq!(shell.diff_detector.unreviewed_count(), 0);
+        assert_eq!(
+            shell.drain_notices().len(),
+            1,
+            "the unfinished patch is rejected"
+        );
+
+        // A patch finished before its agent left is kept, and the agent's
+        // unterminated last line is not read as one.
+        shell.observe_output(
+            b"--- a/kept\n+++ b/kept\n@@ -1 +1 @@\n-old\n+new\n\x1b[2",
+            false,
+        );
+        assert!(shell.set_agent(None));
+        assert_eq!(
+            shell.diff_detector.latest_unreviewed().unwrap().filename,
+            "kept"
+        );
+        assert!(shell.drain_notices().is_empty());
     }
 
     #[test]

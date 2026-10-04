@@ -196,10 +196,23 @@ impl DiffDetector {
         let mut framer = std::mem::take(&mut self.framer);
         framer.finish(|line| self.accept_line(line, &mut completed));
         self.framer = framer;
+        self.settle_capture(&mut completed);
+    }
+
+    /// The program whose output was being captured is gone, though the
+    /// stream goes on: the terminal's agent changed. A complete patch is kept
+    /// and an unfinished one rejected, as at EOF, but an unterminated line is
+    /// dropped rather than read, since it may as well be the start of
+    /// whatever runs next, such as a shell prompt. Nothing captured from one
+    /// program is then resumed against another's output.
+    pub fn end_capture(&mut self, mut completed: impl FnMut(&DetectedDiff)) {
+        self.framer = Framer::default();
+        self.settle_capture(&mut completed);
+    }
+
+    fn settle_capture(&mut self, completed: &mut impl FnMut(&DetectedDiff)) {
         match std::mem::take(&mut self.state) {
-            ScanState::InDiff(capture) if capture.complete() => {
-                self.finalize(capture, &mut completed)
-            }
+            ScanState::InDiff(capture) if capture.complete() => self.finalize(capture, completed),
             ScanState::Idle => {}
             _ => self.reject(),
         }

@@ -743,10 +743,7 @@ impl Tab {
                 session.agent_status = None;
                 changed = true;
             }
-            if session.agent != observed {
-                session.agent = observed;
-                changed = true;
-            }
+            changed |= session.set_agent(observed);
             changed
         }
         let mut changed = false;
