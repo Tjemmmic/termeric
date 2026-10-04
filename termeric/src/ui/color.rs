@@ -57,11 +57,13 @@ pub fn contrast_ratio(first: [f32; 4], second: [f32; 4]) -> f32 {
     (first.max(second) + 0.05) / (first.min(second) + 0.05)
 }
 
-/// The near-black or near-white text that contrasts more with `background`;
-/// high-contrast mode draws chrome text in it.
+/// Black or white, whichever contrasts more with `background`; high-contrast
+/// mode draws chrome text in it. Pure black and white guarantee at least
+/// 4.58:1 on any color (the worst case, a surface whose ratio to both is the
+/// same, is the square root of 21); any tint would cost the mid grays AA.
 pub fn high_contrast_text(background: [f32; 4]) -> [f32; 4] {
-    let dark = [0.04, 0.03, 0.02, 1.0];
-    let light = [1.0, 0.98, 0.95, 1.0];
+    let dark = [0.0, 0.0, 0.0, 1.0];
+    let light = [1.0, 1.0, 1.0, 1.0];
     if contrast_ratio(background, dark) >= contrast_ratio(background, light) {
         dark
     } else {
@@ -95,11 +97,24 @@ mod tests {
     }
 
     #[test]
-    fn high_contrast_text_reaches_aa_on_any_gray() {
-        for step in 0..=20 {
-            let gray = step as f32 / 20.0;
-            let background = [gray, gray, gray, 1.0];
-            assert!(contrast_ratio(high_contrast_text(background), background) >= 4.5);
+    fn high_contrast_text_reaches_aa_on_any_color() {
+        let reaches_aa = |background: [f32; 4]| {
+            let ratio = contrast_ratio(high_contrast_text(background), background);
+            assert!(ratio >= 4.5, "{ratio} on {background:?}");
+        };
+        // Fine enough to land inside the narrow band of mid grays where both
+        // candidates come closest to failing.
+        for step in 0..=1_000 {
+            let gray = step as f32 / 1_000.0;
+            reaches_aa([gray, gray, gray, 1.0]);
+        }
+        for red in 0..=20 {
+            for green in 0..=20 {
+                for blue in 0..=20 {
+                    let channel = |step: i32| step as f32 / 20.0;
+                    reaches_aa([channel(red), channel(green), channel(blue), 1.0]);
+                }
+            }
         }
         assert!((contrast_ratio([0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]) - 21.0).abs() < 0.01);
     }
