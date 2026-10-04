@@ -199,6 +199,24 @@ pub enum WorkspaceLaunch {
     },
 }
 
+/// What a tab or pane relaunches as, in words for warnings and logs.
+impl std::fmt::Display for WorkspaceLaunch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Shell => formatter.write_str("shell"),
+            Self::Profile { name } => write!(formatter, "terminal profile {name:?}"),
+            Self::Plugin {
+                plugin_id,
+                profile: None,
+            } => write!(formatter, "plugin {plugin_id:?}"),
+            Self::Plugin {
+                plugin_id,
+                profile: Some(profile),
+            } => write!(formatter, "plugin {plugin_id:?} profile {profile:?}"),
+        }
+    }
+}
+
 impl WorkspaceLaunch {
     fn validate(&self) -> anyhow::Result<()> {
         match self {
@@ -486,6 +504,33 @@ pub(crate) mod tests {
         let mut workspace = sample_workspace();
         workspace.tabs[0].panes.pop();
         assert!(workspace.validate().is_err());
+    }
+
+    #[test]
+    fn launches_read_as_their_kind_and_name() {
+        for (launch, words) in [
+            (WorkspaceLaunch::Shell, "shell"),
+            (
+                WorkspaceLaunch::Profile { name: "dev".into() },
+                "terminal profile \"dev\"",
+            ),
+            (
+                WorkspaceLaunch::Plugin {
+                    plugin_id: "codex".into(),
+                    profile: None,
+                },
+                "plugin \"codex\"",
+            ),
+            (
+                WorkspaceLaunch::Plugin {
+                    plugin_id: "codex".into(),
+                    profile: Some("review".into()),
+                },
+                "plugin \"codex\" profile \"review\"",
+            ),
+        ] {
+            assert_eq!(launch.to_string(), words);
+        }
     }
 
     #[test]

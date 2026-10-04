@@ -220,10 +220,12 @@ impl App {
                 }
                 Err(error) => {
                     outcome.skipped_tabs += 1;
+                    let launch = snapshot
+                        .launch()
+                        .map_or_else(|_| "unknown launch".into(), ToString::to_string);
                     outcome.warnings.push(format!(
-                        "tab {} ({:?}) was skipped: {error:#}",
-                        snapshot.id,
-                        snapshot.launch().ok()
+                        "tab {} ({launch}) was skipped: {error:#}",
+                        snapshot.id
                     ));
                 }
             }

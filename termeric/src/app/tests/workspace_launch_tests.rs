@@ -214,6 +214,14 @@ fn workspace_restore_partially_recovers_missing_cwd_profile_and_cli() {
             outcome
                 .warnings
                 .iter()
+                .any(|line| line.starts_with("tab 2 (plugin \"codex\") was skipped:")),
+            "{:?}",
+            outcome.warnings
+        );
+        assert!(
+            outcome
+                .warnings
+                .iter()
                 .any(|line| line.contains("saved focused tab"))
         );
         assert_eq!(app.tabs.as_ref().unwrap().count(), 1);
