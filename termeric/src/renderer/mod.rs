@@ -67,7 +67,7 @@ use colors::{TerminalPalette, contrast_text, select_surface_formats};
 #[cfg(test)]
 pub(crate) use device::discover_adapter;
 pub(crate) use device::{RendererDeviceFailure, RendererDiagnostics, RendererFailureCallback};
-use device::{attempt_label, fallback_attempts, request_adapter_device};
+use device::{request_adapter_device, select_adapter};
 use grid::{cursor_cell_geometry, draws_char, draws_grapheme, gliding_cursor_origin};
 #[cfg(test)]
 pub(crate) use headless_tests::{
@@ -224,36 +224,12 @@ impl Renderer {
         // Create surface - window is Arc so it lives long enough
         let surface = instance.create_surface(window.clone())?;
 
-        let mut failures = Vec::new();
-        let mut selected = None;
-        for &force_fallback in fallback_attempts(backend_preference) {
-            match request_adapter_device(&instance, enabled_backends, &surface, force_fallback) {
-                Ok(found) => {
-                    selected = Some((found, force_fallback));
-                    break;
-                }
-                Err(reason) => failures.push(format!(
-                    "{} adapter {reason}",
-                    attempt_label(force_fallback)
-                )),
-            }
-        }
-        let Some(((adapter, device, queue), fallback_requested)) = selected else {
-            anyhow::bail!(
-                "renderer initialization failed with preference {backend_preference}: {}. \
-                 Try `termeric --renderer software`, install current graphics/Mesa drivers, \
-                 or set renderer.backend = \"software\" in config.toml",
-                failures.join("; ")
-            );
-        };
-        let adapter_info = adapter.get_info();
-        let diagnostics = RendererDiagnostics {
-            preference: backend_preference,
-            adapter: adapter_info.name.clone(),
-            backend: format!("{:?}", adapter_info.backend),
-            device_type: format!("{:?}", adapter_info.device_type),
-            software: fallback_requested || adapter_info.device_type == DeviceType::Cpu,
-        };
+        let ((adapter, device, queue), fallback_requested) =
+            select_adapter(backend_preference, |force_fallback| {
+                request_adapter_device(&instance, enabled_backends, &surface, force_fallback)
+            })?;
+        let diagnostics =
+            RendererDiagnostics::new(backend_preference, &adapter.get_info(), fallback_requested);
         if diagnostics.software {
             log::warn!(
                 "Using software renderer; performance will be lower ({})",
