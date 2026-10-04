@@ -2398,40 +2398,19 @@ fn divider_owner_fixture() -> App {
 
 #[cfg(unix)]
 fn domain_divider_pending_fixture() -> App {
-    use crate::domain::model::{DomainSnapshot, LivePane, LivePaneLayout, LiveTab};
-    let snapshot = DomainSnapshot {
-        id: "divider-pending".into(),
-        name: "divider pending fixture".into(),
-        created_at: "2026-01-01T00:00:00Z".into(),
-        active_tab: 10,
-        tabs: vec![LiveTab {
-            id: 10,
-            title: "fixture".into(),
-            user_title: None,
-            pinned: false,
-            focused_pane: 100,
-            layout: LivePaneLayout::Split {
-                split_id: 44,
-                direction: crate::panes::SplitDirection::Vertical,
-                ratio_millis: 500,
-                first: Box::new(LivePaneLayout::Pane { pane: 100 }),
-                second: Box::new(LivePaneLayout::Pane { pane: 101 }),
-            },
-            panes: [100, 101]
-                .into_iter()
-                .map(|id| LivePane {
-                    id,
-                    title: "fixture pane".into(),
-                    working_directory: None,
-                    command: vec!["fixture".into()],
-                    cols: 40,
-                    rows: 24,
-                    closed: false,
-                    attachments: 0,
-                })
-                .collect(),
-        }],
-    };
+    use crate::domain::model::{DomainSnapshot, LivePaneLayout, LiveTab};
+    let mut tab = LiveTab::fixture(
+        10,
+        LivePaneLayout::split(
+            44,
+            crate::panes::SplitDirection::Vertical,
+            500,
+            LivePaneLayout::pane(100),
+            LivePaneLayout::pane(101),
+        ),
+    );
+    tab.focused_pane = 100;
+    let snapshot = DomainSnapshot::fixture("divider-pending", 10, vec![tab]);
     let relay = crate::domain::DomainRelayCommand::local("/bin/true");
     let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 100, 1024 * 1024);
     tabs.attach_domain(&snapshot, &relay).unwrap();

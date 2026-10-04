@@ -205,6 +205,89 @@ impl SpawnSpec {
     }
 }
 
+/// Test fixtures that spell out only what a test is about. They stay out of
+/// the fuzz build, which includes this file without `cfg(test)`.
+#[cfg(test)]
+impl DomainSnapshot {
+    pub(crate) fn fixture(id: &str, active_tab: u32, tabs: Vec<LiveTab>) -> Self {
+        Self {
+            id: id.into(),
+            name: id.into(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            active_tab,
+            tabs,
+        }
+    }
+}
+
+#[cfg(test)]
+impl LiveTab {
+    /// A tab with a pane for every leaf of `layout`, focused on its last.
+    pub(crate) fn fixture(id: u32, layout: LivePaneLayout) -> Self {
+        let mut panes = Vec::new();
+        layout.for_each_pane(&mut |pane| panes.push(LivePane::fixture(pane)));
+        Self {
+            id,
+            title: format!("tab-{id}"),
+            user_title: None,
+            pinned: false,
+            focused_pane: panes.last().expect("a layout has a pane").id,
+            layout,
+            panes,
+        }
+    }
+}
+
+#[cfg(test)]
+impl LivePane {
+    /// An open 80x24 pane running `shell`.
+    pub(crate) fn fixture(id: u32) -> Self {
+        Self {
+            id,
+            title: format!("pane-{id}"),
+            working_directory: None,
+            command: vec!["shell".into()],
+            cols: 80,
+            rows: 24,
+            closed: false,
+            attachments: 0,
+        }
+    }
+}
+
+#[cfg(test)]
+impl LivePaneLayout {
+    pub(crate) fn pane(pane: u32) -> Self {
+        Self::Pane { pane }
+    }
+
+    pub(crate) fn split(
+        split_id: u32,
+        direction: SplitDirection,
+        ratio_millis: u16,
+        first: Self,
+        second: Self,
+    ) -> Self {
+        Self::Split {
+            split_id,
+            direction,
+            ratio_millis,
+            first: Box::new(first),
+            second: Box::new(second),
+        }
+    }
+
+    fn for_each_pane(&self, visit: &mut impl FnMut(u32)) {
+        match self {
+            Self::Pane { pane } => visit(*pane),
+            Self::Split { first, second, .. } => {
+                first.for_each_pane(visit);
+                second.for_each_pane(visit);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,30 +333,11 @@ mod tests {
     #[test]
     fn topology_revisions_exclude_heavy_inspection_metadata() {
         let marker = "large-command-marker".repeat(10_000);
-        let snapshot = DomainSnapshot {
-            id: "domain-memory".into(),
-            name: "memory".into(),
-            created_at: "now".into(),
-            active_tab: 0,
-            tabs: vec![LiveTab {
-                id: 0,
-                title: "tab".into(),
-                user_title: None,
-                pinned: false,
-                focused_pane: 0,
-                layout: LivePaneLayout::Pane { pane: 0 },
-                panes: vec![LivePane {
-                    id: 0,
-                    title: "pane".into(),
-                    working_directory: Some("/large/inspection/path".into()),
-                    command: vec![marker.clone()],
-                    cols: 80,
-                    rows: 24,
-                    closed: false,
-                    attachments: 7,
-                }],
-            }],
-        };
+        let mut tab = LiveTab::fixture(0, LivePaneLayout::pane(0));
+        tab.panes[0].working_directory = Some("/large/inspection/path".into());
+        tab.panes[0].command = vec![marker.clone()];
+        tab.panes[0].attachments = 7;
+        let snapshot = DomainSnapshot::fixture("domain-memory", 0, vec![tab]);
         let topology = DomainTopology::from(&snapshot);
         let encoded = serde_json::to_vec(&topology).unwrap();
         assert!(encoded.len() < 512);

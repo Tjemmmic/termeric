@@ -3536,50 +3536,22 @@ mod tests {
 
     #[test]
     fn domain_attachment_reconstructs_nested_layout_and_stable_focus_mapping() {
-        if !std::path::Path::new("/bin/true").exists() {
-            return;
-        }
-        use crate::domain::model::{DomainSnapshot, LivePane, LivePaneLayout, LiveTab};
-        let panes = [5, 9, 12]
-            .into_iter()
-            .map(|id| LivePane {
-                id,
-                title: format!("remote-{id}"),
-                working_directory: None,
-                command: vec!["shell".into()],
-                cols: 80,
-                rows: 24,
-                closed: false,
-                attachments: 0,
-            })
-            .collect();
-        let snapshot = DomainSnapshot {
-            id: "domain-layout".into(),
-            name: "layout".into(),
-            created_at: "2026-01-01T00:00:00Z".into(),
-            active_tab: 7,
-            tabs: vec![LiveTab {
-                id: 7,
-                title: "nested".into(),
-                user_title: None,
-                pinned: false,
-                focused_pane: 12,
-                layout: LivePaneLayout::Split {
-                    split_id: 70,
-                    direction: SplitDirection::Vertical,
-                    ratio_millis: 400,
-                    first: Box::new(LivePaneLayout::Pane { pane: 5 }),
-                    second: Box::new(LivePaneLayout::Split {
-                        split_id: 71,
-                        direction: SplitDirection::Horizontal,
-                        ratio_millis: 600,
-                        first: Box::new(LivePaneLayout::Pane { pane: 9 }),
-                        second: Box::new(LivePaneLayout::Pane { pane: 12 }),
-                    }),
-                },
-                panes,
-            }],
-        };
+        use crate::domain::model::{DomainSnapshot, LivePaneLayout, LiveTab};
+        let layout = LivePaneLayout::split(
+            70,
+            SplitDirection::Vertical,
+            400,
+            LivePaneLayout::pane(5),
+            LivePaneLayout::split(
+                71,
+                SplitDirection::Horizontal,
+                600,
+                LivePaneLayout::pane(9),
+                LivePaneLayout::pane(12),
+            ),
+        );
+        let snapshot =
+            DomainSnapshot::fixture("domain-layout", 7, vec![LiveTab::fixture(7, layout)]);
         let mut manager = TabManager::new(80, 24, ShellConfig::default(), 1_000, 1024 * 1024);
         let kitty_files = TerminalPolicy {
             kitty_file_transmission: true,
@@ -3666,35 +3638,12 @@ mod tests {
 
     #[test]
     fn domain_topology_revisions_incrementally_add_split_collapse_and_remove_relays() {
-        if !std::path::Path::new("/bin/true").exists() {
-            return;
-        }
-        use crate::domain::model::{DomainSnapshot, LivePane, LivePaneLayout, LiveTab};
-        let remote_pane = |id| LivePane {
-            id,
-            title: format!("remote-{id}"),
-            working_directory: None,
-            command: vec!["shell".into()],
-            cols: 80,
-            rows: 24,
-            closed: false,
-            attachments: 0,
-        };
-        let mut snapshot = DomainSnapshot {
-            id: "domain-revisions".into(),
-            name: "revisions".into(),
-            created_at: "2026-01-01T00:00:00Z".into(),
-            active_tab: 7,
-            tabs: vec![LiveTab {
-                id: 7,
-                title: "first".into(),
-                user_title: None,
-                pinned: false,
-                focused_pane: 5,
-                layout: LivePaneLayout::Pane { pane: 5 },
-                panes: vec![remote_pane(5)],
-            }],
-        };
+        use crate::domain::model::{DomainSnapshot, LivePaneLayout, LiveTab};
+        let mut snapshot = DomainSnapshot::fixture(
+            "domain-revisions",
+            7,
+            vec![LiveTab::fixture(7, LivePaneLayout::pane(5))],
+        );
         let mut manager = TabManager::new(80, 24, ShellConfig::default(), 1_000, 1024 * 1024);
         manager
             .attach_domain(
@@ -3704,15 +3653,16 @@ mod tests {
             .unwrap();
         let stable_first_tab = manager.active_tab().unwrap().id;
 
-        snapshot.tabs[0].focused_pane = 9;
-        snapshot.tabs[0].layout = LivePaneLayout::Split {
-            split_id: 70,
-            direction: SplitDirection::Vertical,
-            ratio_millis: 350,
-            first: Box::new(LivePaneLayout::Pane { pane: 5 }),
-            second: Box::new(LivePaneLayout::Pane { pane: 9 }),
-        };
-        snapshot.tabs[0].panes.push(remote_pane(9));
+        snapshot.tabs[0] = LiveTab::fixture(
+            7,
+            LivePaneLayout::split(
+                70,
+                SplitDirection::Vertical,
+                350,
+                LivePaneLayout::pane(5),
+                LivePaneLayout::pane(9),
+            ),
+        );
         manager
             .reconcile_live_domain(
                 &crate::domain::model::DomainTopology::from(&snapshot),
@@ -3730,15 +3680,9 @@ mod tests {
             Some(("domain-revisions", 9))
         );
 
-        snapshot.tabs.push(LiveTab {
-            id: 8,
-            title: "second".into(),
-            user_title: None,
-            pinned: false,
-            focused_pane: 15,
-            layout: LivePaneLayout::Pane { pane: 15 },
-            panes: vec![remote_pane(15)],
-        });
+        snapshot
+            .tabs
+            .push(LiveTab::fixture(8, LivePaneLayout::pane(15)));
         snapshot.active_tab = 8;
         manager
             .reconcile_live_domain(
@@ -3789,43 +3733,22 @@ mod tests {
         );
     }
 
+    /// One domain tab split into remote panes 4 and 8, focused on 8.
+    fn split_domain_fixture(id: &str) -> crate::domain::model::DomainSnapshot {
+        use crate::domain::model::{DomainSnapshot, LivePaneLayout, LiveTab};
+        let layout = LivePaneLayout::split(
+            30,
+            SplitDirection::Vertical,
+            500,
+            LivePaneLayout::pane(4),
+            LivePaneLayout::pane(8),
+        );
+        DomainSnapshot::fixture(id, 3, vec![LiveTab::fixture(3, layout)])
+    }
+
     #[test]
     fn relay_driven_full_tab_exit_removes_the_tab_instead_of_leaving_an_empty_owner() {
-        if !std::path::Path::new("/bin/echo").exists() {
-            return;
-        }
-        use crate::domain::model::{DomainSnapshot, LivePane, LivePaneLayout, LiveTab};
-        let pane = |id| LivePane {
-            id,
-            title: format!("remote-{id}"),
-            working_directory: None,
-            command: vec!["shell".into()],
-            cols: 80,
-            rows: 24,
-            closed: false,
-            attachments: 0,
-        };
-        let snapshot = DomainSnapshot {
-            id: "domain-exit".into(),
-            name: "exit".into(),
-            created_at: "2026-01-01T00:00:00Z".into(),
-            active_tab: 3,
-            tabs: vec![LiveTab {
-                id: 3,
-                title: "closing".into(),
-                user_title: None,
-                pinned: false,
-                focused_pane: 8,
-                layout: LivePaneLayout::Split {
-                    split_id: 30,
-                    direction: SplitDirection::Vertical,
-                    ratio_millis: 500,
-                    first: Box::new(LivePaneLayout::Pane { pane: 4 }),
-                    second: Box::new(LivePaneLayout::Pane { pane: 8 }),
-                },
-                panes: vec![pane(4), pane(8)],
-            }],
-        };
+        let snapshot = split_domain_fixture("domain-exit");
         let session_root = tempfile::tempdir().unwrap();
         crate::session::set_test_sessions_base_dir(Some(session_root.path().to_path_buf()));
         let mut manager = TabManager::new(80, 24, ShellConfig::default(), 1_000, 1024 * 1024);
@@ -3859,7 +3782,6 @@ mod tests {
 
     #[test]
     fn relay_driven_split_dissolution_remaps_focus_to_the_surviving_remote_pane() {
-        use crate::domain::model::{DomainSnapshot, LivePane, LivePaneLayout, LiveTab};
         use std::os::unix::fs::PermissionsExt;
 
         let temporary = tempfile::tempdir().unwrap();
@@ -3870,37 +3792,7 @@ mod tests {
         )
         .unwrap();
         std::fs::set_permissions(&relay, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let pane = |id| LivePane {
-            id,
-            title: format!("remote-{id}"),
-            working_directory: None,
-            command: vec!["shell".into()],
-            cols: 80,
-            rows: 24,
-            closed: false,
-            attachments: 0,
-        };
-        let snapshot = DomainSnapshot {
-            id: "domain-partial-exit".into(),
-            name: "partial exit".into(),
-            created_at: "2026-01-01T00:00:00Z".into(),
-            active_tab: 3,
-            tabs: vec![LiveTab {
-                id: 3,
-                title: "closing split".into(),
-                user_title: None,
-                pinned: false,
-                focused_pane: 8,
-                layout: LivePaneLayout::Split {
-                    split_id: 30,
-                    direction: SplitDirection::Vertical,
-                    ratio_millis: 500,
-                    first: Box::new(LivePaneLayout::Pane { pane: 4 }),
-                    second: Box::new(LivePaneLayout::Pane { pane: 8 }),
-                },
-                panes: vec![pane(4), pane(8)],
-            }],
-        };
+        let snapshot = split_domain_fixture("domain-partial-exit");
         let mut manager = TabManager::new(80, 24, ShellConfig::default(), 1_000, 1024 * 1024);
         manager
             .attach_domain(
