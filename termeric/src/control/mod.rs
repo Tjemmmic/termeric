@@ -105,8 +105,10 @@ pub fn build_identity() -> Option<String> {
 /// renderer, terminal identity, and where it reads configuration and keeps
 /// data. A launch whose values differ starts a process of its own, since a
 /// running process cannot take them on; the rest of the launcher's
-/// environment is never carried to a running process.
-pub const JOIN_ENVIRONMENT_VARIABLES: [&str; 11] = [
+/// environment is never carried to a running process. `HOME` counts because
+/// the configuration and data directories, and `~/.terminfo`, fall back to
+/// it when the XDG variables are unset.
+pub const JOIN_ENVIRONMENT_VARIABLES: [&str; 12] = [
     "RUST_LOG",
     "WGPU_BACKEND",
     "WGPU_ADAPTER_NAME",
@@ -116,6 +118,7 @@ pub const JOIN_ENVIRONMENT_VARIABLES: [&str; 11] = [
     "TERMERIC_TERMINFO_DIR",
     "TERMINFO",
     "TERMINFO_DIRS",
+    "HOME",
     "XDG_CONFIG_HOME",
     "XDG_DATA_HOME",
 ];
@@ -281,6 +284,7 @@ mod tests {
             assert!(seen.insert(with(name, "x")), "{name}");
         }
         assert_ne!(with("RUST_LOG", "debug"), with("RUST_LOG", "info"));
+        assert_ne!(with("HOME", "/tmp/h"), with("HOME", "/home/someone"));
         // Other variables, such as the launcher's working environment, never do.
         assert_eq!(with("PATH", "/opt/bin"), unset);
         assert_eq!(with("EDITOR", "vim"), unset);
