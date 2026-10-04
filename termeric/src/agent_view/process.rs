@@ -8,7 +8,7 @@
 
 use std::collections::VecDeque;
 use std::ffi::OsString;
-use std::io::{BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -23,8 +23,12 @@ use crate::line_reader::read_bounded_line;
 use super::event::ExitReport;
 
 /// Longest single protocol line kept. Claude Code already shortens large tool
-/// output; anything beyond this is dropped rather than held in memory.
+/// output; a longer line is reported as [`ProcessOutput::Oversized`] and
+/// dropped, holding at most this much of it while it is read.
 pub const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
+/// Capacity the line buffer keeps between lines, so one huge line doesn't
+/// hold its memory until the agent exits.
+const RETAINED_LINE_CAPACITY: usize = 64 * 1024;
 /// Lines waiting for the panel before the reader stops reading, which in turn
 /// makes the agent wait instead of growing memory.
 const OUTPUT_CAPACITY: usize = 4096;
@@ -268,6 +272,34 @@ fn write_input(mut stdin: std::process::ChildStdin, queue: Receiver<String>) {
     }
 }
 
+/// The agent's next output line from `reader`, read through `line`: blank
+/// lines are skipped, a line over `limit` bytes becomes
+/// [`ProcessOutput::Oversized`] and reading goes on, and a last line without
+/// a newline still counts. `None` once the output ends or fails.
+fn next_output(
+    reader: &mut impl BufRead,
+    limit: usize,
+    line: &mut Vec<u8>,
+) -> Option<ProcessOutput> {
+    loop {
+        let read = read_bounded_line(reader, limit, line).ok()??;
+        let next = if read.oversized {
+            Some(ProcessOutput::Oversized)
+        } else {
+            let text = String::from_utf8_lossy(line);
+            let text = text.trim_end_matches('\r');
+            (!text.trim().is_empty()).then(|| ProcessOutput::Line(text.to_owned()))
+        };
+        if line.capacity() > RETAINED_LINE_CAPACITY {
+            line.clear();
+            line.shrink_to(RETAINED_LINE_CAPACITY);
+        }
+        if next.is_some() {
+            return next;
+        }
+    }
+}
+
 fn keep_tail(stderr: std::process::ChildStderr, tail: &Mutex<VecDeque<u8>>) {
     let mut stderr = stderr;
     let mut buffer = [0; 4096];
@@ -294,26 +326,9 @@ fn read_output(
 ) {
     let mut reader = BufReader::with_capacity(64 * 1024, stdout);
     let mut line = Vec::new();
-    loop {
-        // An oversized line is dropped whole; a last line without a newline
-        // still counts.
-        match read_bounded_line(&mut reader, MAX_LINE_BYTES, &mut line) {
-            Ok(Some(read)) if read.oversized => {
-                if output.send(ProcessOutput::Oversized).is_err() {
-                    return;
-                }
-            }
-            Ok(Some(_)) => {
-                let text = String::from_utf8_lossy(&line);
-                let text = text.trim_end_matches('\r');
-                if text.trim().is_empty() {
-                    continue;
-                }
-                if output.send(ProcessOutput::Line(text.to_owned())).is_err() {
-                    return;
-                }
-            }
-            Ok(None) | Err(_) => break,
+    while let Some(next) = next_output(&mut reader, MAX_LINE_BYTES, &mut line) {
+        if output.send(next).is_err() {
+            return;
         }
         waker();
     }
@@ -572,6 +587,29 @@ fn login_shell_path() -> Option<OsString> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_lines_skip_blanks_survive_an_oversized_line_and_keep_an_unterminated_end() {
+        let limit = 4 * RETAINED_LINE_CAPACITY;
+        let large = "y".repeat(2 * RETAINED_LINE_CAPACITY);
+        let input = format!(
+            "first\r\n\n  \r\n{}\n{large}\nλ last",
+            "x".repeat(limit + 1)
+        );
+        let mut reader = BufReader::with_capacity(4096, input.as_bytes());
+        let mut line = Vec::new();
+        let mut next = || {
+            let output = next_output(&mut reader, limit, &mut line);
+            // A huge line's memory is given back once it is handled.
+            assert!(line.capacity() <= RETAINED_LINE_CAPACITY);
+            output
+        };
+        assert_eq!(next(), Some(ProcessOutput::Line("first".into())));
+        assert_eq!(next(), Some(ProcessOutput::Oversized));
+        assert_eq!(next(), Some(ProcessOutput::Line(large.clone())));
+        assert_eq!(next(), Some(ProcessOutput::Line("λ last".into())));
+        assert_eq!(next(), None);
+    }
 
     #[test]
     fn the_login_path_is_asked_for_once_without_waiting() {
