@@ -97,7 +97,7 @@ If `config.toml` has a mistake, Termeric still starts, using default settings, a
 
 If you save an invalid change while Termeric is running, it keeps the previous settings and shows why the reload failed. If a custom theme file can't be loaded at startup, Termeric uses the Turmeric theme; if it breaks while Termeric runs, the current theme stays.
 
-To start over, run **Reset Configuration to Defaults** from the command palette. If your file has an error, Termeric first keeps a copy of it beside the new one, named `config.toml.<number>.bak`. A file without errors is replaced without a copy, so back it up first if you want to keep it.
+To start over, run **Reset Configuration to Defaults** from the command palette. Termeric keeps a copy of your old file beside the new one, named `config.toml.<number>.bak`, and the notice says where it is.
 
 ## Collect logs
 

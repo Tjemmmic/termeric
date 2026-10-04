@@ -53,6 +53,8 @@ arboard = { version = "3.4", features = ["wayland-data-control"] }
 serde.workspace = true
 serde_json = { version = "1", features = ["raw_value"] }
 toml.workspace = true
+# Saving config.toml in place, keeping its comments and layout
+toml_edit = "0.22"
 directories = "6.0"
 
 # Fuzzy matching for command palette

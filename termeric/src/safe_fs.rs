@@ -76,12 +76,26 @@ pub(crate) fn atomic_replace<T>(
     path: &Path,
     write: impl FnOnce(&mut dyn Write) -> io::Result<T>,
 ) -> io::Result<T> {
+    atomic_replace_keeping(path, None, write)
+}
+
+/// [`atomic_replace`] for a file the person owns and may have given other
+/// permissions, such as `config.toml`: the replacement takes `permissions`
+/// (the old file's), or stays private when there are none.
+pub(crate) fn atomic_replace_keeping<T>(
+    path: &Path,
+    permissions: Option<fs::Permissions>,
+    write: impl FnOnce(&mut dyn Write) -> io::Result<T>,
+) -> io::Result<T> {
     let directory = path
         .parent()
         .ok_or_else(|| io::Error::other("replaced file has no parent directory"))?;
     let mut staging = tempfile::Builder::new()
         .prefix(STAGING_PREFIX)
         .tempfile_in(directory)?;
+    if let Some(permissions) = permissions {
+        staging.as_file().set_permissions(permissions)?;
+    }
     let result = {
         let mut writer = BufWriter::new(staging.as_file_mut());
         let result = write(&mut writer)?;

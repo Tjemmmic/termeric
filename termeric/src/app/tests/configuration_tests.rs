@@ -481,3 +481,49 @@ fn config_reload_only_overrides_application_keyboard_type_when_profile_changes()
         termeric_core::term::XtermKeyboardType::Normal
     );
 }
+
+/// A headless window whose configuration file, holding `text`, is its own.
+fn app_with_config_file(text: &str) -> (tempfile::TempDir, std::path::PathBuf, App) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.toml");
+    std::fs::write(&path, text).unwrap();
+    let mut app = App::new_headless(Config::load_from(&path).unwrap()).unwrap();
+    app.config_path = path.clone();
+    (directory, path, app)
+}
+
+#[test]
+fn saving_from_settings_writes_only_the_changed_setting() {
+    let original = "# Mine.\n[window]\npadding = 4 # tight\n";
+    let (_directory, path, mut app) = app_with_config_file(original);
+    app.apply_settings_action(SettingsAction::SetVisualBell(false));
+    assert!(app.config_has_unsaved_changes());
+    app.apply_settings_action(SettingsAction::SaveConfig);
+    assert!(!app.config_has_unsaved_changes());
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        format!("{original}\n[bell]\nvisual = false\n")
+    );
+}
+
+#[test]
+fn a_save_that_keeps_an_edit_made_elsewhere_leaves_it_for_the_reload() {
+    let (_directory, path, mut app) = app_with_config_file("[window]\npadding = 4\n");
+    // A save that leaves the file holding just the live settings needs no
+    // reload.
+    app.apply_settings_action(SettingsAction::SetVisualBell(false));
+    app.save_config().unwrap();
+    let saved = std::fs::metadata(&path).unwrap().modified().unwrap();
+    assert_eq!(app.last_config_mtime, Some(saved));
+
+    // Another program changes the file before the poller sees it.
+    std::fs::write(&path, "[window]\npadding = 20\n\n[bell]\nvisual = false\n").unwrap();
+    app.apply_settings_action(SettingsAction::SetAudioBell(true));
+    app.save_config().unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "[window]\npadding = 20\n\n[bell]\nvisual = false\naudio = true\n"
+    );
+    // The poller still sees a change, and its reload brings in padding = 20.
+    assert_eq!(app.last_config_mtime, Some(saved));
+}

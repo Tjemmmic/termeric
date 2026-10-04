@@ -1,5 +1,6 @@
 //! Configuration management
 
+pub mod save;
 pub mod theme;
 
 use anyhow::{Context, Result, bail};
@@ -257,27 +258,19 @@ impl Config {
         if config_path.exists() {
             let content = std::fs::read_to_string(config_path)
                 .with_context(|| format!("failed to read {}", config_path.display()))?;
-            let config: Config = toml::from_str(&content)
-                .with_context(|| format!("failed to parse {}", config_path.display()))?;
-            config.validate()?;
-            Ok(config)
+            Self::from_toml(&content, config_path)
         } else {
             Ok(Self::default())
         }
     }
 
-    /// Refuse to replace the configuration file at `path` when it does not
-    /// load. Termeric is then running on its defaults or on the last settings
-    /// that did load, and writing either over the file would destroy the
-    /// person's settings, which may be one typo away from working.
-    pub fn ensure_replaceable(path: &std::path::Path) -> Result<()> {
-        match Self::load_from(path) {
-            Ok(_) => Ok(()),
-            Err(error) => bail!(
-                "{} has an error, so it was left as it is ({error:#}); fix it, or use Reset Configuration to replace it",
-                path.display()
-            ),
-        }
+    /// Parse and validate `text`, the contents of the configuration file at
+    /// `source`.
+    pub fn from_toml(text: &str, source: &std::path::Path) -> Result<Self> {
+        let config: Config = toml::from_str(text)
+            .with_context(|| format!("failed to parse {}", source.display()))?;
+        config.validate()?;
+        Ok(config)
     }
 
     /// Load startup configuration without making a malformed user file fatal.
@@ -509,6 +502,20 @@ where
         );
     }
     Ok(())
+}
+
+/// Write an `f32` setting as the shortest decimal that reads back as it, so
+/// a saved `1.2` stays `1.2` instead of the `1.2000000476837158` that
+/// widening it to the `f64` TOML stores would give.
+fn serialize_shortest_f32<S: serde::Serializer>(
+    value: &f32,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    let shortest = value
+        .to_string()
+        .parse()
+        .unwrap_or_else(|_| f64::from(*value));
+    serializer.serialize_f64(shortest)
 }
 
 /// Saved destinations for the experimental OpenSSH domain transport. OpenSSH
@@ -928,12 +935,14 @@ pub struct FontConfig {
     /// Font family name
     pub family: String,
     /// Font size in points
+    #[serde(serialize_with = "serialize_shortest_f32")]
     pub size: f32,
     /// OpenType `wght` value used for ordinary terminal text.
     pub weight: u16,
     /// OpenType `wght` value used for SGR bold terminal text.
     pub bold_weight: u16,
     /// Line height multiplier (e.g. 1.2 = 120%)
+    #[serde(serialize_with = "serialize_shortest_f32")]
     pub line_height: f32,
     /// Fallback font families
     pub fallback: Vec<String>,
@@ -1162,6 +1171,7 @@ pub struct BackgroundImageConfig {
     /// PNG or JPEG path. Relative paths are resolved beside `config.toml`.
     pub path: Option<PathBuf>,
     /// Image alpha over the theme background.
+    #[serde(serialize_with = "serialize_shortest_f32")]
     pub opacity: f32,
     /// Viewport mapping policy.
     pub fit: BackgroundImageFit,
@@ -1212,6 +1222,7 @@ pub struct WindowConfig {
     /// Initial height
     pub height: u32,
     /// Window opacity (0.1 - 1.0)
+    #[serde(serialize_with = "serialize_shortest_f32")]
     pub opacity: f32,
     /// Padding around terminal content
     pub padding: u32,
@@ -2043,23 +2054,6 @@ mod tests {
             let invalid: Config = toml::from_str(source).unwrap();
             assert!(invalid.validate().is_err(), "accepted {source:?}");
         }
-    }
-
-    #[test]
-    fn a_configuration_that_does_not_load_is_never_saved_over() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("config.toml");
-        Config::ensure_replaceable(&path).expect("no file yet");
-        std::fs::write(&path, "[window]\nwidth = 1234\n").unwrap();
-        Config::ensure_replaceable(&path).expect("a file that loads");
-        // One typo away from working: the person's settings must survive.
-        std::fs::write(&path, "[window]\nwidth = 1234\n[font\nsize = 13\n").unwrap();
-        let error = Config::ensure_replaceable(&path).unwrap_err().to_string();
-        assert!(error.contains("Reset Configuration"), "{error}");
-        assert!(error.contains("config.toml"), "{error}");
-        // So is one that parses but is refused by validation.
-        std::fs::write(&path, "[window]\nwidth = 0\n").unwrap();
-        assert!(Config::ensure_replaceable(&path).is_err());
     }
 
     #[test]

@@ -3820,6 +3820,7 @@ dependencies = [
  "tempfile",
  "termeric-core",
  "toml",
+ "toml_edit 0.22.27",
  "unicode-segmentation",
  "unicode_names2",
  "wgpu",

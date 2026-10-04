@@ -178,8 +178,9 @@ impl App {
         self.last_config_check = Instant::now();
         let mut changed = false;
 
-        let path = crate::config::Config::config_path();
-        let current_mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        let current_mtime = std::fs::metadata(&self.config_path)
+            .and_then(|m| m.modified())
+            .ok();
 
         if current_mtime != self.last_config_mtime {
             changed = true;
@@ -187,8 +188,8 @@ impl App {
 
             // Only reload if the file exists (avoid racing with editors that
             // briefly delete + rewrite).
-            if path.exists() {
-                match crate::config::Config::load_or_default() {
+            if self.config_path.exists() {
+                match crate::config::Config::load_from(&self.config_path) {
                     Ok(config) => {
                         if let Err(error) = self.apply_config(config) {
                             log::warn!("Config hot-reload rejected: {}", error);

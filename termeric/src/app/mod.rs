@@ -1140,13 +1140,17 @@ pub struct App {
     last_agent_scan: Instant,
     /// Enter keys waiting to submit text typed into agents.
     pending_agent_submits: Vec<agents::PendingAgentSubmit>,
+    /// The configuration file this window loads, saves, and watches.
+    config_path: PathBuf,
     /// Last observed mtime of the config file (for change detection)
     last_config_mtime: Option<std::time::SystemTime>,
     /// Coding agents with configuration applied; rebuilt on every config change.
     agents: crate::agents::AgentCatalog,
-    /// Serialized configuration last known to match the file on disk, so
-    /// Settings can say when live changes have not been saved.
-    saved_config: Option<String>,
+    /// The configuration last known to match the file on disk, as
+    /// `config::save::config_table` gives it: Settings compares it to say
+    /// when live changes have not been saved, and a save writes only what
+    /// differs from it.
+    saved_config: Option<toml::Table>,
     /// Last installed-plugin registry mtime for live enable/update/remove.
     last_plugin_registry_mtime: Option<std::time::SystemTime>,
     /// File backing the active custom/explicit theme, when applicable.
@@ -1428,6 +1432,7 @@ impl App {
         use_system_state: bool,
     ) -> Result<Self> {
         let default_font_size = config.font.size;
+        let config_path = Config::config_path();
         let background_image_path = config.window.background_image.path.clone();
         let last_background_image_stamp = background_image_path.as_deref().and_then(|path| {
             crate::renderer::BackgroundImageStamp::for_path(
@@ -1524,9 +1529,10 @@ impl App {
             saved_config: None,
             agents: crate::agents::AgentCatalog::default(),
             last_config_mtime: use_system_state
-                .then(|| std::fs::metadata(crate::config::Config::config_path()))
+                .then(|| std::fs::metadata(&config_path))
                 .and_then(Result::ok)
                 .and_then(|metadata| metadata.modified().ok()),
+            config_path,
             last_plugin_registry_mtime: use_system_state
                 .then(|| runtime_plugin_paths.registry_mtime())
                 .flatten(),
@@ -3387,7 +3393,7 @@ impl App {
 
     /// Replace the running configuration with the one on disk.
     fn reload_config_from_disk(&mut self) {
-        match crate::config::Config::load_or_default() {
+        match Config::load_from(&self.config_path) {
             Ok(config) => {
                 if let Err(error) = self.apply_config(config) {
                     self.toasts.error(format!("Reload failed: {error}"));
@@ -3404,17 +3410,33 @@ impl App {
         }
     }
 
-    /// Apply the default configuration and save it over the file on disk.
+    /// Replace the configuration file with one that sets nothing, keeping
+    /// the old file beside it, and then use the defaults.
     fn reset_config_to_defaults(&mut self) {
+        let backup =
+            match crate::config::save::reset(&self.config_path, std::time::SystemTime::now()) {
+                Ok(backup) => backup,
+                Err(error) => {
+                    self.toasts.error(format!("Reset failed: {error:#}"));
+                    return;
+                }
+            };
+        self.last_config_mtime = std::fs::metadata(&self.config_path)
+            .and_then(|metadata| metadata.modified())
+            .ok();
         if let Err(error) = self.apply_config(Config::default()) {
-            self.toasts.error(format!("Reset failed: {error}"));
+            self.toasts.error(format!(
+                "The file was reset, but the defaults failed: {error}"
+            ));
             return;
         }
-        match self.save_config_replacing() {
-            Ok(path) => self.toasts.success(format!("Configuration reset: {path}")),
-            Err(error) => self
-                .toasts
-                .error(format!("Reset could not be saved: {error}")),
+        self.mark_config_saved();
+        match backup {
+            Some(backup) => self.toasts.success(format!(
+                "Configuration reset; the old file is {}",
+                backup.display()
+            )),
+            None => self.toasts.success("Configuration reset"),
         }
     }
 
@@ -3751,66 +3773,49 @@ impl App {
         config
     }
 
+    /// The live configuration as `config::save::config_table` gives it.
+    fn persisted_config_table(&self) -> Result<toml::Table> {
+        crate::config::save::config_table(&self.persisted_config())
+    }
+
     /// Record the live configuration as matching the file, after it was
     /// loaded or reloaded from disk.
     fn mark_config_saved(&mut self) {
-        self.saved_config = toml::to_string_pretty(&self.persisted_config()).ok();
+        self.saved_config = match self.persisted_config_table() {
+            Ok(table) => Some(table),
+            Err(error) => {
+                log::error!("Could not record the saved configuration: {error:#}");
+                None
+            }
+        };
     }
 
     /// Whether live settings differ from what was last loaded or saved.
     fn config_has_unsaved_changes(&self) -> bool {
         self.saved_config.as_ref().is_some_and(|saved| {
-            toml::to_string_pretty(&self.persisted_config()).is_ok_and(|live| live != *saved)
+            self.persisted_config_table()
+                .is_ok_and(|live| live != *saved)
         })
     }
 
-    /// Save the live configuration, unless the file on disk does not load.
+    /// Write the live settings that differ from the file's to the file,
+    /// unless it does not load, and return its path.
     fn save_config(&mut self) -> Result<String> {
-        Config::ensure_replaceable(&Config::config_path())?;
-        self.write_config()
-    }
-
-    /// Save the live configuration even over a file that does not load,
-    /// keeping that file beside it first. Only an explicit reset does this.
-    fn save_config_replacing(&mut self) -> Result<String> {
-        let config_path = Config::config_path();
-        if Config::ensure_replaceable(&config_path).is_err() {
-            let seconds = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |elapsed| elapsed.as_secs());
-            let mut backup = config_path.clone().into_os_string();
-            backup.push(format!(".{seconds}.bak"));
-            anyhow::Context::with_context(std::fs::copy(&config_path, &backup), || {
-                format!(
-                    "keep a copy of {} before replacing it",
-                    config_path.display()
-                )
-            })?;
+        let live_config = self.persisted_config();
+        live_config.validate()?;
+        let live = crate::config::save::config_table(&live_config)?;
+        let baseline = self.saved_config.clone().unwrap_or_default();
+        let file = crate::config::save::save(&self.config_path, &baseline, &live_config)?;
+        // When the file now holds exactly the live settings, the poller need
+        // not reload this write. Otherwise another program changed the file
+        // too, and the reload brings in its changes.
+        if file == live {
+            self.last_config_mtime = std::fs::metadata(&self.config_path)
+                .and_then(|metadata| metadata.modified())
+                .ok();
         }
-        self.write_config()
-    }
-
-    fn write_config(&mut self) -> Result<String> {
-        let config_path = Config::config_path();
-
-        // Ensure config directory exists
-        if let Some(parent) = config_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        let config = self.persisted_config();
-        config.validate()?;
-
-        let config_content = toml::to_string_pretty(&config)?;
-
-        std::fs::write(&config_path, &config_content)?;
-        self.saved_config = Some(config_content);
-        // Capture the new mtime so the hot-reload poller doesn't treat
-        // our own write as an external change.
-        self.last_config_mtime = std::fs::metadata(&config_path)
-            .and_then(|m| m.modified())
-            .ok();
-        Ok(config_path.display().to_string())
+        self.saved_config = Some(live);
+        Ok(self.config_path.display().to_string())
     }
 }
 
