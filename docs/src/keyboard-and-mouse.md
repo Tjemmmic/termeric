@@ -174,7 +174,7 @@ action = { type = "run_command", command = "make test" }
 | `run_command` | Clears the current prompt line, types `command`, and presses Enter. |
 | `plugin_command` | Runs a plugin's command by its `command_id`; see [Plugins](plugins.md). |
 
-The modifiers must match exactly, and keys are matched the same way as shortcuts: `Shift` is part of the character on digit and symbol keys, and `+` and `=` are the same key. If a combination is also a built-in shortcut, the built-in shortcut wins.
+The modifiers must match exactly, and keys are matched the same way as shortcuts: `Shift` is part of the character on digit and symbol keys, and `+` and `=` are the same key. If a combination is also a built-in shortcut, the built-in shortcut wins, except Copy and Clear Selection when there is nothing selected: then the key runs your keybinding instead, or goes to the program if there isn't one.
 
 ### Saved commands
 
