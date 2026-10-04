@@ -61,7 +61,6 @@ impl App {
             window_attrs = window_attrs.with_inner_size(PhysicalSize::new(width, height));
         }
 
-        #[cfg(target_os = "linux")]
         {
             use winit::platform::startup_notify::{
                 EventLoopExtStartupNotify, WindowAttributesExtStartupNotify,

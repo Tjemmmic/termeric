@@ -14,26 +14,20 @@ pub(crate) struct SystemAccessibilityPreferences {
 }
 
 pub(super) fn start_monitor(proxy: EventLoopProxy<AppEvent>) {
-    #[cfg(target_os = "linux")]
     if let Err(error) = std::thread::Builder::new()
         .name("termeric-accessibility".into())
         .spawn(move || monitor_linux(proxy))
     {
         log::warn!("Could not start the desktop accessibility monitor: {error}");
     }
-
-    #[cfg(not(target_os = "linux"))]
-    let _ = proxy;
 }
 
-#[cfg(target_os = "linux")]
 fn monitor_linux(proxy: EventLoopProxy<AppEvent>) {
     if let Err(error) = monitor_linux_inner(&proxy) {
         let _ = proxy.send_event(AppEvent::SystemAccessibilityUnavailable(error));
     }
 }
 
-#[cfg(target_os = "linux")]
 fn monitor_linux_inner(proxy: &EventLoopProxy<AppEvent>) -> Result<(), String> {
     use zbus::blocking::{Connection, Proxy};
 
@@ -88,7 +82,6 @@ fn monitor_linux_inner(proxy: &EventLoopProxy<AppEvent>) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
 fn read_preference(portal: &zbus::blocking::Proxy<'_>, namespace: &str, key: &str) -> Option<bool> {
     let value: zbus::zvariant::OwnedValue = match portal.call("ReadOne", &(namespace, key)) {
         Ok(value) => value,
@@ -106,12 +99,10 @@ fn read_preference(portal: &zbus::blocking::Proxy<'_>, namespace: &str, key: &st
     }
 }
 
-#[cfg(target_os = "linux")]
 const fn portal_preference(value: u32) -> bool {
     value == 1
 }
 
-#[cfg(target_os = "linux")]
 fn apply_portal_setting(
     preferences: &mut SystemAccessibilityPreferences,
     key: &str,
