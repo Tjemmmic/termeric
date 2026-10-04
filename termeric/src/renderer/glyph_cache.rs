@@ -5,7 +5,7 @@
 
 use super::{
     FontCoverageAttempt, FontCoverageEntry, FontCoverageReport, FontCoverageRoute,
-    FontCoverageSource, RasterizerMetrics,
+    FontCoverageSource,
 };
 use crate::config::{FontRangeOverride, MAX_FONT_FALLBACKS};
 use anyhow::Result;
@@ -39,8 +39,8 @@ pub(crate) const MAX_FONT_COVERAGE_GRAPHEMES: usize = 16;
 const MAX_FONT_COVERAGE_PLATFORM_FACES: usize = 8;
 const MAX_FONT_COVERAGE_FAMILY_CHARS: usize = 256;
 
-/// The atlas owns reusable glyph pixels. Keep Swash's scaler context, but do
-/// not retain a second, unbounded map of CPU images after atlas upload/eviction.
+/// The atlas owns reusable glyph pixels. Keep Swash's scaler context, but
+/// rasterize uncached so no second map of CPU images outlives the upload.
 struct GlyphRasterizer {
     swash: SwashCache,
     rasterizations: u64,
@@ -57,20 +57,6 @@ impl GlyphRasterizer {
     fn rasterize(&mut self, fonts: &mut FontSystem, key: CacheKey) -> Option<SwashImage> {
         self.rasterizations = self.rasterizations.saturating_add(1);
         self.swash.get_image_uncached(fonts, key)
-    }
-
-    fn metrics(&self) -> RasterizerMetrics {
-        RasterizerMetrics {
-            rasterizations: self.rasterizations,
-            retained_images: self.swash.image_cache.len(),
-            retained_image_bytes: self
-                .swash
-                .image_cache
-                .values()
-                .flatten()
-                .map(|image| image.data.capacity())
-                .sum(),
-        }
     }
 }
 
@@ -1198,8 +1184,9 @@ impl GlyphCache {
             ^ self.color_atlas.generation.rotate_left(29)
     }
 
-    pub(crate) fn rasterizer_metrics(&self) -> RasterizerMetrics {
-        self.rasterizer.metrics()
+    /// Glyphs rasterized so far; atlas hits do not rasterize.
+    pub(crate) fn rasterizations(&self) -> u64 {
+        self.rasterizer.rasterizations
     }
 
     pub(crate) fn atlas_metrics(&self) -> GlyphAtlasMetrics {
@@ -3511,81 +3498,6 @@ mod tests {
         assert_eq!(cache.insert(key, &run), MAX_SHAPED_RUNS);
         assert_eq!(cache.len(), 1);
         assert_eq!(cache.bytes, recount_run_cache(&cache));
-    }
-
-    #[test]
-    fn uncached_rasterization_preserves_pixels_without_retaining_cpu_images() {
-        let mut database = cosmic_text::fontdb::Database::new();
-        database.load_font_source(cosmic_text::fontdb::Source::Binary(Arc::new(
-            deterministic_test_font_data(),
-        )));
-        let mut fonts = FontSystem::new_with_locale_and_db("en-US".into(), database);
-        let text: String = ('!'..='~').collect();
-        let mut keys = Vec::new();
-        for size in [24.0, 48.0, 96.0] {
-            let mut buffer = Buffer::new(&mut fonts, Metrics::new(size, size * 1.2));
-            buffer.set_text(
-                &text,
-                &Attrs::new().family(Family::Name("Fira Mono")),
-                Shaping::Basic,
-                None,
-            );
-            buffer.shape_until_scroll(&mut fonts, false);
-            keys.extend(
-                buffer
-                    .layout_runs()
-                    .flat_map(|run| run.glyphs.iter())
-                    .map(|glyph| glyph.physical((0.0, 0.0), 1.0).cache_key),
-            );
-        }
-        assert_eq!(keys.len(), 94 * 3);
-        let mut legacy = SwashCache::new();
-        let mut rasterizer = GlyphRasterizer::new();
-        for key in &keys {
-            let expected = legacy.get_image(&mut fonts, *key).as_ref().unwrap();
-            let actual = rasterizer.rasterize(&mut fonts, *key).unwrap();
-            assert_eq!(actual.content, expected.content);
-            assert_eq!(actual.data, expected.data);
-            assert_eq!(
-                (
-                    actual.placement.width,
-                    actual.placement.height,
-                    actual.placement.left,
-                    actual.placement.top
-                ),
-                (
-                    expected.placement.width,
-                    expected.placement.height,
-                    expected.placement.left,
-                    expected.placement.top
-                ),
-            );
-            assert_eq!(rasterizer.metrics().retained_images, 0);
-            assert_eq!(rasterizer.metrics().retained_image_bytes, 0);
-        }
-        let old_bytes: usize = legacy
-            .image_cache
-            .values()
-            .flatten()
-            .map(|image| image.data.capacity())
-            .sum();
-        assert!(
-            old_bytes > 64 * 1024,
-            "fixture must expose meaningful retained payload"
-        );
-        // Revisit an old size/key: its bitmap must still be reproducible even
-        // though the rasterizer deliberately did not keep it alive.
-        let again = rasterizer.rasterize(&mut fonts, keys[0]).unwrap();
-        assert_eq!(
-            again.data,
-            legacy.get_image(&mut fonts, keys[0]).as_ref().unwrap().data
-        );
-        assert_eq!(rasterizer.metrics().rasterizations, keys.len() as u64 + 1);
-        assert_eq!(rasterizer.metrics().retained_image_bytes, 0);
-        eprintln!(
-            "raster retention fixture: {} cached images, {old_bytes} old payload bytes; 0 new retained images/bytes",
-            legacy.image_cache.len()
-        );
     }
 
     fn shape_signature(

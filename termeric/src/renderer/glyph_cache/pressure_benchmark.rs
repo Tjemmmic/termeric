@@ -66,7 +66,7 @@ pub(crate) fn measure(device: &Device, queue: &Queue) -> Result<PressureBenchmar
     queue.submit([]);
     device.poll(Maintain::Wait);
     let atlas_before = cache.atlas_metrics();
-    let raster_before = cache.rasterizer_metrics();
+    let raster_before = cache.rasterizations();
     let mut result = PressureBenchmark {
         font_sha256,
         ..PressureBenchmark::default()
@@ -85,7 +85,7 @@ pub(crate) fn measure(device: &Device, queue: &Queue) -> Result<PressureBenchmar
             assert_same_runs(&expected, &warmup);
             drop(warmup);
             let before = cache.shaping_cache_metrics();
-            let raster = cache.rasterizer_metrics();
+            let raster = cache.rasterizations();
             let started = Instant::now();
             let actual = shape_pass(&mut cache, queue, &inputs);
             let elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0;
@@ -96,7 +96,7 @@ pub(crate) fn measure(device: &Device, queue: &Queue) -> Result<PressureBenchmar
             assert!(after.retained_bytes <= budget);
             assert_eq!(after.deferred_entries, 0);
             assert_eq!(after.skipped_runs, before.skipped_runs);
-            let rasterizations = cache.rasterizer_metrics().rasterizations - raster.rasterizations;
+            let rasterizations = cache.rasterizations() - raster;
             assert_eq!(
                 rasterizations, 0,
                 "shaping churn must not rerasterize atlas hits"
@@ -128,7 +128,7 @@ pub(crate) fn measure(device: &Device, queue: &Queue) -> Result<PressureBenchmar
         }
     }
     assert_eq!(cache.atlas_metrics().evictions, atlas_before.evictions);
-    assert_eq!(cache.rasterizer_metrics(), raster_before);
+    assert_eq!(cache.rasterizations(), raster_before);
     Ok(result)
 }
 
