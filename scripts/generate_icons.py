@@ -8,6 +8,7 @@ found by desktops. Re-run this after changing `assets/icons/termeric.png`.
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 from PIL import Image
@@ -21,6 +22,7 @@ SIZES = (16, 24, 32, 48, 64, 128, 256, 512)
 
 
 def main() -> int:
+    argparse.ArgumentParser(description=__doc__.splitlines()[0]).parse_args()
     with Image.open(MASTER) as source:
         master = source.convert("RGBA")
     for size in SIZES:
