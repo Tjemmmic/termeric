@@ -67,7 +67,14 @@ fn harness(root: &Path) -> RemoteHarness {
     let ssh = fake_bin.join("ssh");
     fs::write(
         &ssh,
-        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$TERMERIC_SSH_LOG\"\nexec \"$TERMERIC_TEST_BINARY\" domain proxy-stdio\n",
+        // Log every argument, then run what would run on the remote
+        // computer: everything after `-- DESTINATION termeric`.
+        "#!/bin/sh\n\
+         printf '%s\\n' \"$@\" > \"$TERMERIC_SSH_LOG\"\n\
+         while [ \"$#\" -gt 0 ] && [ \"$1\" != -- ]; do shift; done\n\
+         [ \"$#\" -ge 3 ] && [ \"$3\" = termeric ] || exit 97\n\
+         shift 3\n\
+         exec \"$TERMERIC_TEST_BINARY\" \"$@\"\n",
     )
     .unwrap();
     fs::set_permissions(&ssh, fs::Permissions::from_mode(0o700)).unwrap();
@@ -225,10 +232,61 @@ fn fake_ssh_controls_a_remote_daemon_without_network_or_token_export() {
         "termeric",
         "domain",
         "proxy-stdio",
+        "--no-start",
     ] {
-        assert!(ssh_arguments.lines().any(|argument| argument == required));
+        assert!(
+            ssh_arguments.lines().any(|argument| argument == required),
+            "ssh was not passed {required:?}: {ssh_arguments:?}"
+        );
     }
     assert!(!ssh_arguments.contains("token"));
+
+    // With the daemon gone, the bridge refuses rather than starting one.
+    let no_daemon = harness.command(&["domain", "--host", "test-host", "stop-server"]);
+    assert!(!no_daemon.status.success());
+    assert!(
+        String::from_utf8_lossy(&no_daemon.stderr).contains("no domain server is running"),
+        "{}",
+        String::from_utf8_lossy(&no_daemon.stderr)
+    );
+    let list = harness.successful(&["domain", "--host", "test-host", "list", "--json"]);
+    assert!(
+        !fs::read_to_string(&harness.ssh_log)
+            .unwrap()
+            .lines()
+            .any(|argument| argument == "--no-start"),
+        "only stop-server asks the bridge not to start a daemon"
+    );
+    let listed: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    assert_eq!(listed["domains"], serde_json::json!([]));
+}
+
+#[test]
+fn local_stop_server_without_a_daemon_starts_nothing() {
+    let temporary = tempfile::tempdir().unwrap();
+    let runtime = temporary.path().join("runtime");
+    fs::create_dir(&runtime).unwrap();
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_termeric"))
+        .args(["domain", "stop-server"])
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("no domain server is running"), "{stderr}");
+    let mut pending = vec![runtime];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(&directory).unwrap() {
+            let path = entry.unwrap().path();
+            assert!(
+                path.is_dir(),
+                "stop-server without a daemon created {}",
+                path.display()
+            );
+            pending.push(path);
+        }
+    }
 }
 
 #[test]
