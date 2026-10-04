@@ -3781,37 +3781,130 @@ mod tests {
         assert_eq!(normalize_relay_pixel_extent(0, 0, 0, 0, 8), 1);
     }
 
-    #[test]
-    fn local_server_survives_disconnect_and_supports_the_complete_control_surface() {
-        let temporary = tempfile::tempdir().unwrap();
-        let reported_cwd = temporary.path().join("reported-cwd");
-        std::fs::create_dir(&reported_cwd).unwrap();
-        let paths = RuntimePaths::from_directory(temporary.path().join("runtime")).unwrap();
-        // Some test sandboxes deny AF_UNIX entirely. Keep the integration
-        // fixture active everywhere else while retaining protocol/model unit
-        // coverage in those restricted environments.
-        let probe = paths.directory.join("socket-probe");
-        match UnixListener::bind(&probe) {
-            Ok(listener) => {
-                drop(listener);
-                fs::remove_file(&probe).unwrap();
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-                eprintln!("skip domain socket integration: sandbox denies AF_UNIX");
-                return;
-            }
-            Err(error) => panic!("could not probe Unix-domain socket support: {error}"),
-        }
-        let server_paths = paths.clone();
-        let server = thread::spawn(move || {
-            run_foreground(server_paths, false, XtermKeyboardType::Normal).unwrap()
-        });
-        assert!(crate::test_support::poll_until(
-            Duration::from_secs(2),
-            || paths.socket.exists()
-        ));
-        let client = crate::domain::DomainClient::for_paths(paths.clone());
+    /// A real daemon on a private runtime directory, with one domain whose
+    /// shell reports `reported_cwd` through OSC 7 and then prints
+    /// `root-ready`.
+    struct DaemonFixture {
+        temporary: tempfile::TempDir,
+        paths: RuntimePaths,
+        reported_cwd: std::path::PathBuf,
+        client: crate::domain::DomainClient,
+        domain_id: String,
+        server: Option<thread::JoinHandle<()>>,
+    }
 
+    impl DaemonFixture {
+        /// `None` when the sandbox denies Unix-domain sockets entirely, so
+        /// the protocol and model unit tests still run there.
+        fn start() -> Option<Self> {
+            let temporary = tempfile::tempdir().unwrap();
+            let reported_cwd = temporary.path().join("reported-cwd");
+            std::fs::create_dir(&reported_cwd).unwrap();
+            let paths = RuntimePaths::from_directory(temporary.path().join("runtime")).unwrap();
+            let probe = paths.directory.join("socket-probe");
+            match UnixListener::bind(&probe) {
+                Ok(listener) => {
+                    drop(listener);
+                    fs::remove_file(&probe).unwrap();
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                    eprintln!("skip domain socket integration: sandbox denies AF_UNIX");
+                    return None;
+                }
+                Err(error) => panic!("could not probe Unix-domain socket support: {error}"),
+            }
+            let server_paths = paths.clone();
+            let server = thread::spawn(move || {
+                run_foreground(server_paths, false, XtermKeyboardType::Normal).unwrap()
+            });
+            assert!(crate::test_support::poll_until(
+                Duration::from_secs(2),
+                || paths.socket.exists()
+            ));
+            let client = crate::domain::DomainClient::for_paths(paths.clone());
+            let response = client
+                .request(Request::CreateDomain {
+                    name: "integration".into(),
+                    spawn: SpawnSpec {
+                        program: Some("/bin/sh".into()),
+                        args: vec![
+                            "-c".into(),
+                            format!(
+                                "printf '\\033]7;file://{}\\007root-ready\\n'; sleep 5",
+                                reported_cwd.display()
+                            ),
+                        ],
+                        ..SpawnSpec::default()
+                    },
+                })
+                .unwrap();
+            let Response::Domain { domain } = response else {
+                panic!("expected created domain");
+            };
+            Some(Self {
+                temporary,
+                paths,
+                reported_cwd,
+                client,
+                domain_id: domain.id,
+                server: Some(server),
+            })
+        }
+
+        /// Wait until the domain's shell has reported its directory.
+        fn wait_for_root(&self) {
+            assert!(crate::test_support::poll_until(
+                Duration::from_secs(2),
+                || {
+                    matches!(
+                        self.client.request(Request::GetText {
+                            domain: self.domain_id.clone(),
+                            pane: 0,
+                            max_bytes: 4096,
+                        }),
+                        Ok(Response::Text { text, .. }) if text.contains("root-ready")
+                    )
+                }
+            ));
+        }
+
+        /// End the domain, then stop the daemon.
+        fn kill_and_stop(self) {
+            self.client
+                .request(Request::KillDomain {
+                    domain: self.domain_id.clone(),
+                })
+                .unwrap();
+            self.stop();
+        }
+
+        /// Stop the daemon, which must succeed once no domain remains.
+        fn stop(mut self) {
+            self.client.request(Request::Shutdown).unwrap();
+            self.server.take().unwrap().join().unwrap();
+        }
+    }
+
+    impl Drop for DaemonFixture {
+        fn drop(&mut self) {
+            // A failed test still ends its shells and its daemon.
+            if let Some(server) = self.server.take() {
+                let _ = self.client.request(Request::KillDomain {
+                    domain: self.domain_id.clone(),
+                });
+                if self.client.request(Request::Shutdown).is_ok() {
+                    let _ = server.join();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_daemon_refuses_another_protocol_version() {
+        let Some(fixture) = DaemonFixture::start() else {
+            return;
+        };
+        let paths = &fixture.paths;
         // Version negotiation fails closed before a request is accepted.
         let mut incompatible = UnixStream::connect(&paths.socket).unwrap();
         protocol::write_frame(
@@ -3826,75 +3919,20 @@ mod tests {
             protocol::read_frame::<ServerFrame>(&mut incompatible).unwrap(),
             ServerFrame::Error { message } if message.contains("incompatible")
         ));
+        fixture.kill_and_stop();
+    }
 
-        let response = client
-            .request(Request::CreateDomain {
-                name: "integration".into(),
-                spawn: SpawnSpec {
-                    program: Some("/bin/sh".into()),
-                    args: vec![
-                        "-c".into(),
-                        format!(
-                            "printf '\\033]7;file://{}\\007root-ready\\n'; sleep 5",
-                            reported_cwd.display()
-                        ),
-                    ],
-                    ..SpawnSpec::default()
-                },
-            })
-            .unwrap();
-        let Response::Domain { domain } = response else {
-            panic!("expected created domain");
+    #[test]
+    fn uploads_land_in_the_pane_directory_resume_and_never_overwrite() {
+        let Some(fixture) = DaemonFixture::start() else {
+            return;
         };
-        let domain_id = domain.id;
-
-        // A topology subscription receives an atomic initial snapshot, then
-        // strictly increasing whole-domain revisions on structural changes.
-        let mut topology = UnixStream::connect(&paths.socket).unwrap();
-        protocol::write_frame(
-            &mut topology,
-            &ClientFrame::Hello {
-                version: protocol::PROTOCOL_VERSION,
-                token: paths.read_token().unwrap(),
-            },
-        )
-        .unwrap();
-        assert!(matches!(
-            protocol::read_frame::<ServerFrame>(&mut topology).unwrap(),
-            ServerFrame::Hello { .. }
-        ));
-        protocol::write_frame(
-            &mut topology,
-            &ClientFrame::Request {
-                request: Request::SubscribeTopology {
-                    domain: domain_id.clone(),
-                },
-            },
-        )
-        .unwrap();
-        assert!(matches!(
-            protocol::read_frame::<ServerFrame>(&mut topology).unwrap(),
-            ServerFrame::Response {
-                response: Response::TopologySubscribed {
-                    revision: 1,
-                    domain
-                }
-            } if domain.tabs.len() == 1
-        ));
-        assert!(crate::test_support::poll_until(
-            Duration::from_secs(2),
-            || {
-                matches!(
-                    client.request(Request::GetText {
-                        domain: domain_id.clone(),
-                        pane: 0,
-                        max_bytes: 4096,
-                    }),
-                    Ok(Response::Text { text, .. }) if text.contains("root-ready")
-                )
-            }
-        ));
-
+        let temporary = &fixture.temporary;
+        let paths = &fixture.paths;
+        let reported_cwd = &fixture.reported_cwd;
+        let client = &fixture.client;
+        let domain_id = &fixture.domain_id;
+        fixture.wait_for_root();
         let upload_source = temporary.path().join("local-upload-source.bin");
         let upload_bytes = (0..150_000)
             .map(|index| (index % 251) as u8)
@@ -3990,7 +4028,7 @@ mod tests {
             )
             .unwrap_err();
         assert!(format!("{directory_overwrite:#}").contains("never overwrite"));
-        assert!(fs::read_dir(&reported_cwd).unwrap().all(|entry| {
+        assert!(fs::read_dir(reported_cwd).unwrap().all(|entry| {
             !entry
                 .unwrap()
                 .file_name()
@@ -4054,7 +4092,7 @@ mod tests {
         assert!(crate::test_support::poll_until(
             Duration::from_secs(2),
             || {
-                fs::read_dir(&reported_cwd).unwrap().all(|entry| {
+                fs::read_dir(reported_cwd).unwrap().all(|entry| {
                     !entry
                         .unwrap()
                         .file_name()
@@ -4114,7 +4152,7 @@ mod tests {
             Duration::from_secs(2),
             || {
                 !reported_cwd.join("partial.bin").exists()
-                    && fs::read_dir(&reported_cwd).unwrap().any(|entry| {
+                    && fs::read_dir(reported_cwd).unwrap().any(|entry| {
                         entry
                             .unwrap()
                             .file_name()
@@ -4177,7 +4215,7 @@ mod tests {
             fs::read(reported_cwd.join("partial.bin")).unwrap(),
             b"abcdefghij"
         );
-        assert!(fs::read_dir(&reported_cwd).unwrap().all(|entry| {
+        assert!(fs::read_dir(reported_cwd).unwrap().all(|entry| {
             !entry
                 .unwrap()
                 .file_name()
@@ -4207,7 +4245,64 @@ mod tests {
             )
             .unwrap_err();
         assert!(format!("{mismatch:#}").contains("different source or destination"));
+        fixture.kill_and_stop();
+    }
 
+    #[test]
+    fn local_server_survives_disconnect_and_supports_the_complete_control_surface() {
+        let Some(fixture) = DaemonFixture::start() else {
+            return;
+        };
+        let paths = &fixture.paths;
+        let reported_cwd = &fixture.reported_cwd;
+        let client = &fixture.client;
+        let domain_id = &fixture.domain_id;
+        // A topology subscription receives an atomic initial snapshot, then
+        // strictly increasing whole-domain revisions on structural changes.
+        let mut topology = UnixStream::connect(&paths.socket).unwrap();
+        protocol::write_frame(
+            &mut topology,
+            &ClientFrame::Hello {
+                version: protocol::PROTOCOL_VERSION,
+                token: paths.read_token().unwrap(),
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            protocol::read_frame::<ServerFrame>(&mut topology).unwrap(),
+            ServerFrame::Hello { .. }
+        ));
+        protocol::write_frame(
+            &mut topology,
+            &ClientFrame::Request {
+                request: Request::SubscribeTopology {
+                    domain: domain_id.clone(),
+                },
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            protocol::read_frame::<ServerFrame>(&mut topology).unwrap(),
+            ServerFrame::Response {
+                response: Response::TopologySubscribed {
+                    revision: 1,
+                    domain
+                }
+            } if domain.tabs.len() == 1
+        ));
+        assert!(crate::test_support::poll_until(
+            Duration::from_secs(2),
+            || {
+                matches!(
+                    client.request(Request::GetText {
+                        domain: domain_id.clone(),
+                        pane: 0,
+                        max_bytes: 4096,
+                    }),
+                    Ok(Response::Text { text, .. }) if text.contains("root-ready")
+                )
+            }
+        ));
         let Response::Domain { domain } = client
             .request(Request::SplitPane {
                 domain: domain_id.clone(),
@@ -4934,10 +5029,9 @@ mod tests {
         assert!(matches!(
             protocol::read_frame::<ServerFrame>(&mut topology).unwrap(),
             ServerFrame::DomainClosed { domain, message }
-                if domain == domain_id && message.contains("terminated")
+                if &domain == domain_id && message.contains("terminated")
         ));
-        client.request(Request::Shutdown).unwrap();
-        server.join().unwrap();
+        fixture.stop();
     }
 
     #[test]
