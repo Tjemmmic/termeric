@@ -867,9 +867,12 @@ impl App {
                         let dd_hover = self
                             .settings_panel
                             .dropdown_layout(&layout, &entries)
-                            .filter(|(rect, _)| rect.bounds.contains(px, py))
-                            .and_then(|(rect, option_count)| {
-                                rect.option_at(py).filter(|&i| i < option_count)
+                            .filter(|dropdown| dropdown.rect.bounds.contains(px, py))
+                            .and_then(|dropdown| {
+                                dropdown
+                                    .rect
+                                    .option_at(py)
+                                    .filter(|&i| i < dropdown.options.len())
                             });
                         self.settings_panel.set_dropdown_hover(dd_hover);
                     } else {

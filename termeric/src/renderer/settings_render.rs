@@ -423,46 +423,11 @@ impl Renderer {
             info.entries.len(),
         );
 
-        // Find the selected entry's absolute index.
-        let Some(abs_idx) = info
-            .entries
-            .iter()
-            .enumerate()
-            .filter(|(_, e)| !e.is_header)
-            .nth(info.selected)
-            .map(|(i, _)| i)
-        else {
+        // The same dropdown the panel hit-tests clicks and hover against.
+        let Some(dropdown) = info.dropdown_layout(&layout) else {
             return;
         };
-        let entry = &info.entries[abs_idx];
-
-        let (options_text, option_count): (Vec<String>, usize) = match &entry.kind {
-            crate::ui::settings::SettingKind::Dropdown { options, .. } => {
-                (options.clone(), options.len())
-            }
-            crate::ui::settings::SettingKind::SteppedList { values, .. } => {
-                (values.iter().map(|v| v.to_string()).collect(), values.len())
-            }
-            _ => return,
-        };
-        if option_count == 0 {
-            return;
-        }
-
-        let max_option_chars = options_text
-            .iter()
-            .map(|s| s.chars().count())
-            .max()
-            .unwrap_or(10);
-        let Some(rect) = layout.dropdown_rect(
-            abs_idx,
-            info.scroll_offset,
-            option_count,
-            max_option_chars,
-            info.dropdown_highlight,
-        ) else {
-            return;
-        };
+        let rect = dropdown.rect;
 
         let scale = self.scale_factor;
         let px = |logical: f32| (logical * scale).round().max(1.0);
@@ -471,7 +436,8 @@ impl Renderer {
 
         // ── Options in the UI face ──
         let size = self.ui_label_px();
-        for (visible_index, (index, option)) in options_text
+        for (visible_index, (index, option)) in dropdown
+            .options
             .iter()
             .enumerate()
             .skip(rect.first_option)

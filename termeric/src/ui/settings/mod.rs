@@ -337,6 +337,37 @@ pub struct DropdownRect {
     pub first_option: usize,
 }
 
+/// The selected row's open dropdown or stepped list: where it is drawn and
+/// the labels it offers. Drawing, hit testing, hover, and accessibility all
+/// resolve it through [`open_dropdown`], so they agree.
+#[derive(Debug, Clone)]
+pub struct OpenDropdown {
+    pub rect: DropdownRect,
+    pub options: Vec<String>,
+}
+
+/// The open dropdown of the `selected`th selectable entry, if that entry
+/// offers options and its row is on screen.
+fn open_dropdown(
+    layout: &SettingsModalLayout,
+    entries: &[SettingEntry],
+    selected: usize,
+    scroll_offset: usize,
+    highlighted_option: usize,
+) -> Option<OpenDropdown> {
+    let entry_abs_idx = SettingsPanel::nth_selectable_abs_index(entries, selected)?;
+    let options = entries.get(entry_abs_idx)?.kind.option_labels()?;
+    let max_option_chars = options.iter().map(|option| option.chars().count()).max()?;
+    let rect = layout.dropdown_rect(
+        entry_abs_idx,
+        scroll_offset,
+        options.len(),
+        max_option_chars,
+        highlighted_option,
+    )?;
+    Some(OpenDropdown { rect, options })
+}
+
 impl DropdownRect {
     /// Which option index does a y-coordinate fall into, if any.
     pub fn option_at(&self, y: f32) -> Option<usize> {
@@ -505,6 +536,17 @@ pub enum SettingKind {
     Action { action: SettingsAction },
     /// Read-only display value
     ReadOnly,
+}
+
+impl SettingKind {
+    /// The labels a dropdown or stepped list offers, in order.
+    pub fn option_labels(&self) -> Option<Vec<String>> {
+        match self {
+            Self::Dropdown { options, .. } => Some(options.clone()),
+            Self::SteppedList { values, .. } => Some(values.iter().map(f64::to_string).collect()),
+            _ => None,
+        }
+    }
 }
 
 /// How a picked dropdown option becomes an action.
@@ -2259,11 +2301,11 @@ impl SettingsPanel {
 
         // If a dropdown is open, resolve clicks against it first.
         if self.dropdown_open {
-            if let Some((rect, option_count)) = self.dropdown_layout(&layout, &entries) {
-                if rect.bounds.contains(x, y) {
-                    if let Some(opt_idx) = rect.option_at(y) {
+            if let Some(dropdown) = self.dropdown_layout(&layout, &entries) {
+                if dropdown.rect.bounds.contains(x, y) {
+                    if let Some(opt_idx) = dropdown.rect.option_at(y) {
                         self.dropdown_open = false;
-                        if opt_idx < option_count {
+                        if opt_idx < dropdown.options.len() {
                             if let Some(entry) = Self::nth_selectable(&entries, self.selected) {
                                 return Self::option_action(&entry.kind, opt_idx);
                             }
@@ -2334,41 +2376,19 @@ impl SettingsPanel {
         }
     }
 
-    /// Resolve the current dropdown's geometry plus its option count.
+    /// The selected row's dropdown as it would be drawn over `entries`.
     pub fn dropdown_layout(
         &self,
         layout: &SettingsModalLayout,
         entries: &[SettingEntry],
-    ) -> Option<(DropdownRect, usize)> {
-        let abs_idx = Self::nth_selectable_abs_index(entries, self.selected)?;
-        let entry = entries.get(abs_idx)?;
-        let (option_count, max_len) = match &entry.kind {
-            SettingKind::Dropdown { options, .. } => (
-                options.len(),
-                options
-                    .iter()
-                    .map(|s| s.chars().count())
-                    .max()
-                    .unwrap_or(10),
-            ),
-            SettingKind::SteppedList { values, .. } => (
-                values.len(),
-                values
-                    .iter()
-                    .map(|v| v.to_string().chars().count())
-                    .max()
-                    .unwrap_or(10),
-            ),
-            _ => return None,
-        };
-        let rect = layout.dropdown_rect(
-            abs_idx,
+    ) -> Option<OpenDropdown> {
+        open_dropdown(
+            layout,
+            entries,
+            self.selected,
             self.scroll_offset,
-            option_count,
-            max_len,
             self.dropdown_highlight,
-        )?;
-        Some((rect, option_count))
+        )
     }
 
     /// Scroll up by n rows
@@ -2459,6 +2479,20 @@ pub struct SettingsPanelInfo {
     /// Whether the live configuration differs from the saved file. The
     /// application fills this in; the panel cannot see the file.
     pub unsaved: bool,
+}
+
+impl SettingsPanelInfo {
+    /// The open dropdown the renderer draws; the panel's
+    /// [`SettingsPanel::dropdown_layout`] resolves the same one for input.
+    pub fn dropdown_layout(&self, layout: &SettingsModalLayout) -> Option<OpenDropdown> {
+        open_dropdown(
+            layout,
+            &self.entries,
+            self.selected,
+            self.scroll_offset,
+            self.dropdown_highlight,
+        )
+    }
 }
 
 impl SettingsPanel {
@@ -3211,6 +3245,34 @@ mod tests {
             step(&config, SettingsPage::Font, "Line Height", 1),
             SettingsAction::SetLineHeight(value) if value == 1.15
         ));
+    }
+
+    #[test]
+    fn drawn_dropdown_is_the_one_input_resolves() {
+        let mut panel = SettingsPanel::new();
+        panel.open();
+        panel.select_page(SettingsPage::Terminal);
+        let mut config = Config::default();
+        config.scrollback.lines = 300_000;
+        let registry = default_registry();
+        assert!(panel.accessibility_set_dropdown_expanded(
+            SettingsSection::Scrollback,
+            "Lines",
+            true,
+            &config,
+            &registry,
+        ));
+        let info = panel.build_info(&config, &registry);
+        let layout =
+            SettingsModalLayout::calculate(1_000.0, 800.0, 10.0, 20.0, 1.0, info.entries.len());
+        let drawn = info.dropdown_layout(&layout).expect("open dropdown");
+        let resolved = panel
+            .dropdown_layout(&layout, &info.entries)
+            .expect("open dropdown");
+        assert_eq!(drawn.rect.bounds, resolved.rect.bounds);
+        assert_eq!(drawn.rect.first_option, resolved.rect.first_option);
+        assert_eq!(drawn.options, resolved.options);
+        assert!(drawn.options.iter().any(|option| option == "300000"));
     }
 
     #[test]

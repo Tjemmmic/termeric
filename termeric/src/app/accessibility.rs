@@ -4799,8 +4799,10 @@ impl App {
         }
 
         if let Some((entry, options)) = open_dropdown {
-            if let Some((dropdown_rect, _)) =
-                self.settings_panel.dropdown_layout(&layout, &info.entries)
+            if let Some(dropdown_rect) = self
+                .settings_panel
+                .dropdown_layout(&layout, &info.entries)
+                .map(|dropdown| dropdown.rect)
             {
                 let mut option_nodes = Vec::new();
                 for (visible_index, (index, value)) in options
