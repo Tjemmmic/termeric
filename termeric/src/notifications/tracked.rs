@@ -1754,6 +1754,17 @@ mod tests {
                 expire_timeout: -1,
             }
         );
+        for (urgency, level) in [
+            (NotificationUrgency::Low, 0),
+            (NotificationUrgency::Normal, 1),
+            (NotificationUrgency::Critical, 2),
+        ] {
+            let request = NotificationRequest {
+                urgency: Some(urgency),
+                ..NotificationRequest::default()
+            };
+            assert_eq!(freedesktop_notification(&request).urgency, Some(level));
+        }
     }
 
     #[test]
