@@ -1745,15 +1745,6 @@ impl PaneManager {
     }
 }
 
-/// Render information for a pane
-#[derive(Debug, Clone)]
-pub struct PaneRenderInfo {
-    /// The pane's layout rectangle
-    pub rect: Bounds,
-    /// Whether this pane is focused
-    pub is_focused: bool,
-}
-
 /// A divider between panes
 #[derive(Debug, Clone, Copy)]
 pub struct Divider {

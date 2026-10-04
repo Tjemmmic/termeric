@@ -2737,67 +2737,45 @@ impl App {
 
         let mut semantic_focus = ROOT;
         if let Some(tab) = self.tabs.as_ref().and_then(TabManager::active_tab) {
-            if let Some(panes) = tab.split_panes() {
-                let focused = panes.focused_id();
-                let mut ordered: Vec<_> = panes.iter_with_layout().collect();
-                ordered.sort_by_key(|(pane, _)| pane.id.0);
-                for (pane, pane_rect) in ordered {
-                    let id = pane_node(pane.id);
-                    root_children.push(id);
-                    if pane.id == focused {
-                        semantic_focus = id;
-                    }
-                    append_terminal_nodes(
-                        &mut nodes,
-                        id,
-                        pane.id,
-                        &pane.terminal,
-                        pane.id == focused,
-                        (broadcast_tab == Some(tab.id) && broadcast_panes.contains(&pane.id))
-                            .then_some(broadcast_state)
-                            .flatten(),
-                        pane.read_only,
-                        panes.zoomed_id() == Some(pane.id),
-                        rect(
-                            content_left + padding + pane_rect.x,
-                            content_top + pane_rect.y,
-                            pane_rect.width,
-                            pane_rect.height,
-                        ),
-                        cell_width,
-                        cell_height,
-                        if pane.id == focused {
-                            self.search
-                                .filtered_rows(pane.terminal.presentation_grid().rows())
-                        } else {
-                            &[]
-                        },
-                    );
-                }
-            } else if let Some(terminal) = tab.focused_terminal() {
-                let pane_id = tab.panes.focused_id();
-                let id = pane_node(pane_id);
+            let panes = &tab.panes;
+            let lone = panes.pane_count() == 1;
+            let placement = crate::renderer::PanePlacement {
+                left: content_left,
+                top: content_top,
+                right: content_right,
+                bottom: height,
+                padding,
+            };
+            let focused = panes.focused_id();
+            let mut ordered: Vec<_> = panes.iter_with_layout().collect();
+            ordered.sort_by_key(|(pane, _)| pane.id.0);
+            for (pane, pane_rect) in ordered {
+                let id = pane_node(pane.id);
                 root_children.push(id);
-                semantic_focus = id;
+                if pane.id == focused {
+                    semantic_focus = id;
+                }
+                let bounds = placement.pane_bounds(pane_rect, lone);
                 append_terminal_nodes(
                     &mut nodes,
                     id,
-                    pane_id,
-                    terminal,
-                    true,
-                    None,
-                    tab.focused_pane_read_only(),
-                    false,
-                    rect(
-                        content_left + padding,
-                        content_top + padding,
-                        content_right - content_left - padding * 2.0,
-                        height - content_top - padding * 2.0,
-                    ),
+                    pane.id,
+                    &pane.terminal,
+                    pane.id == focused,
+                    (broadcast_tab == Some(tab.id) && broadcast_panes.contains(&pane.id))
+                        .then_some(broadcast_state)
+                        .flatten(),
+                    pane.read_only,
+                    panes.zoomed_id() == Some(pane.id),
+                    rect(bounds.x, bounds.y, bounds.width, bounds.height),
                     cell_width,
                     cell_height,
-                    self.search
-                        .filtered_rows(terminal.presentation_grid().rows()),
+                    if pane.id == focused {
+                        self.search
+                            .filtered_rows(pane.terminal.presentation_grid().rows())
+                    } else {
+                        &[]
+                    },
                 );
             }
         }

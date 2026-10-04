@@ -2,6 +2,7 @@
 
 use super::modal_layer::ModalLayer;
 use super::*;
+use crate::renderer::PanePlacement;
 use crate::ui::geometry::Bounds;
 
 impl DividerDrag {
@@ -1235,41 +1236,28 @@ impl App {
             return None;
         }
         let terminal = self.active_terminal()?;
-        let content_left = self
-            .renderer
-            .as_ref()
-            .map_or(0.0, crate::renderer::Renderer::tab_bar_width);
-        let (origin_x, origin_y, viewport_width, viewport_height) = if let Some(tab) =
-            self.tabs.as_ref().and_then(TabManager::active_tab)
-            && let Some(panes) = tab.split_panes()
-            && let Some(rect) = panes.calculate_layout().get(&panes.focused_id())
-        {
+        let (bounds, lone) = self.focused_pane_bounds(content_top, padding)?;
+        // A lone pane reports over its terminal's own cells, as an unsplit
+        // terminal always has; a split pane over its whole rectangle.
+        let viewport = if lone {
             (
-                content_left + padding + rect.x,
-                content_top + rect.y,
-                rect.width,
-                rect.height,
-            )
-        } else {
-            (
-                content_left + padding,
-                content_top + padding,
                 terminal.cols() as f32 * cell_width,
                 terminal.rows() as f32 * cell_height,
             )
+        } else {
+            (bounds.width, bounds.height)
         };
         protocol_cell_from_viewport(
             position,
-            (origin_x, origin_y),
-            (viewport_width, viewport_height),
+            (bounds.x, bounds.y),
+            viewport,
             (cell_width, cell_height),
             (terminal.cols(), terminal.rows()),
         )
     }
 
-    /// Convert a screen position through the focused pane's viewport. Pane
-    /// rectangles are relative to `content_top`; unlike single-grid mode they
-    /// already include their own edge spacing.
+    /// Convert a screen position to a cell of the focused pane's grid, in
+    /// live scrollback coordinates.
     fn focused_grid_position(
         &self,
         position: (f64, f64),
@@ -1278,43 +1266,41 @@ impl App {
         content_top: f32,
         padding: f32,
     ) -> termeric_core::Point {
-        if let Some(tab) = self.tabs.as_ref().and_then(TabManager::active_tab)
-            && let Some(panes) = tab.split_panes()
-            && let Some(pane) = panes.focused_pane()
-            && let Some(rect) = panes.calculate_layout().get(&pane.id)
-        {
-            return screen_to_pane_grid(
-                position,
-                cell_width,
-                cell_height,
-                self.renderer
-                    .as_ref()
-                    .map_or(0.0, crate::renderer::Renderer::tab_bar_width),
-                content_top,
-                padding,
-                *rect,
-                pane.terminal.grid().scroll_offset(),
+        let (origin, scroll_offset) = self
+            .focused_pane_bounds(content_top, padding)
+            .zip(self.active_terminal())
+            .map_or_else(
+                // With no tab, the area's top-left cell.
+                || {
+                    let placement = self.pointer_pane_placement(content_top, padding);
+                    let bounds = placement.pane_bounds(Bounds::default(), true);
+                    ((bounds.x, bounds.y), 0)
+                },
+                |((bounds, _), terminal)| ((bounds.x, bounds.y), terminal.grid().scroll_offset()),
             );
-        }
+        screen_to_pane_grid(position, cell_width, cell_height, origin, scroll_offset)
+    }
 
-        let scroll_offset = self
-            .active_terminal()
-            .and_then(|terminal| i32::try_from(terminal.grid().scroll_offset()).ok())
-            .unwrap_or(0);
-        screen_to_grid(
-            position.0
-                - f64::from(
-                    self.renderer
-                        .as_ref()
-                        .map_or(0.0, crate::renderer::Renderer::tab_bar_width),
-                ),
-            position.1,
-            cell_width,
-            cell_height,
-            content_top,
+    /// The focused pane's window rectangle, as drawn, and whether it is the
+    /// tab's only pane. `content_top` and `padding` are as the caller
+    /// measured them.
+    fn focused_pane_bounds(&self, content_top: f32, padding: f32) -> Option<(Bounds, bool)> {
+        let panes = &self.tabs.as_ref()?.active_tab()?.panes;
+        let rect = *panes.calculate_layout().get(&panes.focused_id())?;
+        let lone = panes.pane_count() == 1;
+        let placement = self.pointer_pane_placement(content_top, padding);
+        Some((placement.pane_bounds(rect, lone), lone))
+    }
+
+    fn pointer_pane_placement(&self, content_top: f32, padding: f32) -> PanePlacement {
+        let renderer = self.renderer.as_ref();
+        PanePlacement {
+            left: renderer.map_or(0.0, crate::renderer::Renderer::tab_bar_width),
+            top: content_top,
+            right: renderer.map_or(0.0, crate::renderer::Renderer::content_right),
+            bottom: renderer.map_or(0.0, |renderer| renderer.window_size().1 as f32),
             padding,
-            scroll_offset,
-        )
+        }
     }
 
     pub(super) fn focused_hyperlink_open_context(
@@ -1647,18 +1633,17 @@ fn protocol_cell_from_viewport(
     (col < grid_size.0 && row < grid_size.1).then_some((col, row))
 }
 
+/// The cell under `position` of a grid drawn from `origin`, in live
+/// scrollback coordinates.
 fn screen_to_pane_grid(
     position: (f64, f64),
     cell_width: f32,
     cell_height: f32,
-    content_left: f32,
-    content_top: f32,
-    padding: f32,
-    rect: Bounds,
+    origin: (f32, f32),
     scroll_offset: usize,
 ) -> termeric_core::Point {
-    let local_x = (position.0 as f32 - content_left - padding - rect.x).max(0.0);
-    let local_y = (position.1 as f32 - content_top - rect.y).max(0.0);
+    let local_x = (position.0 as f32 - origin.0).max(0.0);
+    let local_y = (position.1 as f32 - origin.1).max(0.0);
     let col = (local_x / cell_width).floor() as usize;
     let visual_row = (local_y / cell_height).floor() as i32;
     let scroll_offset = i32::try_from(scroll_offset).unwrap_or(i32::MAX);
@@ -1873,22 +1858,26 @@ mod tests {
 
     #[test]
     fn pane_grid_coordinates_include_pane_origin_and_scrollback() {
-        let point = screen_to_pane_grid(
-            (196.0, 174.0),
-            10.0,
-            20.0,
-            50.0,
-            50.0,
-            6.0,
-            Bounds {
-                x: 100.0,
-                y: 60.0,
-                width: 200.0,
-                height: 160.0,
-            },
-            3,
-        );
+        let placement = PanePlacement {
+            left: 50.0,
+            top: 50.0,
+            right: 900.0,
+            bottom: 700.0,
+            padding: 6.0,
+        };
+        let rect = Bounds {
+            x: 100.0,
+            y: 60.0,
+            width: 200.0,
+            height: 160.0,
+        };
+        let split = placement.pane_bounds(rect, false);
+        let point = screen_to_pane_grid((196.0, 174.0), 10.0, 20.0, (split.x, split.y), 3);
         assert_eq!(point, termeric_core::Point::new(0, 4));
+        // A lone pane's grid starts one padding below the area's top.
+        let lone = placement.pane_bounds(rect, true);
+        let point = screen_to_pane_grid((96.0, 96.0), 10.0, 20.0, (lone.x, lone.y), 0);
+        assert_eq!(point, termeric_core::Point::new(2, 4));
     }
 
     #[test]

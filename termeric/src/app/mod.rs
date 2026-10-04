@@ -88,9 +88,8 @@ use crate::config::theme::Theme;
 use crate::config::{Config, SplashMode};
 use crate::harvest::HarvestMode;
 use crate::input::keybindings::{KeyAction, KeyBindingManager};
-use crate::input::{Action, MouseReportButton, MouseState, ShortcutRegistry, screen_to_grid};
+use crate::input::{Action, MouseReportButton, MouseState, ShortcutRegistry};
 use crate::notifications::{Bell, Notifications};
-use crate::panes::PaneRenderInfo;
 use crate::panes::{PaneId, PaneManager, SplitDirection};
 use crate::plugin::{PluginContext, PluginManager};
 use crate::renderer::types::{
@@ -2217,9 +2216,6 @@ impl App {
 
         let tab_bar_hover_progress = self.tab_bar_hover_progress();
 
-        // Pane geometry is read before the renderer is borrowed.
-        let pane_info = self.pane_render_info();
-
         // While the agent view has the keyboard, the terminal cursor rests
         // dim and steady, so typing clearly goes to the panel.
         let terminal_keyboard = !self.agent_view.state.has_keyboard();
@@ -2270,7 +2266,7 @@ impl App {
         // The IME places its window at the panel's caret, so the scene comes
         // first.
         self.prepare_agent_view_frame();
-        let ime_preedit_info = self.ime_preedit_render_info(&pane_info);
+        let ime_preedit_info = self.ime_preedit_render_info();
         let chrome_focus_target = self.chrome_focus_render_target();
         let broadcast_render = self.broadcast_render_targets();
         // Before the frame borrows the renderer: a picker preview may change

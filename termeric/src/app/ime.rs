@@ -312,10 +312,7 @@ impl App {
 
     /// Keep the native candidate window and preedit decoration on the focused
     /// input's shared geometry, not the terminal cursor behind a palette.
-    pub(super) fn ime_preedit_render_info(
-        &self,
-        panes: &[crate::panes::PaneRenderInfo],
-    ) -> Option<crate::renderer::ImePreeditRenderInfo> {
+    pub(super) fn ime_preedit_render_info(&self) -> Option<crate::renderer::ImePreeditRenderInfo> {
         if !self.accepts_ime_text() {
             return None;
         }
@@ -427,34 +424,19 @@ impl App {
                 view.right - view.cursor_x,
             );
         }
-        let terminal = self.active_terminal()?;
+        let panes = &self.tabs.as_ref()?.active_tab()?.panes;
+        let terminal = &panes.focused_pane()?.terminal;
         // The cursor that is drawn: synchronized output freezes the
         // presentation grid while the live one moves on.
         let cursor = terminal.presentation_grid().cursor();
-        let content_top = renderer.content_top();
-        let content_left = renderer.tab_bar_width();
-        let focused_pane = panes.iter().find(|pane| pane.is_focused);
-        let (origin_x, origin_y, max_width) = if let Some(pane) = focused_pane {
-            let cursor_offset = cursor.col as f32 * renderer.cell_width();
-            (
-                content_left + renderer.padding() + pane.rect.x,
-                content_top + pane.rect.y,
-                (pane.rect.width - cursor_offset).max(renderer.cell_width()),
-            )
-        } else {
-            let cursor_offset = cursor.col as f32 * renderer.cell_width();
-            (
-                content_left + renderer.padding(),
-                content_top + renderer.padding(),
-                (renderer.content_right()
-                    - content_left
-                    - renderer.padding() * 2.0
-                    - cursor_offset)
-                    .max(renderer.cell_width()),
-            )
-        };
-        let x = origin_x + cursor.col as f32 * renderer.cell_width();
-        let y = origin_y + cursor.row as f32 * renderer.cell_height();
+        let rect = *panes.calculate_layout().get(&panes.focused_id())?;
+        let bounds = renderer
+            .pane_placement()
+            .pane_bounds(rect, panes.pane_count() == 1);
+        let cursor_offset = cursor.col as f32 * renderer.cell_width();
+        let max_width = (bounds.width - cursor_offset).max(renderer.cell_width());
+        let x = bounds.x + cursor_offset;
+        let y = bounds.y + cursor.row as f32 * renderer.cell_height();
         self.ime_target(
             [x, y, renderer.cell_width(), renderer.cell_height()],
             max_width,

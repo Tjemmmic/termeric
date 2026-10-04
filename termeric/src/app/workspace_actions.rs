@@ -292,28 +292,6 @@ impl App {
         });
         self.request_redraw(RedrawReason::Action);
     }
-    /// Get pane render info from the active tab's pane manager (if in pane mode)
-    pub(super) fn pane_render_info(&self) -> Vec<PaneRenderInfo> {
-        let Some(tabs) = &self.tabs else {
-            return Vec::new();
-        };
-        let Some(tab) = tabs.active_tab() else {
-            return Vec::new();
-        };
-        let Some(pm) = tab.split_panes() else {
-            return Vec::new();
-        };
-        let layout = pm.calculate_layout();
-        let focused = pm.focused_id();
-        layout
-            .into_iter()
-            .map(|(id, rect)| PaneRenderInfo {
-                rect,
-                is_focused: id == focused,
-            })
-            .collect()
-    }
-
     /// Split the current tab into panes
     pub(super) fn split_pane(&mut self, direction: SplitDirection) {
         let live_route = self
