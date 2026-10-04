@@ -32,7 +32,7 @@ title = "Python"
 | `description` | no | Short text shown after the name in the command palette |
 | `env` | no | Extra environment variables for the program |
 
-The name after `profiles.` can use letters, digits, `.`, `_`, and `-`, up to 64 characters.
+The name after `profiles.` can use letters, digits, `.`, `_`, and `-`, up to 64 characters. A `title` or `description` is one line of text; control characters, such as tabs, and bidirectional formatting characters are refused, because both are shown in the tab bar, window title, or command palette.
 
 Termeric runs `program` directly with exactly the `args` you list. There's no shell in between, so a string like `"ls -la | less"` is not split or interpreted. To run a shell pipeline, make the program a shell and pass the command, for example `program = "/bin/sh"` and `args = ["-c", "ls -la | less"]`.
 

@@ -797,17 +797,23 @@ fn validate_launch_profiles(profiles: &BTreeMap<String, LaunchProfileConfig>) ->
         }
         if profile
             .description
-            .as_ref()
-            .is_some_and(|value| value.trim().is_empty() || !is_single_line(value))
+            .as_deref()
+            .is_some_and(|value| !is_display_line(value))
         {
-            bail!("terminal profile {name:?} has an invalid description");
+            bail!(
+                "terminal profile {name:?} description must be one non-blank line without \
+                 control or bidirectional formatting characters"
+            );
         }
         if profile
             .title
-            .as_ref()
-            .is_some_and(|value| value.trim().is_empty() || !is_single_line(value))
+            .as_deref()
+            .is_some_and(|value| !is_display_line(value))
         {
-            bail!("terminal profile {name:?} has an invalid title");
+            bail!(
+                "terminal profile {name:?} title must be one non-blank line without control \
+                 or bidirectional formatting characters"
+            );
         }
         if profile.cwd.as_ref().is_some_and(|path| !path.is_absolute()) {
             bail!("terminal profile {name:?} cwd must be an absolute path");
@@ -854,6 +860,13 @@ fn validate_child_env_key(owner: &str, key: &str) -> Result<()> {
 
 fn is_single_line(value: &str) -> bool {
     !value.contains(['\0', '\n', '\r'])
+}
+
+/// Text shown as one line of chrome (a tab or window title, a palette entry):
+/// not blank, and nothing that breaks the line or reorders what surrounds it,
+/// the rule terminal-set titles are filtered by.
+fn is_display_line(value: &str) -> bool {
+    !value.trim().is_empty() && !value.chars().any(crate::safe_text::is_unsafe_display_char)
 }
 
 fn validate_font_family(owner: &str, family: &str) -> Result<()> {
@@ -1906,16 +1919,43 @@ mod tests {
             assert!(config.validate().is_err(), "accepted {source:?}");
         }
 
-        let mut multiline = Config::default();
-        multiline.profiles.insert(
+        for text in [
+            "two\nlines",
+            "tab\there",
+            "a\u{202e}txt.exe",
+            "\u{2066}x",
+            " ",
+        ] {
+            for field in ["title", "description"] {
+                let mut profile = LaunchProfileConfig {
+                    program: "/bin/sh".into(),
+                    ..LaunchProfileConfig::default()
+                };
+                let slot = match field {
+                    "title" => &mut profile.title,
+                    _ => &mut profile.description,
+                };
+                *slot = Some(text.into());
+                let mut config = Config::default();
+                config.profiles.insert("dev".into(), profile);
+                let error = config.validate().unwrap_err().to_string();
+                assert!(
+                    error.contains(&format!("{field} must be one non-blank line")),
+                    "{field} {text:?}: {error}"
+                );
+            }
+        }
+        let mut displayable = Config::default();
+        displayable.profiles.insert(
             "dev".into(),
             LaunchProfileConfig {
                 program: "/bin/sh".into(),
-                title: Some("two\nlines".into()),
+                title: Some("Café 界 — build".into()),
+                description: Some("עברית mixed with English".into()),
                 ..LaunchProfileConfig::default()
             },
         );
-        assert!(multiline.validate().is_err());
+        displayable.validate().unwrap();
 
         for reserved in ["TERM", "PWD", "TERMERIC_TERMINAL_ID"] {
             let mut reserved_shell_env = Config::default();
