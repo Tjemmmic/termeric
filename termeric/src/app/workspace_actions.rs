@@ -3944,7 +3944,6 @@ mod workspace_control_tests {
         assert!(matches!(app.broadcast, BroadcastState::Inactive));
     }
 
-    #[cfg(unix)]
     #[test]
     fn domain_control_completion_is_stable_id_routed_idempotent_and_error_safe() {
         if !std::path::Path::new("/bin/true").exists() {
@@ -4219,7 +4218,6 @@ mod workspace_control_tests {
         }));
     }
 
-    #[cfg(unix)]
     #[test]
     fn topology_handler_applies_only_newer_revisions_and_closes_the_exact_domain() {
         if !std::path::Path::new("/bin/true").exists() {
@@ -4691,7 +4689,6 @@ mod workspace_control_tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn broadcast_targeting_excludes_and_rejects_read_only_panes() {
         use std::collections::HashMap;
@@ -4738,7 +4735,6 @@ mod workspace_control_tests {
         assert!(!targets.contains(&locked));
     }
 
-    #[cfg(unix)]
     #[test]
     fn selected_broadcast_reaches_only_targets_and_closure_reconciles_it() {
         use std::collections::HashMap;

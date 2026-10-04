@@ -596,7 +596,7 @@ pub fn revert(baseline: &Baseline, path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;

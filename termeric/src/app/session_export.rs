@@ -113,7 +113,7 @@ fn capture_scrollback(grid: &termeric_core::grid::Grid) -> Result<String, String
     Ok(text)
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Config;

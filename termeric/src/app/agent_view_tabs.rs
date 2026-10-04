@@ -387,7 +387,7 @@ impl App {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::agent_view::event::{AgentEvent, Handshake};

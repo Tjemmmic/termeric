@@ -1711,7 +1711,6 @@ mod tests {
         assert_eq!(PointerShape::ALL.map(native_pointer_icon), expected);
     }
 
-    #[cfg(unix)]
     fn mouse_report_position(app: &App) -> (f64, f64) {
         let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
         let (x, y) = tab.pane_manager.as_ref().map_or((0.0, 0.0), |panes| {
@@ -1721,7 +1720,6 @@ mod tests {
         ((x + 15.0) as f64, (y + 30.0) as f64)
     }
 
-    #[cfg(unix)]
     #[test]
     fn application_mouse_gesture_does_not_follow_tab_or_pane_focus() {
         use crate::app::tests::{
@@ -1795,7 +1793,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn application_mouse_capture_preserves_valid_drag_release_and_hover() {
         use crate::app::tests::{fenced_harvest_capture, harvest_rerun_capture_fixture_in};
@@ -1830,7 +1827,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn application_mouse_capture_cancellation_cannot_resume_after_focus_returns() {
         use crate::app::tests::{fenced_harvest_capture, harvest_rerun_capture_fixture_in};

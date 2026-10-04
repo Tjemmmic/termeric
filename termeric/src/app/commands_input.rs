@@ -470,7 +470,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn keyboard_run_activates_only_the_selected_command_in_an_inert_raw_pty() {
         let mut app = App::new_headless_running(
@@ -503,7 +502,6 @@ mod tests {
         assert_eq!(app.config.commands.len(), 3);
     }
 
-    #[cfg(unix)]
     #[test]
     fn editing_and_ime_commit_stay_in_the_form_and_leave_the_raw_pty_untouched() {
         let mut app = App::new_headless_running(

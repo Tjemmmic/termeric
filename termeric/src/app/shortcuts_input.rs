@@ -191,7 +191,6 @@ mod tests {
         assert!(app.redraw_scheduler.has_pending());
     }
 
-    #[cfg(unix)]
     #[test]
     fn shortcut_ime_limit_and_recording_refusal_never_leak_text_to_the_pty() {
         let mut app = App::new_headless_running(

@@ -1059,7 +1059,7 @@ fn forget_now(mut command: std::process::Command) {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::agent_view::transcript::{Item, ToolState};

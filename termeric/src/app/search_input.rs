@@ -43,7 +43,7 @@ impl App {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use winit::keyboard::NamedKey;

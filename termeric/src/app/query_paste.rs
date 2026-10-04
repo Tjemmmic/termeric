@@ -860,7 +860,6 @@ mod tests {
         assert!(app.search.query().is_empty());
     }
 
-    #[cfg(unix)]
     #[test]
     fn search_clipboard_paste_is_bounded_and_query_pastes_never_reach_raw_pty() {
         let mut app = App::new_headless_running(
