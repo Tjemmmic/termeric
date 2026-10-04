@@ -33,6 +33,8 @@ pub struct Config {
     pub keyboard: KeyboardConfig,
     /// Keyboard copy mode and quick-select configuration.
     pub copy_mode: CopyModeConfig,
+    /// What a finished mouse selection does.
+    pub selection: SelectionConfig,
     /// Theme name or path
     pub theme: ThemeConfig,
     /// Window configuration
@@ -1004,6 +1006,15 @@ impl ScrollbackConfig {
     }
 }
 
+/// Mouse selection. A finished selection always fills the primary
+/// selection; this table adds the clipboard.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct SelectionConfig {
+    /// Also copy a finished mouse selection to the clipboard.
+    pub copy_on_select: bool,
+}
+
 /// Built-in modal bindings used after entering copy mode. The global entry
 /// shortcuts remain independently configurable in the shortcut registry.
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -1410,6 +1421,16 @@ mod tests {
         let example =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../assets/config.example.toml");
         Config::load_from(&example).unwrap();
+    }
+
+    #[test]
+    fn copy_on_select_defaults_off_and_round_trips() {
+        let defaults: Config = toml::from_str("").unwrap();
+        assert!(!defaults.selection.copy_on_select);
+        let config: Config = toml::from_str("[selection]\ncopy_on_select = true").unwrap();
+        assert!(config.selection.copy_on_select);
+        let decoded: Config = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+        assert_eq!(decoded.selection, config.selection);
     }
 
     #[test]

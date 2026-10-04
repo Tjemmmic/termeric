@@ -711,6 +711,7 @@ impl App {
             }
             SettingsAction::SetFontLigatures(enabled) => config.font.ligatures = enabled,
             SettingsAction::SetBoldIsBright(enabled) => config.font.bold_is_bright = enabled,
+            SettingsAction::SetCopyOnSelect(enabled) => config.selection.copy_on_select = enabled,
             SettingsAction::SetTheme(name) => {
                 applied_message = Some(format!("Theme: {name}"));
                 config.theme.name = name;

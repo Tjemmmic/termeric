@@ -3654,6 +3654,38 @@ impl App {
         self.paste_clipboard_payload(&text);
     }
 
+    /// A middle click pastes the primary selection into the pane it just
+    /// focused, through the same checks and framing as a keyboard paste.
+    fn paste_primary_selection(&mut self) {
+        // A field that holds the keyboard does not take a paste aimed at the
+        // terminal beneath the pointer.
+        if self.tab_rename.is_some()
+            || self.agent_view_has_keyboard()
+            || self.file_drop_input_blocked()
+        {
+            return;
+        }
+        let text = match self.clipboard.text(
+            termeric_core::ClipboardRequest::Primary,
+            clipboard::ClipboardAccess::Explicit,
+        ) {
+            Ok(text) => text,
+            // Usually nothing is selected anywhere, which pastes nothing.
+            Err(error @ clipboard::ClipboardError::Failed(_)) => {
+                log::debug!("Primary selection not pasted: {error}");
+                return;
+            }
+            Err(error) => {
+                log::warn!("Paste failed: {error}");
+                self.toasts.error(format!("Paste failed: {error}"));
+                return;
+            }
+        };
+        if !text.is_empty() {
+            self.write_paste_text(&text);
+        }
+    }
+
     fn write_paste_text(&mut self, text: &str) -> bool {
         if matches!(self.broadcast, BroadcastState::Armed { .. }) {
             self.toasts

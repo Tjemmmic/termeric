@@ -616,38 +616,7 @@ impl App {
                         }
                     }
                 }
-                if button == MouseButton::Left
-                    && self.toggle_armed_broadcast_target_at(position, content_top, padding)
-                {
-                    self.request_redraw(RedrawReason::PointerInput);
-                    return;
-                }
-                if self.focus_pane_at(position, content_top, padding) {
-                    self.refresh_focused_terminal_surfaces();
-                }
-
-                let grid_pos = self.focused_grid_position(
-                    position,
-                    cell_width,
-                    cell_height,
-                    content_top,
-                    padding,
-                );
-
-                // Ctrl+Click opens links from the pane selected by this click.
-                if self.modifiers.control_key() {
-                    if let Some((url, directory)) = self.focused_hyperlink_open_context(grid_pos) {
-                        log::info!("Opening hyperlink: {}", url);
-                        self.activate_hyperlink(
-                            self.active_terminal_origin(),
-                            &url,
-                            directory.as_deref(),
-                        );
-                        return;
-                    }
-                }
-
-                if self.try_report_mouse_press(
+                if self.press_terminal(
                     button,
                     position,
                     cell_width,
@@ -656,24 +625,6 @@ impl App {
                     padding,
                 ) {
                     return;
-                }
-
-                self.begin_native_selection(button, grid_pos);
-
-                if button != MouseButton::Left {
-                    if self.focus_pane_at(position, content_top, padding) {
-                        self.refresh_focused_terminal_surfaces();
-                    }
-                    if self.try_report_mouse_press(
-                        button,
-                        position,
-                        cell_width,
-                        cell_height,
-                        content_top,
-                        padding,
-                    ) {
-                        return;
-                    }
                 }
             }
             ElementState::Released => {
@@ -701,6 +652,64 @@ impl App {
 
         // Request redraw to show selection changes
         self.request_redraw(RedrawReason::PointerInput);
+    }
+
+    /// A press over the terminal area, once no chrome or panel took it: it
+    /// focuses the pane under the pointer, then opens a link (Ctrl), goes
+    /// to a program that asks for mouse input (unless Shift is held), or
+    /// starts a selection (primary) or pastes the primary selection
+    /// (middle). Returns true when the press is fully handled.
+    fn press_terminal(
+        &mut self,
+        button: MouseButton,
+        position: (f64, f64),
+        cell_width: f32,
+        cell_height: f32,
+        content_top: f32,
+        padding: f32,
+    ) -> bool {
+        if button == MouseButton::Left
+            && self.toggle_armed_broadcast_target_at(position, content_top, padding)
+        {
+            self.request_redraw(RedrawReason::PointerInput);
+            return true;
+        }
+        if self.focus_pane_at(position, content_top, padding) {
+            self.refresh_focused_terminal_surfaces();
+        }
+
+        let grid_pos =
+            self.focused_grid_position(position, cell_width, cell_height, content_top, padding);
+
+        // Ctrl+Click opens links from the pane selected by this click.
+        if self.modifiers.control_key()
+            && let Some((url, directory)) = self.focused_hyperlink_open_context(grid_pos)
+        {
+            log::info!("Opening hyperlink: {}", url);
+            self.activate_hyperlink(self.active_terminal_origin(), &url, directory.as_deref());
+            return true;
+        }
+
+        if self.try_report_mouse_press(
+            button,
+            position,
+            cell_width,
+            cell_height,
+            content_top,
+            padding,
+        ) {
+            return true;
+        }
+
+        self.begin_native_selection(button, grid_pos);
+        if button == MouseButton::Middle
+            && self
+                .pane_at_pointer(position, content_top, padding)
+                .is_some()
+        {
+            self.paste_primary_selection();
+        }
+        false
     }
 
     /// Handle mouse movement
@@ -2219,6 +2228,89 @@ mod tests {
 
         let bytes = fenced_harvest_capture(&mut app, &captures);
         assert!(bytes.iter().all(Vec::is_empty), "{bytes:?}");
+    }
+
+    /// The capture fixture's panes with an in-memory primary selection
+    /// holding `hello`, and one pane other than the focused one.
+    fn middle_click_fixture() -> (
+        App,
+        tempfile::TempDir,
+        Vec<(crate::tabs::TerminalEventOrigin, std::path::PathBuf)>,
+        PaneId,
+    ) {
+        use crate::app::tests::harvest_rerun_capture_fixture_in;
+        let (mut app, directory, _, captures) = harvest_rerun_capture_fixture_in(true);
+        let (clipboard, memory) = super::super::clipboard::Clipboard::in_memory();
+        memory.lock().unwrap().primary = Some("hello".into());
+        app.clipboard = clipboard;
+        let focused = app.active_panes().focused_id();
+        let target = app
+            .active_panes()
+            .pane_ids()
+            .into_iter()
+            .find(|pane| *pane != focused)
+            .unwrap();
+        (app, directory, captures, target)
+    }
+
+    fn assert_only_pane_received(
+        captures: &[(crate::tabs::TerminalEventOrigin, std::path::PathBuf)],
+        bytes: Vec<Vec<u8>>,
+        pane: PaneId,
+        expected: &[u8],
+    ) {
+        for ((origin, _), bytes) in captures.iter().zip(bytes) {
+            let wanted: &[u8] = if origin.pane_id == pane {
+                expected
+            } else {
+                b""
+            };
+            assert_eq!(
+                String::from_utf8_lossy(&bytes),
+                String::from_utf8_lossy(wanted),
+                "{:?}",
+                origin.pane_id
+            );
+        }
+    }
+
+    #[test]
+    fn a_middle_click_pastes_the_primary_selection_into_the_pane_under_it() {
+        use crate::app::tests::fenced_harvest_capture;
+        use termeric_core::term::TerminalMode;
+        let (mut app, _directory, captures, target) = middle_click_fixture();
+        app.active_panes_mut()
+            .get_pane_mut(target)
+            .unwrap()
+            .terminal
+            .set_mode(TerminalMode::BRACKETED_PASTE, true);
+        let position = pane_position(&app, target);
+        assert!(!app.press_terminal(MouseButton::Middle, position, 10.0, 20.0, 0.0, 0.0));
+        assert_eq!(app.active_panes().focused_id(), target);
+        let bytes = fenced_harvest_capture(&mut app, &captures);
+        assert_only_pane_received(&captures, bytes, target, b"\x1b[200~hello\x1b[201~");
+    }
+
+    #[test]
+    fn a_program_using_the_mouse_gets_the_middle_click_and_shift_pastes_instead() {
+        use crate::app::tests::fenced_harvest_capture;
+        use termeric_core::term::TerminalMode;
+        let (mut app, _directory, captures, target) = middle_click_fixture();
+        app.active_panes_mut()
+            .get_pane_mut(target)
+            .unwrap()
+            .terminal
+            .set_mode(
+                TerminalMode::MOUSE_BUTTON_EVENT | TerminalMode::MOUSE_SGR,
+                true,
+            );
+        let position = pane_position(&app, target);
+        assert!(app.press_terminal(MouseButton::Middle, position, 10.0, 20.0, 0.0, 0.0));
+        assert!(app.try_report_mouse_release(MouseButton::Middle, position, 10.0, 20.0, 0.0, 0.0));
+        app.modifiers = ModifiersState::SHIFT;
+        assert!(!app.press_terminal(MouseButton::Middle, position, 10.0, 20.0, 0.0, 0.0));
+        let bytes = fenced_harvest_capture(&mut app, &captures);
+        assert_only_pane_received(&captures, bytes, target, b"\x1b[<1;2;2M\x1b[<1;2;2mhello");
     }
 
     #[test]

@@ -452,6 +452,7 @@ pub enum SettingsSection {
     Cursor,
     Bell,
     Scrollback,
+    Selection,
     Startup,
     Shell,
     Keyboard,
@@ -471,6 +472,7 @@ impl SettingsSection {
             Self::Cursor => "Cursor",
             Self::Bell => "Bell",
             Self::Scrollback => "Scrollback",
+            Self::Selection => "Selection",
             Self::Startup => "Startup",
             Self::Shell => "Shell",
             Self::Sessions => "Sessions",
@@ -487,7 +489,9 @@ impl SettingsSection {
         match self {
             Self::Theme | Self::Window => SettingsPage::Appearance,
             Self::Font => SettingsPage::Font,
-            Self::Cursor | Self::Scrollback | Self::Bell | Self::Shell => SettingsPage::Terminal,
+            Self::Cursor | Self::Scrollback | Self::Selection | Self::Bell | Self::Shell => {
+                SettingsPage::Terminal
+            }
             Self::Keyboard => SettingsPage::Keyboard,
             Self::Agents => SettingsPage::Agents,
             Self::Startup | Self::Sessions => SettingsPage::Sessions,
@@ -697,6 +701,8 @@ pub enum SettingsAction {
     SetFontLigatures(bool),
     /// Enable or disable ANSI bold-to-bright compatibility.
     SetBoldIsBright(bool),
+    /// Also copy finished mouse selections to the clipboard.
+    SetCopyOnSelect(bool),
     /// Change theme to this name
     SetTheme(String),
     /// Change window padding
@@ -1401,6 +1407,15 @@ impl SettingsPanel {
                     ),
                 },
             ],
+        ));
+
+        result.push((
+            SettingsSection::Selection,
+            vec![toggle(
+                "Copy on Select",
+                config.selection.copy_on_select,
+                SettingsAction::SetCopyOnSelect,
+            )],
         ));
 
         // Startup

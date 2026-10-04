@@ -1,5 +1,6 @@
 //! Native selection follows the displayed grid; PTY mouse reports remain live.
 
+use super::clipboard::{ClipboardAccess, ClipboardError};
 use super::*;
 use termeric_core::Point;
 
@@ -164,6 +165,34 @@ impl App {
             let selection = self.mouse_state.selection.clone();
             if let Some(terminal) = self.active_terminal_mut() {
                 terminal.set_selection(selection);
+            }
+            self.publish_finished_selection();
+        }
+    }
+
+    /// A finished mouse selection (a drag, a double-click word, or a
+    /// triple-click line) fills the primary selection, as other X11 and
+    /// Wayland programs expect, and with `copy_on_select` the clipboard too.
+    /// Failures are logged, not shown: the person asked for neither.
+    fn publish_finished_selection(&mut self) {
+        let Some(text) = self.native_selection_text().filter(|text| !text.is_empty()) else {
+            return;
+        };
+        let mut selections = vec![termeric_core::ClipboardRequest::Primary];
+        if self.config.selection.copy_on_select {
+            selections.push(termeric_core::ClipboardRequest::Clipboard);
+        }
+        for selection in selections {
+            match self
+                .clipboard
+                .set_text(selection, &text, ClipboardAccess::Implicit)
+            {
+                Ok(()) => {}
+                // Already logged when the connection failed.
+                Err(error @ ClipboardError::Unavailable(_)) => {
+                    log::debug!("Selection not published to {selection:?}: {error}");
+                }
+                Err(error) => log::warn!("Selection not published to {selection:?}: {error}"),
             }
         }
     }

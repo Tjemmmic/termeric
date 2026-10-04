@@ -200,11 +200,11 @@ Typing a saved command's name or alias as the first word at your prompt and pres
 | Triple-click | A line |
 | `Alt`+drag | A rectangular block |
 
-Selecting text doesn't copy it. Press `Ctrl+Shift+C` to copy the selection to the clipboard, and `Escape` to clear it. Clicking in the terminal also leaves keyboard copy mode.
+Finishing a selection (releasing the drag, or a double- or triple-click) puts it in the primary selection, as other Linux programs do; middle-click pastes it here or in any other program. It doesn't copy to the clipboard unless you set `copy_on_select = true` under `[selection]`, or turn on **Copy on Select** in **Settings → Terminal**. Press `Ctrl+Shift+C` to copy the selection to the clipboard, and `Escape` to clear it. Clicking in the terminal also leaves keyboard copy mode.
 
 `Ctrl+Shift+V` pastes the clipboard into the focused pane. If the program has turned on bracketed paste, the pasted text is marked as a paste, so shells and editors don't run it line by line as it arrives.
 
-Termeric doesn't use the X11/Wayland primary selection for mouse selections: selecting doesn't fill it, and middle-click doesn't paste it.
+Middle-click pastes the primary selection into the pane under the pointer, which it focuses. The paste works like `Ctrl+Shift+V`: bracketed paste, read-only panes, and broadcast input apply the same way.
 
 ### Links
 
@@ -214,7 +214,7 @@ Hold `Ctrl` and click a link to open it with your desktop's default handler (`xd
 
 Programs such as `vim`, `htop`, and `tmux` can ask for mouse input. While they do, clicks, drags, and the wheel go to the program. Hold `Shift` to select text or scroll the scrollback yourself instead; `Alt+Shift`+drag selects a block. `Ctrl+Click` on a link still opens it.
 
-Middle and right clicks are sent only to programs that ask for mouse input; otherwise Termeric ignores them.
+While a program asks for mouse input, middle and right clicks go to it; hold `Shift` and middle-click to paste the primary selection instead. Otherwise Termeric ignores right clicks.
 
 ### Scroll
 

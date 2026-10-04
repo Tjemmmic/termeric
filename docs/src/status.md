@@ -41,7 +41,7 @@ This page sums up what Termeric supports today. Use it to check whether somethin
 
 - Tabs, split panes, and multiple windows, including layout presets, zoom, swap, and moving panes and tabs between windows. See [Tabs, panes, and windows](tabs-panes-windows.md).
 - Broadcasting input to several panes of the active tab.
-- Selection, copy, and paste; search with plain text, regular expressions, and a filter mode. See [Search, copy mode, and links](search-and-copy-mode.md).
+- Selection, copy, and paste, including the primary selection and middle-click paste; search with plain text, regular expressions, and a filter mode. See [Search, copy mode, and links](search-and-copy-mode.md).
 - Keyboard copy mode and quick-select hints for links and other matches.
 - Clickable OSC 8 hyperlinks and detected URLs.
 - Shell integration for Bash, Zsh, Fish, Nushell, and Elvish: prompt jumping and failed-command navigation. See [Shell integration](shell-integration.md).

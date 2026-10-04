@@ -71,6 +71,9 @@ bindings = "vi"           # vi or emacs
 # name = "ticket"
 # regex = "PROJ-[0-9]+"
 
+[selection]
+copy_on_select = false    # also copy a finished mouse selection to the clipboard
+
 [theme]
 # A built-in theme (turmeric, ginger, daikon, dracula, nord, ... 26 in all) or
 # the name of a file in ~/.config/termeric/themes/ without ".toml".

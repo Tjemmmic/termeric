@@ -204,6 +204,12 @@ name = "ticket"
 regex = "PROJ-[0-9]+"
 ```
 
+### [selection]
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| `copy_on_select` | `false` | Also copy a finished mouse selection to the clipboard. A finished selection always fills the primary selection, which middle-click pastes; see [Keyboard and mouse](keyboard-and-mouse.md#select-and-copy). |
+
 ### [accessibility]
 
 See [Accessibility](accessibility.md).

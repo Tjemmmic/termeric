@@ -390,3 +390,37 @@ fn a_clipboard_unreachable_at_startup_connects_on_the_next_copy() {
     assert_eq!(app.copy_selection(), CopyOutcome::Copied);
     assert_eq!(memory.lock().unwrap().clipboard.as_deref(), Some("copie"));
 }
+
+#[test]
+fn a_finished_mouse_selection_fills_primary_and_with_copy_on_select_the_clipboard() {
+    use termeric_core::Point;
+    let mut app = scrollbar_owner_fixture();
+    app.active_terminal_mut()
+        .unwrap()
+        .process(b"\x1b[H\x1b[2Jcopied text");
+    let (clipboard, memory) = super::super::clipboard::Clipboard::in_memory();
+    app.clipboard = clipboard;
+
+    // Dragging alone publishes nothing; the release does.
+    app.begin_native_selection(MouseButton::Left, Point::new(0, 0));
+    app.extend_native_selection(Point::new(0, 4));
+    assert_eq!(memory.lock().unwrap().primary, None);
+    app.finish_native_selection();
+    assert_eq!(memory.lock().unwrap().primary.as_deref(), Some("copie"));
+    assert_eq!(memory.lock().unwrap().clipboard, None);
+
+    // A double-click selects and publishes the whole word.
+    app.config.selection.copy_on_select = true;
+    for _ in 0..2 {
+        app.begin_native_selection(MouseButton::Left, Point::new(0, 8));
+        app.finish_native_selection();
+    }
+    assert_eq!(memory.lock().unwrap().primary.as_deref(), Some("text"));
+    assert_eq!(memory.lock().unwrap().clipboard.as_deref(), Some("text"));
+
+    // A plain click selects nothing and leaves both alone.
+    app.mouse_state.last_click_pos = None;
+    app.begin_native_selection(MouseButton::Left, Point::new(0, 2));
+    app.finish_native_selection();
+    assert_eq!(memory.lock().unwrap().primary.as_deref(), Some("text"));
+}
