@@ -6607,7 +6607,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn search_semantic_replacement_retires_preedit_and_never_writes_to_pty() {
         let mut app = App::new_headless_running(
@@ -8279,7 +8278,6 @@ mod tests {
         assert_eq!(app.config.commands.len(), 100);
     }
 
-    #[cfg(unix)]
     #[test]
     fn agents_panel_is_one_modal_tree_whose_rows_show_their_agent() {
         let (mut app, codex_tab, _) = crate::app::tests::two_agent_tabs();

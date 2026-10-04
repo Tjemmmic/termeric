@@ -350,7 +350,6 @@ mod tests {
         assert!(text.chars().count() <= MAX_ASSEMBLED_CONTEXT_CHARS);
     }
 
-    #[cfg(unix)]
     #[test]
     fn specific_file_is_revalidated_after_selection_to_block_symlink_retargeting() {
         use std::os::unix::fs::symlink;

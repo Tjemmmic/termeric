@@ -787,7 +787,6 @@ mod tests {
         assert!(!app.search_owns_ime_text());
     }
 
-    #[cfg(unix)]
     #[test]
     fn search_ime_commit_inserts_at_query_caret_without_leaking_into_pty() {
         let mut app = App::new_headless_running(
@@ -1232,7 +1231,6 @@ mod tests {
         exercise_retained_rename_modal_ownership(&mut app);
     }
 
-    #[cfg(unix)]
     #[test]
     fn modal_atomic_commits_never_fall_through_to_a_live_pty() {
         let mut app = App::new_headless_running(
@@ -1474,7 +1472,6 @@ mod tests {
         assert!(app.ime.preedit().is_none());
     }
 
-    #[cfg(unix)]
     #[test]
     fn ime_commit_reaches_only_the_focused_pane_pty() {
         use crate::config::ShellConfig;
