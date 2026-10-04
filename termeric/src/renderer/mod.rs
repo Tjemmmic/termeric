@@ -1525,32 +1525,14 @@ impl Renderer {
                     } else {
                         2.0
                     };
-                    // Top
-                    self.rect_pipeline
-                        .push_rect(pane_x, pane_y, pane.rect.width, bw, border_color);
-                    // Bottom
-                    self.rect_pipeline.push_rect(
+                    self.rect_pipeline.push_rounded_outline(
                         pane_x,
-                        pane_y + pane.rect.height - bw,
+                        pane_y,
                         pane.rect.width,
-                        bw,
-                        border_color,
-                    );
-                    // Left
-                    self.rect_pipeline.push_rect(
-                        pane_x,
-                        pane_y,
-                        bw,
                         pane.rect.height,
                         border_color,
-                    );
-                    // Right
-                    self.rect_pipeline.push_rect(
-                        pane_x + pane.rect.width - bw,
-                        pane_y,
+                        0.0,
                         bw,
-                        pane.rect.height,
-                        border_color,
                     );
                 }
             }

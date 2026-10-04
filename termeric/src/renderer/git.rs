@@ -285,15 +285,15 @@ impl Renderer {
             [bg[0], bg[1], bg[2], 0.95],
             6.0,
         );
-        let border = [accent[0], accent[1], accent[2], 0.3];
-        for (x, y, width, height) in [
-            (layout.x, layout.y, layout.width, 1.0),
-            (layout.x, layout.y + layout.height - 1.0, layout.width, 1.0),
-            (layout.x, layout.y, 1.0, layout.height),
-            (layout.x + layout.width - 1.0, layout.y, 1.0, layout.height),
-        ] {
-            self.rect_pipeline.push_rect(x, y, width, height, border);
-        }
+        self.rect_pipeline.push_rounded_outline(
+            layout.x,
+            layout.y,
+            layout.width,
+            layout.height,
+            [accent[0], accent[1], accent[2], 0.3],
+            6.0,
+            1.0,
+        );
 
         if layout.header {
             let icon_cx = layout.x + cw * 1.3;

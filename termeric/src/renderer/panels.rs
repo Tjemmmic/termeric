@@ -618,18 +618,8 @@ impl Renderer {
         if width <= stroke * 2.0 || height <= stroke * 2.0 {
             return;
         }
-        self.rect_pipeline.push_rect(x, y, width, stroke, color);
         self.rect_pipeline
-            .push_rect(x, y + height - stroke, width, stroke, color);
-        self.rect_pipeline
-            .push_rect(x, y + stroke, stroke, height - stroke * 2.0, color);
-        self.rect_pipeline.push_rect(
-            x + width - stroke,
-            y + stroke,
-            stroke,
-            height - stroke * 2.0,
-            color,
-        );
+            .push_rounded_outline(x, y, width, height, color, 0.0, stroke);
     }
 
     /// Hit-test the custom commands panel
