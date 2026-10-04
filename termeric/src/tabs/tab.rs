@@ -31,6 +31,15 @@ pub struct ClosedTabSave {
     pub scrollback_truncated: bool,
 }
 
+/// The closed-tab snapshot a tab was reopened from or last saved as, which
+/// closing the tab again replaces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedSnapshot {
+    pub id: String,
+    /// When the snapshot was first saved, kept by every later save.
+    pub created_at: String,
+}
+
 /// A program a tab runs directly, without a shell or its prompt marks.
 #[derive(Clone, Debug, Default)]
 pub struct CommandLaunch {
@@ -105,7 +114,7 @@ pub struct Tab {
     /// When this tab started closing (for shrink animation), None if not closing
     pub closing_at: Option<Instant>,
     /// The closed-tab snapshot this tab was reopened from or last saved as.
-    pub snapshot_id: Option<String>,
+    pub saved_snapshot: Option<SavedSnapshot>,
     /// What kind of tab this is (shell, plugin, etc.)
     pub tab_type: TabType,
     /// Live domain backing this tab, when its PTYs are authenticated relay
@@ -144,7 +153,7 @@ impl Tab {
             closed: false,
             created_at: Instant::now(),
             closing_at: None,
-            snapshot_id: None,
+            saved_snapshot: None,
             tab_type,
             live_domain: None,
             agent_view: TabAgentView::default(),
@@ -848,7 +857,7 @@ impl Tab {
     /// output off screen. Short commands that fit on screen still count;
     /// splash art or a pristine prompt does not.
     pub fn has_content(&self) -> bool {
-        self.snapshot_id.is_some()
+        self.saved_snapshot.is_some()
             || self.panes.iter_panes().any(|pane| {
                 pane.last_command.is_some() || pane.terminal.grid().scrollback_len() > 0
             })
@@ -856,7 +865,8 @@ impl Tab {
 
     /// This tab as the one-tab workspace kept after it closes: every pane,
     /// named for the focused pane's directory (else the tab's title) and last
-    /// command. A tab reopened from such a snapshot keeps that snapshot's ID.
+    /// command. A tab reopened from such a snapshot keeps that snapshot's ID
+    /// and creation time.
     pub(crate) fn closed_tab_snapshot(
         &self,
         save_scrollback: bool,
@@ -872,11 +882,14 @@ impl Tab {
             &self.title,
             focused.last_command.as_deref(),
         );
-        let id = self
-            .snapshot_id
-            .clone()
-            .unwrap_or_else(|| format!("workspace-{}", crate::session::generate_session_id()));
+        let id = self.saved_snapshot.as_ref().map_or_else(
+            || format!("workspace-{}", crate::session::generate_session_id()),
+            |saved| saved.id.clone(),
+        );
         let mut workspace = crate::workspace::WorkspaceSnapshot::new(id, name, vec![tab]);
+        if let Some(saved) = &self.saved_snapshot {
+            workspace.created_at.clone_from(&saved.created_at);
+        }
         workspace.closed_tab = true;
         Ok(workspace)
     }
@@ -888,7 +901,10 @@ impl Tab {
         let report = crate::workspace::save_workspace(&mut workspace)
             .with_context(|| format!("save closed tab '{}'", workspace.id))?;
         // Identity denotes a published snapshot, never a failed first attempt.
-        self.snapshot_id = Some(report.id.clone());
+        self.saved_snapshot = Some(SavedSnapshot {
+            id: report.id.clone(),
+            created_at: workspace.created_at,
+        });
         Ok(ClosedTabSave {
             scrollback_truncated: !report.truncated_panes.is_empty(),
             id: report.id,

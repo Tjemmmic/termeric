@@ -436,7 +436,8 @@ impl App {
     }
 
     /// Reopen a closed tab's snapshot as a new tab in this window, keeping
-    /// the snapshot's ID so closing the tab again updates it.
+    /// the snapshot's ID and creation time so closing the tab again updates
+    /// it.
     pub(super) fn restore_closed_tab(&mut self, id: &str) {
         let result = self.reopen_closed_tab(id);
         match result {
@@ -469,7 +470,10 @@ impl App {
         if let Ok((index, _)) = &restored {
             tabs.set_active_workspace_tab(*index);
             if let Some(tab) = tabs.active_tab_mut() {
-                tab.snapshot_id = Some(workspace.id.clone());
+                tab.saved_snapshot = Some(crate::tabs::SavedSnapshot {
+                    id: workspace.id.clone(),
+                    created_at: workspace.created_at.clone(),
+                });
             }
         }
         self.tabs = Some(tabs);

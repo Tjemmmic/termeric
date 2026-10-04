@@ -6,7 +6,7 @@ mod plugin_panes;
 mod tab;
 mod title;
 
-pub use tab::{CommandLaunch, Tab, TabType};
+pub use tab::{CommandLaunch, SavedSnapshot, Tab, TabType};
 pub(crate) use tab::{LiveDomainTab, TabAgentView};
 pub(crate) use title::{
     get_foreground_process, get_process_cwd, presentation_working_directory,
@@ -2329,7 +2329,7 @@ mod tests {
         let result = tab.save_closed_tab(false);
         crate::workspace::set_test_workspaces_base_dir(None);
         assert!(result.is_err());
-        assert!(tab.snapshot_id.is_none());
+        assert!(tab.saved_snapshot.is_none());
     }
 
     #[test]

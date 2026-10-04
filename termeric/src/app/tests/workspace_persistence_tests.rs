@@ -79,6 +79,10 @@ fn a_reopened_closed_tab_is_active_and_closing_it_again_updates_its_snapshot() {
     tabs.active_tab_mut().unwrap().title = "closed".into();
     let id = close_active_tab(&mut app);
     assert_eq!(app.tabs.as_ref().unwrap().count(), 1);
+    // Date the snapshot back, so a re-save that reset it would show.
+    let mut saved = crate::workspace::load_workspace(&id).unwrap().workspace;
+    saved.created_at = "2020-01-01T00:00:00Z".into();
+    crate::workspace::save_workspace(&mut saved).unwrap();
 
     app.restore_closed_tab(&id);
     let tabs = app.tabs.as_ref().unwrap();
@@ -86,14 +90,47 @@ fn a_reopened_closed_tab_is_active_and_closing_it_again_updates_its_snapshot() {
     let reopened = tabs.active_tab().unwrap();
     assert_eq!(tabs.active_index(), 1);
     assert_eq!(reopened.title, "closed");
-    assert_eq!(reopened.snapshot_id.as_deref(), Some(id.as_str()));
+    assert_eq!(
+        reopened
+            .saved_snapshot
+            .as_ref()
+            .map(|saved| saved.id.as_str()),
+        Some(id.as_str())
+    );
 
     let resaved = close_active_tab(&mut app);
     let snapshots = crate::workspace::list_closed_tabs();
+    let resaved_archive = crate::workspace::load_workspace(&id).unwrap().workspace;
     end_persistence_test();
     assert_eq!(resaved, id);
+    assert_eq!(resaved_archive.created_at, "2020-01-01T00:00:00Z");
     assert_eq!(snapshots.len(), 1, "{snapshots:?}");
     assert_eq!(snapshots[0].id, id);
+}
+
+#[test]
+fn saving_and_renaming_a_workspace_keep_when_it_was_created() {
+    let root = tempfile::tempdir().unwrap();
+    let mut app = persistence_app(root.path());
+    app.automatic_persistence = true;
+    app.tabs.as_mut().unwrap().new_tab().unwrap();
+    let id = app.save_workspace_as("Project".into()).unwrap().id;
+    let mut saved = crate::workspace::load_workspace(&id).unwrap().workspace;
+    saved.created_at = "2020-01-01T00:00:00Z".into();
+    crate::workspace::save_workspace(&mut saved).unwrap();
+
+    // Quitting saves the window back into the workspace it last saved.
+    app.tabs.as_mut().unwrap().new_tab().unwrap();
+    app.auto_save_workspace();
+    let quit = crate::workspace::load_workspace(&id).unwrap().workspace;
+    crate::workspace::rename_workspace(&id, "Renamed").unwrap();
+    let renamed = crate::workspace::load_workspace(&id).unwrap().workspace;
+    end_persistence_test();
+
+    assert_eq!(quit.tabs.len(), 2, "the window was not saved on quit");
+    assert_eq!(quit.created_at, "2020-01-01T00:00:00Z");
+    assert_eq!(renamed.name, "Renamed");
+    assert_eq!(renamed.created_at, "2020-01-01T00:00:00Z");
 }
 
 #[test]
