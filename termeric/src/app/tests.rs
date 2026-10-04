@@ -684,3 +684,4 @@ mod real_pty_tests;
 mod search_tests;
 mod selection_tests;
 mod workspace_launch_tests;
+mod workspace_persistence_tests;

@@ -8,7 +8,7 @@ Restoring a workspace starts fresh processes. Termeric launches your shell (or t
 
 For each tab in the window:
 
-- its position in the tab bar, whether it's pinned, and any title you gave it;
+- its position in the tab bar, whether it's pinned, and any title you gave it (a tab or pane title longer than 256 characters is shortened);
 - whether it was an ordinary shell tab, a [terminal profile](profiles.md), or a coding agent opened with **New Agent…**, so the same kind of process is relaunched (an agent starts a new conversation);
 - its split layout, including the exact divider positions and which pane had focus;
 - each pane's working directory and title;

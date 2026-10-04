@@ -1988,6 +1988,77 @@ mod tests {
     }
 
     #[test]
+    fn titles_longer_than_a_workspace_holds_are_cut_when_saved() {
+        let root = tempfile::tempdir().unwrap();
+        crate::workspace::set_test_workspaces_base_dir(Some(root.path().to_path_buf()));
+        let shell = crate::test_support::sleeping_shell();
+        let mut manager = TabManager::for_test(shell.clone());
+        let tab_id = manager.new_tab().unwrap();
+        // OSC titles may be up to 4096 bytes; this one is 300 characters.
+        let long = "界".repeat(300);
+        let cut = format!(
+            "{}…",
+            "界".repeat(crate::workspace::MAX_WORKSPACE_TITLE_CHARS - 1)
+        );
+        let lone = TerminalEventOrigin {
+            tab_id,
+            pane_id: PaneId(0),
+        };
+        assert!(manager.set_title_for_origin(lone, long.clone()));
+        let right = manager
+            .active_tab_mut()
+            .unwrap()
+            .panes_for_test(shell, 800.0, 160.0, 10.0, 20.0)
+            .split(SplitDirection::Vertical)
+            .unwrap();
+        let split = TerminalEventOrigin {
+            tab_id,
+            pane_id: right,
+        };
+        assert!(manager.set_title_for_origin(split, long.clone()));
+        assert_eq!(manager.active_tab().unwrap().title, long);
+
+        let workspace = manager
+            .capture_workspace("Long titles".into(), false, Default::default())
+            .unwrap();
+        let tab = &workspace.tabs[0];
+        assert_eq!(tab.title, cut);
+        for pane in &tab.panes {
+            assert_eq!(
+                pane.title.as_deref(),
+                Some(cut.as_str()),
+                "pane {}",
+                pane.id
+            );
+        }
+
+        // A profile's title becomes the tab's own title, and has no limit.
+        manager
+            .active_tab_mut()
+            .unwrap()
+            .set_user_title(Some(long.clone()));
+        let workspace = manager
+            .capture_workspace("Long titles".into(), false, Default::default())
+            .unwrap();
+        assert_eq!(workspace.tabs[0].user_title.as_deref(), Some(cut.as_str()));
+
+        let tab = manager.active_tab_mut().unwrap();
+        for pane in tab.panes.all_panes_mut() {
+            pane.last_command = Some("build".into());
+            pane.closed = true;
+        }
+        assert!(manager.cleanup_closed(true, false));
+        let notices = manager.drain_persistence_notices();
+        let [PersistenceNotice::Saved { id, .. }] = notices.as_slice() else {
+            panic!("the closed tab with long titles was not saved: {notices:?}");
+        };
+        let saved = crate::workspace::load_workspace(id).unwrap().workspace;
+        crate::workspace::set_test_workspaces_base_dir(None);
+        assert_eq!(saved.tabs[0].title, cut);
+        assert_eq!(saved.tabs[0].user_title.as_deref(), Some(cut.as_str()));
+    }
+
+    #[test]
     fn removing_closed_tabs_keeps_the_same_tab_active() {
         let shell = ShellConfig {
             program: Some("/bin/sh".into()),

@@ -918,8 +918,11 @@ impl Tab {
     ) -> anyhow::Result<crate::workspace::WorkspaceTabSnapshot> {
         Ok(crate::workspace::WorkspaceTabSnapshot {
             id: workspace_tab_id,
-            title: self.title.clone(),
-            user_title: self.user_title.clone(),
+            title: crate::workspace::bounded_workspace_title(&self.title),
+            user_title: self
+                .user_title
+                .as_deref()
+                .map(crate::workspace::bounded_workspace_title),
             pinned: self.pinned,
             primary_pane: self.panes.primary_id().0,
             focused_pane: self.panes.focused_id().0,

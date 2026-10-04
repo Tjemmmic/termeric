@@ -5,6 +5,17 @@ use std::collections::HashSet;
 pub const WORKSPACE_SCHEMA_VERSION: u32 = 3;
 pub const MAX_WORKSPACE_TABS: usize = 64;
 pub const MAX_WORKSPACE_PANES_PER_TAB: usize = 64;
+/// The longest tab or pane title a workspace keeps, in characters.
+pub const MAX_WORKSPACE_TITLE_CHARS: usize = 256;
+/// The longest workspace name, in characters.
+pub const MAX_WORKSPACE_NAME_CHARS: usize = 128;
+
+/// `title` as a workspace keeps it. A terminal or a profile can set a longer
+/// title than a workspace holds, so it is cut to
+/// [`MAX_WORKSPACE_TITLE_CHARS`], with `…` marking the cut.
+pub fn bounded_workspace_title(title: &str) -> String {
+    crate::safe_text::truncate_with_ellipsis(title, MAX_WORKSPACE_TITLE_CHARS)
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkspaceSnapshot {
@@ -125,14 +136,12 @@ impl WorkspaceTabSnapshot {
     }
 
     pub(crate) fn validate(&self) -> anyhow::Result<()> {
-        if self.title.chars().count() > 256 {
+        if self.title.chars().count() > MAX_WORKSPACE_TITLE_CHARS {
             anyhow::bail!("workspace tab {} title is too long", self.id);
         }
-        if self
-            .user_title
-            .as_ref()
-            .is_some_and(|title| title.trim().is_empty() || title.chars().count() > 256)
-        {
+        if self.user_title.as_ref().is_some_and(|title| {
+            title.trim().is_empty() || title.chars().count() > MAX_WORKSPACE_TITLE_CHARS
+        }) {
             anyhow::bail!("workspace tab {} user title is invalid", self.id);
         }
         if self.panes.is_empty() || self.panes.len() > MAX_WORKSPACE_PANES_PER_TAB {
@@ -332,7 +341,7 @@ impl WorkspacePaneSnapshot {
         if self
             .title
             .as_ref()
-            .is_some_and(|title| title.chars().count() > 256)
+            .is_some_and(|title| title.chars().count() > MAX_WORKSPACE_TITLE_CHARS)
         {
             anyhow::bail!("workspace pane {} title is too long", self.id);
         }
@@ -353,8 +362,13 @@ pub fn validate_workspace_id(id: &str) -> anyhow::Result<()> {
 }
 
 pub fn validate_workspace_name(name: &str) -> anyhow::Result<()> {
-    if name.trim().is_empty() || name.chars().count() > 128 || name.contains(['\n', '\r', '\0']) {
-        anyhow::bail!("workspace name must contain 1 to 128 single-line characters");
+    if name.trim().is_empty()
+        || name.chars().count() > MAX_WORKSPACE_NAME_CHARS
+        || name.contains(['\n', '\r', '\0'])
+    {
+        anyhow::bail!(
+            "workspace name must contain 1 to {MAX_WORKSPACE_NAME_CHARS} single-line characters"
+        );
     }
     Ok(())
 }

@@ -924,8 +924,9 @@ impl PaneManager {
                     launch: pane.launch.clone(),
                     title: pane
                         .title
-                        .clone()
-                        .or_else(|| (pane.id == primary_id).then(|| tab_title.to_string())),
+                        .as_deref()
+                        .or((pane.id == primary_id).then_some(tab_title))
+                        .map(crate::workspace::bounded_workspace_title),
                     working_directory,
                     last_command: pane
                         .pty

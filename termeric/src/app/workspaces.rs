@@ -13,7 +13,14 @@ impl App {
             .tabs
             .as_ref()
             .and_then(|tabs| tabs.active_tab())
-            .map(|tab| format!("{} workspace", tab.title))
+            .map(|tab| {
+                const SUFFIX: &str = " workspace";
+                let title = crate::safe_text::truncate_with_ellipsis(
+                    &tab.title,
+                    crate::workspace::MAX_WORKSPACE_NAME_CHARS - SUFFIX.len(),
+                );
+                format!("{title}{SUFFIX}")
+            })
             .unwrap_or_else(|| "Termeric workspace".into());
         match self.save_workspace_as(name) {
             Ok(report) => {
