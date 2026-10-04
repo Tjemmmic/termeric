@@ -130,10 +130,12 @@ pub fn invoked_name(message: &str) -> Option<&str> {
 /// Longest title kept for an earlier conversation.
 pub const EARLIER_TITLE_CHARS: usize = 80;
 
-/// An earlier conversation's title from `text`: its first line, cut to
-/// [`EARLIER_TITLE_CHARS`].
+/// An earlier conversation's title from `text`, which an agent or its logs
+/// supplied: its first line, cut to [`EARLIER_TITLE_CHARS`], with control
+/// and bidirectional characters shown as U+FFFD rather than acted on.
 pub fn earlier_title(text: &str) -> String {
-    crate::safe_text::first_line_truncated(text, EARLIER_TITLE_CHARS)
+    let line = crate::safe_text::first_line_truncated(text, EARLIER_TITLE_CHARS);
+    crate::safe_text::display_line(&line, EARLIER_TITLE_CHARS, 1)
 }
 
 /// An earlier conversation in a folder, which the agent can continue.
@@ -391,6 +393,23 @@ pub enum AgentCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn earlier_titles_show_hidden_characters_instead_of_acting_on_them() {
+        assert_eq!(
+            earlier_title("\n  fix \u{202e}gnp.exe\u{1b}[2J\tnow  \nsecond line"),
+            "fix \u{fffd}gnp.exe\u{fffd}[2J now"
+        );
+        let long = format!("{}\u{2066}", "a".repeat(EARLIER_TITLE_CHARS - 1));
+        assert_eq!(
+            earlier_title(&long),
+            format!("{}\u{fffd}", "a".repeat(EARLIER_TITLE_CHARS - 1))
+        );
+        let longer = format!("\u{2066}{}", "a".repeat(EARLIER_TITLE_CHARS));
+        let title = earlier_title(&longer);
+        assert_eq!(title.chars().count(), EARLIER_TITLE_CHARS);
+        assert!(title.starts_with('\u{fffd}') && title.ends_with('…'));
+    }
 
     #[test]
     fn context_fraction_is_bounded() {
