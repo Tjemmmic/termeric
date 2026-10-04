@@ -544,8 +544,15 @@ fn validate_identifier(label: &str, value: &str) -> anyhow::Result<()> {
 }
 
 fn validate_single_line(label: &str, value: &str) -> anyhow::Result<()> {
-    if value.is_empty() || value.chars().count() > 256 || value.contains(['\n', '\r', '\0']) {
-        anyhow::bail!("{label} must contain 1 to 256 single-line characters");
+    // The value shows in chrome, so it follows the display rule terminal
+    // titles do: no control, line-break, or bidirectional formatting text.
+    if value.is_empty()
+        || value.chars().count() > 256
+        || value.chars().any(crate::safe_text::is_unsafe_display_char)
+    {
+        anyhow::bail!(
+            "{label} must be 1 to 256 characters on one line, without control or bidirectional formatting characters"
+        );
     }
     Ok(())
 }
@@ -1026,9 +1033,13 @@ mod tests {
             vec!["--geometry", "80x24"],
             vec!["--"],
             vec!["positional"],
+            vec!["--title", "two\nlines"],
+            vec!["--title", "tab\tstop"],
+            vec!["--title", "\u{202e}reversed"],
         ] {
             assert!(parse(arguments.into_iter().map(OsString::from)).is_err());
         }
+        assert!(parse(["--title", "Ünïcode ✓"].into_iter().map(OsString::from)).is_ok());
     }
 
     #[test]
