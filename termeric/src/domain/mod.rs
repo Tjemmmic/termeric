@@ -210,20 +210,11 @@ pub enum DomainCommand {
         max_bytes: usize,
         json: bool,
     },
-    Uploads {
-        json: bool,
-    },
-    CancelUpload {
-        upload_id: String,
-        json: bool,
-    },
     Upload {
         domain: String,
         pane: u32,
         source: std::path::PathBuf,
         name: Option<String>,
-        retain: bool,
-        resume: Option<String>,
         json: bool,
     },
     Relay {
@@ -302,22 +293,10 @@ fn execute_with_client(
         pane,
         source,
         name,
-        retain,
-        resume,
         json,
     } = command
     {
-        let response = if let Some(upload_id) = resume {
-            client.upload_path_with_manual_resume(domain, pane, &source, name, upload_id, true)?
-        } else if retain {
-            let upload_id = DomainClient::new_upload_id()?;
-            eprintln!(
-                "Resumable upload ID: {upload_id} (retained after interruption for up to 24 hours)"
-            );
-            client.upload_path_with_manual_resume(domain, pane, &source, name, upload_id, false)?
-        } else {
-            client.upload_path(domain, pane, &source, name)?
-        };
+        let response = client.upload_path(domain, pane, &source, name)?;
         return if json {
             Ok(Some(serde_json::to_string_pretty(&response)?))
         } else {
@@ -426,10 +405,6 @@ fn execute_with_client(
             },
             json,
         ),
-        DomainCommand::Uploads { json } => (Request::ListUploads, json),
-        DomainCommand::CancelUpload { upload_id, json } => {
-            (Request::CancelUpload { upload_id }, json)
-        }
         DomainCommand::Kill { domain } => (Request::KillDomain { domain }, false),
         DomainCommand::StopServer => (Request::Shutdown, false),
         DomainCommand::ServerForeground
@@ -540,35 +515,6 @@ fn format_human(response: Response) -> String {
         }
         Response::UploadBusy { retry_after_ms } => {
             format!("upload busy; retry after {retry_after_ms} ms")
-        }
-        Response::Uploads { uploads } => {
-            if uploads.is_empty() {
-                return "No retained uploads".into();
-            }
-            uploads
-                .into_iter()
-                .map(|upload| {
-                    let kind = match upload.kind {
-                        protocol::UploadKind::File => "file".to_string(),
-                        protocol::UploadKind::Directory { entries } => {
-                            format!("directory/{entries}")
-                        }
-                    };
-                    format!(
-                        "{}\t{}\t{}/{} bytes\t{}\t{}/{}\t{}\texpires {}s",
-                        upload.upload_id,
-                        kind,
-                        upload.bytes_received,
-                        upload.total_bytes,
-                        if upload.active { "active" } else { "retained" },
-                        upload.domain,
-                        upload.pane,
-                        upload.name,
-                        upload.expires_in_seconds
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
         }
         Response::UploadReady { .. } => "upload ready".into(),
         Response::Ok { message } => message,

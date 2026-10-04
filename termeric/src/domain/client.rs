@@ -1,9 +1,7 @@
 //! Authenticated local-domain client and transparent GUI relay.
 
 use super::paths::RuntimePaths;
-use super::protocol::{
-    self, ClientFrame, Request, Response, ServerFrame, UploadKind, UploadRetention,
-};
+use super::protocol::{self, ClientFrame, Request, Response, ServerFrame, UploadKind};
 use super::{DomainTopologyEvent, validate_ssh_destination};
 use anyhow::Context;
 use sha2::{Digest, Sha256};
@@ -341,10 +339,6 @@ pub fn request_focus_background(authority: super::DomainAuthority, domain: Strin
 }
 
 impl DomainClient {
-    pub fn new_upload_id() -> anyhow::Result<String> {
-        generate_upload_id()
-    }
-
     pub fn connect_or_start() -> anyhow::Result<Self> {
         let paths = RuntimePaths::discover()?;
         // Create authentication material before spawning so concurrent clients
@@ -489,70 +483,6 @@ impl DomainClient {
         anyhow::bail!("upload source must be one regular file or real directory")
     }
 
-    pub fn upload_path_with_manual_resume(
-        &self,
-        domain: String,
-        pane: u32,
-        source: &std::path::Path,
-        name: Option<String>,
-        upload_id: String,
-        resume_only: bool,
-    ) -> anyhow::Result<Response> {
-        let metadata = std::fs::symlink_metadata(source)
-            .with_context(|| format!("inspect upload source {}", source.display()))?;
-        if metadata.file_type().is_symlink() {
-            anyhow::bail!("upload source must not be a symbolic link");
-        }
-        let name = name
-            .or_else(|| {
-                source
-                    .file_name()
-                    .and_then(std::ffi::OsStr::to_str)
-                    .map(String::from)
-            })
-            .context("upload source requires a UTF-8 name")?;
-        let cancelled = AtomicBool::new(false);
-        if metadata.is_file() {
-            let file = std::fs::OpenOptions::new()
-                .read(true)
-                .custom_flags(libc::O_NOFOLLOW)
-                .open(source)
-                .with_context(|| format!("open upload source {}", source.display()))?;
-            return self.upload_open_file_with_kind_and_id(
-                domain,
-                pane,
-                file,
-                name,
-                UploadKind::File,
-                upload_id,
-                UploadRetention::Manual,
-                resume_only,
-                &cancelled,
-                |_, _| {},
-            );
-        }
-        if metadata.is_dir() {
-            let archive =
-                super::archive::build_directory_archive_with_control(source, &cancelled, None)?;
-            let file = archive.file.try_clone()?;
-            return self.upload_open_file_with_kind_and_id(
-                domain,
-                pane,
-                file,
-                name,
-                UploadKind::Directory {
-                    entries: archive.entries,
-                },
-                upload_id,
-                UploadRetention::Manual,
-                resume_only,
-                &cancelled,
-                |_, _| {},
-            );
-        }
-        anyhow::bail!("upload source must be one regular file or real directory")
-    }
-
     pub fn upload_directory(
         &self,
         domain: String,
@@ -606,8 +536,6 @@ impl DomainClient {
                 entries: archive.entries,
             },
             generate_upload_id()?,
-            UploadRetention::Automatic,
-            false,
             cancelled,
             progress,
         )
@@ -635,8 +563,6 @@ impl DomainClient {
                 entries: archive.entries,
             },
             upload_id,
-            UploadRetention::Automatic,
-            false,
             &cancelled,
             |_, _| {},
         )
@@ -672,8 +598,6 @@ impl DomainClient {
             name,
             UploadKind::File,
             upload_id,
-            UploadRetention::Automatic,
-            false,
             cancelled,
             progress,
         )
@@ -697,8 +621,6 @@ impl DomainClient {
             name,
             UploadKind::File,
             upload_id,
-            UploadRetention::Automatic,
-            false,
             cancelled,
             progress,
         )
@@ -712,8 +634,6 @@ impl DomainClient {
         name: String,
         kind: UploadKind,
         upload_id: String,
-        retention: UploadRetention,
-        resume_only: bool,
         cancelled: &AtomicBool,
         mut progress: impl FnMut(u64, u64),
     ) -> anyhow::Result<Response> {
@@ -745,8 +665,6 @@ impl DomainClient {
                 total_bytes,
                 &upload_id,
                 kind,
-                retention,
-                resume_only,
                 &metadata,
                 cancelled,
                 &mut progress,
@@ -780,8 +698,6 @@ impl DomainClient {
         total_bytes: u64,
         upload_id: &str,
         kind: UploadKind,
-        retention: UploadRetention,
-        resume_only: bool,
         expected_metadata: &std::fs::Metadata,
         cancelled: &AtomicBool,
         progress: &mut impl FnMut(u64, u64),
@@ -798,8 +714,6 @@ impl DomainClient {
                     total_bytes,
                     upload_id: upload_id.to_string(),
                     kind,
-                    retention,
-                    resume_only,
                 },
             },
         )

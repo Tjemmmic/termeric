@@ -1550,22 +1550,6 @@ fn parse_domain(
         "list" => DomainCommand::List {
             json: parse_only_json(values, "domain list")?,
         },
-        "uploads" => DomainCommand::Uploads {
-            json: parse_only_json(values, "domain uploads")?,
-        },
-        "cancel-upload" => {
-            if values.is_empty() || values.len() > 2 {
-                anyhow::bail!("usage: termeric domain cancel-upload UPLOAD_ID [--json]");
-            }
-            let upload_id = domain_utf8(values.first(), "cancel-upload requires UPLOAD_ID")?;
-            crate::domain::protocol::validate_upload_id(&upload_id)?;
-            let json = values.len() == 2
-                && domain_utf8(values.get(1), "invalid cancel-upload option")? == "--json";
-            if values.len() == 2 && !json {
-                anyhow::bail!("unknown cancel-upload option");
-            }
-            DomainCommand::CancelUpload { upload_id, json }
-        }
         "panes" | "show" => {
             let (domain, json) = parse_id_and_json(values, command)?;
             match command {
@@ -1963,17 +1947,13 @@ fn parse_domain_get_text(arguments: &[OsString]) -> anyhow::Result<crate::domain
 
 fn parse_domain_upload(arguments: &[OsString]) -> anyhow::Result<crate::domain::DomainCommand> {
     if arguments.len() < 3 {
-        anyhow::bail!(
-            "usage: termeric domain upload DOMAIN PANE SOURCE [--name NAME] [--retain|--resume ID] [--json]"
-        );
+        anyhow::bail!("usage: termeric domain upload DOMAIN PANE SOURCE [--name NAME] [--json]");
     }
     let domain = validated_domain_id(arguments.first())?;
     let pane = parse_pane_id(arguments.get(1))?;
     let source =
         std::path::PathBuf::from(arguments.get(2).context("domain upload requires SOURCE")?);
     let mut name = None;
-    let mut retain = false;
-    let mut resume = None;
     let mut json = false;
     let mut index = 3;
     while index < arguments.len() {
@@ -1985,27 +1965,15 @@ fn parse_domain_upload(arguments: &[OsString]) -> anyhow::Result<crate::domain::
                 name = Some(value);
             }
             "--json" => json = true,
-            "--retain" => retain = true,
-            "--resume" => {
-                index += 1;
-                let upload_id = domain_utf8(arguments.get(index), "--resume requires UPLOAD_ID")?;
-                crate::domain::protocol::validate_upload_id(&upload_id)?;
-                resume = Some(upload_id);
-            }
             option => anyhow::bail!("unknown upload option {option:?}"),
         }
         index += 1;
-    }
-    if retain && resume.is_some() {
-        anyhow::bail!("--retain and --resume cannot be used together");
     }
     Ok(crate::domain::DomainCommand::Upload {
         domain,
         pane,
         source,
         name,
-        retain,
-        resume,
         json,
     })
 }
@@ -2101,7 +2069,6 @@ Inspect:\n  \
   protocol-version [--json]             Print the local client's wire version\n  \
   hosts [--json]                       List configured SSH host profiles\n  \
   list [--json]                         List live domains\n  \
-  uploads [--json]                      List retained partial uploads\n  \
   show DOMAIN [--json]                  Describe complete live state\n  \
   panes DOMAIN [--json]                 List panes\n\n\
 Create and control:\n  \
@@ -2122,9 +2089,8 @@ Create and control:\n  \
   close-tab DOMAIN TAB                  Terminate and remove one tab\n  \
   send DOMAIN PANE TEXT [--enter]       Send bounded UTF-8 input\n  \
   get-text DOMAIN PANE [--bytes N] [--json]\n  \
-  upload DOMAIN PANE SOURCE [--name NAME] [--retain|--resume ID] [--json]\n  \
+  upload DOMAIN PANE SOURCE [--name NAME] [--json]\n  \
                                           Upload one file/directory without overwrite\n  \
-  cancel-upload UPLOAD_ID [--json]       Delete one inactive retained upload\n  \
   attach DOMAIN [WINDOW OPTIONS]        Open the domain in a GUI\n  \
   kill DOMAIN                           Terminate its processes\n  \
   stop-server                           Stop an empty daemon\n\n\
@@ -2546,66 +2512,6 @@ mod tests {
                 ["--quick-access", "--quick-access"]
                     .into_iter()
                     .map(OsString::from)
-            )
-            .is_err()
-        );
-        assert!(matches!(
-            parse(
-                ["domain", "uploads", "--json"]
-                    .into_iter()
-                    .map(OsString::from)
-            )
-            .unwrap(),
-            ParseOutcome::Domain(crate::domain::DomainCommand::Uploads { json: true })
-        ));
-        let resume_id = "0123456789abcdef0123456789abcdef";
-        assert!(matches!(
-            parse(
-                ["domain", "cancel-upload", resume_id, "--json"]
-                    .into_iter()
-                    .map(OsString::from)
-            )
-            .unwrap(),
-            ParseOutcome::Domain(crate::domain::DomainCommand::CancelUpload {
-                upload_id,
-                json: true,
-            }) if upload_id == resume_id
-        ));
-        assert!(matches!(
-            parse(
-                [
-                    "domain",
-                    "upload",
-                    "domain-123",
-                    "42",
-                    "/tmp/file",
-                    "--resume",
-                    resume_id,
-                ]
-                .into_iter()
-                .map(OsString::from)
-            )
-            .unwrap(),
-            ParseOutcome::Domain(crate::domain::DomainCommand::Upload {
-                retain: false,
-                resume: Some(upload_id),
-                ..
-            }) if upload_id == resume_id
-        ));
-        assert!(
-            parse(
-                [
-                    "domain",
-                    "upload",
-                    "domain-123",
-                    "42",
-                    "/tmp/file",
-                    "--retain",
-                    "--resume",
-                    resume_id,
-                ]
-                .into_iter()
-                .map(OsString::from)
             )
             .is_err()
         );
@@ -3886,6 +3792,8 @@ mod tests {
             vec!["domain", "--host", "host", "--host", "other", "list"],
             vec!["domain", "create", "name", "--size", "0x24"],
             vec!["domain", "server"],
+            vec!["domain", "upload", "domain-1", "0", "/tmp/file", "--retain"],
+            vec!["domain", "uploads"],
         ] {
             assert!(parse(arguments.into_iter().map(OsString::from)).is_err());
         }

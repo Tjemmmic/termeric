@@ -2,9 +2,7 @@
 
 use super::model::*;
 use super::paths::{RuntimePaths, effective_uid};
-use super::protocol::{
-    self, ClientFrame, Request, Response, ServerFrame, UploadKind, UploadRetention, UploadSummary,
-};
+use super::protocol::{self, ClientFrame, Request, Response, ServerFrame, UploadKind};
 use crate::panes::{PaneLayoutPreset, SplitDirection};
 use anyhow::Context;
 use sha2::{Digest, Sha256};
@@ -35,7 +33,6 @@ const MAX_RETAINED_UPLOAD_BYTES: u64 =
     protocol::MAX_FILE_UPLOAD_BYTES * MAX_RETAINED_PARTIAL_UPLOADS as u64;
 const MAX_COMPLETED_UPLOAD_RECORDS: usize = 32;
 const RETAINED_UPLOAD_TTL: Duration = Duration::from_secs(60);
-const MANUAL_UPLOAD_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const UPLOAD_JANITOR_INTERVAL: Duration = Duration::from_secs(5);
 const UPLOAD_RETRY_DELAY_MILLIS: u16 = 100;
 const ATTACH_QUEUE_CAPACITY: usize = 64;
@@ -74,7 +71,6 @@ struct UploadDescriptor {
     name: String,
     total_bytes: u64,
     kind: UploadKind,
-    retention: UploadRetention,
 }
 
 impl UploadDescriptor {
@@ -93,13 +89,6 @@ impl UploadDescriptor {
             && self.name == other.name
             && self.total_bytes == other.total_bytes
             && self.kind == other.kind
-    }
-
-    fn retention_ttl(&self) -> Duration {
-        match self.retention {
-            UploadRetention::Automatic => RETAINED_UPLOAD_TTL,
-            UploadRetention::Manual => MANUAL_UPLOAD_TTL,
-        }
     }
 }
 
@@ -393,13 +382,8 @@ fn prune_expired_upload_records(state: &SharedState, remove_all: bool) {
                     record.state,
                     UploadRecordState::Partial { active: true, .. }
                 );
-                let ttl = if matches!(record.state, UploadRecordState::Complete { .. }) {
-                    RETAINED_UPLOAD_TTL
-                } else {
-                    record.descriptor.retention_ttl()
-                };
-                (remove_all || (now.saturating_duration_since(record.updated) >= ttl && !active))
-                    .then_some(upload_id.clone())
+                let expired = now.saturating_duration_since(record.updated) >= RETAINED_UPLOAD_TTL;
+                (remove_all || (expired && !active)).then_some(upload_id.clone())
             })
             .collect::<Vec<_>>();
         expired
@@ -454,88 +438,6 @@ fn ensure_upload_janitor(state: &SharedState) {
         state.lock().unwrap().upload_janitor_running = false;
         log::warn!("Could not start retained-upload janitor: {error}");
     }
-}
-
-fn list_retained_uploads(state: &SharedState) -> Response {
-    prune_expired_upload_records(state, false);
-    let now = Instant::now();
-    let state = state.lock().unwrap();
-    let mut uploads = state
-        .upload_records
-        .iter()
-        .filter_map(|(upload_id, record)| {
-            let (bytes_received, active) = match &record.state {
-                UploadRecordState::Partial {
-                    bytes_received,
-                    active,
-                    ..
-                } => (*bytes_received, *active),
-                UploadRecordState::Complete { .. } => return None,
-            };
-            let remaining = record
-                .descriptor
-                .retention_ttl()
-                .saturating_sub(now.saturating_duration_since(record.updated));
-            Some(UploadSummary {
-                upload_id: upload_id.clone(),
-                domain: record.descriptor.domain.clone(),
-                pane: record.descriptor.pane,
-                name: record.descriptor.name.clone(),
-                total_bytes: record.descriptor.total_bytes,
-                bytes_received,
-                kind: record.descriptor.kind,
-                retention: record.descriptor.retention,
-                active,
-                expires_in_seconds: remaining.as_secs(),
-            })
-        })
-        .collect::<Vec<_>>();
-    uploads.sort_by(|left, right| left.upload_id.cmp(&right.upload_id));
-    Response::Uploads { uploads }
-}
-
-fn cancel_retained_upload(state: &SharedState, upload_id: &str) -> anyhow::Result<Response> {
-    protocol::validate_upload_id(upload_id)?;
-    prune_expired_upload_records(state, false);
-    let path = {
-        let mut state = state.lock().unwrap();
-        let record = state
-            .upload_records
-            .get_mut(upload_id)
-            .context("retained upload was not found or has expired")?;
-        match &mut record.state {
-            UploadRecordState::Partial { active: true, .. } => {
-                anyhow::bail!("upload is active; cancel it from the originating client")
-            }
-            UploadRecordState::Partial {
-                temporary_path,
-                active,
-                ..
-            } => {
-                *active = true;
-                temporary_path.clone()
-            }
-            UploadRecordState::Complete { .. } => {
-                anyhow::bail!("upload is already complete and cannot be cancelled")
-            }
-        }
-    };
-    if let Err(error) = fs::remove_file(&path)
-        && error.kind() != std::io::ErrorKind::NotFound
-    {
-        if let Some(UploadRecord {
-            state: UploadRecordState::Partial { active, .. },
-            ..
-        }) = state.lock().unwrap().upload_records.get_mut(upload_id)
-        {
-            *active = false;
-        }
-        return Err(error).context("remove retained upload staging file");
-    }
-    state.lock().unwrap().upload_records.remove(upload_id);
-    Ok(Response::Ok {
-        message: format!("cancelled retained upload {upload_id}"),
-    })
 }
 
 impl TemporaryUpload {
@@ -719,8 +621,6 @@ fn handle_client_with_setup_timeout(
         total_bytes,
         upload_id,
         kind,
-        retention,
-        resume_only,
     } = request
     {
         return serve_file_upload(
@@ -732,8 +632,6 @@ fn handle_client_with_setup_timeout(
             total_bytes,
             upload_id,
             kind,
-            retention,
-            resume_only,
         );
     }
     if matches!(&request, Request::Shutdown) {
@@ -797,8 +695,6 @@ fn serve_file_upload(
     total_bytes: u64,
     upload_id: String,
     kind: UploadKind,
-    retention: UploadRetention,
-    resume_only: bool,
 ) -> anyhow::Result<()> {
     stream.set_read_timeout(Some(UPLOAD_FRAME_TIMEOUT))?;
     let result = receive_file_upload(
@@ -810,8 +706,6 @@ fn serve_file_upload(
         total_bytes,
         &upload_id,
         kind,
-        retention,
-        resume_only,
     );
     match result {
         Ok(response) => write_server_frame(&mut stream, &ServerFrame::Response { response }),
@@ -838,8 +732,6 @@ fn receive_file_upload(
     total_bytes: u64,
     upload_id: &str,
     kind: UploadKind,
-    retention: UploadRetention,
-    resume_only: bool,
 ) -> anyhow::Result<Response> {
     validate_id("domain id", domain_id)?;
     protocol::validate_upload_name(name)?;
@@ -864,7 +756,6 @@ fn receive_file_upload(
         name: name.to_string(),
         total_bytes,
         kind,
-        retention,
     };
     prune_expired_upload_records(&state, false);
 
@@ -888,9 +779,6 @@ fn receive_file_upload(
         let start = if let Some(record) = state_guard.upload_records.get_mut(upload_id) {
             if !record.descriptor.matches_transfer(&descriptor) {
                 anyhow::bail!("upload id belongs to a different source or destination");
-            }
-            if retention == UploadRetention::Manual {
-                record.descriptor.retention = UploadRetention::Manual;
             }
             let start = match &mut record.state {
                 UploadRecordState::Complete { response } => {
@@ -927,9 +815,6 @@ fn receive_file_upload(
             record.updated = Instant::now();
             start
         } else {
-            if resume_only {
-                anyhow::bail!("retained upload was not found or has expired");
-            }
             if at_active_capacity {
                 return Ok(Response::UploadBusy {
                     retry_after_ms: UPLOAD_RETRY_DELAY_MILLIS,
@@ -1450,8 +1335,6 @@ fn process_request(state: &SharedState, request: Request) -> anyhow::Result<Resp
             let (text, truncated) = newest_utf8_bytes(&complete, maximum);
             Ok(Response::Text { text, truncated })
         }
-        Request::ListUploads => Ok(list_retained_uploads(state)),
-        Request::CancelUpload { upload_id } => cancel_retained_upload(state, &upload_id),
         Request::UploadFile { .. } => {
             unreachable!("streaming uploads are handled before request dispatch")
         }
@@ -3283,10 +3166,8 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let idle_path = directory.path().join("idle.part");
         let active_path = directory.path().join("active.part");
-        let manual_path = directory.path().join("manual.part");
         fs::write(&idle_path, b"idle").unwrap();
         fs::write(&active_path, b"active").unwrap();
-        fs::write(&manual_path, b"manual").unwrap();
         let old = Instant::now() - RETAINED_UPLOAD_TTL - Duration::from_secs(1);
         let descriptor = |name: &str, total_bytes| UploadDescriptor {
             domain: "daily".into(),
@@ -3294,10 +3175,7 @@ mod tests {
             name: name.into(),
             total_bytes,
             kind: UploadKind::File,
-            retention: UploadRetention::Automatic,
         };
-        let mut manual_descriptor = descriptor("manual.bin", 6);
-        manual_descriptor.retention = UploadRetention::Manual;
         let state = Arc::new(Mutex::new(ServerState {
             domains: HashMap::new(),
             allow_screen_checksum_reports: false,
@@ -3352,21 +3230,6 @@ mod tests {
                         updated: old,
                     },
                 ),
-                (
-                    "66666666666666666666666666666666".into(),
-                    UploadRecord {
-                        descriptor: manual_descriptor,
-                        state: UploadRecordState::Partial {
-                            temporary_path: manual_path.clone(),
-                            target_path: directory.path().join("manual.bin"),
-                            bytes_received: 6,
-                            device: 3,
-                            inode: 3,
-                            active: false,
-                        },
-                        updated: old,
-                    },
-                ),
             ]),
             upload_janitor_running: false,
         }));
@@ -3395,38 +3258,15 @@ mod tests {
         prune_expired_upload_records(&state, false);
         assert!(!idle_path.exists());
         assert!(active_path.exists());
-        assert!(manual_path.exists());
         {
             let state = state.lock().unwrap();
-            assert_eq!(state.upload_records.len(), 2);
+            assert_eq!(state.upload_records.len(), 1);
             assert!(
                 state
                     .upload_records
                     .contains_key("22222222222222222222222222222222")
             );
         }
-
-        let Response::Uploads { uploads } = list_retained_uploads(&state) else {
-            panic!("expected retained uploads");
-        };
-        assert_eq!(uploads.len(), 2);
-        assert!(uploads.iter().any(|upload| {
-            upload.upload_id == "66666666666666666666666666666666"
-                && upload.retention == UploadRetention::Manual
-                && !upload.active
-                && upload.expires_in_seconds > 60
-        }));
-        assert!(
-            cancel_retained_upload(&state, "22222222222222222222222222222222")
-                .unwrap_err()
-                .to_string()
-                .contains("active")
-        );
-        assert!(matches!(
-            cancel_retained_upload(&state, "66666666666666666666666666666666"),
-            Ok(Response::Ok { .. })
-        ));
-        assert!(!manual_path.exists());
 
         prune_expired_upload_records(&state, true);
         assert!(!active_path.exists());
@@ -4272,8 +4112,6 @@ mod tests {
                     total_bytes: 10,
                     upload_id: resumable_id.into(),
                     kind: UploadKind::File,
-                    retention: UploadRetention::Automatic,
-                    resume_only: false,
                 },
             },
         )
@@ -4308,62 +4146,51 @@ mod tests {
         ));
         let resume_source = temporary.path().join("resume-source.bin");
         fs::write(&resume_source, b"abcdefghij").unwrap();
-        let missing_resume = client
-            .upload_path_with_manual_resume(
-                domain_id.clone(),
-                0,
-                &resume_source,
-                Some("missing.bin".into()),
-                "99999999999999999999999999999999".into(),
-                true,
-            )
-            .unwrap_err();
-        assert!(format!("{missing_resume:#}").contains("not found or has expired"));
-
+        let cancellation = AtomicBool::new(false);
+        // Until the daemon notices the dropped connection, the record is
+        // still active and a retry is told to wait; the retained prefix
+        // then refuses a source that differs from it.
         let wrong_resume_source = temporary.path().join("wrong-resume-source.bin");
         fs::write(&wrong_resume_source, b"xxxdefghij").unwrap();
-        let wrong_prefix = client
-            .upload_path_with_manual_resume(
-                domain_id.clone(),
-                0,
-                &wrong_resume_source,
-                Some("partial.bin".into()),
-                resumable_id.into(),
-                true,
-            )
-            .unwrap_err();
-        assert!(format!("{wrong_prefix:#}").contains("retained prefix"));
-        let mut observed_uploads = Vec::new();
+        let mut last_error = String::new();
         assert!(
-            crate::test_support::poll_until(Duration::from_secs(2), || {
-                let Ok(Response::Uploads { uploads }) = client.request(Request::ListUploads) else {
-                    return false;
-                };
-                let retained = uploads.iter().any(|upload| {
-                    upload.upload_id == resumable_id
-                        && upload.bytes_received == 3
-                        && upload.retention == UploadRetention::Manual
-                        && !upload.active
-                });
-                observed_uploads = uploads;
-                retained
+            crate::test_support::poll_until(Duration::from_secs(5), || {
+                let attempt = client.upload_open_file_with_test_id(
+                    domain_id.clone(),
+                    0,
+                    fs::File::open(&wrong_resume_source).unwrap(),
+                    "partial.bin".into(),
+                    resumable_id.into(),
+                    &cancellation,
+                    |_, _| {},
+                );
+                last_error = attempt.map_or_else(|error| format!("{error:#}"), |_| "ok".into());
+                last_error.contains("retained prefix")
             }),
-            "retained upload did not become inactive: {observed_uploads:?}"
+            "a different source was not refused: {last_error}"
         );
 
-        let cancellation = AtomicBool::new(false);
         let mut resume_progress = Vec::new();
-        let resumed = client
-            .upload_open_file_with_test_id(
-                domain_id.clone(),
-                0,
-                fs::File::open(&resume_source).unwrap(),
-                "partial.bin".into(),
-                resumable_id.into(),
-                &cancellation,
-                |sent, total| resume_progress.push((sent, total)),
-            )
-            .unwrap();
+        let mut resumed = None;
+        assert!(crate::test_support::poll_until(
+            Duration::from_secs(5),
+            || {
+                resume_progress.clear();
+                resumed = client
+                    .upload_open_file_with_test_id(
+                        domain_id.clone(),
+                        0,
+                        fs::File::open(&resume_source).unwrap(),
+                        "partial.bin".into(),
+                        resumable_id.into(),
+                        &cancellation,
+                        |sent, total| resume_progress.push((sent, total)),
+                    )
+                    .ok();
+                resumed.is_some()
+            }
+        ));
+        let resumed = resumed.unwrap();
         assert!(matches!(resumed, Response::FileUploaded { bytes: 10, .. }));
         assert!(resume_progress.contains(&(3, 10)));
         assert_eq!(

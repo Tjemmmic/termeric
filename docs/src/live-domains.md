@@ -59,10 +59,10 @@ To copy a file or directory into a pane's working directory from a script:
 
 ```bash
 termeric domain upload DOMAIN 1 ./dist.tar.gz
-termeric domain upload DOMAIN 1 ./assets --name static --retain
+termeric domain upload DOMAIN 1 ./assets --name static
 ```
 
-An upload never overwrites an existing file. It is limited to 64 MiB, and a directory to 4096 entries. With `--retain`, an interrupted upload is kept for up to 24 hours and prints an ID you can pass to `--resume` to continue it; `termeric domain uploads` lists kept uploads and `termeric domain cancel-upload ID` deletes one.
+An upload never overwrites an existing file. It is limited to 64 MiB, and a directory to 4096 entries. If the connection drops partway, Termeric reconnects a few times on its own and continues where it stopped; the daemon deletes a partial upload nobody continues within a minute.
 
 ## Closing panes, tabs, and domains
 
@@ -133,9 +133,7 @@ A saved host holds only a name, a destination, and an optional description. Keep
 | `focus DOMAIN PANE` | Focus a pane. |
 | `send DOMAIN PANE TEXT [--enter]` | Type text into a pane, pressing Enter after it with `--enter`; at most 64 KiB. |
 | `get-text DOMAIN PANE [--bytes N] [--json]` | Print up to `N` bytes of a pane's newest text: 64 KiB by default, at most 1 MiB. |
-| `upload DOMAIN PANE SOURCE [--name NAME] [--retain\|--resume UPLOAD_ID] [--json]` | Copy a file or directory into a pane's working directory, never overwriting (see [above](#controlling-a-domain-from-scripts)). |
-| `uploads [--json]` | List interrupted uploads kept for resuming. |
-| `cancel-upload UPLOAD_ID [--json]` | Delete a kept upload. |
+| `upload DOMAIN PANE SOURCE [--name NAME] [--json]` | Copy a file or directory into a pane's working directory, never overwriting (see [above](#controlling-a-domain-from-scripts)). |
 | `close-pane DOMAIN PANE` | End a pane's program and remove the pane. Refused for a tab's last pane; use `close-tab`. |
 | `close-tab DOMAIN TAB` | End every program in a tab and remove it. Refused for a domain's last tab; use `kill`. |
 | `kill DOMAIN` | End every program in the domain and remove it. |

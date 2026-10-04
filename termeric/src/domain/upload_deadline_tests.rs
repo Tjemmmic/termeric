@@ -31,8 +31,6 @@ fn start(
             total,
             UPLOAD,
             UploadKind::File,
-            UploadRetention::Automatic,
-            true,
         )
     });
     assert!(
@@ -69,7 +67,6 @@ fn trickled_upload_chunk_and_commit_release_capacity_without_publishing_and_can_
                     name: "result.bin".into(),
                     total_bytes: total,
                     kind: UploadKind::File,
-                    retention: UploadRetention::Automatic,
                 },
                 state: UploadRecordState::Partial {
                     temporary_path: staging.clone(),

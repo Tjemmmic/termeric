@@ -19,27 +19,6 @@ pub enum UploadKind {
     Directory { entries: u32 },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum UploadRetention {
-    Automatic,
-    Manual,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct UploadSummary {
-    pub upload_id: String,
-    pub domain: String,
-    pub pane: u32,
-    pub name: String,
-    pub total_bytes: u64,
-    pub bytes_received: u64,
-    pub kind: UploadKind,
-    pub retention: UploadRetention,
-    pub active: bool,
-    pub expires_in_seconds: u64,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientFrame {
@@ -199,10 +178,6 @@ pub enum Request {
         pane: u32,
         max_bytes: usize,
     },
-    ListUploads,
-    CancelUpload {
-        upload_id: String,
-    },
     UploadFile {
         domain: String,
         pane: u32,
@@ -214,9 +189,6 @@ pub enum Request {
         /// The byte stream is either the file itself or Termeric's bounded,
         /// deterministic directory archive.
         kind: UploadKind,
-        retention: UploadRetention,
-        /// Refuse to create a new transfer when the retained record is absent.
-        resume_only: bool,
     },
     Attach {
         domain: String,
@@ -267,9 +239,6 @@ pub enum Response {
     },
     UploadBusy {
         retry_after_ms: u16,
-    },
-    Uploads {
-        uploads: Vec<UploadSummary>,
     },
     Attached {
         snapshot: Vec<u8>,
@@ -504,16 +473,6 @@ mod tests {
                     total_bytes: 131_072,
                     upload_id: "0123456789abcdef0123456789abcdef".into(),
                     kind: UploadKind::Directory { entries: 42 },
-                    retention: UploadRetention::Manual,
-                    resume_only: true,
-                },
-            },
-            ClientFrame::Request {
-                request: Request::ListUploads,
-            },
-            ClientFrame::Request {
-                request: Request::CancelUpload {
-                    upload_id: "0123456789abcdef0123456789abcdef".into(),
                 },
             },
             ClientFrame::UploadChunk {
@@ -586,22 +545,6 @@ mod tests {
             ServerFrame::Response {
                 response: Response::UploadBusy {
                     retry_after_ms: 100,
-                },
-            },
-            ServerFrame::Response {
-                response: Response::Uploads {
-                    uploads: vec![UploadSummary {
-                        upload_id: "0123456789abcdef0123456789abcdef".into(),
-                        domain: "daily".into(),
-                        pane: 7,
-                        name: "artifact.bin".into(),
-                        total_bytes: 131_072,
-                        bytes_received: 65_536,
-                        kind: UploadKind::File,
-                        retention: UploadRetention::Manual,
-                        active: false,
-                        expires_in_seconds: 86_399,
-                    }],
                 },
             },
             ServerFrame::SnapshotComplete,

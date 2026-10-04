@@ -188,38 +188,6 @@ fn fake_ssh_controls_a_remote_daemon_without_network_or_token_export() {
         b"remote directory\n"
     );
     assert!(remote_cwd.join("remote project/empty").is_dir());
-    let retained_upload = harness.successful(&[
-        "domain",
-        "--host",
-        "test-host",
-        "upload",
-        &domain,
-        "0",
-        source.to_str().unwrap(),
-        "--name",
-        "retained option.bin",
-        "--retain",
-        "--json",
-    ]);
-    let retained_id = String::from_utf8_lossy(&retained_upload.stderr)
-        .split_whitespace()
-        .nth(3)
-        .unwrap()
-        .to_string();
-    assert!(retained_id.len() == 32 && retained_id.bytes().all(|byte| byte.is_ascii_hexdigit()));
-    let uploads = harness.successful(&["domain", "--host", "test-host", "uploads", "--json"]);
-    let uploads: serde_json::Value = serde_json::from_slice(&uploads.stdout).unwrap();
-    assert_eq!(uploads["result"], "uploads");
-    assert_eq!(uploads["uploads"].as_array().unwrap().len(), 0);
-    let completed_cancel = harness.command(&[
-        "domain",
-        "--host",
-        "test-host",
-        "cancel-upload",
-        &retained_id,
-    ]);
-    assert!(!completed_cancel.status.success());
-    assert!(String::from_utf8_lossy(&completed_cancel.stderr).contains("already complete"));
     let overwrite = harness.command(&[
         "domain",
         "--host",
