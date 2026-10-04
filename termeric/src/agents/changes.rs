@@ -588,7 +588,6 @@ pub fn revert(baseline: &Baseline, path: &Path) -> Result<()> {
             fs::remove_file(&target)?;
         }
         if fs::symlink_metadata(&restored)?.file_type().is_symlink() {
-            #[cfg(unix)]
             std::os::unix::fs::symlink(fs::read_link(&restored)?, &target)?;
         } else {
             fs::copy(&restored, &target)?;

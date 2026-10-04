@@ -6,6 +6,7 @@
 //! understand, and gives up rather than guessing.
 
 use std::io::{Read, Seek, SeekFrom};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
 use serde_json::Value;
@@ -43,12 +44,7 @@ pub fn last_response(path: &Path) -> Option<String> {
 /// pipe otherwise would.
 fn open_without_waiting(path: &Path) -> Option<std::fs::File> {
     let mut options = std::fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NONBLOCK);
-    }
+    options.read(true).custom_flags(libc::O_NONBLOCK);
     options.open(path).ok()
 }
 
@@ -128,7 +124,6 @@ mod tests {
         assert_eq!(last_response(Path::new("/definitely/missing.jsonl")), None);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_pipe_in_place_of_a_log_is_refused_without_waiting() {
         let directory = tempfile::tempdir().unwrap();

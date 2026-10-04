@@ -105,7 +105,6 @@ pub(crate) fn poll_until(timeout: Duration, mut step: impl FnMut() -> bool) -> b
     }
 }
 
-#[cfg(unix)]
 pub(crate) fn seed_pixel_geometry_retention_probe(terminal: &mut Terminal) {
     assert_eq!((terminal.grid().cols(), terminal.grid().rows()), (8, 5));
     terminal.set_scrollback_limits(0, 0);
@@ -116,7 +115,6 @@ pub(crate) fn seed_pixel_geometry_retention_probe(terminal: &mut Terminal) {
     terminal.presentation_grid_mut().set_scrollback_limit(0);
 }
 
-#[cfg(unix)]
 pub(crate) fn assert_pixel_geometry_retention_probe(terminal: &Terminal) {
     assert_eq!((terminal.grid().cols(), terminal.grid().rows()), (8, 2));
     assert_eq!(terminal.grid().scrollback_len(), 0);

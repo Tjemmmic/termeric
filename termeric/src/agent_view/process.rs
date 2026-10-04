@@ -9,6 +9,7 @@
 use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::io::{BufReader, Read, Write};
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -105,13 +106,9 @@ impl AgentProcess {
         for (name, value) in &spec.env {
             command.env(name, value);
         }
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            // Its own group, so closing the agent also closes the commands it
-            // started, and a terminal's Ctrl+C never reaches it.
-            command.process_group(0);
-        }
+        // Its own group, so closing the agent also closes the commands it
+        // started, and a terminal's Ctrl+C never reaches it.
+        command.process_group(0);
         let mut child = command.spawn()?;
         let process_id = child.id();
         let (Some(stdin), Some(stdout), Some(stderr)) =
@@ -405,7 +402,6 @@ fn reap(child: &Mutex<Child>) -> Result<Option<std::process::ExitStatus>, ()> {
     }
 }
 
-#[cfg(unix)]
 fn leader_state(process_id: u32) -> Leader {
     let id = libc::id_t::from(process_id);
     loop {
@@ -435,19 +431,12 @@ fn leader_state(process_id: u32) -> Leader {
     }
 }
 
-/// Without process groups there is nothing to protect; std reaps as usual.
-#[cfg(not(unix))]
-fn leader_state(_process_id: u32) -> Leader {
-    Leader::Reaped
-}
-
 #[derive(Clone, Copy)]
 enum Signal {
     Terminate,
     Kill,
 }
 
-#[cfg(unix)]
 fn signal_group(process_id: u32, signal: Signal) {
     let Ok(group) = libc::pid_t::try_from(process_id) else {
         return;
@@ -465,9 +454,6 @@ fn signal_group(process_id: u32, signal: Signal) {
         libc::kill(-group, signal);
     }
 }
-
-#[cfg(not(unix))]
-fn signal_group(_process_id: u32, _signal: Signal) {}
 
 /// Whether a program was found, once the search has finished.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -557,7 +543,6 @@ impl LoginPath {
 }
 
 /// Asks the person's login shell for its `PATH`.
-#[cfg(unix)]
 fn login_shell_path() -> Option<OsString> {
     let shell = std::env::var_os("SHELL").unwrap_or_else(|| "/bin/sh".into());
     let mut child = Command::new(shell)
@@ -584,12 +569,7 @@ fn login_shell_path() -> Option<OsString> {
     (!path.is_empty()).then(|| path.into())
 }
 
-#[cfg(not(unix))]
-fn login_shell_path() -> Option<OsString> {
-    None
-}
-
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

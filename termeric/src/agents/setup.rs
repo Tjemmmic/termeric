@@ -768,7 +768,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn writes_follow_links_keep_permissions_and_back_up() {
         use std::os::unix::fs::PermissionsExt;
