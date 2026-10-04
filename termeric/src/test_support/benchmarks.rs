@@ -168,8 +168,8 @@ fn release_benchmark_suite() {
             assert_eq!(search.match_count(), lines / 100);
 
             // Model a paused typist: the broad first character has completed
-            // before the next key arrives. This catches candidate-row copies
-            // or result cleanup that scale badly on the keyboard path.
+            // before the next key arrives. This catches result cleanup that
+            // scales badly on the keyboard path.
             let mut broad_search = Search::new();
             broad_search.start();
             broad_search.push_char('n', terminal.grid());

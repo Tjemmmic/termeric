@@ -39,42 +39,26 @@ struct LineCell {
 }
 
 #[derive(Debug)]
-enum SearchRows {
-    All {
-        next_history: usize,
-        next_visible: usize,
-    },
-    Candidates {
-        rows: Vec<i32>,
-        next: usize,
-    },
-}
-
-#[derive(Debug)]
 struct PendingSearch {
     content_revision: (u64, u64),
     cols: usize,
     history_len: usize,
     visible_rows: usize,
-    rows: SearchRows,
+    next_history: usize,
+    next_visible: usize,
     /// Last row of the latest logical line searched; rows up to it are done.
     searched_through: Option<i32>,
 }
 
 impl PendingSearch {
-    fn new(grid: &Grid, candidate_rows: Option<Vec<i32>>) -> Self {
+    fn new(grid: &Grid) -> Self {
         Self {
             content_revision: grid.content_revision(),
             cols: grid.cols(),
             history_len: grid.scrollback_len(),
             visible_rows: grid.rows(),
-            rows: candidate_rows.map_or(
-                SearchRows::All {
-                    next_history: 0,
-                    next_visible: 0,
-                },
-                |rows| SearchRows::Candidates { rows, next: 0 },
-            ),
+            next_history: 0,
+            next_visible: 0,
             searched_through: None,
         }
     }
@@ -87,63 +71,36 @@ impl PendingSearch {
     }
 
     fn next_row(&mut self) -> Option<i32> {
-        match &mut self.rows {
-            SearchRows::All {
-                next_history,
-                next_visible,
-            } => {
-                if *next_history < self.history_len {
-                    let index = *next_history;
-                    *next_history += 1;
-                    return Some(-((self.history_len - index) as i32));
-                }
-                if *next_visible < self.visible_rows {
-                    let row = *next_visible as i32;
-                    *next_visible += 1;
-                    return Some(row);
-                }
-                None
-            }
-            SearchRows::Candidates { rows, next } => {
-                let row = rows.get(*next).copied();
-                *next += usize::from(row.is_some());
-                row
-            }
+        if self.next_history < self.history_len {
+            let index = self.next_history;
+            self.next_history += 1;
+            return Some(-((self.history_len - index) as i32));
         }
+        if self.next_visible < self.visible_rows {
+            let row = self.next_visible as i32;
+            self.next_visible += 1;
+            return Some(row);
+        }
+        None
     }
 
     fn is_complete(&self) -> bool {
-        match &self.rows {
-            SearchRows::All {
-                next_history,
-                next_visible,
-            } => *next_history >= self.history_len && *next_visible >= self.visible_rows,
-            SearchRows::Candidates { rows, next } => *next >= rows.len(),
-        }
+        self.next_history >= self.history_len && self.next_visible >= self.visible_rows
     }
 }
 
 impl SearchLine {
-    /// The logical line holding `row`: back to the row after the last hard
-    /// break and on through the rows it wraps into, never outside `scope`.
-    fn around(grid: &Grid, row: i32, scope: Option<&RangeInclusive<i32>>) -> Self {
-        let first_stored = -(grid.scrollback_len().min(i32::MAX as usize) as i32);
-        let first_allowed = scope.map_or(first_stored, |scope| (*scope.start()).max(first_stored));
+    /// The logical line that starts at `row`: it and the rows it wraps
+    /// into, never past the end of `scope`. Rows are scanned in order, so the
+    /// row before `row` has always been searched already or is out of scope.
+    fn starting_at(grid: &Grid, row: i32, scope: Option<&RangeInclusive<i32>>) -> Self {
         let last_allowed = scope.map_or(i32::MAX, |scope| *scope.end());
-        let mut first = row;
-        while first > first_allowed
-            && grid
-                .row_at_offset(first - 1)
-                .is_some_and(|previous| previous.is_wrapped())
-        {
-            first -= 1;
-        }
         let mut line = Self {
             text: String::new(),
-            first_row: first,
+            first_row: row,
             cells: None,
         };
-        let mut current = first;
+        let mut current = row;
         while let Some(view) = grid.row_at_offset(current) {
             line.push_row(current, &view);
             if !view.is_wrapped() || current >= last_allowed {
@@ -274,7 +231,7 @@ pub struct Search {
     filter_row_offset: usize,
     /// Optional inclusive row scope (used by Harvest's Search Output).
     row_scope: Option<RangeInclusive<i32>>,
-    /// In-progress full/candidate scan. Work is consumed in bounded slices by
+    /// In-progress scan. Work is consumed in bounded slices by
     /// the event-driven render loop so keyboard dispatch never walks all history.
     pending_search: Option<PendingSearch>,
     /// Identity of the matching-row set. Scrolling that set does not change it.
@@ -474,15 +431,10 @@ impl Search {
         self.pending_search.is_some()
     }
 
-    /// Add a character to the query
+    /// Type a character at the end of the query, as the keyboard does.
     #[cfg(test)]
     pub fn push_char(&mut self, c: char, grid: &Grid) {
-        let candidate_rows =
-            (!self.use_regex && !self.query.is_empty() && self.pending_search.is_none())
-                .then(|| std::mem::take(&mut self.matching_rows));
-        self.query.push(c);
-        self.compile_regex_if_needed();
-        self.begin_update(grid, candidate_rows);
+        assert!(self.insert_text(self.query.len(), c.encode_utf8(&mut [0; 4]), grid));
     }
 
     /// Insert committed platform text at a UTF-8 cursor boundary.
@@ -494,7 +446,7 @@ impl Search {
         {
             self.query.insert_str(cursor, text);
             self.compile_regex_if_needed();
-            self.begin_update(grid, None);
+            self.begin_update(grid);
             true
         } else {
             false
@@ -514,7 +466,7 @@ impl Search {
         }
         if crate::ui::text_input::edit_grapheme(&mut self.query, &mut cursor, edit) {
             self.compile_regex_if_needed();
-            self.begin_update(grid, None);
+            self.begin_update(grid);
         }
         Some(cursor)
     }
@@ -527,7 +479,7 @@ impl Search {
         self.query.clear();
         self.query.push_str(query);
         self.compile_regex_if_needed();
-        self.begin_update(grid, None);
+        self.begin_update(grid);
         true
     }
 
@@ -535,21 +487,21 @@ impl Search {
     pub fn toggle_case_sensitive(&mut self, grid: &Grid) {
         self.case_sensitive = !self.case_sensitive;
         self.compile_regex_if_needed();
-        self.begin_update(grid, None);
+        self.begin_update(grid);
     }
 
     /// Toggle regex mode
     pub fn toggle_regex(&mut self, grid: &Grid) {
         self.use_regex = !self.use_regex;
         self.compile_regex_if_needed();
-        self.begin_update(grid, None);
+        self.begin_update(grid);
     }
 
     /// Re-run the current query against a different terminal grid while
     /// preserving the search controls and input state.
     pub fn refresh(&mut self, grid: &Grid) {
         // Content changes do not alter the query or its compile/error state.
-        self.begin_update(grid, None);
+        self.begin_update(grid);
     }
 
     /// Get current match count
@@ -679,13 +631,13 @@ impl Search {
         }
     }
 
-    fn begin_update(&mut self, grid: &Grid, candidate_rows: Option<Vec<i32>>) {
+    fn begin_update(&mut self, grid: &Grid) {
         self.clear_results();
         if self.query.is_empty() || self.compiled_regex.is_none() {
             return;
         }
 
-        self.pending_search = Some(PendingSearch::new(grid, candidate_rows));
+        self.pending_search = Some(PendingSearch::new(grid));
     }
 
     /// Consume at most `max_rows` rows of pending search work.
@@ -698,7 +650,7 @@ impl Search {
             return false;
         };
         if !pending.matches_source(grid) {
-            self.begin_update(grid, None);
+            self.begin_update(grid);
         }
 
         let Some(mut pending) = self.pending_search.take() else {
@@ -718,7 +670,7 @@ impl Search {
             {
                 continue;
             }
-            let line = SearchLine::around(grid, row_index, self.row_scope.as_ref());
+            let line = SearchLine::starting_at(grid, row_index, self.row_scope.as_ref());
             let last_row = line.last_row();
             rows_read += usize::try_from(last_row - row_index).unwrap_or(0);
             pending.searched_through = Some(last_row);
@@ -1338,36 +1290,6 @@ mod tests {
     }
 
     #[test]
-    fn completed_literal_extension_moves_candidate_rows_without_copying() {
-        let mut terminal = termeric_core::Terminal::new(40, 2);
-        terminal.grid_mut().set_scrollback_limit(1_000);
-        for line in 0..200 {
-            terminal.process(format!("{line:03} needle content\r\n").as_bytes());
-        }
-
-        let mut search = Search::new();
-        search.start();
-        search.push_char('n', terminal.grid());
-        search.finish(terminal.grid());
-        let candidate_count = search.matching_rows.len();
-        let candidate_ptr = search.matching_rows.as_ptr();
-
-        search.push_char('e', terminal.grid());
-        let Some(PendingSearch {
-            rows: SearchRows::Candidates { rows, .. },
-            ..
-        }) = search.pending_search.as_ref()
-        else {
-            panic!("literal extension should narrow completed candidate rows");
-        };
-        assert_eq!(rows.len(), candidate_count);
-        assert_eq!(rows.as_ptr(), candidate_ptr);
-
-        search.finish(terminal.grid());
-        assert_eq!(search.match_count(), 200);
-    }
-
-    #[test]
     fn pending_search_restarts_after_same_shape_edits_and_grid_replacement() {
         let mut terminal = termeric_core::Terminal::new(30, 4);
         terminal.process(b"needle\r\nneedle");
@@ -1499,7 +1421,7 @@ mod tests {
 fn multicell_text_is_indexed_once_across_its_full_column_span() {
     let mut terminal = termeric_core::Terminal::new(10, 3);
     terminal.process(b"\x1b]66;s=2:w=2;title\x07!");
-    let line = SearchLine::around(terminal.grid(), 0, None);
+    let line = SearchLine::starting_at(terminal.grid(), 0, None);
     assert_eq!(line.text.trim_end(), "title!");
     assert_eq!((line.span(0, 5).start_col, line.span(0, 5).end_col), (0, 4));
     assert_eq!((line.span(5, 6).start_col, line.span(5, 6).end_col), (4, 5));
@@ -1540,19 +1462,14 @@ fn matches_continue_across_soft_wraps_but_not_hard_line_breaks() {
 
     assert_eq!(search_for(b"xxxxxhel\r\nlo", "hello").match_count(), 0);
 
-    // Extending a literal rescans only matching rows; one in the middle of a
-    // wrapped line is searched from the start of that line.
-    let mut terminal = termeric_core::Terminal::new(8, 4);
-    terminal.process(b"abcdefghijhello!");
-    let mut search = Search::new();
-    search.start();
-    search.set_query("hel", terminal.grid());
-    search.finish(terminal.grid());
-    assert_eq!(search.matching_rows, [1]);
-    search.set_query("hello!", terminal.grid());
-    search.finish(terminal.grid());
+    // A match that starts on a wrapped line's second row is placed there.
+    let search = search_for(b"abcdefghijhello!", "hello!");
     assert_eq!(search.match_count(), 1);
-    assert_eq!(search.current().map(|found| found.row), Some(1));
+    assert_eq!(search.matching_rows, [1]);
+    assert_eq!(
+        search.current().map(|found| (found.row, found.start_col)),
+        Some((1, 2))
+    );
 
     // A wide character pushed to the next row leaves padding that isn't text.
     let search = search_for("abcdefg界x".as_bytes(), "g界");
