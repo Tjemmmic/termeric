@@ -8941,7 +8941,7 @@ Used by:
 - [wayland-protocols-plasma 0.3.10](https://github.com/smithay/wayland-rs)
 - [wayland-protocols-wlr 0.3.10](https://github.com/smithay/wayland-rs)
 - [wayland-protocols 0.32.10](https://github.com/smithay/wayland-rs)
-- [wayland-scanner 0.31.8](https://github.com/smithay/wayland-rs)
+- [wayland-scanner 0.31.11](https://github.com/smithay/wayland-rs)
 - [wayland-sys 0.31.8](https://github.com/smithay/wayland-rs)
 
 ```text
@@ -10499,7 +10499,7 @@ SOFTWARE.
 
 Used by:
 
-- [quick-xml 0.38.4](https://github.com/tafia/quick-xml)
+- [quick-xml 0.41.0](https://github.com/tafia/quick-xml)
 
 ```text
 The MIT License (MIT)
