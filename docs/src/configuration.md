@@ -70,7 +70,7 @@ Some settings are not in the Settings dialog, so you change them in the file:
 - launch profiles, `[[keybindings]]`, and SSH host names;
 - custom agents, every built-in agent key except turning the agent on or off, and `supervisor.max_sends_per_minute`.
 
-`panes.cwd` is also set by **Cycle New Pane Directory** in the command palette. A few Settings controls offer a narrower range, or a list of common values, than the file accepts; the reference below gives the full ranges.
+`panes.cwd` is also set by **Cycle New Pane Directory** in the command palette. Settings steps the scrollback lines, scroll speed, and memory limit through a list of common values; the file accepts any value in the ranges below, and every other Settings control reaches the full range.
 
 ## Reference
 
