@@ -239,7 +239,6 @@ fn evicted_diff_review_cannot_copy_or_dismiss_a_newer_patch() {
 
 #[test]
 fn plugin_export_uses_its_own_transcript_or_scrollback_not_focused_sibling() {
-    let _lock = crate::session::export_job::EXPORT_TEST_LOCK.lock().unwrap();
     for recording in [false, true] {
         let (mut app, directory, entry, _) = harvest_rerun_capture_fixture();
         let base = directory.path().join("exports");

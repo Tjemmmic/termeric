@@ -16,7 +16,7 @@ use super::transcript::{EntryKind, MAX_TRANSCRIPT_RECORD_BYTES, TranscriptEntry}
 pub(crate) fn markdown_of_file(jsonl_path: &Path) -> Result<String, String> {
     let mut reader = io::BufReader::new(fs::File::open(jsonl_path).map_err(|e| e.to_string())?);
     let mut output = Vec::new();
-    render_markdown(&mut reader, &mut output, &|| Ok(())).map_err(|e| e.to_string())?;
+    render_markdown(&mut reader, &mut output).map_err(|e| e.to_string())?;
     String::from_utf8(output).map_err(|e| e.to_string())
 }
 
@@ -25,13 +25,12 @@ pub(crate) fn markdown_of_file(jsonl_path: &Path) -> Result<String, String> {
 pub(super) fn render_markdown(
     reader: &mut (impl BufRead + Seek),
     writer: &mut impl Write,
-    check: &impl Fn() -> io::Result<()>,
 ) -> io::Result<usize> {
     let mut line = Vec::new();
     let mut peak_encoded_capacity = 0;
     let mut count = 0;
     let mut metadata = None;
-    while read_record(reader, &mut line, check)? {
+    while read_record(reader, &mut line)? {
         peak_encoded_capacity = peak_encoded_capacity.max(line.capacity());
         count += 1;
         let entry = parse_entry(&line, count)?;
@@ -47,12 +46,11 @@ pub(super) fn render_markdown(
     drop(metadata);
     reader.seek(SeekFrom::Start(0))?;
     count = 0;
-    while read_record(reader, &mut line, check)? {
+    while read_record(reader, &mut line)? {
         peak_encoded_capacity = peak_encoded_capacity.max(line.capacity());
         count += 1;
         write_entry(writer, &parse_entry(&line, count)?)?;
     }
-    check()?;
     Ok(peak_encoded_capacity)
 }
 
@@ -62,33 +60,14 @@ fn parse_entry(line: &[u8], number: usize) -> io::Result<TranscriptEntry> {
     })
 }
 
-fn read_record(
-    reader: &mut impl BufRead,
-    line: &mut Vec<u8>,
-    check: &impl Fn() -> io::Result<()>,
-) -> io::Result<bool> {
-    line.clear();
-    loop {
-        check()?;
-        let available = reader.fill_buf()?;
-        if available.is_empty() {
-            return Ok(!line.is_empty());
-        }
-        let count = available
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .map_or(available.len(), |index| index + 1);
-        if line.len().saturating_add(count) > MAX_TRANSCRIPT_RECORD_BYTES {
-            return Err(io::Error::other(
-                "Transcript record exceeds the 16 MiB encoded limit",
-            ));
-        }
-        let finished = available[count - 1] == b'\n';
-        line.extend_from_slice(&available[..count]);
-        reader.consume(count);
-        if finished {
-            return Ok(true);
-        }
+/// Read the next record into `line`; false at the end of the transcript.
+fn read_record(reader: &mut impl BufRead, line: &mut Vec<u8>) -> io::Result<bool> {
+    match crate::line_reader::read_bounded_line(reader, MAX_TRANSCRIPT_RECORD_BYTES, line)? {
+        None => Ok(false),
+        Some(read) if read.oversized => Err(io::Error::other(
+            "Transcript record exceeds the 16 MiB encoded limit",
+        )),
+        Some(_) => Ok(true),
     }
 }
 
@@ -204,7 +183,7 @@ mod tests {
         }
         let mut output = Count(0, 0);
         let mut input = io::BufReader::new(fs::File::open(path).unwrap());
-        let peak = render_markdown(&mut input, &mut output, &|| Ok(())).unwrap();
+        let peak = render_markdown(&mut input, &mut output).unwrap();
         assert!(peak <= 1024 * 1024, "encoded buffer grew to {peak}");
         assert!(output.0 >= 45 * 1024 * 1024, "content was truncated");
         assert_eq!(
@@ -225,13 +204,12 @@ mod tests {
         };
         let line = serde_json::to_vec(&entry).unwrap();
         assert!(line.len() < MAX_TRANSCRIPT_RECORD_BYTES);
-        let peak =
-            render_markdown(&mut io::Cursor::new(line), &mut io::sink(), &|| Ok(())).unwrap();
+        let peak = render_markdown(&mut io::Cursor::new(line), &mut io::sink()).unwrap();
         assert!(peak <= MAX_TRANSCRIPT_RECORD_BYTES);
         let mut oversized =
             io::BufReader::new(io::repeat(b'x').take(MAX_TRANSCRIPT_RECORD_BYTES as u64 + 1));
         assert!(
-            read_record(&mut oversized, &mut Vec::new(), &|| Ok(()))
+            read_record(&mut oversized, &mut Vec::new())
                 .unwrap_err()
                 .to_string()
                 .contains("16 MiB")
@@ -242,7 +220,7 @@ mod tests {
     fn streaming_metadata_order_and_io_errors_remain_explicit() {
         let input = b"{\"timestamp\":0,\"kind\":\"output\",\"content\":\"early\"}\n{\"timestamp\":0,\"kind\":\"meta\",\"content\":\"\",\"metadata\":{\"repo\":\"later metadata\"}}\n";
         let mut output = Vec::new();
-        render_markdown(&mut io::Cursor::new(input), &mut output, &|| Ok(())).unwrap();
+        render_markdown(&mut io::Cursor::new(input), &mut output).unwrap();
         let text = String::from_utf8(output).unwrap();
         assert!(text.find("later metadata").unwrap() < text.find("early").unwrap());
         struct Fail;
@@ -255,7 +233,7 @@ mod tests {
             }
         }
         assert!(
-            render_markdown(&mut io::Cursor::new(input), &mut Fail, &|| Ok(()))
+            render_markdown(&mut io::Cursor::new(input), &mut Fail)
                 .unwrap_err()
                 .to_string()
                 .contains("full disk")

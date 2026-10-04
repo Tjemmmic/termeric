@@ -184,8 +184,8 @@ mod tests {
         assert!(session.transcript.is_some());
         assert_eq!(session.drain_notices().len(), 3); // Two text directions plus strict diff-observer rejection.
         let recorder = session.transcript.as_ref().unwrap();
-        let checkpoint = recorder.checkpoint().unwrap();
-        checkpoint
+        let flush = recorder.flush().unwrap();
+        flush
             .reply
             .recv_timeout(std::time::Duration::from_secs(2))
             .unwrap()

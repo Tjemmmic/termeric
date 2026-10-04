@@ -81,19 +81,19 @@ fn malformed_and_eof_replacements_are_persisted_and_notices_are_once_per_directi
 }
 
 #[test]
-fn checkpoint_exports_only_decoded_prefix_without_finalizing_a_pending_character() {
+fn a_flush_holds_only_the_decoded_prefix_without_finalizing_a_pending_character() {
     let directory = tempfile::tempdir().unwrap();
     let mut recorder =
         TranscriptRecorder::new(directory.path(), None, None, "Local", "fixture").unwrap();
     recorder.record_output(b"before \xf0\x9f").unwrap();
-    let pending = recorder.checkpoint().unwrap();
-    let checkpoint = pending
+    let pending = recorder.flush().unwrap();
+    let flushed = pending
         .reply
         .recv_timeout(Duration::from_secs(2))
         .unwrap()
         .unwrap();
     let prefix = fs::read(recorder.path()).unwrap();
-    let prefix = std::str::from_utf8(&prefix[..checkpoint.bytes as usize]).unwrap();
+    let prefix = std::str::from_utf8(&prefix[..flushed as usize]).unwrap();
     assert!(prefix.contains("before "));
     assert!(!prefix.contains('�'));
     recorder.record_output(b"\x8c\xb1 after").unwrap();
@@ -216,8 +216,8 @@ fn blocked_writer_does_not_block_decoder_or_carry_text_across_dropped_calls() {
     release.send(()).unwrap();
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
-        if let Ok(checkpoint) = recorder.checkpoint() {
-            checkpoint
+        if let Ok(flush) = recorder.flush() {
+            flush
                 .reply
                 .recv_timeout(Duration::from_secs(2))
                 .unwrap()

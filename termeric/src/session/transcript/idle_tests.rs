@@ -148,7 +148,7 @@ fn periodic_flush_returns_to_sleep_and_later_commands_wake_the_writer() {
     let mut fixture = LifecycleFixture::new(DEFAULT_MAX_FILE_BYTES);
     fixture.recorder.record_output("first batch").unwrap();
     fixture.await_periodic_flush();
-    // An idle checkpoint is not required to trigger the periodic flush.
+    // An explicit flush is not required to trigger the periodic flush.
     // Afterward, neither repeated flushes nor timer wakeups should occur.
     assert!(matches!(
         fixture.flushed.recv_timeout(FLUSH_INTERVAL * 2),
@@ -159,16 +159,15 @@ fn periodic_flush_returns_to_sleep_and_later_commands_wake_the_writer() {
         Err(mpsc::TryRecvError::Empty)
     ));
 
-    let checkpoint = fixture.recorder.checkpoint().unwrap();
-    let checkpoint = checkpoint
+    let flush = fixture.recorder.flush().unwrap();
+    let flushed = flush
         .reply
         .recv_timeout(Duration::from_secs(2))
         .unwrap()
         .unwrap();
-    fixture.await_periodic_flush(); // This flush was explicitly checkpointed.
+    fixture.await_periodic_flush(); // This flush was explicitly requested.
     let bytes = fixture.bytes.lock().unwrap().clone();
-    assert_eq!(checkpoint.bytes, bytes.len() as u64);
-    assert_eq!(checkpoint.sha256, <[u8; 32]>::from(Sha256::digest(&bytes)));
+    assert_eq!(flushed, bytes.len() as u64);
     assert!(String::from_utf8(bytes).unwrap().contains("first batch"));
 
     fixture

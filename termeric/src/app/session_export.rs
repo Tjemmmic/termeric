@@ -24,7 +24,7 @@ impl App {
             .pane_session(identity.pane_id)
             .and_then(|state| state.transcript.as_ref())
         {
-            match recorder.checkpoint() {
+            match recorder.flush() {
                 Ok(pending) => ExportSource::Transcript(pending),
                 Err(error) => {
                     self.toasts.error(format!("Session export failed: {error}"));
@@ -56,7 +56,7 @@ impl App {
         match ExportJob::start(source, base, super::transcript_event_waker()) {
             Ok(job) => {
                 self.session_export = Some(job);
-                self.toasts.info("Exporting session snapshot…");
+                self.toasts.info("Exporting session…");
             }
             Err(error) => self.toasts.error(format!("Session export failed: {error}")),
         }
@@ -75,7 +75,7 @@ impl App {
                     .as_mut()
                     .is_some_and(|clipboard| clipboard.set_text(path.clone()).is_ok());
                 let format = if export.includes_jsonl {
-                    "snapshot Markdown + JSONL"
+                    "transcript Markdown + JSONL"
                 } else {
                     "scrollback Markdown"
                 };
@@ -163,7 +163,6 @@ mod tests {
 
     #[test]
     fn export_busy_and_completion_stay_with_the_original_window_after_tab_closure() {
-        let _guard = crate::session::export_job::EXPORT_TEST_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         crate::session::set_test_sessions_base_dir(Some(dir.path().join("exports")));
         let mut app = app();
@@ -188,7 +187,7 @@ mod tests {
                 .message
                 .contains("already in progress")
         );
-        app.tabs = None; // Closes the source; the export owns its pending checkpoint.
+        app.tabs = None; // Closes the source; the export owns its pending flush.
         poll(&mut app);
         assert!(
             app.toasts
@@ -196,7 +195,7 @@ mod tests {
                 .last()
                 .unwrap()
                 .message
-                .contains("Exported snapshot")
+                .contains("Exported transcript")
         );
         assert!(
             !other
@@ -214,7 +213,6 @@ mod tests {
 
     #[test]
     fn unavailable_attached_transcript_reports_failure_instead_of_scrollback_success() {
-        let _guard = crate::session::export_job::EXPORT_TEST_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let base = dir.path().join("exports");
         crate::session::set_test_sessions_base_dir(Some(base.clone()));

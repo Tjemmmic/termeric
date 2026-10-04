@@ -11608,7 +11608,6 @@ done
                     .is_some_and(|tab| tab.focused_session().unwrap().transcript.is_some()),
                 "{agent_id} transcript did not start"
             );
-            let export_guard = crate::session::export_job::EXPORT_TEST_LOCK.lock().unwrap();
             app.run_agent_command("agent.export");
             let export_deadline = Instant::now() + Duration::from_secs(5);
             while app.session_export.is_some() && Instant::now() < export_deadline {
@@ -11616,7 +11615,6 @@ done
                 std::thread::sleep(Duration::from_millis(5));
             }
             assert!(latest_toast(&app).is_some_and(|message| message.contains("Exported")));
-            drop(export_guard);
             app.toggle_transcript();
 
             app.run_agent_command("agent.restart");
