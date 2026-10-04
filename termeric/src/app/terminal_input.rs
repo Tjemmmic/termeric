@@ -254,6 +254,34 @@ impl App {
             None => false,
         }
     }
+
+    /// Write pointer-protocol bytes (wheel reports and alternate-scroll keys)
+    /// to the exact terminal under the pointer, which need not have focus.
+    /// As with typing, a read-only pane refuses them, and no pane receives
+    /// them while broadcast targets are being chosen.
+    pub(super) fn write_pointer_protocol_input(
+        &mut self,
+        target: crate::tabs::TerminalIdentity,
+        data: &[u8],
+    ) -> bool {
+        if matches!(self.broadcast, BroadcastState::Armed { .. }) {
+            return false;
+        }
+        let Some(tabs) = &mut self.tabs else {
+            return false;
+        };
+        let Some(origin) = tabs.origin_for_pane(target.tab_id, target.pane_id) else {
+            return false;
+        };
+        match tabs.write_user_to_origin(origin, data) {
+            Ok(()) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => false,
+            Err(error) => {
+                log::error!("Failed to write pointer input to {target:?}: {error}");
+                false
+            }
+        }
+    }
 }
 
 #[cfg(test)]

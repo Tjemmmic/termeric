@@ -948,15 +948,81 @@ impl App {
         }
     }
 
-    /// Handle scroll wheel
+    /// Handle scroll wheel. The wheel goes to the pane under the pointer,
+    /// which it never focuses, or to the focused pane when the pointer is
+    /// over no pane.
     pub(super) fn handle_scroll(&mut self, delta: f64) {
         // Filter out near-zero deltas (release artifacts from trackpad/mouse)
         // These appear as -0.000 or very small values on scroll release
         if delta.abs() < 0.001 {
             return;
         }
+        let target = self.wheel_target();
+        self.scroll_terminal(delta, target);
+    }
 
-        if self.search.is_filter_mode() && self.search.has_results() {
+    /// Horizontal wheel events are reportable to terminal applications but do
+    /// not have a native scrollback action.
+    pub(super) fn handle_horizontal_scroll(&mut self, delta: f64) {
+        if delta.abs() < 0.001 {
+            return;
+        }
+        let direction = if delta > 0.0 {
+            crate::input::WheelDirection::Left
+        } else {
+            crate::input::WheelDirection::Right
+        };
+        if let Some(target) = self.wheel_target()
+            && let Some(cell) = target.cell
+        {
+            self.report_wheel(target.identity, cell, direction);
+        }
+    }
+
+    fn wheel_target(&self) -> Option<WheelTarget> {
+        let position = self.last_cursor_pos?;
+        let renderer = self.renderer.as_ref()?;
+        let (cell_width, cell_height) = renderer.cell_size();
+        self.wheel_target_at(
+            position,
+            cell_width,
+            cell_height,
+            renderer.content_top(),
+            renderer.padding(),
+        )
+    }
+
+    fn wheel_target_at(
+        &self,
+        position: (f64, f64),
+        cell_width: f32,
+        cell_height: f32,
+        content_top: f32,
+        padding: f32,
+    ) -> Option<WheelTarget> {
+        let pane = self.pane_at_pointer(position, content_top, padding)?;
+        Some(WheelTarget {
+            identity: pane.identity,
+            cell: self.pane_protocol_cell(pane, position, cell_width, cell_height),
+        })
+    }
+
+    /// One wheel step for `target`, or for the focused pane when the pointer
+    /// is over no pane: a report when its program asks for mouse input, arrow
+    /// keys when its alternate screen asks for them, otherwise its scrollback.
+    /// Modes come from the same terminal that receives the bytes.
+    fn scroll_terminal(&mut self, delta: f64, target: Option<WheelTarget>) {
+        let focused = self
+            .tabs
+            .as_ref()
+            .and_then(TabManager::active_tab)
+            .map(crate::tabs::Tab::focused_terminal_identity);
+        let Some(identity) = target.map(|target| target.identity).or(focused) else {
+            return;
+        };
+
+        // The filtered view belongs to the focused pane's search.
+        if Some(identity) == focused && self.search.is_filter_mode() && self.search.has_results() {
             let viewport_rows = self
                 .active_terminal()
                 .map(|terminal| terminal.grid().rows())
@@ -971,20 +1037,20 @@ impl App {
         } else {
             crate::input::WheelDirection::Down
         };
-        if self.try_report_wheel(direction) {
-            return;
+        if let Some(cell) = target.and_then(|target| target.cell) {
+            if self.report_wheel(identity, cell, direction) {
+                return;
+            }
+            let mode = self.pointer_terminal_mode(identity);
+            if !self.modifiers.shift_key()
+                && let Some(bytes) = crate::input::encode_wheel_as_cursor_key(mode, direction)
+                && self.write_pointer_protocol_input(identity, bytes)
+            {
+                return;
+            }
         }
 
-        let mode = self.active_keyboard_mode();
-        if !self.modifiers.shift_key()
-            && self.pointer_is_over_focused_terminal()
-            && let Some(bytes) = crate::input::encode_wheel_as_cursor_key(mode, direction)
-        {
-            self.write_terminal_protocol_input(bytes);
-            return;
-        }
-
-        if let Some(terminal) = self.active_terminal_mut() {
+        if let Some(terminal) = self.pointer_terminal_mut(identity) {
             let lines = delta.abs().max(1.0) as usize;
             let offset = terminal.grid().scroll_offset();
 
@@ -1000,18 +1066,61 @@ impl App {
         }
     }
 
-    /// Horizontal wheel events are reportable to terminal applications but do
-    /// not have a native scrollback action.
-    pub(super) fn handle_horizontal_scroll(&mut self, delta: f64) {
-        if delta.abs() < 0.001 {
-            return;
+    /// Report a wheel step at `cell` to `identity`'s program when it asks for
+    /// mouse input. Shift keeps the wheel for Termeric.
+    fn report_wheel(
+        &mut self,
+        identity: crate::tabs::TerminalIdentity,
+        cell: (usize, usize),
+        direction: crate::input::WheelDirection,
+    ) -> bool {
+        if self.modifiers.shift_key() {
+            return false;
         }
-        let direction = if delta > 0.0 {
-            crate::input::WheelDirection::Left
-        } else {
-            crate::input::WheelDirection::Right
+        let mode = self.pointer_terminal_mode(identity);
+        if !mode.has_mouse_mode() {
+            return false;
+        }
+        let Some(bytes) = crate::input::encode_mouse_report(
+            mode,
+            crate::input::MouseReportKind::Wheel(direction),
+            cell.0,
+            cell.1,
+            self.modifiers,
+        ) else {
+            return false;
         };
-        self.try_report_wheel(direction);
+        self.write_pointer_protocol_input(identity, &bytes)
+    }
+
+    /// The terminal a pointer gesture addresses. A pane whose program has
+    /// exited still shows, and scrolls, its output; only writes need a live
+    /// program, and their route checks that.
+    fn pointer_terminal(
+        &self,
+        identity: crate::tabs::TerminalIdentity,
+    ) -> Option<&termeric_core::Terminal> {
+        self.tabs
+            .as_ref()?
+            .terminal_for_origin(pointer_route(identity))
+    }
+
+    fn pointer_terminal_mut(
+        &mut self,
+        identity: crate::tabs::TerminalIdentity,
+    ) -> Option<&mut termeric_core::Terminal> {
+        self.tabs
+            .as_mut()?
+            .terminal_for_origin_mut(pointer_route(identity))
+    }
+
+    fn pointer_terminal_mode(
+        &self,
+        identity: crate::tabs::TerminalIdentity,
+    ) -> termeric_core::term::TerminalMode {
+        self.pointer_terminal(identity)
+            .map(termeric_core::Terminal::mode)
+            .unwrap_or_default()
     }
 
     fn try_report_mouse_press(
@@ -1140,40 +1249,6 @@ impl App {
         true
     }
 
-    fn try_report_wheel(&mut self, direction: crate::input::WheelDirection) -> bool {
-        if self.modifiers.shift_key() {
-            return false;
-        }
-        let mode = self.active_keyboard_mode();
-        if !mode.has_mouse_mode() {
-            return false;
-        }
-        let Some(position) = self.last_cursor_pos else {
-            return false;
-        };
-        let Some(renderer) = &self.renderer else {
-            return false;
-        };
-        let (cell_width, cell_height) = renderer.cell_size();
-        let content_top = renderer.content_top();
-        let padding = renderer.padding();
-        let Some((col, row)) =
-            self.protocol_grid_position(position, cell_width, cell_height, content_top, padding)
-        else {
-            return false;
-        };
-        let Some(bytes) = crate::input::encode_mouse_report(
-            mode,
-            crate::input::MouseReportKind::Wheel(direction),
-            col,
-            row,
-            self.modifiers,
-        ) else {
-            return false;
-        };
-        self.write_terminal_protocol_input(&bytes)
-    }
-
     fn pointer_is_over_focused_terminal(&self) -> bool {
         let Some(position) = self.last_cursor_pos else {
             return false;
@@ -1228,32 +1303,48 @@ impl App {
         content_top: f32,
         padding: f32,
     ) -> Option<(usize, usize)> {
-        if !position.0.is_finite()
-            || !position.1.is_finite()
-            || cell_width <= 0.0
-            || cell_height <= 0.0
-        {
-            return None;
-        }
         let terminal = self.active_terminal()?;
         let (bounds, lone) = self.focused_pane_bounds(content_top, padding)?;
-        // A lone pane reports over its terminal's own cells, as an unsplit
-        // terminal always has; a split pane over its whole rectangle.
-        let viewport = if lone {
-            (
-                terminal.cols() as f32 * cell_width,
-                terminal.rows() as f32 * cell_height,
-            )
-        } else {
-            (bounds.width, bounds.height)
-        };
-        protocol_cell_from_viewport(
+        terminal_protocol_cell(terminal, bounds, lone, position, (cell_width, cell_height))
+    }
+
+    /// The visible, zero-based cell of `pane`'s terminal under `position`.
+    fn pane_protocol_cell(
+        &self,
+        pane: PointerPane,
+        position: (f64, f64),
+        cell_width: f32,
+        cell_height: f32,
+    ) -> Option<(usize, usize)> {
+        let terminal = self.pointer_terminal(pane.identity)?;
+        terminal_protocol_cell(
+            terminal,
+            pane.bounds,
+            pane.lone,
             position,
-            (bounds.x, bounds.y),
-            viewport,
             (cell_width, cell_height),
-            (terminal.cols(), terminal.rows()),
         )
+    }
+
+    /// The active tab's pane drawn under `position`, focused or not.
+    pub(super) fn pane_at_pointer(
+        &self,
+        position: (f64, f64),
+        content_top: f32,
+        padding: f32,
+    ) -> Option<PointerPane> {
+        let tab = self.tabs.as_ref()?.active_tab()?;
+        let lone = tab.panes.pane_count() == 1;
+        let placement = self.pointer_pane_placement(content_top, padding);
+        let (pane_id, bounds) = pane_at(placement, tab.panes.calculate_layout(), lone, position)?;
+        Some(PointerPane {
+            identity: crate::tabs::TerminalIdentity {
+                tab_id: tab.id,
+                pane_id,
+            },
+            bounds,
+            lone,
+        })
     }
 
     /// Convert a screen position to a cell of the focused pane's grid, in
@@ -1375,51 +1466,24 @@ impl App {
         if !matches!(self.broadcast, BroadcastState::Armed { .. }) {
             return false;
         }
-        let content_left = self
-            .renderer
-            .as_ref()
-            .map_or(0.0, crate::renderer::Renderer::tab_bar_width);
-        let local_x = position.0 as f32 - content_left - padding;
-        let local_y = position.1 as f32 - content_top;
         let target = self
-            .tabs
-            .as_ref()
-            .and_then(TabManager::active_tab)
-            .and_then(|tab| tab.split_panes())
-            .and_then(|panes| {
-                panes.calculate_layout().into_iter().find_map(|(id, rect)| {
-                    (local_x >= rect.x
-                        && local_x < rect.x + rect.width
-                        && local_y >= rect.y
-                        && local_y < rect.y + rect.height)
-                        .then_some(id)
-                })
-            });
-        target.is_some_and(|target| self.toggle_armed_broadcast_target(target))
+            .pane_at_pointer(position, content_top, padding)
+            .filter(|pane| !pane.lone);
+        target.is_some_and(|pane| self.toggle_armed_broadcast_target(pane.identity.pane_id))
     }
 
     /// Focus the pane under a content click. Returns whether focus moved.
     fn focus_pane_at(&mut self, position: (f64, f64), content_top: f32, padding: f32) -> bool {
-        let content_left = self
-            .renderer
-            .as_ref()
-            .map_or(0.0, crate::renderer::Renderer::tab_bar_width);
+        let Some(target) = self.pane_at_pointer(position, content_top, padding) else {
+            return false;
+        };
+        let target = target.identity.pane_id;
         let Some(tab) = self.tabs.as_mut().and_then(TabManager::active_tab_mut) else {
             return false;
         };
         let Some(panes) = tab.split_panes_mut() else {
             return false;
         };
-        let local_x = position.0 as f32 - content_left - padding;
-        let local_y = position.1 as f32 - content_top;
-        let target = panes.calculate_layout().into_iter().find_map(|(id, rect)| {
-            (local_x >= rect.x
-                && local_x < rect.x + rect.width
-                && local_y >= rect.y
-                && local_y < rect.y + rect.height)
-                .then_some(id)
-        });
-        let Some(target) = target else { return false };
         if target == panes.focused_id() {
             return false;
         }
@@ -1607,6 +1671,71 @@ pub(super) const fn native_pointer_icon(
         PointerShape::ZoomIn => CursorIcon::ZoomIn,
         PointerShape::ZoomOut => CursorIcon::ZoomOut,
     }
+}
+
+/// A pane of the active tab under the pointer: its terminal, its window
+/// rectangle as drawn, and whether it is the tab's only pane.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct PointerPane {
+    pub(super) identity: crate::tabs::TerminalIdentity,
+    pub(super) bounds: Bounds,
+    pub(super) lone: bool,
+}
+
+/// Where a wheel step lands: the pane under the pointer and, when the
+/// pointer is over one of its cells, that visible cell.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct WheelTarget {
+    identity: crate::tabs::TerminalIdentity,
+    cell: Option<(usize, usize)>,
+}
+
+fn pointer_route(identity: crate::tabs::TerminalIdentity) -> crate::tabs::TerminalEventOrigin {
+    crate::tabs::TerminalEventOrigin {
+        tab_id: identity.tab_id,
+        pane_id: identity.pane_id,
+    }
+}
+
+/// The pane whose rectangle, placed as drawn, contains `position`.
+fn pane_at(
+    placement: PanePlacement,
+    layout: impl IntoIterator<Item = (PaneId, Bounds)>,
+    lone: bool,
+    position: (f64, f64),
+) -> Option<(PaneId, Bounds)> {
+    let (x, y) = (position.0 as f32, position.1 as f32);
+    layout
+        .into_iter()
+        .map(|(id, rect)| (id, placement.pane_bounds(rect, lone)))
+        .find(|(_, bounds)| bounds.contains(x, y))
+}
+
+/// The visible cell of `terminal` under `position` for a pane drawn at
+/// `bounds`. A lone pane reports over its terminal's own cells, as an
+/// unsplit terminal always has; a split pane over its whole rectangle.
+fn terminal_protocol_cell(
+    terminal: &termeric_core::Terminal,
+    bounds: Bounds,
+    lone: bool,
+    position: (f64, f64),
+    cell_size: (f32, f32),
+) -> Option<(usize, usize)> {
+    let viewport = if lone {
+        (
+            terminal.cols() as f32 * cell_size.0,
+            terminal.rows() as f32 * cell_size.1,
+        )
+    } else {
+        (bounds.width, bounds.height)
+    };
+    protocol_cell_from_viewport(
+        position,
+        (bounds.x, bounds.y),
+        viewport,
+        cell_size,
+        (terminal.cols(), terminal.rows()),
+    )
 }
 
 fn protocol_cell_from_viewport(
@@ -1911,6 +2040,185 @@ mod tests {
             protocol_cell_from_viewport((f64::NAN, 100.0), args.0, args.1, args.2, args.3),
             None
         );
+    }
+
+    #[test]
+    fn the_pane_under_the_pointer_is_found_where_it_is_drawn() {
+        let placement = PanePlacement {
+            left: 40.0,
+            top: 30.0,
+            right: 840.0,
+            bottom: 530.0,
+            padding: 6.0,
+        };
+        let left = Bounds::new(0.0, 0.0, 400.0, 500.0);
+        let right = Bounds::new(400.0, 0.0, 394.0, 500.0);
+        let split = [(PaneId(0), left), (PaneId(1), right)];
+        let id_at = |position| pane_at(placement, split, false, position).map(|(id, _)| id);
+        // Split panes sit at their rectangles from the area's left padding
+        // and its top edge; edges are half-open.
+        assert_eq!(id_at((46.0, 30.0)), Some(PaneId(0)));
+        assert_eq!(id_at((445.9, 529.9)), Some(PaneId(0)));
+        assert_eq!(id_at((446.0, 100.0)), Some(PaneId(1)));
+        assert_eq!(id_at((839.9, 100.0)), Some(PaneId(1)));
+        // The tab rail, the left padding, the tab bar, and the window below.
+        assert_eq!(id_at((45.9, 100.0)), None);
+        assert_eq!(id_at((100.0, 29.9)), None);
+        assert_eq!(id_at((100.0, 530.0)), None);
+        assert_eq!(id_at((f64::NAN, 100.0)), None);
+        // A lone pane fills the area inside the padding on every side.
+        let lone = [(PaneId(0), left)];
+        assert_eq!(
+            pane_at(placement, lone, true, (46.0, 36.0)),
+            Some((PaneId(0), Bounds::new(46.0, 36.0, 788.0, 488.0)))
+        );
+        assert_eq!(pane_at(placement, lone, true, (46.0, 35.9)), None);
+        assert_eq!(pane_at(placement, lone, true, (834.0, 100.0)), None);
+    }
+
+    /// A point inside `pane`'s rectangle, one cell in from its corner, in a
+    /// window with no tab bar or padding.
+    fn pane_position(app: &App, pane: PaneId) -> (f64, f64) {
+        let rect = app.active_panes().calculate_layout()[&pane];
+        ((rect.x + 15.0) as f64, (rect.y + 30.0) as f64)
+    }
+
+    fn pane_scroll_offset(app: &App, pane: PaneId) -> usize {
+        app.active_panes()
+            .get_pane(pane)
+            .unwrap()
+            .terminal
+            .grid()
+            .scroll_offset()
+    }
+
+    #[test]
+    fn the_wheel_scrolls_the_pane_under_the_pointer_without_focusing_it() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        let mut tabs = TabManager::for_test(crate::test_support::sleeping_shell());
+        tabs.new_tab().unwrap();
+        app.tabs = Some(tabs);
+        let panes = app
+            .tabs
+            .as_mut()
+            .and_then(TabManager::active_tab_mut)
+            .unwrap()
+            .panes_for_test(
+                crate::test_support::sleeping_shell(),
+                800.0,
+                480.0,
+                10.0,
+                20.0,
+            );
+        let left = panes.focused_id();
+        let right = panes.split(SplitDirection::Vertical).unwrap();
+        for pane in [left, right] {
+            panes
+                .get_pane_mut(pane)
+                .unwrap()
+                .terminal
+                .process(b"history\r\n".repeat(80).as_slice());
+        }
+        panes.focus(left);
+
+        let target = app.wheel_target_at(pane_position(&app, right), 10.0, 20.0, 0.0, 0.0);
+        assert_eq!(target.map(|target| target.identity.pane_id), Some(right));
+        app.scroll_terminal(3.0, target);
+        assert_eq!(pane_scroll_offset(&app, right), 3);
+        assert_eq!(pane_scroll_offset(&app, left), 0);
+        assert_eq!(app.active_panes().focused_id(), left);
+
+        // Over no pane, the wheel stays with the focused pane.
+        app.scroll_terminal(3.0, None);
+        assert_eq!(pane_scroll_offset(&app, left), 3);
+        assert_eq!(pane_scroll_offset(&app, right), 3);
+    }
+
+    #[test]
+    fn wheel_reports_and_alternate_scroll_keys_go_to_the_pane_under_the_pointer() {
+        use crate::app::tests::{fenced_harvest_capture, harvest_rerun_capture_fixture_in};
+        use termeric_core::term::TerminalMode;
+        let (mut app, _directory, _, captures) = harvest_rerun_capture_fixture_in(true);
+        let focused = app.active_panes().focused_id();
+        let others: Vec<_> = app
+            .active_panes()
+            .pane_ids()
+            .into_iter()
+            .filter(|pane| *pane != focused)
+            .collect();
+        let (reporting, scrolling) = (others[0], others[1]);
+        let mouse = TerminalMode::MOUSE_BUTTON_EVENT | TerminalMode::MOUSE_SGR;
+        let panes = app.active_panes_mut();
+        // The focused pane asks for mouse input too: only the hovered pane's
+        // own modes decide what it receives.
+        panes
+            .get_pane_mut(focused)
+            .unwrap()
+            .terminal
+            .set_mode(mouse, true);
+        panes
+            .get_pane_mut(reporting)
+            .unwrap()
+            .terminal
+            .set_mode(mouse, true);
+        panes.get_pane_mut(scrolling).unwrap().terminal.set_mode(
+            TerminalMode::ALT_SCREEN | TerminalMode::ALTERNATE_SCROLL,
+            true,
+        );
+
+        for (pane, delta) in [(reporting, 1.0), (scrolling, -1.0)] {
+            let target = app.wheel_target_at(pane_position(&app, pane), 10.0, 20.0, 0.0, 0.0);
+            app.scroll_terminal(delta, target);
+        }
+
+        assert_eq!(app.active_panes().focused_id(), focused);
+        let bytes = fenced_harvest_capture(&mut app, &captures);
+        for ((origin, _), bytes) in captures.iter().zip(bytes) {
+            let expected: &[u8] = if origin.pane_id == reporting {
+                b"\x1b[<64;2;2M"
+            } else if origin.pane_id == scrolling {
+                b"\x1b[B"
+            } else {
+                b""
+            };
+            assert_eq!(bytes, expected, "{:?}", origin.pane_id);
+        }
+    }
+
+    #[test]
+    fn wheel_input_never_reaches_a_read_only_pane_or_any_pane_while_broadcast_is_armed() {
+        use crate::app::tests::{fenced_harvest_capture, harvest_rerun_capture_fixture_in};
+        use termeric_core::term::TerminalMode;
+        let (mut app, _directory, _, captures) = harvest_rerun_capture_fixture_in(true);
+        let focused = app.active_panes().focused_id();
+        let hovered = app
+            .active_panes()
+            .pane_ids()
+            .into_iter()
+            .find(|pane| *pane != focused)
+            .unwrap();
+        let pane = app.active_panes_mut().get_pane_mut(hovered).unwrap();
+        pane.terminal.set_mode(
+            TerminalMode::MOUSE_BUTTON_EVENT | TerminalMode::MOUSE_SGR,
+            true,
+        );
+        pane.read_only = true;
+        let target = app.wheel_target_at(pane_position(&app, hovered), 10.0, 20.0, 0.0, 0.0);
+        app.scroll_terminal(1.0, target);
+
+        app.active_panes_mut()
+            .get_pane_mut(hovered)
+            .unwrap()
+            .read_only = false;
+        app.broadcast = BroadcastState::Armed {
+            tab_id: app.tabs.as_ref().unwrap().active_tab_id().unwrap(),
+            expires: Instant::now() + Duration::from_secs(10),
+            targets: app.active_panes().pane_ids(),
+        };
+        app.scroll_terminal(1.0, target);
+
+        let bytes = fenced_harvest_capture(&mut app, &captures);
+        assert!(bytes.iter().all(Vec::is_empty), "{bytes:?}");
     }
 
     #[test]

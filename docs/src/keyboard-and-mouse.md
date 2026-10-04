@@ -218,9 +218,9 @@ Middle and right clicks are sent only to programs that ask for mouse input; othe
 
 ### Scroll
 
-The mouse wheel scrolls the scrollback of the focused pane; click a pane first to scroll it. `[scrollback].scroll_speed` sets how many lines each mouse-wheel step moves (default `6`).
+The mouse wheel scrolls the pane under the pointer, without focusing it; anywhere else it scrolls the focused pane. `[scrollback].scroll_speed` sets how many lines each mouse-wheel step moves (default `6`).
 
-In full-screen programs such as `less` that request it, the wheel sends arrow keys instead. Hold `Shift` to scroll the scrollback.
+A program that asks for mouse input gets the wheel from the pane it runs in, and full-screen programs such as `less` that request it get arrow keys instead. Hold `Shift` to scroll the scrollback. A read-only pane, or any pane while broadcast input is armed, only scrolls its scrollback.
 
 When a pane has scrollback, a scrollbar appears along its right edge; drag it to scroll.
 
