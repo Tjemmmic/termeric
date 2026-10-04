@@ -17,7 +17,7 @@ path = "src/lib.rs"
 
 [dependencies]
 # PTY handling
-portable-pty = "0.8"
+portable-pty = "0.9"
 
 # Escape sequence parsing
 vte = { version = "0.13", default-features = false }

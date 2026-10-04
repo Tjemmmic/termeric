@@ -5652,7 +5652,6 @@ Used by:
 - [async-task 4.7.1](https://github.com/smol-rs/async-task)
 - [atomic-waker 1.1.2](https://github.com/smol-rs/atomic-waker)
 - [base64 0.22.1](https://github.com/marshallpierce/rust-base64)
-- [bitflags 1.3.2](https://github.com/bitflags/bitflags)
 - [bitflags 2.10.0](https://github.com/bitflags/bitflags)
 - [bitstream-io 4.9.0](https://github.com/tuffy/bitstream-io)
 - [blocking 1.7.0](https://github.com/smol-rs/blocking)
@@ -8280,6 +8279,7 @@ Used by:
 - [serde_derive 1.0.228](https://github.com/serde-rs/serde)
 - [serde_json 1.0.149](https://github.com/serde-rs/json)
 - [serde_repr 0.1.21](https://github.com/dtolnay/serde-repr)
+- [serial2 0.2.38](https://github.com/de-vri-es/serial2-rs)
 - [siphasher 1.0.3](https://github.com/jedisct1/rust-siphash)
 - [spirv 0.3.0+sdk-1.3.268.0](https://github.com/gfx-rs/rspirv)
 - [syn 2.0.114](https://github.com/dtolnay/syn)
@@ -8968,39 +8968,6 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- [ioctl-rs 0.1.6](https://github.com/dcuddeback/ioctl-rs)
-- [serial-core 0.4.0](https://github.com/dcuddeback/serial-rs)
-- [serial-unix 0.4.0](https://github.com/dcuddeback/serial-rs)
-- [termios 0.2.2](https://github.com/dcuddeback/termios-rs)
-
-```text
-Copyright (c) 2015 David Cuddeback
-
-Permission is hereby granted, free of charge, to any person obtaining
-a copy of this software and associated documentation files (the
-"Software"), to deal in the Software without restriction, including
-without limitation the rights to use, copy, modify, merge, publish,
-distribute, sublicense, and/or sell copies of the Software, and to
-permit persons to whom the Software is furnished to do so, subject to
-the following conditions:
-
-The above copyright notice and this permission notice shall be
-included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-```
-
-### MIT License
-
-Used by:
-
 - [wayland-backend 0.3.12](https://github.com/smithay/wayland-rs)
 - [wayland-client 0.31.12](https://github.com/smithay/wayland-rs)
 - [wayland-cursor 0.31.12](https://github.com/smithay/wayland-rs)
@@ -9095,34 +9062,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
-```
-
-### MIT License
-
-Used by:
-
-- [memoffset 0.6.5](https://github.com/Gilnaa/memoffset)
-
-```text
-Copyright (c) 2017 Gilad Naaman
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
 ```
 
 ### MIT License
@@ -9573,7 +9512,7 @@ SOFTWARE.
 Used by:
 
 - [filedescriptor 0.8.3](https://github.com/wezterm/wezterm)
-- [portable-pty 0.8.1](https://github.com/wez/wezterm)
+- [portable-pty 0.9.0](https://github.com/wezterm/wezterm)
 
 ```text
 MIT License
@@ -9980,7 +9919,6 @@ Used by:
 - [fax 0.2.6](https://github.com/pdf-rs/fax)
 - [fax_derive 0.2.0](https://github.com/pdf-rs/fax)
 - [libm 0.2.15](https://github.com/rust-lang/compiler-builtins)
-- [serial 0.4.0](https://github.com/dcuddeback/serial-rs)
 - [simd_helpers 0.1.0](https://github.com/lu-zero/simd_helpers)
 
 ```text
@@ -10268,7 +10206,7 @@ THE SOFTWARE.
 
 Used by:
 
-- [nix 0.25.1](https://github.com/nix-rust/nix)
+- [nix 0.28.0](https://github.com/nix-rust/nix)
 
 ```text
 The MIT License (MIT)
