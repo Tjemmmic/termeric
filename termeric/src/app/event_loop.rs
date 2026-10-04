@@ -850,13 +850,14 @@ impl App {
     /// side panel, the agent view, or the terminal.
     pub(super) fn handle_mouse_wheel(&mut self, delta: winit::event::MouseScrollDelta) {
         let (columns, rows) = modal_wheel_steps(delta);
-        // Shift turns a vertical wheel sideways in views that scroll both ways.
-        let (columns, rows) = if self.modifiers.shift_key() && columns == 0 {
+        // Shift turns a vertical wheel sideways, but only in the views that
+        // scroll both ways; every other surface keeps scrolling vertically.
+        let (two_axis_columns, two_axis_rows) = if self.modifiers.shift_key() && columns == 0 {
             (rows, 0)
         } else {
             (columns, rows)
         };
-        let sideways = columns.abs() > rows.abs();
+        let sideways = two_axis_columns.abs() > two_axis_rows.abs();
         match self.top_modal_layer() {
             Some(ModalLayer::InfoOverlay) => {
                 use crate::ui::info_overlay::InfoOverlayAction;
@@ -864,12 +865,12 @@ impl App {
                 self.apply_info_overlay_action(if sideways {
                     InfoOverlayAction::ScrollColumns {
                         request_id,
-                        delta: columns,
+                        delta: two_axis_columns,
                     }
                 } else {
                     InfoOverlayAction::ScrollLines {
                         request_id,
-                        delta: rows,
+                        delta: two_axis_rows,
                     }
                 });
             }
@@ -879,12 +880,12 @@ impl App {
                 self.apply_diff_review_action(if sideways {
                     DiffReviewAction::ScrollColumns {
                         request_id,
-                        delta: columns,
+                        delta: two_axis_columns,
                     }
                 } else {
                     DiffReviewAction::ScrollRows {
                         request_id,
-                        delta: rows,
+                        delta: two_axis_rows,
                     }
                 });
             }
@@ -1088,5 +1089,33 @@ mod wheel_tests {
         let before = offset(&app);
         app.handle_mouse_wheel(MouseScrollDelta::LineDelta(0.0, -3.0));
         assert!(offset(&app) > before);
+    }
+
+    #[test]
+    fn shift_turns_the_wheel_sideways_only_in_views_that_scroll_both_ways() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.modifiers = winit::keyboard::ModifiersState::SHIFT;
+
+        // Settings scrolls only vertically, so Shift leaves the wheel alone.
+        app.settings_panel.toggle();
+        let settings_offset = |app: &mut App| {
+            app.settings_panel
+                .build_info(&app.config, &app.shortcut_registry)
+                .scroll_offset
+        };
+        assert_eq!(settings_offset(&mut app), 0);
+        app.handle_mouse_wheel(MouseScrollDelta::LineDelta(0.0, -3.0));
+        assert!(settings_offset(&mut app) > 0);
+
+        // The info overlay, above Settings, scrolls both ways, so Shift
+        // turns the same wheel sideways there.
+        let lines = (0..100)
+            .map(|line| format!("line {line} {}", "wide ".repeat(60)))
+            .collect();
+        app.info_overlay.show("Wide notice", lines);
+        app.info_overlay.set_viewport(5, 80);
+        app.handle_mouse_wheel(MouseScrollDelta::LineDelta(0.0, -3.0));
+        assert_eq!(app.info_overlay.scroll_offset(), 0);
+        assert_eq!(app.info_overlay.horizontal_offset(), 3);
     }
 }
