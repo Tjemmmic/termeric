@@ -47,7 +47,7 @@ fn release_benchmark_suite() {
     use crate::config::Config;
     use crate::panes::{PaneId, PaneTree, SplitDirection};
     use crate::renderer::benchmark_headless_renderer;
-    use crate::session::transcript::benchmark_slow_transcript_enqueue;
+    use crate::session::transcript::benchmark::benchmark_slow_transcript_enqueue;
     use crate::terminal::search::{
         MAX_RETAINED_SEARCH_MATCHES, MAX_SEARCH_RESULT_INDEX_BYTES, Search,
     };
