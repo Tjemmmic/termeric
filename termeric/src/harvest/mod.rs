@@ -154,9 +154,16 @@ impl HarvestMode {
         command: impl Into<String>,
         command_truncated: bool,
         output: impl Into<String>,
+        output_truncated: bool,
     ) {
-        self.cellar
-            .add_from_region(source, region, command, command_truncated, output);
+        self.cellar.add_from_region(
+            source,
+            region,
+            command,
+            command_truncated,
+            output,
+            output_truncated,
+        );
     }
 
     /// Show sprout menu at the given position
@@ -289,7 +296,14 @@ mod tests {
             },
         ];
         for source in sources {
-            harvest.record_command(source, region, "fixture command", false, "fixture output");
+            harvest.record_command(
+                source,
+                region,
+                "fixture command",
+                false,
+                "fixture output",
+                false,
+            );
         }
         for source in sources {
             let entry = harvest.cellar.latest_for_source(source).unwrap();

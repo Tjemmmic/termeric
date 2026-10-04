@@ -180,6 +180,7 @@ fn ansi_hyperlink_and_semantic_marks_cross_the_parser_grid_and_harvest() {
         "echo ok",
         false,
         "ok",
+        false,
     );
     assert_eq!(harvest.cellar.len(), 1);
     assert_eq!(harvest.cellar.latest().unwrap().command, "echo ok");

@@ -3285,6 +3285,59 @@ impl Terminal {
         (output, truncated)
     }
 
+    /// Like [`Self::bounded_rows_text`], but the newest requested text is
+    /// retained: rows are read backwards from `end_row_inclusive`, and the
+    /// row that crosses the budget keeps only its end, cut on a character
+    /// boundary. Output is read this way because its end (the error, the
+    /// summary) matters most. `truncated` is true when the start of the
+    /// requested range was dropped, by scrollback eviction or the budget.
+    pub fn bounded_rows_text_tail(
+        &self,
+        start_row: i32,
+        end_row_inclusive: i32,
+        max_bytes: usize,
+    ) -> (String, bool) {
+        if end_row_inclusive < start_row {
+            return (String::new(), false);
+        }
+        let oldest = -i32::try_from(self.grid().scrollback_len()).unwrap_or(i32::MAX);
+        let newest = i32::try_from(self.rows.saturating_sub(1)).unwrap_or(i32::MAX);
+        let start = start_row.max(oldest);
+        let end = end_row_inclusive.min(newest);
+        let mut truncated = start != start_row || end != end_row_inclusive;
+        if start > end || max_bytes == 0 {
+            return (String::new(), truncated || start <= end);
+        }
+
+        // Newest first; reversed and joined once the budget is spent.
+        let mut lines = Vec::new();
+        let mut used = 0_usize;
+        for row_index in (start..=end).rev() {
+            let separator = usize::from(row_index != end);
+            let line = self
+                .grid()
+                .row_at_offset(row_index)
+                .map(|row| row.plain_text(self.cols))
+                .unwrap_or_default();
+            let line = line.trim_end();
+            let remaining = max_bytes - used;
+            if line.len() + separator <= remaining {
+                lines.push(line.to_owned());
+                used += line.len() + separator;
+                continue;
+            }
+            truncated = true;
+            let room = remaining.saturating_sub(separator);
+            let cut = crate::safe_text::ceil_char_boundary(line, line.len() - room.min(line.len()));
+            if cut < line.len() {
+                lines.push(line[cut..].to_owned());
+            }
+            break;
+        }
+        lines.reverse();
+        (lines.join("\n"), truncated)
+    }
+
     /// Expand a click point to its word boundaries (for double-click semantic
     /// selection). Returns `(start, end_inclusive)`. If the clicked cell is
     /// whitespace or empty, returns `(point, point)` unchanged so the caller

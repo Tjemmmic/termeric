@@ -38,7 +38,8 @@ pub struct CommandEntry {
     pub command_truncated: bool,
     /// Bounded output snapshot retained after terminal scrollback eviction.
     pub output: String,
-    /// Whether the retained output ended at the per-entry byte ceiling.
+    /// Whether the start of the output was dropped: by the extraction
+    /// budget, by scrollback eviction, or at the per-entry byte ceiling.
     pub output_truncated: bool,
     /// Terminal that produced this command.
     pub source: HarvestSource,
@@ -301,12 +302,15 @@ impl RootCellar {
         command: impl Into<String>,
         command_truncated: bool,
         output: impl Into<String>,
+        output_truncated: bool,
     ) {
         let mut entry = CommandEntry::new_for_source(source, region.prompt_row, region.exit_code);
         entry.region_id = region.id;
         entry.command = command.into();
         entry.command_truncated = command_truncated;
-        (entry.output, entry.output_truncated) = bounded_output(output.into());
+        let (output, ceiling_truncated) = bounded_output(output.into());
+        entry.output = output;
+        entry.output_truncated = output_truncated || ceiling_truncated;
         self.add(entry);
     }
 
@@ -603,18 +607,20 @@ fn bounded_command(command: String) -> String {
     crate::safe_text::truncate_with_ellipsis(&normalized, MAX_HARVEST_COMMAND_CHARS)
 }
 
+/// The output within the per-entry ceiling. Like output extraction, it keeps
+/// the end, where errors and summaries are, and marks the cut with `…`.
 fn bounded_output(mut output: String) -> (String, bool) {
     if output.len() <= MAX_HARVEST_OUTPUT_BYTES {
         output.shrink_to_fit();
         return (output, false);
     }
-    let mut bounded = crate::safe_text::prefix_within(
+    let suffix = crate::safe_text::suffix_within(
         &output,
         MAX_HARVEST_OUTPUT_BYTES.saturating_sub('…'.len_utf8()),
-    )
-    .to_owned();
+    );
+    let mut bounded = String::with_capacity('…'.len_utf8() + suffix.len());
     bounded.push('…');
-    bounded.shrink_to_fit();
+    bounded.push_str(suffix);
     (bounded, true)
 }
 
@@ -726,7 +732,8 @@ mod tests {
             region,
             format!("  echo\n{}  ", "x".repeat(MAX_HARVEST_COMMAND_CHARS + 100)),
             false,
-            format!("{}終", "y".repeat(MAX_HARVEST_OUTPUT_BYTES + 100)),
+            format!("終{}end", "y".repeat(MAX_HARVEST_OUTPUT_BYTES + 100)),
+            false,
         );
         let entry = cellar.latest().unwrap();
         let command = &entry.command;
@@ -736,7 +743,8 @@ mod tests {
         assert!(entry.output_truncated);
         assert!(entry.output.len() <= MAX_HARVEST_OUTPUT_BYTES);
         assert!(entry.output.capacity() <= MAX_HARVEST_OUTPUT_BYTES);
-        assert!(entry.output.ends_with('…'));
+        assert!(entry.output.starts_with("…y"));
+        assert!(entry.output.ends_with("yend"));
     }
 
     #[test]

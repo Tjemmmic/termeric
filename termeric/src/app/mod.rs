@@ -1954,6 +1954,7 @@ impl App {
                                 command.clone(),
                                 command_truncated,
                                 output.clone(),
+                                output_truncated,
                             );
                         }
                         completed_hooks.push(crate::plugin::Hook::CommandExecuted {

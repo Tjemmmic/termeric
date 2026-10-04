@@ -755,7 +755,7 @@ fn root_cellar_announces_retention_eviction_and_clipped_output() {
         selected
             .description()
             .unwrap()
-            .contains("truncated at 64 KiB")
+            .contains("only the last 64 KiB of output is retained")
     );
 }
 

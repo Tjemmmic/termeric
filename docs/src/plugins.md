@@ -248,7 +248,7 @@ Result events (below) carry no `context`; a handler that needs it later keeps it
 | `command-completed` | `region_id`, `tab_id`, `pane_id`, `exit_code`, `content_available`, `command`, `output` | A shell command finished. Needs [shell integration](shell-integration.md). |
 | `command-invoked` | `command_id` | One of the plugin's commands ran. `command_id` is `PLUGIN-ID.COMMAND-ID`. |
 
-In `command-completed`, `pane_id` is `null` in a tab that isn't split, `exit_code` is `null` when the shell didn't report one, and `command` and `output` are each `{"text", "truncated", "sanitized"}`. Command text is cut to about 2 KiB and output to about 8 KiB; `truncated` says so. Control characters other than tab and newline are replaced with `�` and `sanitized` is `true`. When `content_available` is `false`, both texts are empty.
+In `command-completed`, `pane_id` is `null` in a tab that isn't split, `exit_code` is `null` when the shell didn't report one, and `command` and `output` are each `{"text", "truncated", "sanitized"}`. Command text keeps its first 2 KiB or so and output its last 8 KiB or so; `truncated` says the rest was left out, which for output means its start. Control characters other than tab and newline are replaced with `�` and `sanitized` is `true`. When `content_available` is `false`, both texts are empty.
 
 Tabs, panes, and focus changed by a plugin's own actions raise no events; the action's result is the only reply.
 

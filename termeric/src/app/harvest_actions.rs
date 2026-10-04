@@ -19,7 +19,7 @@ fn harvest_explain_context(
         ""
     };
     let output_note = if output_truncated {
-        "\n\n[Output snapshot truncated at 64 KiB.]"
+        "\n\n[Only the last 64 KiB of output is included.]"
     } else {
         ""
     };
@@ -355,7 +355,7 @@ impl App {
                         .mode()
                         .contains(termeric_core::term::TerminalMode::ALT_SCREEN)
                 });
-        let (region, live_output) = self
+        let (region, (live_output, live_output_truncated)) = self
             .terminal_for_harvest_source(target.source)
             .and_then(|terminal| {
                 if source_alternate_screen {
@@ -368,20 +368,20 @@ impl App {
                     return None;
                 }
                 let region = region.clone();
-                let output = Self::extract_output_text(terminal, &region).0;
+                let output = Self::extract_output_text(terminal, &region);
                 Some((region, output))
             })
             .map_or_else(
-                || (None, String::new()),
+                || (None, (String::new(), false)),
                 |(region, output)| (Some(region), output),
             );
         let (command_text, command_truncated) = self.harvest_command_text(&target);
         let used_output_snapshot =
             live_output.trim().is_empty() && !target.output.trim().is_empty();
-        let output_text = if used_output_snapshot {
-            target.output.clone()
+        let (output_text, output_truncated) = if used_output_snapshot {
+            (target.output.clone(), target.output_truncated)
         } else {
-            live_output
+            (live_output, live_output_truncated)
         };
 
         match action {
@@ -406,8 +406,8 @@ impl App {
                     self.toasts.warning("Output is empty");
                     return;
                 }
-                let message = if used_output_snapshot && target.output_truncated {
-                    "Copied retained output (truncated at 64 KiB)"
+                let message = if output_truncated {
+                    "Copied the last 64 KiB of output"
                 } else {
                     "Copied output"
                 };
@@ -536,12 +536,8 @@ impl App {
                     self.toasts.warning("No command to explain");
                     return;
                 }
-                let context = harvest_explain_context(
-                    &cmd,
-                    command_truncated,
-                    &out,
-                    used_output_snapshot && target.output_truncated,
-                );
+                let context =
+                    harvest_explain_context(&cmd, command_truncated, &out, output_truncated);
                 match self.preferred_agent_target() {
                     Ok(target) => {
                         self.send_to_agent(target, &context);
@@ -663,7 +659,7 @@ impl App {
     }
 
     /// Extract the output block of a command (between output start and
-    /// finish).
+    /// finish), keeping its end when it is longer than the budget.
     pub(super) fn extract_output_text(
         terminal: &termeric_core::Terminal,
         region: &termeric_core::CommandRegion,
@@ -679,7 +675,7 @@ impl App {
             .map(|r| r.saturating_sub(1))
             .unwrap_or(start);
         let end = end.max(start);
-        terminal.bounded_rows_text(start, end, MAX_COMMAND_REGION_OUTPUT_BYTES)
+        terminal.bounded_rows_text_tail(start, end, MAX_COMMAND_REGION_OUTPUT_BYTES)
     }
 }
 
@@ -707,7 +703,7 @@ mod tests {
                     command_truncated
                 );
                 assert_eq!(
-                    context.contains("Output snapshot truncated"),
+                    context.contains("Only the last 64 KiB of output"),
                     output_truncated
                 );
             }

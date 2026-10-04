@@ -29,6 +29,11 @@ pub fn prefix_within(text: &str, max_bytes: usize) -> &str {
     &text[..floor_char_boundary(text, max_bytes)]
 }
 
+/// The longest suffix of `text` within `max_bytes` UTF-8 bytes.
+pub fn suffix_within(text: &str, max_bytes: usize) -> &str {
+    &text[ceil_char_boundary(text, text.len().saturating_sub(max_bytes))..]
+}
+
 /// At most `max_chars` characters of `text`; when it is cut, the last kept
 /// character becomes `…`, after any whitespace the cut left at the end.
 pub fn truncate_with_ellipsis(text: &str, max_chars: usize) -> String {
@@ -96,10 +101,13 @@ mod tests {
     }
 
     #[test]
-    fn prefixes_stay_within_their_bytes_on_a_character_boundary() {
+    fn prefixes_and_suffixes_stay_within_their_bytes_on_a_character_boundary() {
         assert_eq!(prefix_within("aé界", 2), "a");
         assert_eq!(prefix_within("aé界", 3), "aé");
         assert_eq!(prefix_within("aé界", 99), "aé界");
+        assert_eq!(suffix_within("aé界", 2), "");
+        assert_eq!(suffix_within("aé界", 5), "é界");
+        assert_eq!(suffix_within("aé界", 99), "aé界");
     }
 
     #[test]

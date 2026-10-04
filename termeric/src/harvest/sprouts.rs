@@ -156,13 +156,13 @@ impl SproutAvailability {
             SproutAction::CopyOutput
                 if self.retained_output_truncated && !self.live_content_available =>
             {
-                Some("Uses a retained output snapshot truncated at 64 KiB")
+                Some("Uses the last 64 KiB of the retained output")
             }
             SproutAction::Explain
                 if self.retained_output_truncated && !self.live_content_available =>
             {
                 Some(
-                    "Sends the command and a retained 64-KiB-truncated output snapshot to the chosen open AI plugin tab",
+                    "Sends the command and the last 64 KiB of its retained output to the chosen open AI plugin tab",
                 )
             }
             SproutAction::Explain => {

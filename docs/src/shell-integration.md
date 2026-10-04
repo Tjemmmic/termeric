@@ -91,7 +91,7 @@ The sprout menu lists what you can do with a command. **Show Sprout Menu** in th
 
 Use Up, Down, Home, and End to choose an action, Enter to run it, and Escape to close the menu.
 
-Harvest keeps up to 64 KiB of each command's output, so **Copy output** and **Explain** still work after the text has scrolled out of the terminal's scrollback. When output was longer than that, the menu labels the action "(truncated)". **Search** and **Scroll to** need the text to still be in the terminal, and are disabled when it isn't. **Re-run** is refused for a command whose text was cut short, for a read-only pane, and while broadcast input is on.
+Harvest keeps the last 64 KiB of each command's output, so **Copy output** and **Explain** still work after the text has scrolled out of the terminal's scrollback. When output was longer than that, its start is left out and the menu labels the action "(truncated)". **Search** and **Scroll to** need the text to still be in the terminal, and are disabled when it isn't. **Re-run** is refused for a command whose text was cut short, for a read-only pane, and while broadcast input is on.
 
 ### Growth indicators
 

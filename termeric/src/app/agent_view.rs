@@ -1150,7 +1150,7 @@ impl App {
             return None;
         }
         let output = if truncated {
-            format!("{}\n[output shortened]", output.trim_end())
+            format!("[output shortened]\n{}", output.trim_end())
         } else {
             output.trim_end().to_owned()
         };

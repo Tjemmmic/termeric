@@ -693,6 +693,46 @@ fn bounded_row_extraction_never_splits_utf8_or_allocates_the_unread_suffix() {
 }
 
 #[test]
+fn bounded_tail_extraction_keeps_the_newest_rows_and_cuts_the_oldest_on_a_boundary() {
+    let mut term = Terminal::new(10, 4);
+    term.process("first\r\nab界c\r\nlast".as_bytes());
+
+    let (text, truncated) = term.bounded_rows_text_tail(0, 2, 64);
+    assert_eq!(text, "first\nab界c\nlast");
+    assert!(!truncated);
+
+    // "c\nlast" is 6 bytes; a seventh would split 界, so it is left out.
+    let (text, truncated) = term.bounded_rows_text_tail(0, 2, 7);
+    assert_eq!(text, "c\nlast");
+    assert!(truncated);
+    let (text, truncated) = term.bounded_rows_text_tail(0, 2, 9);
+    assert_eq!(text, "界c\nlast");
+    assert!(truncated);
+    assert!(text.len() <= 9);
+
+    // A budget that ends exactly at a row boundary keeps no partial row or
+    // dangling newline.
+    let (text, truncated) = term.bounded_rows_text_tail(0, 2, 5);
+    assert_eq!(text, "last");
+    assert!(truncated);
+    let (text, truncated) = term.bounded_rows_text_tail(0, 2, 2);
+    assert_eq!(text, "st");
+    assert!(truncated);
+
+    // Rows already evicted from scrollback drop the start too.
+    let (text, truncated) = term.bounded_rows_text_tail(-100, 2, 64);
+    assert_eq!(text, "first\nab界c\nlast");
+    assert!(truncated);
+
+    // A blank row that exactly fills the budget is kept whole.
+    let mut term = Terminal::new(10, 4);
+    term.process(b"one\r\n\r\ntwo");
+    let (text, truncated) = term.bounded_rows_text_tail(0, 2, 5);
+    assert_eq!(text, "\ntwo");
+    assert!(truncated);
+}
+
+#[test]
 fn test_write_char() {
     let mut term = Terminal::new(80, 24);
     term.write_char('A');

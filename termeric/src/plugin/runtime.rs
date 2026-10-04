@@ -1747,6 +1747,7 @@ fn encode_command_event(mut envelope: serde_json::Value, max_event_bytes: usize)
                 ""
             },
             remaining.min(MAX_STRUCTURED_COMMAND_JSON_BYTES),
+            KeepText::Start,
         );
     remaining = remaining.saturating_sub(command_json_bytes);
     let (output, output_truncated, output_sanitized, _) = bounded_json_terminal_text(
@@ -1756,6 +1757,7 @@ fn encode_command_event(mut envelope: serde_json::Value, max_event_bytes: usize)
             ""
         },
         remaining.min(MAX_STRUCTURED_OUTPUT_JSON_BYTES),
+        KeepText::End,
     );
     envelope["event"]["command"] = serde_json::json!({
         "text": command,
@@ -1774,15 +1776,44 @@ fn encode_command_event(mut envelope: serde_json::Value, max_event_bytes: usize)
     Ok(encoded)
 }
 
+/// Which end of a text survives when it is cut.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeepText {
+    /// A command line, read from its start.
+    Start,
+    /// Command output, whose end matters most.
+    End,
+}
+
 /// Bound terminal text by its JSON string-body representation so quotes,
 /// backslashes, and newlines cannot make the final event exceed its wire cap.
 /// C0/C1 controls other than tab/newline are replaced before disclosure.
-fn bounded_json_terminal_text(value: &str, max_json_bytes: usize) -> (String, bool, bool, usize) {
-    let mut output = String::with_capacity(value.len().min(max_json_bytes));
+fn bounded_json_terminal_text(
+    value: &str,
+    max_json_bytes: usize,
+    keep: KeepText,
+) -> (String, bool, bool, usize) {
+    match keep {
+        KeepText::Start => bounded_json_characters(value.chars(), max_json_bytes),
+        KeepText::End => {
+            let (reversed, truncated, sanitized, used) =
+                bounded_json_characters(value.chars().rev(), max_json_bytes);
+            (reversed.chars().rev().collect(), truncated, sanitized, used)
+        }
+    }
+}
+
+/// The characters `characters` yields until the next one would pass
+/// `max_json_bytes`, sanitized, in the order they were yielded.
+fn bounded_json_characters(
+    characters: impl Iterator<Item = char>,
+    max_json_bytes: usize,
+) -> (String, bool, bool, usize) {
+    let mut output = String::new();
     let mut used = 0_usize;
     let mut truncated = false;
     let mut sanitized = false;
-    for character in value.chars() {
+    for character in characters {
         let (character, json_bytes) = if character == '\n' || character == '\t' {
             (character, 2)
         } else if character.is_control() {
@@ -3477,7 +3508,7 @@ events = ["command-invoked"]
             grants,
             &command_completed(
                 format!("\u{0007}printf '\"{}\"'", "x".repeat(4_000)),
-                format!("\u{0001}{}", "\\\n".repeat(12_000)),
+                format!("\u{0001}{}\u{0002}", "\\\n".repeat(12_000)),
                 true,
             ),
             &context,
@@ -3494,11 +3525,33 @@ events = ["command-invoked"]
         assert!(value["event"]["command"]["sanitized"].as_bool().unwrap());
         assert!(value["event"]["output"]["truncated"].as_bool().unwrap());
         assert!(value["event"]["output"]["sanitized"].as_bool().unwrap());
-        assert!(
-            value["event"]["command"]["text"].as_str().unwrap().len()
-                <= MAX_STRUCTURED_COMMAND_JSON_BYTES
-        );
+        // The command keeps its start and the output its end, each with its
+        // control character replaced.
+        let command = value["event"]["command"]["text"].as_str().unwrap();
+        assert!(command.len() <= MAX_STRUCTURED_COMMAND_JSON_BYTES);
+        assert!(command.starts_with("\u{fffd}printf '\""));
+        let output = value["event"]["output"]["text"].as_str().unwrap();
+        assert!(output.ends_with("\\\n\u{fffd}"));
+        assert_eq!(output.matches('\u{fffd}').count(), 1);
         assert!(value.get("context").is_none());
+
+        let invocation = invocation_for(
+            manifest.clone(),
+            manifest.permissions.clone(),
+            &command_completed(
+                "cargo test".into(),
+                format!("{}error: 3 tests failed", "running\n".repeat(4_000)),
+                true,
+            ),
+            &context,
+        );
+        let value: serde_json::Value = serde_json::from_str(&invocation.event_json).unwrap();
+        let output = &value["event"]["output"];
+        assert!(output["truncated"].as_bool().unwrap());
+        assert!(!output["sanitized"].as_bool().unwrap());
+        let text = output["text"].as_str().unwrap();
+        assert!(text.ends_with("running\nerror: 3 tests failed"), "{text}");
+        assert!(text.len() < 4_000 * "running\n".len());
         assert!(!invocation.event_json.contains("/workspace/project"));
 
         let mut ungranted = DeclarativePlugin::new(

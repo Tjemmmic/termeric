@@ -2920,7 +2920,7 @@ impl App {
                 u64::from(entry.source.pane_id) + 1,
             );
             let retention = if entry.output_truncated {
-                "; retained output is truncated at 64 KiB"
+                "; only the last 64 KiB of output is retained"
             } else {
                 ""
             };
