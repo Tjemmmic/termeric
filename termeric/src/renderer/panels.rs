@@ -1,4 +1,5 @@
-//! Slide-in panel rendering — commands panel, session management panel
+//! Slide-in side panels — Commands, Agents, and session management — their
+//! shared frame and header buttons, and the Commands and session panel hit tests.
 
 use super::Renderer;
 use crate::ui::color::{scale_alpha, with_alpha};
