@@ -7678,7 +7678,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(target_os = "linux")]
     fn command_deletion_unifies_focus_and_retires_stale_duplicate_actions() {
         // Deleting a command saves the configuration. A child test process
         // has a configuration directory of its own, so tests running beside
