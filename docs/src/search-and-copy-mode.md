@@ -54,7 +54,7 @@ The arrow keys, `Home`, `End`, `Page Up`, `Page Down`, and `Ctrl+Home` / `Ctrl+E
 | Previous / next word | `b` / `w` | `Alt+B` / `Alt+F` |
 | Page up / down | `Page Up` / `Page Down` | `Alt+V` / `Ctrl+V` |
 | Top of scrollback / bottom | `gg` / `G` | `Ctrl+Home` / `Ctrl+End` |
-| Start or stop selecting characters | `v` | `Space` |
+| Start or stop selecting characters | `v` | `Ctrl+Space` or `Space` |
 | Start or stop selecting whole lines | `Shift+V` | none |
 | Start or stop selecting a block | `Ctrl+V` | none |
 | Search | `/` | `Ctrl+S` |

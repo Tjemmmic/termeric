@@ -543,7 +543,8 @@ fn copy_mode_command(
             NamedKey::End if ctrl => Move(CopyMotion::Bottom),
             NamedKey::PageUp if plain => Move(CopyMotion::PageUp),
             NamedKey::PageDown if plain => Move(CopyMotion::PageDown),
-            NamedKey::Space if plain && bindings == CopyModeBindings::Emacs => {
+            // Emacs sets the mark with Ctrl+Space; plain Space does too.
+            NamedKey::Space if (plain || ctrl) && bindings == CopyModeBindings::Emacs => {
                 Select(SelectionType::Simple)
             }
             _ => return None,
@@ -587,6 +588,7 @@ fn copy_mode_command(
                     'e' => Move(CopyMotion::LineEnd),
                     'v' => Move(CopyMotion::PageDown),
                     's' => Search,
+                    ' ' => Select(SelectionType::Simple),
                     _ => return None,
                 },
                 CopyModeBindings::Emacs if alt => match chord {
@@ -654,6 +656,29 @@ mod tests {
         assert_eq!(command("F", ctrl | shift, Emacs), None);
         assert_eq!(command("w", alt, Emacs), Some(CopyModeCommand::Yank));
         assert_eq!(command("f", none, Emacs), None);
+        // Emacs sets the mark with Ctrl+Space or Space, however the
+        // keyboard reports the space bar.
+        for modifiers in [ctrl, none] {
+            assert_eq!(
+                command(" ", modifiers, Emacs),
+                Some(CopyModeCommand::Select(SelectionType::Simple))
+            );
+            assert_eq!(
+                copy_mode_command(&Key::Named(NamedKey::Space), modifiers, false, Emacs),
+                Some(CopyModeCommand::Select(SelectionType::Simple))
+            );
+        }
+        for modifiers in [ctrl | shift, alt] {
+            assert_eq!(command(" ", modifiers, Emacs), None);
+            assert_eq!(
+                copy_mode_command(&Key::Named(NamedKey::Space), modifiers, false, Emacs),
+                None
+            );
+        }
+        assert_eq!(
+            copy_mode_command(&Key::Named(NamedKey::Space), ctrl, false, Vi),
+            None
+        );
         // AltGr types characters even where it reports as Ctrl+Alt.
         assert_eq!(
             copy_mode_command(&Key::Character("$".into()), ctrl | alt, true, Vi),
