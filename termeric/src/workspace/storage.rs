@@ -703,6 +703,64 @@ mod tests {
     }
 
     #[test]
+    fn hostile_scrollback_paths_never_read_outside_the_archive() {
+        let temp = tempfile::tempdir().unwrap();
+        let archive = temp.path().join("archive");
+        fs::write(temp.path().join("x.txt"), "outside-secret").unwrap();
+        let mut workspace = sample_workspace();
+        workspace.tabs.push(workspace.tabs[0].clone());
+        workspace.tabs[1].id = 8;
+        workspace.tabs[1].pinned = false;
+        save_workspace_to_dir(&mut workspace, &archive).unwrap();
+        fs::create_dir(archive.join("scrollback/nested")).unwrap();
+        fs::write(archive.join("scrollback/nested/x.txt"), "outside-secret").unwrap();
+        let metadata = fs::read_to_string(archive.join("workspace.toml")).unwrap();
+
+        for hostile in [
+            "../x.txt",
+            "scrollback/../x.txt",
+            "scrollback/../../x.txt",
+            "/tmp/x.txt",
+            "/scrollback/x.txt",
+            "scrollback/nested/x.txt",
+            "x.txt",
+            "scrollback/x.toml",
+        ] {
+            assert!(
+                safe_scrollback_path(&archive, hostile).is_err(),
+                "accepted {hostile:?}"
+            );
+            let mut encoded: toml::Value = toml::from_str(&metadata).unwrap();
+            encoded["tabs"][0]["panes"][0]["scrollback_file"] = toml::Value::String(hostile.into());
+            fs::write(
+                archive.join("workspace.toml"),
+                toml::to_string_pretty(&encoded).unwrap(),
+            )
+            .unwrap();
+
+            let loaded = load_workspace_from_dir(&archive).unwrap();
+            let ids: Vec<_> = loaded.workspace.tabs.iter().map(|tab| tab.id).collect();
+            assert_eq!(ids, [8], "{hostile:?}");
+            assert!(
+                loaded
+                    .warnings
+                    .iter()
+                    .any(|warning| warning.contains("unsafe scrollback path")),
+                "{hostile:?}: {:?}",
+                loaded.warnings
+            );
+            let history = loaded
+                .workspace
+                .tabs
+                .iter()
+                .flat_map(|tab| &tab.panes)
+                .flat_map(|pane| &pane.scrollback_lines)
+                .any(|line| line.contains("outside-secret"));
+            assert!(!history, "{hostile:?} read a file outside the archive");
+        }
+    }
+
+    #[test]
     fn delete_refuses_a_symlinked_workspace_before_touching_its_target() {
         use std::os::unix::fs::symlink;
 

@@ -534,6 +534,26 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn scrollback_files_outside_the_scrollback_folder_are_rejected() {
+        let mut workspace = sample_workspace();
+        workspace.tabs[0].panes[0].scrollback_file = Some("scrollback/0123-4.txt".into());
+        workspace.validate().unwrap();
+        for hostile in [
+            "../x.txt",
+            "scrollback/../x.txt",
+            "scrollback/../../x.txt",
+            "/tmp/x.txt",
+            "/scrollback/x.txt",
+            "scrollback/nested/x.txt",
+            "x.txt",
+            "scrollback/x.toml",
+        ] {
+            workspace.tabs[0].panes[0].scrollback_file = Some(hostile.into());
+            assert!(workspace.validate().is_err(), "accepted {hostile:?}");
+        }
+    }
+
+    #[test]
     fn nonprimary_plugin_launch_identity_is_valid() {
         let mut workspace = sample_workspace();
         workspace.tabs[0].panes[1].launch = WorkspaceLaunch::Plugin {
