@@ -29,7 +29,7 @@ fn save_workspace_names_a_long_titled_tab_within_the_name_limit() {
     tabs.new_tab().unwrap();
     tabs.active_tab_mut().unwrap().title = "x".repeat(300);
 
-    app.force_save_workspace();
+    app.force_save_workspace(crate::app::workspaces::WorkspaceSave::Update);
     let saved = crate::workspace::list_workspaces();
     end_persistence_test();
 
@@ -114,7 +114,10 @@ fn saving_and_renaming_a_workspace_keep_when_it_was_created() {
     let mut app = persistence_app(root.path());
     app.automatic_persistence = true;
     app.tabs.as_mut().unwrap().new_tab().unwrap();
-    let id = app.save_workspace_as("Project".into()).unwrap().id;
+    let id = app
+        .save_workspace(crate::app::workspaces::WorkspaceSave::New)
+        .unwrap()
+        .id;
     let mut saved = crate::workspace::load_workspace(&id).unwrap().workspace;
     saved.created_at = "2020-01-01T00:00:00Z".into();
     crate::workspace::save_workspace(&mut saved).unwrap();
@@ -154,7 +157,7 @@ fn a_reopened_pinned_tab_joins_the_pinned_group_and_the_window_still_saves() {
     assert_eq!(tabs.active_index(), 0);
     assert_eq!(tabs.active_tab().unwrap().title, "pinned");
 
-    let saved = app.save_workspace_as("After reopening".into());
+    let saved = app.save_workspace(crate::app::workspaces::WorkspaceSave::New);
     end_persistence_test();
     saved.unwrap();
 }
@@ -223,4 +226,251 @@ fn reopening_reports_both_archive_and_relaunch_warnings() {
             "no {expected:?} in {messages:?}"
         );
     }
+}
+
+use crate::app::workspaces::WorkspaceSave;
+
+fn workspace_ids() -> Vec<String> {
+    let mut ids: Vec<_> = crate::workspace::list_workspaces()
+        .into_iter()
+        .map(|workspace| workspace.id)
+        .collect();
+    ids.sort();
+    ids
+}
+
+#[test]
+fn save_workspace_updates_the_open_workspace_and_save_as_starts_another() {
+    let root = tempfile::tempdir().unwrap();
+    let mut app = persistence_app(root.path());
+    app.tabs.as_mut().unwrap().new_tab().unwrap();
+
+    let first = app.save_workspace(WorkspaceSave::Update).unwrap().id;
+    app.tabs.as_mut().unwrap().new_tab().unwrap();
+    let again = app.save_workspace(WorkspaceSave::Update).unwrap().id;
+    let after_two_saves = workspace_ids();
+    let updated = crate::workspace::load_workspace(&first).unwrap().workspace;
+
+    let second = app.save_workspace(WorkspaceSave::New).unwrap().id;
+    let after_save_as = workspace_ids();
+    let current_after_save_as = app.current_workspace_id.clone();
+
+    // A workspace opened in the window is the one Save Workspace updates.
+    assert!(app.restore_saved_workspace(&first));
+    app.tabs.as_mut().unwrap().new_tab().unwrap();
+    let reopened = app.save_workspace(WorkspaceSave::Update).unwrap().id;
+    let after_reopening = workspace_ids();
+    let reopened_tabs = crate::workspace::load_workspace(&first)
+        .unwrap()
+        .workspace
+        .tabs
+        .len();
+    end_persistence_test();
+
+    assert_eq!(again, first);
+    assert_eq!(after_two_saves, std::slice::from_ref(&first));
+    assert_eq!(updated.tabs.len(), 2, "the second save updated the archive");
+    assert!(!updated.automatic);
+    assert_ne!(second, first);
+    assert_eq!(after_save_as.len(), 2);
+    assert_eq!(current_after_save_as.as_deref(), Some(second.as_str()));
+    assert_eq!(reopened, first);
+    assert_eq!(after_reopening.len(), 2);
+    assert_eq!(reopened_tabs, 3);
+}
+
+#[test]
+fn saving_an_automatic_workspace_makes_it_the_persons() {
+    let root = tempfile::tempdir().unwrap();
+    let mut app = persistence_app(root.path());
+    app.automatic_persistence = true;
+    let tabs = app.tabs.as_mut().unwrap();
+    tabs.new_tab().unwrap();
+    tabs.active_tab_mut().unwrap().title = "notes".into();
+
+    app.auto_save_workspace();
+    let automatic = crate::workspace::list_workspaces();
+    let saved = app.save_workspace(WorkspaceSave::Update).unwrap().id;
+    let promoted = crate::workspace::load_workspace(&saved).unwrap().workspace;
+    end_persistence_test();
+
+    let [automatic] = automatic.as_slice() else {
+        panic!("closing did not save one automatic workspace: {automatic:?}");
+    };
+    assert_eq!(automatic.name, "Last workspace");
+    assert_eq!(saved, automatic.id, "the automatic workspace was updated");
+    assert!(!promoted.automatic, "it is never pruned now");
+    assert_eq!(promoted.name, "notes workspace");
+}
+
+/// Two saved workspaces, A of two tabs and B of one, with the window
+/// showing B and belonging to no workspace.
+fn two_workspaces(app: &mut App) -> (String, String) {
+    let tabs = app.tabs.as_mut().unwrap();
+    tabs.new_tab().unwrap();
+    tabs.new_tab().unwrap();
+    let a = app.save_workspace(WorkspaceSave::New).unwrap().id;
+    let tabs = app.tabs.as_mut().unwrap();
+    assert!(tabs.close_tab(tabs.active_index()));
+    tabs.set_reduced_motion(true);
+    tabs.cleanup_closed(false, false);
+    let b = app.save_workspace(WorkspaceSave::New).unwrap().id;
+    app.current_workspace_id = None;
+    (a, b)
+}
+
+fn tab_count(app: &App) -> usize {
+    app.tabs.as_ref().unwrap().count()
+}
+
+#[test]
+fn a_window_of_idle_shells_opens_a_workspace_at_once() {
+    let root = tempfile::tempdir().unwrap();
+    let mut app = persistence_app(root.path());
+    let (a, _) = two_workspaces(&mut app);
+
+    app.request_open_workspace(&a);
+    end_persistence_test();
+    assert!(!app.info_overlay.is_active(), "nothing to ask");
+    assert_eq!(tab_count(&app), 2);
+    assert_eq!(app.current_workspace_id.as_deref(), Some(a.as_str()));
+}
+
+#[test]
+fn opening_over_running_programs_asks_first() {
+    let root = tempfile::tempdir().unwrap();
+    let mut app = persistence_app(root.path());
+    let (a, _) = two_workspaces(&mut app);
+    // A profile the tab launched is a program besides the shell.
+    app.tabs
+        .as_mut()
+        .unwrap()
+        .active_tab_mut()
+        .unwrap()
+        .focused_pane_mut()
+        .unwrap()
+        .launch = crate::workspace::WorkspaceLaunch::Profile { name: "ssh".into() };
+
+    app.request_open_workspace(&a);
+    let asked = app.info_overlay.is_active();
+    let request_id = app.info_overlay.request_id();
+    let choose = |app: &mut App, choice_id: &str| {
+        app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
+            request_id,
+            choice_id: choice_id.into(),
+        });
+    };
+    let close_label = app
+        .info_overlay
+        .choice(request_id, "workspace-open")
+        .map(|choice| choice.label.clone());
+    let kept_while_asking = tab_count(&app);
+    choose(&mut app, "workspace-cancel");
+    let kept_after_cancel = tab_count(&app);
+
+    app.request_open_workspace(&a);
+    let request_id = app.info_overlay.request_id();
+    app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
+        request_id,
+        choice_id: "workspace-open".into(),
+    });
+    end_persistence_test();
+
+    assert!(asked);
+    let close_label = close_label.unwrap();
+    assert!(
+        close_label.starts_with("Close 1 tab and open \u{201c}"),
+        "{close_label}"
+    );
+    assert_eq!(kept_while_asking, 1);
+    assert_eq!(kept_after_cancel, 1);
+    assert!(app.overlay_flow.is_none());
+    assert_eq!(tab_count(&app), 2, "agreeing opened the workspace");
+    assert_eq!(app.current_workspace_id.as_deref(), Some(a.as_str()));
+}
+
+#[test]
+fn opening_from_an_auto_saved_workspace_saves_it_back_first() {
+    let root = tempfile::tempdir().unwrap();
+    let mut app = persistence_app(root.path());
+    let (a, b) = two_workspaces(&mut app);
+    app.current_workspace_id = Some(b.clone());
+    app.automatic_persistence = true;
+    // Busy, yet nothing is lost: the window goes back into B.
+    let tabs = app.tabs.as_mut().unwrap();
+    tabs.new_tab().unwrap();
+    tabs.active_tab_mut()
+        .unwrap()
+        .focused_pane_mut()
+        .unwrap()
+        .launch = crate::workspace::WorkspaceLaunch::Profile { name: "ssh".into() };
+
+    app.request_open_workspace(&a);
+    let saved_back = crate::workspace::load_workspace(&b).unwrap().workspace;
+    end_persistence_test();
+
+    assert!(!app.info_overlay.is_active());
+    assert_eq!(saved_back.tabs.len(), 2, "B holds the window as it was");
+    assert_eq!(tab_count(&app), 2);
+    assert_eq!(app.current_workspace_id.as_deref(), Some(a.as_str()));
+}
+
+#[test]
+fn deleting_a_workspace_asks_first() {
+    let root = tempfile::tempdir().unwrap();
+    let mut app = persistence_app(root.path());
+    let (a, b) = two_workspaces(&mut app);
+    app.current_workspace_id = Some(a.clone());
+
+    app.confirm_workspace_delete(&a, false);
+    let asked = app.info_overlay.is_active();
+    let request_id = app.info_overlay.request_id();
+    app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
+        request_id,
+        choice_id: "workspace-cancel".into(),
+    });
+    let after_cancel = workspace_ids();
+
+    app.confirm_workspace_delete(&a, false);
+    let request_id = app.info_overlay.request_id();
+    app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
+        request_id,
+        choice_id: "workspace-delete".into(),
+    });
+    let after_delete = workspace_ids();
+    end_persistence_test();
+
+    assert!(asked);
+    assert_eq!(after_cancel.len(), 2, "cancelling kept it");
+    assert_eq!(after_delete, [b]);
+    assert!(app.current_workspace_id.is_none());
+}
+
+#[test]
+fn only_a_program_besides_an_idle_shell_counts_as_running() {
+    let mut tabs = TabManager::for_test(ShellConfig::default());
+    // An interactive shell gives what it starts a foreground job of its own.
+    tabs.new_tab_with_command(
+        "/bin/sh",
+        &["-i".into()],
+        None,
+        None,
+        None,
+        HashMap::from([("ENV".to_owned(), "/dev/null".to_owned())]),
+    )
+    .unwrap();
+    let tab = tabs.active_tab_mut().unwrap();
+    assert!(
+        crate::test_support::poll_until(Duration::from_secs(5), || {
+            let pty = tab.lone_pty().unwrap();
+            pty.foreground_process_group().is_some()
+        }),
+        "the shell never took its terminal"
+    );
+    assert!(!tab.has_running_program(), "an idle shell runs nothing");
+    tab.write(b"sleep 30\r").unwrap();
+    assert!(
+        crate::test_support::poll_until(Duration::from_secs(5), || tab.has_running_program()),
+        "a program started at the prompt runs"
+    );
 }

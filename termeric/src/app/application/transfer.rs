@@ -92,6 +92,9 @@ impl Application {
         if destination.tabs.is_none() {
             anyhow::bail!("No destination workspace is active");
         }
+        if let Some(refusal) = destination.live_domain_tab_move_refusal() {
+            anyhow::bail!(refusal);
+        }
         let moving = source
             .tabs
             .as_ref()

@@ -457,6 +457,9 @@ impl App {
     }
 
     fn reopen_closed_tab(&mut self, id: &str) -> anyhow::Result<(String, Vec<String>)> {
+        if self.is_live_domain_window() {
+            anyhow::bail!("a live-domain window holds only its domain's tabs");
+        }
         let report = crate::workspace::load_workspace(id)?;
         let workspace = report.workspace;
         let [tab] = workspace.tabs.as_slice() else {

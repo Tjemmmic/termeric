@@ -1006,6 +1006,9 @@ impl Application {
             .validate_window_tab_transfer_destination(pinned, destination_index)
             .map_err(|error| format!("Could not move tab {tab_id}: {error:#}"))?;
 
+        if let Some(refusal) = destination.live_domain_tab_move_refusal() {
+            return Err(format!("Could not move tab {tab_id}: {refusal}"));
+        }
         if let Some(refusal) = source.agent_view_tab_move_refusal(destination, tab_id) {
             return Err(format!("Could not move tab {tab_id}: {refusal}"));
         }

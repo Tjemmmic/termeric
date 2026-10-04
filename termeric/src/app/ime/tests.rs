@@ -6,7 +6,7 @@ fn an_open_workspaces_menu_swallows_ime_text_like_every_key() {
     app.search.start();
     assert!(app.accepts_ime_text());
     app.workspace_menu = Some(crate::ui::popup_menu::PopupMenu::new(
-        crate::ui::workspace_menu::workspace_menu_rows(&[], None),
+        crate::ui::workspace_menu::workspace_menu_rows(&[], None, false),
         false,
     ));
     assert!(!app.accepts_ime_text());

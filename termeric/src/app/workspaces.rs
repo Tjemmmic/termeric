@@ -2,27 +2,41 @@
 
 use super::*;
 use crate::tabs::TabType;
+use crate::ui::info_overlay::InfoOverlayChoice;
 use crate::workspace::{
     WorkspaceConfigReference, WorkspaceLaunch, WorkspaceRestoreOutcome, WorkspaceSnapshot,
     WorkspaceTabSnapshot,
 };
 
+/// Which workspace a person's save puts this window in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum WorkspaceSave {
+    /// **Save Workspace**: back into the workspace this window belongs to,
+    /// else into a new one.
+    Update,
+    /// **Save Workspace As…**: always into a new workspace.
+    New,
+}
+
+/// The archive a save writes over: its identity and how it was named.
+struct SaveTarget {
+    id: String,
+    name: String,
+    created_at: String,
+    automatic: bool,
+}
+
+const AUTOMATIC_WORKSPACE_NAME: &str = "Last workspace";
+const WORKSPACE_OPEN_CHOICE: &str = "workspace-open";
+const WORKSPACE_DELETE_CHOICE: &str = "workspace-delete";
+const WORKSPACE_CANCEL_CHOICE: &str = "workspace-cancel";
+/// Longest workspace name a confirmation quotes.
+const CONFIRMATION_NAME_CHARS: usize = 40;
+
 impl App {
-    pub(super) fn force_save_workspace(&mut self) {
-        let name = self
-            .tabs
-            .as_ref()
-            .and_then(|tabs| tabs.active_tab())
-            .map(|tab| {
-                const SUFFIX: &str = " workspace";
-                let title = crate::safe_text::truncate_with_ellipsis(
-                    &tab.title,
-                    crate::workspace::MAX_WORKSPACE_NAME_CHARS - SUFFIX.len(),
-                );
-                format!("{title}{SUFFIX}")
-            })
-            .unwrap_or_else(|| "Termeric workspace".into());
-        match self.save_workspace_as(name) {
+    /// Save this window as the person asked, and say how it went.
+    pub(super) fn force_save_workspace(&mut self, mode: WorkspaceSave) {
+        match self.save_workspace(mode) {
             Ok(report) => {
                 let suffix = if report.truncated_panes.is_empty() {
                     String::new()
@@ -41,13 +55,24 @@ impl App {
         }
     }
 
-    pub(super) fn save_workspace_as(
+    /// Save this window into its own workspace (for `Update`) or a new one,
+    /// which it then belongs to. A workspace saved by the person is theirs:
+    /// an automatic "Last workspace" saved this way takes the name a new
+    /// save would, and is never pruned.
+    pub(super) fn save_workspace(
         &mut self,
-        name: String,
+        mode: WorkspaceSave,
     ) -> anyhow::Result<crate::workspace::WorkspaceSaveReport> {
-        let mut workspace = self.capture_workspace(name)?;
-        let report = crate::workspace::save_workspace(&mut workspace)?;
-        if let Err(error) = self.remember_workspace(&workspace.id) {
+        let target = match mode {
+            WorkspaceSave::Update => self.current_save_target(),
+            WorkspaceSave::New => None,
+        };
+        let name = match &target {
+            Some(target) if !target.automatic => target.name.clone(),
+            _ => self.new_workspace_name(),
+        };
+        let (id, report) = self.save_window_into(name, target.as_ref(), false)?;
+        if let Err(error) = self.remember_workspace(&id) {
             log::warn!(
                 "Workspace was saved, but its last-workspace reference could not be persisted: {error:#}"
             );
@@ -55,11 +80,66 @@ impl App {
         Ok(report)
     }
 
+    /// The name a new workspace takes from the active tab.
+    fn new_workspace_name(&self) -> String {
+        self.tabs
+            .as_ref()
+            .and_then(|tabs| tabs.active_tab())
+            .map(|tab| {
+                const SUFFIX: &str = " workspace";
+                let title = crate::safe_text::truncate_with_ellipsis(
+                    &tab.title,
+                    crate::workspace::MAX_WORKSPACE_NAME_CHARS - SUFFIX.len(),
+                );
+                format!("{title}{SUFFIX}")
+            })
+            .unwrap_or_else(|| "Termeric workspace".into())
+    }
+
+    /// The workspace this window belongs to, while its archive still reads.
+    fn current_save_target(&self) -> Option<SaveTarget> {
+        let id = self.current_workspace_id.as_deref()?;
+        match crate::workspace::load_workspace(id) {
+            Ok(report) => Some(SaveTarget {
+                id: report.workspace.id,
+                name: report.workspace.name,
+                created_at: report.workspace.created_at,
+                automatic: report.workspace.automatic,
+            }),
+            Err(error) => {
+                log::warn!("Workspace {id:?} could not be read; saving a new one: {error:#}");
+                None
+            }
+        }
+    }
+
+    /// Capture this window and write it over `target`, keeping its ID and
+    /// creation time, or as a new workspace. Every save of a window, the
+    /// person's or automatic, goes through here. Returns the saved ID.
+    fn save_window_into(
+        &self,
+        name: String,
+        target: Option<&SaveTarget>,
+        automatic: bool,
+    ) -> anyhow::Result<(String, crate::workspace::WorkspaceSaveReport)> {
+        let mut workspace = self.capture_workspace(name)?;
+        if let Some(target) = target {
+            workspace.id = target.id.clone();
+            workspace.created_at = target.created_at.clone();
+        }
+        workspace.automatic = automatic;
+        let report = crate::workspace::save_workspace(&mut workspace)?;
+        Ok((workspace.id, report))
+    }
+
+    /// Whether closing this window saves it, as **Auto Save Workspace**
+    /// asks.
+    pub(super) fn auto_saves(&self) -> bool {
+        self.automatic_persistence && self.config.session.enabled && self.config.session.auto_save
+    }
+
     pub(super) fn auto_save_workspace(&mut self) {
-        if !self.automatic_persistence
-            || !self.config.session.enabled
-            || !self.config.session.auto_save
-        {
+        if !self.auto_saves() {
             return;
         }
         // A window closed while others stay open is not restored. Unless it
@@ -67,44 +147,30 @@ impl App {
         if !self.retain_workspace_on_exit && self.current_workspace_id.is_none() {
             return;
         }
-        let existing = self
-            .current_workspace_id
-            .as_deref()
-            .and_then(|id| crate::workspace::load_workspace(id).ok())
-            .map(|report| report.workspace);
-        let name = existing
-            .as_ref()
-            .map(|workspace| workspace.name.clone())
-            .unwrap_or_else(|| "Last workspace".into());
-        let mut workspace = match self.capture_workspace(name) {
-            Ok(workspace) => workspace,
-            Err(error) => {
-                log::warn!("Automatic workspace capture failed: {error:#}");
-                return;
-            }
+        if let Err(error) = self.save_back_to_current_workspace() {
+            log::warn!("Automatic workspace save failed: {error:#}");
+        }
+    }
+
+    /// Save this window back into the workspace it belongs to, as closing
+    /// it does, or into a new automatic "Last workspace".
+    pub(super) fn save_back_to_current_workspace(&mut self) -> anyhow::Result<()> {
+        let target = self.current_save_target();
+        let (name, automatic) = target.as_ref().map_or_else(
+            || (AUTOMATIC_WORKSPACE_NAME.to_owned(), true),
+            |target| (target.name.clone(), target.automatic),
+        );
+        let (id, _) = self.save_window_into(name, target.as_ref(), automatic)?;
+        let state_result = if self.retain_workspace_on_exit {
+            self.remember_workspace(&id)
+        } else {
+            self.current_workspace_id = Some(id.clone());
+            self.app_state.forget_workspace(&id)
         };
-        match existing {
-            Some(existing) => {
-                workspace.id = existing.id;
-                workspace.created_at = existing.created_at;
-                workspace.automatic = existing.automatic;
-            }
-            None => workspace.automatic = true,
+        if let Err(error) = state_result {
+            log::warn!("Could not update automatic workspace state: {error:#}");
         }
-        match crate::workspace::save_workspace(&mut workspace) {
-            Ok(_) => {
-                let state_result = if self.retain_workspace_on_exit {
-                    self.remember_workspace(&workspace.id)
-                } else {
-                    self.current_workspace_id = Some(workspace.id.clone());
-                    self.app_state.forget_workspace(&workspace.id)
-                };
-                if let Err(error) = state_result {
-                    log::warn!("Could not update automatic workspace state: {error:#}");
-                }
-            }
-            Err(error) => log::warn!("Automatic workspace save failed: {error:#}"),
-        }
+        Ok(())
     }
 
     fn capture_workspace(&self, name: String) -> anyhow::Result<WorkspaceSnapshot> {
@@ -177,6 +243,9 @@ impl App {
         &mut self,
         id: &str,
     ) -> anyhow::Result<WorkspaceRestoreOutcome> {
+        if self.is_live_domain_window() {
+            anyhow::bail!("a live-domain window holds only its domain's tabs");
+        }
         let report = crate::workspace::load_workspace(id)?;
         let original = self
             .tabs
@@ -407,5 +476,196 @@ impl App {
             launches.insert(pane.id, (resolved, shell));
         }
         Ok(launches)
+    }
+}
+
+impl App {
+    /// Whether this window is attached to a live domain. Its tabs are the
+    /// domain's relays, which keep their processes and layout in the domain,
+    /// so a local tab here could be neither saved nor restored.
+    pub(super) fn is_live_domain_window(&self) -> bool {
+        self.launch.domain.is_some()
+    }
+
+    /// Why no tab from another window may move into this one: a
+    /// live-domain window holds only its domain's tabs, and a local tab
+    /// there could be neither saved nor restored. Domain tabs never leave
+    /// their window, which their tab manager refuses.
+    pub(super) fn live_domain_tab_move_refusal(&self) -> Option<&'static str> {
+        self.is_live_domain_window()
+            .then_some("a live-domain window holds only its domain's tabs")
+    }
+
+    /// Open workspace `id` in place of this window's tabs. A window that
+    /// belongs to a workspace and saves itself on close is first saved back
+    /// into it, as closing it would. Otherwise, while any tab runs a program
+    /// besides an idle shell, those tabs close only once the person agrees.
+    pub(super) fn request_open_workspace(&mut self, id: &str) {
+        if self.is_live_domain_window() {
+            self.toasts.warning(
+                "A live-domain window can't open a workspace; open it from a local window",
+            );
+            return;
+        }
+        if self.current_workspace_id.is_some() && self.auto_saves() {
+            if let Err(error) = self.save_back_to_current_workspace() {
+                self.toasts.error(format!(
+                    "This window could not be saved, so the workspace was not opened: {error:#}"
+                ));
+                return;
+            }
+            self.restore_saved_workspace(id);
+            return;
+        }
+        let tabs = self.tabs.as_ref().map_or(0, TabManager::count);
+        let running = self.tabs.as_ref().map_or(0, |tabs| {
+            tabs.iter()
+                .filter(|(_, tab)| tab.has_running_program())
+                .count()
+        });
+        if running == 0 {
+            self.restore_saved_workspace(id);
+            return;
+        }
+        let name = confirmation_name(id);
+        let tabs = tab_count(tabs);
+        let close = format!("Close {tabs} and open {name}");
+        let lines = vec![
+            format!("Open {name} in this window?"),
+            format!("It replaces the {tabs} here, and the programs running"),
+            "in them end. Save the window first to keep them.".into(),
+            String::new(),
+            format!("  {close}"),
+            "  Cancel".into(),
+        ];
+        let request_id = self.info_overlay.show_choices(
+            "Open Workspace",
+            lines,
+            vec![
+                InfoOverlayChoice::new(WORKSPACE_OPEN_CHOICE, close, 4, None),
+                InfoOverlayChoice::new(WORKSPACE_CANCEL_CHOICE, "Cancel", 5, None),
+            ],
+        );
+        self.overlay_flow = Some(OverlayFlow::WorkspaceOpen {
+            request_id,
+            workspace_id: id.to_owned(),
+        });
+    }
+
+    /// Ask before deleting workspace (or closed-tab snapshot) `id`, which
+    /// can't be undone.
+    pub(super) fn confirm_workspace_delete(&mut self, id: &str, closed_tab: bool) {
+        let name = confirmation_name(id);
+        let lines = vec![
+            format!("Delete {name}?"),
+            "Its layout and saved scrollback are removed from disk.".into(),
+            "This can't be undone.".into(),
+            String::new(),
+            "  Delete".into(),
+            "  Cancel".into(),
+        ];
+        let request_id = self.info_overlay.show_choices(
+            if closed_tab {
+                "Delete Tab Snapshot"
+            } else {
+                "Delete Workspace"
+            },
+            lines,
+            vec![
+                InfoOverlayChoice::new(WORKSPACE_DELETE_CHOICE, "Delete", 4, None),
+                InfoOverlayChoice::new(WORKSPACE_CANCEL_CHOICE, "Cancel", 5, None),
+            ],
+        );
+        self.overlay_flow = Some(OverlayFlow::WorkspaceDelete {
+            request_id,
+            workspace_id: id.to_owned(),
+            closed_tab,
+        });
+    }
+
+    /// Answer an open or delete confirmation. Returns whether the choice was
+    /// its.
+    pub(super) fn handle_workspace_choice(&mut self, request_id: u64, choice_id: &str) -> bool {
+        let pending = matches!(
+            self.overlay_flow,
+            Some(
+                OverlayFlow::WorkspaceOpen { request_id: pending, .. }
+                    | OverlayFlow::WorkspaceDelete { request_id: pending, .. }
+            ) if pending == request_id
+        );
+        if !pending
+            || !matches!(
+                choice_id,
+                WORKSPACE_OPEN_CHOICE | WORKSPACE_DELETE_CHOICE | WORKSPACE_CANCEL_CHOICE
+            )
+        {
+            return false;
+        }
+        self.info_overlay.dismiss(request_id);
+        match (self.overlay_flow.take(), choice_id) {
+            (Some(OverlayFlow::WorkspaceOpen { workspace_id, .. }), WORKSPACE_OPEN_CHOICE) => {
+                self.restore_saved_workspace(&workspace_id);
+            }
+            (
+                Some(OverlayFlow::WorkspaceDelete {
+                    workspace_id,
+                    closed_tab,
+                    ..
+                }),
+                WORKSPACE_DELETE_CHOICE,
+            ) => self.delete_saved_workspace(&workspace_id, closed_tab),
+            _ => {}
+        }
+        self.request_redraw(RedrawReason::Action);
+        true
+    }
+
+    fn delete_saved_workspace(&mut self, id: &str, closed_tab: bool) {
+        let noun = if closed_tab {
+            "closed tab"
+        } else {
+            "workspace"
+        };
+        match crate::workspace::delete_workspace(id) {
+            Ok(()) => {
+                log::info!("Deleted {noun} '{id}'");
+                self.toasts.success(format!("Deleted {noun} '{id}'"));
+                if !closed_tab {
+                    if self.current_workspace_id.as_deref() == Some(id) {
+                        self.current_workspace_id = None;
+                    }
+                    if let Err(error) = self.app_state.forget_workspace(id) {
+                        log::warn!("Could not clear deleted workspace from state: {error:#}");
+                    }
+                }
+            }
+            Err(error) => {
+                log::error!("Failed to delete {noun} '{id}': {error:#}");
+                self.toasts.error(format!("Delete failed: {error:#}"));
+            }
+        }
+        if self.session_panel.is_open() {
+            self.session_panel
+                .refresh(crate::session::listing::SessionListing::load(
+                    self.session_panel.is_workspace_mode(),
+                ));
+        }
+    }
+}
+
+/// Workspace `id`'s name, quoted and bounded for a confirmation.
+fn confirmation_name(id: &str) -> String {
+    let name = crate::workspace::describe_workspace(id)
+        .map_or_else(|_| id.to_owned(), |workspace| workspace.name);
+    format!(
+        "\u{201c}{}\u{201d}",
+        crate::safe_text::truncate_with_ellipsis(&name, CONFIRMATION_NAME_CHARS)
+    )
+}
+
+fn tab_count(count: usize) -> String {
+    match count {
+        1 => "1 tab".into(),
+        count => format!("{count} tabs"),
     }
 }

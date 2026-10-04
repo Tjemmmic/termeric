@@ -915,44 +915,13 @@ impl App {
         match action {
             SessionPanelAction::Load(id) => {
                 if workspace_mode {
-                    self.restore_saved_workspace(&id);
+                    self.request_open_workspace(&id);
                 } else {
                     self.restore_closed_tab(&id);
                 }
                 self.session_panel.close();
             }
-            SessionPanelAction::Delete(id) => {
-                // A closed-tab snapshot is a one-tab workspace.
-                match crate::workspace::delete_workspace(&id) {
-                    Ok(()) => {
-                        let noun = if workspace_mode {
-                            "workspace"
-                        } else {
-                            "closed tab"
-                        };
-                        log::info!("Deleted {noun} '{}'", id);
-                        self.toasts.success(format!("Deleted {noun} '{}'", id));
-                        if workspace_mode {
-                            if self.current_workspace_id.as_deref() == Some(id.as_str()) {
-                                self.current_workspace_id = None;
-                            }
-                            if let Err(error) = self.app_state.forget_workspace(&id) {
-                                log::warn!(
-                                    "Could not clear deleted workspace from state: {error:#}"
-                                );
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        log::error!("Failed to delete session '{}': {}", id, error);
-                        self.toasts.error(format!("Delete failed: {}", error));
-                    }
-                }
-                self.session_panel
-                    .refresh(crate::session::listing::SessionListing::load(
-                        self.session_panel.is_workspace_mode(),
-                    ));
-            }
+            SessionPanelAction::Delete(id) => self.confirm_workspace_delete(&id, !workspace_mode),
             SessionPanelAction::Rename(id) => {
                 self.ime.clear_preedit();
                 self.session_panel.begin_rename(&id);

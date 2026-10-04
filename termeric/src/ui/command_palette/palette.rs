@@ -930,6 +930,7 @@ fn core_command_table() -> Vec<CoreCommand> {
         destructive("core.reset-config", "Reset Configuration to Defaults", Config, Unbound(Action::ResetConfig)),
         command("core.plugins", "Configure Plugins", Config, Unbound(Action::ConfigurePlugins)),
         command("core.save-workspace", "Save Workspace", Workspaces, Unbound(Action::SaveWorkspace)),
+        command("core.save-workspace-as", "Save Workspace As…", Workspaces, Unbound(Action::SaveWorkspaceAs)),
         command("core.workspace-manager", "Manage Workspaces…", Workspaces, Unbound(Action::ToggleWorkspaceManager)),
         command("core.about", "About Termeric", Help, Unbound(Action::ShowAbout)),
         command("core.font-size-increase", "Increase Font Size", Font, Bound(Key::IncreaseFontSize)),

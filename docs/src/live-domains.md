@@ -150,4 +150,4 @@ The launch options for `create`, `spawn`, and `split` come before any `--`: `--w
 - A daemon crash or reboot ends every domain's programs; nothing is saved to disk.
 - Clipboard access, notifications, and bells work only while a window is attached, and nothing from a detached period is replayed. There is no remote clipboard.
 - Agents running in a domain can't report [agent status](agents.md#agent-status).
-- A window showing a domain can't be saved as a workspace; attach the domain instead.
+- A window showing a domain can't save or open a workspace; attach the domain instead. Tabs from other windows can't be moved into it, and its own tabs can't be moved out.

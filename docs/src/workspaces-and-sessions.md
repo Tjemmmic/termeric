@@ -18,16 +18,18 @@ The workspace also remembers which tab was active. Pane zoom and broadcast input
 
 Scrollback is capped at 5 MiB per pane and 50 MiB per workspace. When a pane has more than that, the most recent lines are kept and Termeric tells you after the save that some scrollback was trimmed.
 
-A window that contains [live-domain](live-domains.md) tabs can't be saved as a workspace. Live domains keep their own processes and layout running, so there is nothing to relaunch.
+A window attached to a [live domain](live-domains.md) can't save or open workspaces: in its Workspaces menu, those entries are shown disabled and marked **Live domain**. Live domains keep their own processes and layout running, so there is nothing to relaunch.
 
 ## Save a workspace
 
 Use either of these:
 
-- Click the **Workspaces** button (the down arrow beside the Settings gear in the tab bar) and choose **Save Workspace**.
-- Open the command palette (Ctrl+Shift+P) and run **Save Workspace**.
+- Click the **Workspaces** button (the down arrow beside the Settings gear in the tab bar) and choose **Save Workspace** or **Save Workspace As…**.
+- Open the command palette (Ctrl+Shift+P) and run either command.
 
-Each save creates a new workspace named after the active tab: with a tab titled "termeric" active, it's called "termeric workspace". Rename it in the workspace manager. A toast confirms the save and shows the workspace's ID.
+**Save Workspace** saves the window back into the workspace it belongs to, the one it last opened or saved. A window that doesn't belong to one yet gets a new workspace named after the active tab: with a tab titled "termeric" active, it's called "termeric workspace". **Save Workspace As…** always creates a new workspace, named the same way, and the window belongs to that one from then on. Rename a workspace in the workspace manager. A toast confirms the save and shows the workspace's ID.
+
+Saving a window restored from an automatic "Last workspace" makes it yours: it takes a name from the active tab, like a new workspace, and is kept for good.
 
 ## Open a workspace
 
@@ -35,7 +37,11 @@ Each save creates a new workspace named after the active tab: with a tab titled 
 - **Manage Workspaces…** (in the same menu or the command palette) lists every workspace, newest first.
 - From a shell, `termeric --workspace ID` opens a window with that workspace. It can't be combined with tab options such as `--tab`, `--command`, or `--working-directory` for the same window. See [Command line](command-line.md).
 
-Opening a workspace replaces the tabs in the current window. The processes in those tabs are closed, so save first if you want to keep what's there.
+Opening a workspace replaces the tabs in the current window, and the programs in those tabs end. What happens to the window first:
+
+- If it belongs to a workspace and **Auto Save Workspace** is on, it's saved back into that workspace, as quitting would, and the other workspace opens.
+- Otherwise, if any tab runs a program besides an idle shell (a command started at the prompt, a terminal profile, or an agent), Termeric asks before closing them: choose **Close N tabs and open…** or **Cancel**.
+- A window of idle shells opens the workspace right away.
 
 When you quit, the window is saved back into the workspace it last opened or saved. Opening "Project A", working for a while, and quitting updates "Project A". A window that never opened or saved a workspace is saved as "Last workspace" instead. Termeric keeps only the "Last workspace" entries from your most recent quit, the ones it can reopen; renaming one keeps it for good.
 
@@ -59,7 +65,7 @@ Automatic saving happens when a window closes with tabs still open. If you end t
 | Delete | Delete the selected workspace |
 | Escape | Close the panel, or cancel a rename |
 
-While renaming, Enter saves the new name and Escape cancels. Names can be up to 128 characters. Deleting a workspace removes it from disk right away; there's no undo.
+While renaming, Enter saves the new name and Escape cancels. Names can be up to 128 characters. Deleting a workspace or tab snapshot asks for confirmation first, then removes it from disk; there's no undo.
 
 A workspace that can't be read stays in the list, marked as unavailable, so you can delete it.
 

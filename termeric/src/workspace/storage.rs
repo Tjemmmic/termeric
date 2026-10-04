@@ -277,14 +277,7 @@ fn list_archives(closed_tabs: bool) -> Vec<WorkspaceListEntry> {
             let path = entry.path();
             match read_named_workspace_metadata(&path) {
                 Ok((workspace, ..)) => {
-                    (workspace.closed_tab == closed_tabs).then(|| WorkspaceListEntry {
-                        pane_count: workspace.tabs.iter().map(|tab| tab.panes.len()).sum(),
-                        tab_count: workspace.tabs.len(),
-                        id: workspace.id,
-                        name: workspace.name,
-                        updated_at: workspace.updated_at,
-                        warning: None,
-                    })
+                    (workspace.closed_tab == closed_tabs).then(|| list_entry(workspace))
                 }
                 Err(_) if closed_tabs => None,
                 Err(error) => {
@@ -304,6 +297,26 @@ fn list_archives(closed_tabs: bool) -> Vec<WorkspaceListEntry> {
         .collect();
     workspaces.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
     workspaces
+}
+
+/// The listing of the readable archive `id`, read without its scrollback.
+pub fn describe_workspace(id: &str) -> Result<WorkspaceListEntry> {
+    let dir = workspace_dir(id)?;
+    ensure_real_directory(&dir, false, "workspace")?;
+    let _reading = lock_archive(&dir, ArchiveLock::Read)?;
+    let (workspace, ..) = read_named_workspace_metadata(&dir)?;
+    Ok(list_entry(workspace))
+}
+
+fn list_entry(workspace: WorkspaceSnapshot) -> WorkspaceListEntry {
+    WorkspaceListEntry {
+        pane_count: workspace.tabs.iter().map(|tab| tab.panes.len()).sum(),
+        tab_count: workspace.tabs.len(),
+        id: workspace.id,
+        name: workspace.name,
+        updated_at: workspace.updated_at,
+        warning: None,
+    }
 }
 
 /// How many closed-tab snapshots are kept; older ones are deleted.

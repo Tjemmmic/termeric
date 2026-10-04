@@ -19,6 +19,13 @@ impl App {
         if self.active_file_upload.is_none() {
             hidden.push("core.cancel-file-upload".to_owned());
         }
+        // A domain keeps its own tabs; the Workspaces menu shows why.
+        if self.is_live_domain_window() {
+            hidden.extend([
+                "core.save-workspace".to_owned(),
+                "core.save-workspace-as".to_owned(),
+            ]);
+        }
         hidden
     }
 

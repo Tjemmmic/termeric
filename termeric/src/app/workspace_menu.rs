@@ -19,6 +19,7 @@ impl App {
         let rows = workspace_menu_rows(
             &crate::workspace::list_workspaces(),
             self.current_workspace_id.as_deref(),
+            self.is_live_domain_window(),
         );
         self.workspace_menu = Some(PopupMenu::new(rows, from_keyboard));
         self.request_redraw(RedrawReason::Action);
@@ -113,10 +114,13 @@ impl App {
     pub(super) fn activate_workspace_menu(&mut self, action: WorkspaceMenuAction) {
         self.close_workspace_menu();
         match action {
-            WorkspaceMenuAction::Open(id) => {
-                self.restore_saved_workspace(&id);
+            WorkspaceMenuAction::Open(id) => self.request_open_workspace(&id),
+            WorkspaceMenuAction::Save => {
+                self.force_save_workspace(super::workspaces::WorkspaceSave::Update)
             }
-            WorkspaceMenuAction::Save => self.force_save_workspace(),
+            WorkspaceMenuAction::SaveAs => {
+                self.force_save_workspace(super::workspaces::WorkspaceSave::New)
+            }
             WorkspaceMenuAction::Manage => {
                 self.settings_panel.close();
                 self.commands_panel.close();
@@ -153,7 +157,7 @@ mod tests {
         app.handle_workspace_menu_key(&Key::Named(NamedKey::ArrowDown));
         assert_eq!(
             app.workspace_menu.as_ref().unwrap().highlighted_action(),
-            Some(WorkspaceMenuAction::Manage)
+            Some(WorkspaceMenuAction::SaveAs)
         );
         // Printable keys are swallowed rather than typed into the terminal.
         app.handle_workspace_menu_key(&Key::Character("x".into()));

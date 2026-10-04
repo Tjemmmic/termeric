@@ -890,6 +890,17 @@ enum OverlayFlow {
     FileUpload(PendingFileUpload),
     /// Reset Configuration awaiting confirmation.
     ConfigReset { request_id: u64 },
+    /// Opening a workspace over tabs running programs, awaiting confirmation.
+    WorkspaceOpen {
+        request_id: u64,
+        workspace_id: String,
+    },
+    /// Deleting a workspace or closed-tab snapshot, awaiting confirmation.
+    WorkspaceDelete {
+        request_id: u64,
+        workspace_id: String,
+        closed_tab: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -3268,7 +3279,8 @@ impl App {
             Action::ReloadConfig => self.reload_config_from_disk(),
             Action::ResetConfig => self.confirm_config_reset(),
             Action::ToggleWorkspaceManager => self.toggle_workspace_manager(),
-            Action::SaveWorkspace => self.force_save_workspace(),
+            Action::SaveWorkspace => self.force_save_workspace(workspaces::WorkspaceSave::Update),
+            Action::SaveWorkspaceAs => self.force_save_workspace(workspaces::WorkspaceSave::New),
             Action::ConfigurePlugins => {
                 self.settings_panel
                     .open_to_section(crate::ui::settings::SettingsSection::Plugins);

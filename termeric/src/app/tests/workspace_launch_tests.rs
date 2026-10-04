@@ -68,7 +68,9 @@ fn complete_workspace_round_trip_restores_nested_panes_plugin_profile_and_focus(
         }
         app.tabs = Some(tabs);
         app.execute_plugin_command("codex.open");
-        let report = app.save_workspace_as("Nested and AI".into()).unwrap();
+        let report = app
+            .save_workspace(crate::app::workspaces::WorkspaceSave::New)
+            .unwrap();
 
         app.tabs.as_mut().unwrap().new_tab().unwrap();
         let outcome = app.restore_workspace_archive(&report.id).unwrap();

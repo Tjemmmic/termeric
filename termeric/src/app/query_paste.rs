@@ -374,7 +374,7 @@ mod tests {
         assert_eq!(app.tab_rename.as_ref().unwrap().input.text(), "Roots");
         app.commands_panel.close();
         app.workspace_menu = Some(crate::ui::popup_menu::PopupMenu::new(
-            crate::ui::workspace_menu::workspace_menu_rows(&[], None),
+            crate::ui::workspace_menu::workspace_menu_rows(&[], None, false),
             false,
         ));
         assert!(app.clipboard_paste_blocked());
@@ -468,7 +468,7 @@ mod tests {
         open_workspace_rename(&mut app);
         let rebound = assert_paste_binding_follows_registry(&mut app);
         app.workspace_menu = Some(crate::ui::popup_menu::PopupMenu::new(
-            crate::ui::workspace_menu::workspace_menu_rows(&[], None),
+            crate::ui::workspace_menu::workspace_menu_rows(&[], None, false),
             false,
         ));
         assert!(app.clipboard_paste_blocked());

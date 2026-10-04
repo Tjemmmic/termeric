@@ -67,6 +67,13 @@ pub enum TabType {
     Plugin { plugin_id: String },
 }
 
+/// Whether a terminal's own child, its shell or the program the tab
+/// launched, holds the terminal's foreground rather than a program it
+/// started.
+fn child_holds_foreground(child: Option<i64>, foreground_group: Option<i32>) -> bool {
+    child.is_some() && child == foreground_group.map(i64::from)
+}
+
 /// Mapping from window-local pane identifiers to the daemon's stable pane
 /// identifiers for one attached live-domain tab.
 pub(crate) struct LiveDomainTab {
@@ -678,7 +685,7 @@ impl Tab {
             // The terminal's own child (its shell) in front means no agent is,
             // whatever a program elsewhere that inherited this terminal's
             // identity reports.
-            let child_in_front = child.is_some() && child == foreground_group.map(i64::from);
+            let child_in_front = child_holds_foreground(child, foreground_group);
             let reported = session
                 .agent_status
                 .as_ref()
@@ -763,6 +770,20 @@ impl Tab {
             }
             session.agent_changes.poll();
         }
+    }
+
+    /// Whether any of this tab's terminals runs a program besides an idle
+    /// shell: a profile or agent the tab launched, or a program started at
+    /// a shell's prompt, which then holds the terminal's foreground. Closing
+    /// the tab ends that program.
+    pub(crate) fn has_running_program(&self) -> bool {
+        self.panes.iter_panes().any(|pane| {
+            !pane.closed
+                && (!matches!(pane.launch, crate::workspace::WorkspaceLaunch::Shell)
+                    || pane.pty.foreground_process_group().is_some_and(|group| {
+                        !child_holds_foreground(pane.pty.child_id().map(i64::from), Some(group))
+                    }))
+        })
     }
 
     /// The most urgent agent badge among this tab's terminals.

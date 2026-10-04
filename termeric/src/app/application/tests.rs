@@ -4845,3 +4845,33 @@ fn one_plugin_reload_moves_every_window_to_one_generation() {
     assert_eq!(application.plugin_host.generation(), after_window_reload);
     assert_eq!(reload_toasts(&application), vec![1, 1]);
 }
+
+#[test]
+fn local_tabs_never_move_into_a_live_domain_window() {
+    let (mut source, mut destination, moved_child) = pane_transfer_fixture();
+    destination.launch.domain = Some(crate::domain::DomainTarget {
+        authority: crate::domain::DomainAuthority::Local,
+        domain_id: "domain".into(),
+    });
+    let source_tab = source.tabs.as_ref().unwrap().active_tab().unwrap().id;
+
+    let moving = Application::transfer_active_tab(&mut source, &mut destination)
+        .unwrap_err()
+        .to_string();
+    assert!(moving.contains("live-domain window"), "{moving}");
+    // Dropping the tab on the window takes the same refusal.
+    let dropping =
+        Application::transfer_control_tab(&mut source, &mut destination, source_tab as u64, 1)
+            .unwrap_err();
+    assert!(dropping.contains("live-domain window"), "{dropping}");
+
+    assert!(!source.should_exit);
+    assert_eq!(source.tabs.as_ref().unwrap().count(), 1);
+    assert!(
+        source
+            .active_panes()
+            .iter_with_layout()
+            .any(|(pane, _)| pane.pty.child_id() == moved_child)
+    );
+    assert_eq!(destination.tabs.as_ref().unwrap().count(), 1);
+}

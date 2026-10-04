@@ -117,7 +117,7 @@ The tab keeps its panes, programs, title, and pin state. A window that loses its
 
 On Wayland, Termeric learns where a tab was dropped from the window the pointer enters after you release. If no Termeric window sees the pointer within about half a second, the tab tears off into a new window.
 
-Tabs attached to a [live domain](live-domains.md) keep their place in the domain and can't be dragged out of their window.
+Tabs attached to a [live domain](live-domains.md) keep their place in the domain and can't be dragged out of their window. A window attached to a live domain holds only that domain's tabs, so tabs from other windows can't be moved into it either; Termeric says so and leaves the tab where it was.
 
 ### Windows share one process
 

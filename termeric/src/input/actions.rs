@@ -108,8 +108,10 @@ pub enum Action {
     ResetConfig,
     /// Show or hide the workspace manager
     ToggleWorkspaceManager,
-    /// Save the complete workspace
+    /// Save the window into its workspace, or a new one
     SaveWorkspace,
+    /// Save the window as a new workspace
+    SaveWorkspaceAs,
     /// Open Settings at its Plugins page
     ConfigurePlugins,
     /// Show the About overlay

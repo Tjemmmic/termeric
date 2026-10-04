@@ -780,7 +780,10 @@ fn workspace_menu_is_a_menu_whose_items_focus_and_activate_like_the_keyboard() {
         .iter()
         .map(|id| node(*id).label().unwrap().to_owned())
         .collect();
-    assert_eq!(labels, ["Save Workspace", "Manage Workspaces…"]);
+    assert_eq!(
+        labels,
+        ["Save Workspace", "Save Workspace As…", "Manage Workspaces…"]
+    );
     assert!(items.iter().all(|id| node(*id).role() == Role::MenuItem));
     assert_eq!(
         snapshot.focus, items[0],
@@ -789,14 +792,14 @@ fn workspace_menu_is_a_menu_whose_items_focus_and_activate_like_the_keyboard() {
 
     app.handle_accessibility_action(ActionRequest {
         action: Action::Focus,
-        target_node: items[1],
+        target_node: items[2],
         target_tree: TreeId::ROOT,
         data: None,
     });
-    assert_eq!(app.accessibility_snapshot().focus, items[1]);
+    assert_eq!(app.accessibility_snapshot().focus, items[2]);
     app.handle_accessibility_action(ActionRequest {
         action: Action::Click,
-        target_node: items[1],
+        target_node: items[2],
         target_tree: TreeId::ROOT,
         data: None,
     });

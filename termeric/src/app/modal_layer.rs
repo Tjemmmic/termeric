@@ -62,7 +62,7 @@ mod tests {
         assert!(app.pointer_panel_owns_input());
 
         app.workspace_menu = Some(crate::ui::popup_menu::PopupMenu::new(
-            crate::ui::workspace_menu::workspace_menu_rows(&[], None),
+            crate::ui::workspace_menu::workspace_menu_rows(&[], None, false),
             false,
         ));
         assert_eq!(app.top_modal_layer(), Some(ModalLayer::WorkspaceMenu));

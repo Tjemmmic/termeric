@@ -10,15 +10,23 @@ pub const MAX_RECENT_WORKSPACES: usize = 6;
 pub enum WorkspaceMenuAction {
     Open(String),
     Save,
+    SaveAs,
     Manage,
 }
 
+/// What a live-domain window shows beside the rows it can't use: its tabs
+/// are the domain's, which keeps them itself, so it neither saves nor opens
+/// workspaces.
+const LIVE_DOMAIN_DETAIL: &str = "Live domain";
+
 /// Rows for `workspaces`, which arrive most recently updated first. The
 /// current workspace is checked; an unreadable archive stays visible but
-/// disabled so the manager remains the place to inspect or delete it.
+/// disabled so the manager remains the place to inspect or delete it. In a
+/// `live_domain` window, opening and saving are disabled.
 pub fn workspace_menu_rows(
     workspaces: &[WorkspaceListEntry],
     current: Option<&str>,
+    live_domain: bool,
 ) -> Vec<MenuRow<WorkspaceMenuAction>> {
     let mut rows: Vec<_> = workspaces
         .iter()
@@ -27,13 +35,15 @@ pub fn workspace_menu_rows(
             let readable = workspace.warning.is_none();
             MenuRow::Item(MenuItem {
                 label: workspace.name.clone(),
-                detail: Some(if readable {
-                    tab_count(workspace.tab_count)
-                } else {
+                detail: Some(if !readable {
                     "Unavailable".into()
+                } else if live_domain {
+                    LIVE_DOMAIN_DETAIL.into()
+                } else {
+                    tab_count(workspace.tab_count)
                 }),
                 checked: current == Some(workspace.id.as_str()),
-                enabled: readable,
+                enabled: readable && !live_domain,
                 action: WorkspaceMenuAction::Open(workspace.id.clone()),
             })
         })
@@ -41,15 +51,17 @@ pub fn workspace_menu_rows(
     if !rows.is_empty() {
         rows.push(MenuRow::Separator);
     }
-    for (label, action) in [
-        ("Save Workspace", WorkspaceMenuAction::Save),
-        ("Manage Workspaces…", WorkspaceMenuAction::Manage),
+    for (label, action, savable) in [
+        ("Save Workspace", WorkspaceMenuAction::Save, true),
+        ("Save Workspace As…", WorkspaceMenuAction::SaveAs, true),
+        ("Manage Workspaces…", WorkspaceMenuAction::Manage, false),
     ] {
+        let disabled = savable && live_domain;
         rows.push(MenuRow::Item(MenuItem {
             label: label.into(),
-            detail: None,
+            detail: disabled.then(|| LIVE_DOMAIN_DETAIL.into()),
             checked: false,
-            enabled: true,
+            enabled: !disabled,
             action,
         }));
     }
@@ -89,14 +101,17 @@ mod tests {
 
     #[test]
     fn without_workspaces_only_the_actions_remain() {
-        let rows = workspace_menu_rows(&[], None);
-        assert_eq!(labels(&rows), ["Save Workspace", "Manage Workspaces…"]);
+        let rows = workspace_menu_rows(&[], None, false);
+        assert_eq!(
+            labels(&rows),
+            ["Save Workspace", "Save Workspace As…", "Manage Workspaces…"]
+        );
     }
 
     #[test]
     fn recent_workspaces_precede_a_separator_and_mark_the_current_one() {
         let workspaces = [workspace("a", 3, false), workspace("b", 1, false)];
-        let rows = workspace_menu_rows(&workspaces, Some("b"));
+        let rows = workspace_menu_rows(&workspaces, Some("b"), false);
         assert_eq!(
             labels(&rows),
             [
@@ -104,6 +119,7 @@ mod tests {
                 "Workspace b",
                 "—",
                 "Save Workspace",
+                "Save Workspace As…",
                 "Manage Workspaces…"
             ]
         );
@@ -122,7 +138,7 @@ mod tests {
 
     #[test]
     fn unreadable_archives_are_listed_but_cannot_be_opened() {
-        let rows = workspace_menu_rows(&[workspace("broken", 0, true)], None);
+        let rows = workspace_menu_rows(&[workspace("broken", 0, true)], None, false);
         let MenuRow::Item(item) = &rows[0] else {
             panic!("expected an item")
         };
@@ -135,7 +151,30 @@ mod tests {
         let workspaces: Vec<_> = (0..9)
             .map(|index| workspace(&index.to_string(), 1, false))
             .collect();
-        let rows = workspace_menu_rows(&workspaces, None);
-        assert_eq!(rows.len(), MAX_RECENT_WORKSPACES + 3);
+        let rows = workspace_menu_rows(&workspaces, None, false);
+        assert_eq!(rows.len(), MAX_RECENT_WORKSPACES + 4);
+    }
+
+    #[test]
+    fn a_live_domain_window_shows_saving_and_opening_disabled() {
+        let rows = workspace_menu_rows(&[workspace("a", 2, false)], Some("a"), true);
+        let items: Vec<_> = rows
+            .iter()
+            .filter_map(|row| match row {
+                MenuRow::Item(item) => {
+                    Some((item.label.as_str(), item.enabled, item.detail.as_deref()))
+                }
+                MenuRow::Separator => None,
+            })
+            .collect();
+        assert_eq!(
+            items,
+            [
+                ("Workspace a", false, Some("Live domain")),
+                ("Save Workspace", false, Some("Live domain")),
+                ("Save Workspace As…", false, Some("Live domain")),
+                ("Manage Workspaces…", true, None),
+            ]
+        );
     }
 }

@@ -789,7 +789,7 @@ fn pointer_panel_ownership_tracks_the_full_open_close_lifecycle() {
         (
             |app| {
                 app.workspace_menu = Some(crate::ui::popup_menu::PopupMenu::new(
-                    crate::ui::workspace_menu::workspace_menu_rows(&[], None),
+                    crate::ui::workspace_menu::workspace_menu_rows(&[], None, false),
                     false,
                 ))
             },
@@ -837,7 +837,7 @@ fn modal_interruption_finishes_native_gestures_before_pointer_motion() {
         },
         |app| {
             app.workspace_menu = Some(crate::ui::popup_menu::PopupMenu::new(
-                crate::ui::workspace_menu::workspace_menu_rows(&[], None),
+                crate::ui::workspace_menu::workspace_menu_rows(&[], None, false),
                 false,
             ))
         },
