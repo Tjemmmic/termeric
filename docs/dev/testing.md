@@ -25,7 +25,9 @@ To build the user guide, install [mdBook](https://rust-lang.github.io/mdBook/) a
 
 `.github/workflows/fuzz.yml` runs the three fuzz targets (see [Fuzzing](#fuzzing)) every Monday against `main`, and whenever it's started from the Actions tab.
 
-The GPU smoke, the soak, benchmarks, and package checks don't run in CI. Run them by hand before a release.
+`.github/workflows/release.yml` runs for each `v*` tag: it builds the tarball and `.deb` for x86_64 and arm64, runs `check_debian_package.py` on each `.deb`, and drafts the GitHub release (see [PACKAGING.md](../../PACKAGING.md#releases)).
+
+The GPU smoke, the soak, benchmarks, the Arch package check, and the packages' `--system-lifecycle` checks don't run in CI. Run them by hand before a release.
 
 ## GPU render smoke
 
@@ -84,7 +86,7 @@ cargo +nightly fuzz run graphics_protocols fuzz/corpus/graphics_protocols -- -ma
 
 ## Packages
 
-Every package ships the install tree that `scripts/stage_install_tree.py` stages. The `.deb` packages a tree staged in `target/install-tree`:
+Every package ships the install tree that `scripts/stage_install_tree.py` stages (see [PACKAGING.md](../../PACKAGING.md)). The `.deb` packages a tree staged in `target/install-tree`:
 
 ```bash
 cargo build --release --locked

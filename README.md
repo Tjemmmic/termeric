@@ -31,7 +31,7 @@ The [user guide](docs/src/introduction.md) covers everything from [first steps](
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). [AGENTS.md](AGENTS.md) describes the architecture for contributors and coding agents.
+See [CONTRIBUTING.md](CONTRIBUTING.md). [AGENTS.md](AGENTS.md) describes the architecture for contributors and coding agents. If you package Termeric for a distribution, see [PACKAGING.md](PACKAGING.md).
 
 ## License
 
