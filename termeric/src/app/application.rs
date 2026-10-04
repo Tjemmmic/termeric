@@ -3490,7 +3490,6 @@ impl ApplicationHandler<AppEvent> for Application {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
     #[test]
     fn control_environment_policy_child_probe() {
         let Some(marker) = std::env::var_os("TERMERIC_TEST_CONTROL_ENV_POLICY_MARKER") else {
@@ -3507,7 +3506,6 @@ mod tests {
         std::fs::write(marker, b"environment policy applied").unwrap();
     }
 
-    #[cfg(unix)]
     #[test]
     fn control_environment_policy_reaches_tab_and_prepared_window_children() {
         use crate::control::protocol::{EnvironmentVariable, LaunchState};
@@ -3889,8 +3887,9 @@ mod tests {
 
     #[test]
     fn control_replays_are_exact_collision_safe_and_bounded() {
-        use crate::control::protocol::{Request, Response};
+        use crate::control::protocol::{EnvironmentVariable, Request, Response};
 
+        let different = |result: Option<std::result::Result<Response, String>>| matches!(result, Some(Err(error)) if error.contains("different action"));
         let request = Request::CreateWindow {
             request_id: "0".repeat(32),
             source_window: 7,
@@ -3903,34 +3902,18 @@ mod tests {
         let mut cache = ControlReplayCache::default();
         cache.record(request.clone(), response.clone());
         assert_eq!(cache.replay(&request), Some(response));
-        assert!(matches!(
-            cache.replay(&Request::CreateWindow {
-                request_id: "0".repeat(32),
-                source_window: 8,
-            }),
-            Some(Err(error)) if error.contains("different action")
-        ));
-        assert!(matches!(
-            cache.replay(&Request::CreateTab {
-                request_id: "0".repeat(32),
-                window_id: 7,
-            }),
-            Some(Err(error)) if error.contains("different action")
-        ));
-
-        let tab_request = Request::CreateTab {
-            request_id: "e".repeat(32),
+        // The same ID for another target or another kind of request collides.
+        assert!(different(cache.replay(&Request::CreateWindow {
+            request_id: "0".repeat(32),
+            source_window: 8,
+        })));
+        assert!(different(cache.replay(&Request::CreateTab {
+            request_id: "0".repeat(32),
             window_id: 7,
-        };
-        let tab_response = Ok(Response::TabCreated {
-            process_id: 42,
-            request_id: "e".repeat(32),
-            window_id: 7,
-            tab_id: 3,
-        });
-        cache.record(tab_request.clone(), tab_response.clone());
-        assert_eq!(cache.replay(&tab_request), Some(tab_response));
+        })));
 
+        // A launch matches only with every field equal, including whether it
+        // runs in the background.
         let launch_request = Request::LaunchTab {
             background: false,
             request_id: "2".repeat(32),
@@ -3940,7 +3923,7 @@ mod tests {
             working_directory: Some("/tmp".into()),
             title: Some("build".into()),
             environment_policy: Default::default(),
-            environment: vec![crate::control::protocol::EnvironmentVariable {
+            environment: vec![EnvironmentVariable {
                 name: "BUILD_MODE".into(),
                 value: "exact".into(),
             }],
@@ -3952,61 +3935,46 @@ mod tests {
             tab_id: 4,
         });
         cache.record(launch_request.clone(), launch_response.clone());
-        assert_eq!(cache.replay(&launch_request), Some(launch_response.clone()));
+        assert_eq!(cache.replay(&launch_request), Some(launch_response));
         let mut background_request = launch_request.clone();
+        let mut changed_args = launch_request;
         if let Request::LaunchTab { background, .. } = &mut background_request {
             *background = true;
         }
-        assert!(
-            matches!(cache.replay(&background_request), Some(Err(error)) if error.contains("different action"))
-        );
-        let mut background_cache = ControlReplayCache::default();
-        background_cache.record(background_request.clone(), launch_response.clone());
-        assert_eq!(
-            background_cache.replay(&background_request),
-            Some(launch_response)
-        );
-        assert!(matches!(
-            cache.replay(&Request::LaunchTab {
-                background: false,
-                request_id: "2".repeat(32),
-                window_id: 7,
-                program: "/usr/bin/printf".into(),
-                args: vec!["%s".into(), "different".into()],
-                working_directory: Some("/tmp".into()),
-                title: Some("build".into()),
-                environment_policy: Default::default(),
-                environment: vec![crate::control::protocol::EnvironmentVariable {
-                    name: "BUILD_MODE".into(),
-                    value: "exact".into(),
-                }],
-            }),
-            Some(Err(error)) if error.contains("different action")
-        ));
+        if let Request::LaunchTab { args, .. } = &mut changed_args {
+            args[1] = "different".into();
+        }
+        assert!(different(cache.replay(&background_request)));
+        assert!(different(cache.replay(&changed_args)));
 
-        let mut window_launch_request = Request::LaunchWindow {
-            request_id: "3".repeat(32),
-            source_window: 7,
-            program: "/usr/bin/printf".into(),
-            args: vec!["%s".into(), "exact".into()],
-            working_directory: Some("/tmp".into()),
-            title: Some("window build".into()),
-            environment_policy: termeric_core::pty::EnvironmentPolicy {
-                clear: false,
-                unset: vec!["REMOVE_Z".into(), "REMOVE_A".into()],
-            },
-            environment: vec![
-                crate::control::protocol::EnvironmentVariable {
-                    name: "WINDOW_Z".into(),
-                    value: "last".into(),
+        // Canonical order makes a reordered environment the same request; a
+        // changed value or policy is not.
+        let window_launch = |unset: [&str; 2], environment: [(&str, &str); 2]| {
+            let mut request = Request::LaunchWindow {
+                request_id: "3".repeat(32),
+                source_window: 7,
+                program: "/usr/bin/printf".into(),
+                args: vec!["%s".into(), "exact".into()],
+                working_directory: Some("/tmp".into()),
+                title: Some("window build".into()),
+                environment_policy: termeric_core::pty::EnvironmentPolicy {
+                    clear: false,
+                    unset: unset.map(String::from).to_vec(),
                 },
-                crate::control::protocol::EnvironmentVariable {
-                    name: "WINDOW_A".into(),
-                    value: "exact".into(),
-                },
-            ],
+                environment: environment
+                    .map(|(name, value)| EnvironmentVariable {
+                        name: name.into(),
+                        value: value.into(),
+                    })
+                    .to_vec(),
+            };
+            request.canonicalize();
+            request
         };
-        window_launch_request.canonicalize();
+        let window_launch_request = window_launch(
+            ["REMOVE_Z", "REMOVE_A"],
+            [("WINDOW_Z", "last"), ("WINDOW_A", "exact")],
+        );
         let window_launch_response = Ok(Response::WindowLaunched {
             process_id: 42,
             request_id: "3".repeat(32),
@@ -4018,70 +3986,17 @@ mod tests {
             window_launch_response.clone(),
         );
         assert_eq!(
-            cache.replay(&window_launch_request),
+            cache.replay(&window_launch(
+                ["REMOVE_A", "REMOVE_Z"],
+                [("WINDOW_A", "exact"), ("WINDOW_Z", "last")],
+            )),
             Some(window_launch_response)
         );
-        let mut reordered_window_launch_request = Request::LaunchWindow {
-            request_id: "3".repeat(32),
-            source_window: 7,
-            program: "/usr/bin/printf".into(),
-            args: vec!["%s".into(), "exact".into()],
-            working_directory: Some("/tmp".into()),
-            title: Some("window build".into()),
-            environment_policy: termeric_core::pty::EnvironmentPolicy {
-                clear: false,
-                unset: vec!["REMOVE_A".into(), "REMOVE_Z".into()],
-            },
-            environment: vec![
-                crate::control::protocol::EnvironmentVariable {
-                    name: "WINDOW_A".into(),
-                    value: "exact".into(),
-                },
-                crate::control::protocol::EnvironmentVariable {
-                    name: "WINDOW_Z".into(),
-                    value: "last".into(),
-                },
-            ],
-        };
-        reordered_window_launch_request.canonicalize();
-        assert_eq!(
-            cache.replay(&reordered_window_launch_request),
-            Some(Ok(Response::WindowLaunched {
-                process_id: 42,
-                request_id: "3".repeat(32),
-                window_id: 9,
-                tab_id: 0,
-            }))
-        );
-        let mut changed_window_launch_request = Request::LaunchWindow {
-            request_id: "3".repeat(32),
-            source_window: 7,
-            program: "/usr/bin/printf".into(),
-            args: vec!["%s".into(), "exact".into()],
-            working_directory: Some("/tmp".into()),
-            title: Some("window build".into()),
-            environment_policy: termeric_core::pty::EnvironmentPolicy {
-                clear: false,
-                unset: vec!["REMOVE_A".into(), "REMOVE_Z".into()],
-            },
-            environment: vec![
-                crate::control::protocol::EnvironmentVariable {
-                    name: "WINDOW_Z".into(),
-                    value: "last".into(),
-                },
-                crate::control::protocol::EnvironmentVariable {
-                    name: "WINDOW_A".into(),
-                    value: "different".into(),
-                },
-            ],
-        };
-        changed_window_launch_request.canonicalize();
-        assert!(matches!(
-            cache.replay(&changed_window_launch_request),
-            Some(Err(error)) if error.contains("different action")
-        ));
-
-        let mut changed_policy = window_launch_request.clone();
+        assert!(different(cache.replay(&window_launch(
+            ["REMOVE_A", "REMOVE_Z"],
+            [("WINDOW_Z", "last"), ("WINDOW_A", "different")],
+        ))));
+        let mut changed_policy = window_launch_request;
         if let Request::LaunchWindow {
             environment_policy, ..
         } = &mut changed_policy
@@ -4091,10 +4006,10 @@ mod tests {
                 unset: vec![],
             };
         }
-        assert!(
-            matches!(cache.replay(&changed_policy), Some(Err(error)) if error.contains("different action"))
-        );
+        assert!(different(cache.replay(&changed_policy)));
 
+        // A failure whose outcome may be ambiguous replays; any other
+        // failure changed nothing, so it may be retried.
         let terminal_failure = Request::CreateTab {
             request_id: "1".repeat(32),
             window_id: 7,
@@ -4107,114 +4022,12 @@ mod tests {
             cache.replay(&terminal_failure),
             Some(Err("authoritative domain result was lost".into()))
         );
-
-        let pane_request = Request::SplitPane {
-            request_id: "d".repeat(32),
-            window_id: 7,
-            tab_id: 3,
-            pane_id: 0,
-            direction: crate::panes::SplitDirection::Vertical,
-        };
-        let pane_response = Ok(Response::PaneCreated {
-            process_id: 42,
-            request_id: "d".repeat(32),
-            window_id: 7,
-            tab_id: 3,
-            pane_id: 1,
-        });
-        cache.record(pane_request.clone(), pane_response.clone());
-        assert_eq!(cache.replay(&pane_request), Some(pane_response));
-
-        let close_request = Request::ClosePane {
-            request_id: "c".repeat(32),
-            window_id: 7,
-            tab_id: 3,
-            pane_id: 1,
-        };
-        let close_response = Ok(Response::PaneClosed {
-            process_id: 42,
-            request_id: "c".repeat(32),
-            window_id: 7,
-            tab_id: 3,
-            pane_id: 1,
-            remaining_panes: 1,
-            focused_pane_id: 0,
-        });
-        cache.record(close_request.clone(), close_response.clone());
-        assert_eq!(cache.replay(&close_request), Some(close_response));
-
-        let move_request = Request::MoveTab {
-            request_id: "b".repeat(32),
-            source_window_id: 7,
-            tab_id: 3,
-            destination_window_id: 9,
-            destination_index: 1,
-        };
-        let move_response = Ok(Response::TabMoved {
-            process_id: 42,
-            request_id: "b".repeat(32),
-            source_window_id: 7,
-            source_tab_id: 3,
-            destination_window_id: 9,
-            destination_tab_id: 4,
-            destination_index: 1,
-            source_window_closing: false,
-            changed: true,
-        });
-        cache.record(move_request.clone(), move_response.clone());
-        assert_eq!(cache.replay(&move_request), Some(move_response));
-
-        let pane_move_request = Request::MovePane {
-            request_id: "a".repeat(32),
-            source_window_id: 7,
-            source_tab_id: 3,
-            pane_id: 1,
-            destination_window_id: 9,
-            destination_tab_id: 4,
-            target_pane_id: 0,
-            direction: crate::panes::SplitDirection::Vertical,
-        };
-        let pane_move_response = Ok(Response::PaneMoved {
-            process_id: 42,
-            request_id: "a".repeat(32),
-            source_window_id: 7,
-            source_tab_id: 3,
-            source_pane_id: 1,
-            destination_window_id: 9,
-            destination_tab_id: 4,
-            destination_pane_id: 1,
-            target_pane_id: 0,
-        });
-        cache.record(pane_move_request.clone(), pane_move_response.clone());
-        assert_eq!(cache.replay(&pane_move_request), Some(pane_move_response));
-
-        let resize_request = Request::ResizeDivider {
-            request_id: "9".repeat(32),
-            window_id: 7,
-            tab_id: 3,
-            divider_id: 11,
-            ratio_millis: 650,
-        };
-        let resize_response = Ok(Response::DividerResized {
-            process_id: 42,
-            request_id: "9".repeat(32),
-            window_id: 7,
-            tab_id: 3,
-            divider_id: 11,
-            previous_ratio_millis: 500,
-            ratio_millis: 650,
-            changed: true,
-        });
-        cache.record(resize_request.clone(), resize_response.clone());
-        assert_eq!(cache.replay(&resize_request), Some(resize_response));
-
         let failed = Request::CreateWindow {
             request_id: "f".repeat(32),
             source_window: 7,
         };
         cache.record(failed.clone(), Err("temporary failure".into()));
         assert!(cache.replay(&failed).is_none());
-
         let failed_input = Request::SendText {
             request_id: "8".repeat(32),
             window_id: 7,
@@ -4244,7 +4057,6 @@ mod tests {
         assert!(cache.replay(&request).is_none());
     }
 
-    #[cfg(unix)]
     #[test]
     fn control_launch_tab_targets_one_stable_window_and_returns_its_tab_id() {
         let mut application =
@@ -4322,7 +4134,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn launch_status_survives_fast_exit_window_cleanup_and_replay_expiry() {
         use crate::control::protocol::{LaunchState, Request};
@@ -4434,7 +4245,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn control_launch_window_prepares_one_exact_local_command_and_real_pty() {
         use std::os::unix::fs::PermissionsExt;
@@ -4570,7 +4380,6 @@ mod tests {
         panic!("exact argv or inherited cwd output did not reach the command window");
     }
 
-    #[cfg(unix)]
     #[test]
     fn control_launch_window_preparation_is_atomic_for_stale_and_spawn_failures() {
         let temp = tempfile::tempdir().unwrap();
@@ -4729,42 +4538,66 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn live_domain_creation_completion_returns_authoritative_gui_ids_and_replays() {
-        if !std::path::Path::new("/bin/true").is_file() {
-            return;
-        }
-        use crate::domain::model::{DomainSnapshot, LivePane, LivePaneLayout, LiveTab, SpawnSpec};
+        use crate::app::LiveDomainControl;
+        use crate::control::protocol::{Request, Response};
+        use crate::domain::model::{DomainSnapshot, LivePaneLayout, LiveTab, SpawnSpec};
         use crate::panes::SplitDirection;
         use crate::tabs::TabManager;
+        use std::sync::mpsc::{Receiver, sync_channel};
 
-        let pane = |id| LivePane {
-            id,
-            title: format!("pane-{id}"),
-            working_directory: None,
-            command: vec!["/bin/true".into()],
-            cols: 80,
-            rows: 24,
-            closed: false,
-            attachments: 0,
+        type Reply = Receiver<std::result::Result<Response, String>>;
+        fn pend(
+            application: &mut Application,
+            window: WindowId,
+            request: &Request,
+            control: &LiveDomainControl,
+            context: PendingDomainContext,
+        ) -> Reply {
+            let (responder, reply) = sync_channel(1);
+            application
+                .pending_domain_controls
+                .push(PendingDomainControl {
+                    request: request.clone(),
+                    window_id: window,
+                    control: control.clone(),
+                    context,
+                    responders: vec![responder],
+                });
+            reply
+        }
+        /// The daemon's answer reaches the window, then the control client.
+        fn finish(
+            application: &mut Application,
+            window: WindowId,
+            control: &LiveDomainControl,
+            snapshot: &DomainSnapshot,
+        ) {
+            let result = Ok(snapshot.clone());
+            application
+                .windows
+                .get_mut(&window)
+                .unwrap()
+                .handle_live_domain_control_completed(control.clone(), result.clone());
+            application.complete_live_domain_control(window, control, &result);
+        }
+        let tab = |id, pane| LiveTab::fixture(id, LivePaneLayout::pane(pane));
+        let split_tab = |id, split_id, direction, ratio_millis, first, second| -> LiveTab {
+            LiveTab::fixture(
+                id,
+                LivePaneLayout::split(
+                    split_id,
+                    direction,
+                    ratio_millis,
+                    LivePaneLayout::pane(first),
+                    LivePaneLayout::pane(second),
+                ),
+            )
         };
-        let tab = |id, pane_id| LiveTab {
-            id,
-            title: format!("tab-{id}"),
-            user_title: None,
-            pinned: false,
-            focused_pane: pane_id,
-            layout: LivePaneLayout::Pane { pane: pane_id },
-            panes: vec![pane(pane_id)],
-        };
-        let snapshot = |active_tab, tabs| DomainSnapshot {
-            id: "domain-control-ack".into(),
-            name: "control ack".into(),
-            created_at: "2026-01-01T00:00:00Z".into(),
-            active_tab,
-            tabs,
-        };
+        let snapshot =
+            |active_tab, tabs| DomainSnapshot::fixture("domain-control-ack", active_tab, tabs);
+
         let initial = snapshot(10, vec![tab(10, 100)]);
         let relay = crate::domain::DomainRelayCommand::local("/bin/true");
         let mut tabs = TabManager::new(80, 24, Config::default().shell, 1_000, 1024 * 1024);
@@ -4798,34 +4631,34 @@ mod tests {
         application.windows.insert(native_id, window);
         application.window_order.push(native_id);
         application.control_window_ids.insert(native_id, 7);
+        let domain_id = initial.id.clone();
 
-        let create_request = crate::control::protocol::Request::CreateTab {
-            request_id: "66666666666666666666666666666666".into(),
+        // A retry with the same ID waits on the same completion; the same ID
+        // for another window collides.
+        let create_request = Request::CreateTab {
+            request_id: "6".repeat(32),
             window_id: 7,
         };
-        let create_control = crate::app::LiveDomainControl::SpawnTab {
-            domain_id: initial.id.clone(),
+        let create_control = LiveDomainControl::SpawnTab {
+            domain_id: domain_id.clone(),
             spawn: SpawnSpec::default(),
         };
-        let (create_tx, create_rx) = std::sync::mpsc::sync_channel(1);
-        application
-            .pending_domain_controls
-            .push(PendingDomainControl {
-                request: create_request.clone(),
-                window_id: native_id,
-                control: create_control.clone(),
-                context: PendingDomainContext::None,
-                responders: vec![create_tx],
-            });
-        let (create_retry_tx, create_retry_rx) = std::sync::mpsc::sync_channel(1);
+        let create_reply = pend(
+            &mut application,
+            native_id,
+            &create_request,
+            &create_control,
+            PendingDomainContext::None,
+        );
+        let (retry_tx, retry_rx) = sync_channel(1);
         assert!(
             application
-                .defer_live_domain_control(&create_request, create_retry_tx)
+                .defer_live_domain_control(&create_request, retry_tx)
                 .is_none()
         );
-        let (collision_tx, collision_rx) = std::sync::mpsc::sync_channel(1);
-        let collision = crate::control::protocol::Request::CreateTab {
-            request_id: "66666666666666666666666666666666".into(),
+        let (collision_tx, collision_rx) = sync_channel(1);
+        let collision = Request::CreateTab {
+            request_id: "6".repeat(32),
             window_id: 8,
         };
         assert!(
@@ -4837,17 +4670,15 @@ mod tests {
             collision_rx.recv().unwrap(),
             Err(error) if error.contains("different action")
         ));
-        let created = snapshot(20, vec![tab(10, 100), tab(20, 200)]);
-        let created_result = Ok(created.clone());
-        application
-            .windows
-            .get_mut(&native_id)
-            .unwrap()
-            .handle_live_domain_control_completed(create_control.clone(), created_result.clone());
-        application.complete_live_domain_control(native_id, &create_control, &created_result);
-        let create_response = create_rx.recv().unwrap().unwrap();
+        finish(
+            &mut application,
+            native_id,
+            &create_control,
+            &snapshot(20, vec![tab(10, 100), tab(20, 200)]),
+        );
+        let create_response = create_reply.recv().unwrap().unwrap();
         let created_local_tab = match &create_response {
-            crate::control::protocol::Response::TabCreated {
+            Response::TabCreated {
                 window_id: 7,
                 tab_id,
                 ..
@@ -4855,59 +4686,42 @@ mod tests {
             response => panic!("unexpected create response {response:?}"),
         };
         assert_ne!(created_local_tab, 0);
-        assert_eq!(create_retry_rx.recv().unwrap(), Ok(create_response.clone()));
+        assert_eq!(retry_rx.recv().unwrap(), Ok(create_response.clone()));
         assert_eq!(
             application.control_replays.replay(&create_request),
             Some(Ok(create_response))
         );
 
-        let split_request = crate::control::protocol::Request::SplitPane {
-            request_id: "77777777777777777777777777777777".into(),
-            window_id: 7,
-            tab_id: created_local_tab,
-            pane_id: 0,
-            direction: crate::panes::SplitDirection::Vertical,
-        };
-        let split_control = crate::app::LiveDomainControl::SplitPane {
-            domain_id: created.id.clone(),
+        let split_control = LiveDomainControl::SplitPane {
+            domain_id: domain_id.clone(),
             remote_pane_id: 200,
             direction: SplitDirection::Vertical,
             spawn: SpawnSpec::default(),
         };
-        let (first_tx, first_rx) = std::sync::mpsc::sync_channel(1);
-        let (retry_tx, retry_rx) = std::sync::mpsc::sync_channel(1);
-        application
-            .pending_domain_controls
-            .push(PendingDomainControl {
-                request: split_request.clone(),
-                window_id: native_id,
-                control: split_control.clone(),
-                context: PendingDomainContext::None,
-                responders: vec![first_tx, retry_tx],
-            });
-        let mut split_tab = tab(20, 200);
-        split_tab.focused_pane = 201;
-        split_tab.panes.push(pane(201));
-        split_tab.layout = LivePaneLayout::Split {
-            split_id: 55,
-            direction: SplitDirection::Vertical,
-            ratio_millis: 500,
-            first: Box::new(LivePaneLayout::Pane { pane: 200 }),
-            second: Box::new(LivePaneLayout::Pane { pane: 201 }),
-        };
-        let split = snapshot(20, vec![tab(10, 100), split_tab]);
-        let split_result = Ok(split.clone());
-        application
-            .windows
-            .get_mut(&native_id)
-            .unwrap()
-            .handle_live_domain_control_completed(split_control.clone(), split_result.clone());
-        application.complete_live_domain_control(native_id, &split_control, &split_result);
-        let first = first_rx.recv().unwrap().unwrap();
-        assert_eq!(retry_rx.recv().unwrap().unwrap(), first);
+        let split_reply = pend(
+            &mut application,
+            native_id,
+            &Request::SplitPane {
+                request_id: "7".repeat(32),
+                window_id: 7,
+                tab_id: created_local_tab,
+                pane_id: 0,
+                direction: SplitDirection::Vertical,
+            },
+            &split_control,
+            PendingDomainContext::None,
+        );
+        let split = snapshot(
+            20,
+            vec![
+                tab(10, 100),
+                split_tab(20, 55, SplitDirection::Vertical, 500, 200, 201),
+            ],
+        );
+        finish(&mut application, native_id, &split_control, &split);
         assert!(matches!(
-            first,
-            crate::control::protocol::Response::PaneCreated {
+            split_reply.recv().unwrap().unwrap(),
+            Response::PaneCreated {
                 window_id: 7,
                 tab_id,
                 pane_id: 1,
@@ -4915,80 +4729,69 @@ mod tests {
             } if tab_id == created_local_tab
         ));
 
-        let unproven_close_request = crate::control::protocol::Request::ClosePane {
-            request_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+        // A close the daemon's snapshot does not show is a failure that a
+        // retry gets back rather than repeats.
+        let unproven_close_request = Request::ClosePane {
+            request_id: "a".repeat(32),
             window_id: 7,
             tab_id: created_local_tab,
             pane_id: 1,
         };
-        let unproven_close_control = crate::app::LiveDomainControl::ClosePane {
-            domain_id: initial.id.clone(),
+        let unproven_close_control = LiveDomainControl::ClosePane {
+            domain_id: domain_id.clone(),
             remote_pane_id: 201,
             local_tab_id: usize::try_from(created_local_tab).unwrap(),
         };
-        let (unproven_tx, unproven_rx) = std::sync::mpsc::sync_channel(1);
-        application
-            .pending_domain_controls
-            .push(PendingDomainControl {
-                request: unproven_close_request.clone(),
-                window_id: native_id,
-                control: unproven_close_control.clone(),
-                context: PendingDomainContext::None,
-                responders: vec![unproven_tx],
-            });
+        let unproven_reply = pend(
+            &mut application,
+            native_id,
+            &unproven_close_request,
+            &unproven_close_control,
+            PendingDomainContext::None,
+        );
         application.complete_live_domain_control(native_id, &unproven_close_control, &Ok(split));
-        let unproven_error = unproven_rx.recv().unwrap().unwrap_err();
+        let unproven_error = unproven_reply.recv().unwrap().unwrap_err();
         assert!(unproven_error.contains("still contains the pane"));
         assert_eq!(
             application.control_replays.replay(&unproven_close_request),
             Some(Err(unproven_error))
         );
 
-        let resize_request = crate::control::protocol::Request::ResizeDivider {
-            request_id: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
-            window_id: 7,
-            tab_id: created_local_tab,
-            divider_id: 55,
-            ratio_millis: 650,
-        };
-        let resize_control = crate::app::LiveDomainControl::ResizeSplit {
-            domain_id: initial.id.clone(),
+        let resize_control = LiveDomainControl::ResizeSplit {
+            domain_id: domain_id.clone(),
             remote_split_id: 55,
             ratio_millis: 650,
         };
-        let (resize_tx, resize_rx) = std::sync::mpsc::sync_channel(1);
-        application
-            .pending_domain_controls
-            .push(PendingDomainControl {
-                request: resize_request.clone(),
-                window_id: native_id,
-                control: resize_control.clone(),
-                context: PendingDomainContext::ResizeDivider {
-                    previous_ratio_millis: 500,
-                },
-                responders: vec![resize_tx],
-            });
-        let mut resized_tab = tab(20, 200);
-        resized_tab.focused_pane = 201;
-        resized_tab.panes.push(pane(201));
-        resized_tab.layout = LivePaneLayout::Split {
-            split_id: 55,
-            direction: SplitDirection::Vertical,
-            ratio_millis: 650,
-            first: Box::new(LivePaneLayout::Pane { pane: 200 }),
-            second: Box::new(LivePaneLayout::Pane { pane: 201 }),
-        };
-        let resized = snapshot(20, vec![tab(10, 100), resized_tab]);
-        let resized_result = Ok(resized);
-        application
-            .windows
-            .get_mut(&native_id)
-            .unwrap()
-            .handle_live_domain_control_completed(resize_control.clone(), resized_result.clone());
-        application.complete_live_domain_control(native_id, &resize_control, &resized_result);
+        let resize_reply = pend(
+            &mut application,
+            native_id,
+            &Request::ResizeDivider {
+                request_id: "b".repeat(32),
+                window_id: 7,
+                tab_id: created_local_tab,
+                divider_id: 55,
+                ratio_millis: 650,
+            },
+            &resize_control,
+            PendingDomainContext::ResizeDivider {
+                previous_ratio_millis: 500,
+            },
+        );
+        finish(
+            &mut application,
+            native_id,
+            &resize_control,
+            &snapshot(
+                20,
+                vec![
+                    tab(10, 100),
+                    split_tab(20, 55, SplitDirection::Vertical, 650, 200, 201),
+                ],
+            ),
+        );
         assert!(matches!(
-            resize_rx.recv().unwrap().unwrap(),
-            crate::control::protocol::Response::DividerResized {
+            resize_reply.recv().unwrap().unwrap(),
+            Response::DividerResized {
                 window_id: 7,
                 tab_id,
                 divider_id: 55,
@@ -5006,31 +4809,21 @@ mod tests {
         );
 
         let destination_local_tab = application.windows[&native_id]
-            .control_local_live_tab_id(&initial.id, 10)
+            .control_local_live_tab_id(&domain_id, 10)
             .unwrap();
-        let move_pane_request = crate::control::protocol::Request::MovePane {
-            request_id: "dddddddddddddddddddddddddddddddd".into(),
-            source_window_id: 7,
-            source_tab_id: created_local_tab,
-            pane_id: 1,
-            destination_window_id: 7,
-            destination_tab_id: destination_local_tab,
-            target_pane_id: 0,
-            direction: crate::panes::SplitDirection::Horizontal,
-        };
         let move_pane_control = application.windows[&native_id]
             .control_live_domain_move_pane(
                 created_local_tab,
                 1,
                 destination_local_tab,
                 0,
-                crate::panes::SplitDirection::Horizontal,
+                SplitDirection::Horizontal,
             )
             .unwrap()
             .unwrap();
         assert!(matches!(
             &move_pane_control,
-            crate::app::LiveDomainControl::MovePane {
+            LiveDomainControl::MovePane {
                 remote_pane_id: 201,
                 source_tab_id: 20,
                 destination_tab_id: 10,
@@ -5039,39 +4832,31 @@ mod tests {
                 ..
             }
         ));
-        let (move_pane_tx, move_pane_rx) = std::sync::mpsc::sync_channel(1);
-        application
-            .pending_domain_controls
-            .push(PendingDomainControl {
-                request: move_pane_request.clone(),
-                window_id: native_id,
-                control: move_pane_control.clone(),
-                context: PendingDomainContext::None,
-                responders: vec![move_pane_tx],
-            });
-        let mut destination_after_move = tab(10, 100);
-        destination_after_move.focused_pane = 201;
-        destination_after_move.panes.push(pane(201));
-        destination_after_move.layout = LivePaneLayout::Split {
-            split_id: 56,
-            direction: SplitDirection::Horizontal,
-            ratio_millis: 500,
-            first: Box::new(LivePaneLayout::Pane { pane: 100 }),
-            second: Box::new(LivePaneLayout::Pane { pane: 201 }),
-        };
-        let pane_moved = snapshot(10, vec![destination_after_move, tab(20, 200)]);
-        let pane_moved_result = Ok(pane_moved);
-        application
-            .windows
-            .get_mut(&native_id)
-            .unwrap()
-            .handle_live_domain_control_completed(
-                move_pane_control.clone(),
-                pane_moved_result.clone(),
-            );
-        application.complete_live_domain_control(native_id, &move_pane_control, &pane_moved_result);
-        let moved_local_pane = match move_pane_rx.recv().unwrap().unwrap() {
-            crate::control::protocol::Response::PaneMoved {
+        let move_pane_reply = pend(
+            &mut application,
+            native_id,
+            &Request::MovePane {
+                request_id: "d".repeat(32),
+                source_window_id: 7,
+                source_tab_id: created_local_tab,
+                pane_id: 1,
+                destination_window_id: 7,
+                destination_tab_id: destination_local_tab,
+                target_pane_id: 0,
+                direction: SplitDirection::Horizontal,
+            },
+            &move_pane_control,
+            PendingDomainContext::None,
+        );
+        let destination = || split_tab(10, 56, SplitDirection::Horizontal, 500, 100, 201);
+        finish(
+            &mut application,
+            native_id,
+            &move_pane_control,
+            &snapshot(10, vec![destination(), tab(20, 200)]),
+        );
+        let moved_local_pane = match move_pane_reply.recv().unwrap().unwrap() {
+            Response::PaneMoved {
                 source_window_id: 7,
                 source_tab_id,
                 source_pane_id: 1,
@@ -5089,13 +4874,6 @@ mod tests {
         };
         assert_ne!(moved_local_pane, 0);
 
-        let move_tab_request = crate::control::protocol::Request::MoveTab {
-            request_id: "cccccccccccccccccccccccccccccccc".into(),
-            source_window_id: 7,
-            tab_id: created_local_tab,
-            destination_window_id: 7,
-            destination_index: 0,
-        };
         let (move_tab_control, move_changed) = application.windows[&native_id]
             .control_live_domain_move_tab(created_local_tab, 0)
             .unwrap()
@@ -5103,43 +4881,34 @@ mod tests {
         assert!(move_changed);
         assert!(matches!(
             &move_tab_control,
-            crate::app::LiveDomainControl::MoveTab {
+            LiveDomainControl::MoveTab {
                 remote_tab_id: 20,
                 index: 0,
                 ..
             }
         ));
-        let (move_tab_tx, move_tab_rx) = std::sync::mpsc::sync_channel(1);
-        application
-            .pending_domain_controls
-            .push(PendingDomainControl {
-                request: move_tab_request.clone(),
-                window_id: native_id,
-                control: move_tab_control.clone(),
-                context: PendingDomainContext::MoveTab { changed: true },
-                responders: vec![move_tab_tx],
-            });
-        let mut moved_destination = tab(10, 100);
-        moved_destination.focused_pane = 201;
-        moved_destination.panes.push(pane(201));
-        moved_destination.layout = LivePaneLayout::Split {
-            split_id: 56,
-            direction: SplitDirection::Horizontal,
-            ratio_millis: 500,
-            first: Box::new(LivePaneLayout::Pane { pane: 100 }),
-            second: Box::new(LivePaneLayout::Pane { pane: 201 }),
-        };
-        let moved = snapshot(10, vec![tab(20, 200), moved_destination]);
-        let moved_result = Ok(moved);
-        application
-            .windows
-            .get_mut(&native_id)
-            .unwrap()
-            .handle_live_domain_control_completed(move_tab_control.clone(), moved_result.clone());
-        application.complete_live_domain_control(native_id, &move_tab_control, &moved_result);
+        let move_tab_reply = pend(
+            &mut application,
+            native_id,
+            &Request::MoveTab {
+                request_id: "c".repeat(32),
+                source_window_id: 7,
+                tab_id: created_local_tab,
+                destination_window_id: 7,
+                destination_index: 0,
+            },
+            &move_tab_control,
+            PendingDomainContext::MoveTab { changed: true },
+        );
+        finish(
+            &mut application,
+            native_id,
+            &move_tab_control,
+            &snapshot(10, vec![tab(20, 200), destination()]),
+        );
         assert!(matches!(
-            move_tab_rx.recv().unwrap().unwrap(),
-            crate::control::protocol::Response::TabMoved {
+            move_tab_reply.recv().unwrap().unwrap(),
+            Response::TabMoved {
                 source_window_id: 7,
                 source_tab_id,
                 destination_window_id: 7,
@@ -5151,45 +4920,32 @@ mod tests {
             } if source_tab_id == created_local_tab && destination_tab_id == created_local_tab
         ));
 
-        let close_pane_request = crate::control::protocol::Request::ClosePane {
-            request_id: "88888888888888888888888888888888".into(),
-            window_id: 7,
-            tab_id: destination_local_tab,
-            pane_id: moved_local_pane,
-        };
-        let close_pane_control = crate::app::LiveDomainControl::ClosePane {
-            domain_id: initial.id.clone(),
+        let close_pane_control = LiveDomainControl::ClosePane {
+            domain_id: domain_id.clone(),
             remote_pane_id: 201,
             local_tab_id: usize::try_from(destination_local_tab).unwrap(),
         };
-        let (close_pane_tx, close_pane_rx) = std::sync::mpsc::sync_channel(1);
-        application
-            .pending_domain_controls
-            .push(PendingDomainControl {
-                request: close_pane_request.clone(),
-                window_id: native_id,
-                control: close_pane_control.clone(),
-                context: PendingDomainContext::None,
-                responders: vec![close_pane_tx],
-            });
-        let pane_closed = snapshot(10, vec![tab(20, 200), tab(10, 100)]);
-        let pane_closed_result = Ok(pane_closed);
-        application
-            .windows
-            .get_mut(&native_id)
-            .unwrap()
-            .handle_live_domain_control_completed(
-                close_pane_control.clone(),
-                pane_closed_result.clone(),
-            );
-        application.complete_live_domain_control(
+        let close_pane_reply = pend(
+            &mut application,
+            native_id,
+            &Request::ClosePane {
+                request_id: "8".repeat(32),
+                window_id: 7,
+                tab_id: destination_local_tab,
+                pane_id: moved_local_pane,
+            },
+            &close_pane_control,
+            PendingDomainContext::None,
+        );
+        finish(
+            &mut application,
             native_id,
             &close_pane_control,
-            &pane_closed_result,
+            &snapshot(10, vec![tab(20, 200), tab(10, 100)]),
         );
         assert!(matches!(
-            close_pane_rx.recv().unwrap().unwrap(),
-            crate::control::protocol::Response::PaneClosed {
+            close_pane_reply.recv().unwrap().unwrap(),
+            Response::PaneClosed {
                 window_id: 7,
                 tab_id,
                 pane_id,
@@ -5205,47 +4961,38 @@ mod tests {
                 .contains("sole pane")
         );
 
-        let close_tab_request = crate::control::protocol::Request::CloseTab {
-            request_id: "99999999999999999999999999999999".into(),
-            window_id: 7,
-            tab_id: created_local_tab,
-        };
-        let close_tab_control = crate::app::LiveDomainControl::CloseTab {
-            domain_id: initial.id.clone(),
+        let close_tab_control = LiveDomainControl::CloseTab {
+            domain_id: domain_id.clone(),
             remote_tab_id: 20,
             local_tab_id: usize::try_from(created_local_tab).unwrap(),
         };
-        let (close_tab_tx, close_tab_rx) = std::sync::mpsc::sync_channel(1);
-        application
-            .pending_domain_controls
-            .push(PendingDomainControl {
-                request: close_tab_request.clone(),
-                window_id: native_id,
-                control: close_tab_control.clone(),
-                context: PendingDomainContext::None,
-                responders: vec![close_tab_tx],
-            });
-        let tab_closed = snapshot(10, vec![tab(10, 100)]);
-        let tab_closed_result = Ok(tab_closed);
-        application
-            .windows
-            .get_mut(&native_id)
-            .unwrap()
-            .handle_live_domain_control_completed(
-                close_tab_control.clone(),
-                tab_closed_result.clone(),
-            );
-        application.complete_live_domain_control(native_id, &close_tab_control, &tab_closed_result);
+        let close_tab_reply = pend(
+            &mut application,
+            native_id,
+            &Request::CloseTab {
+                request_id: "9".repeat(32),
+                window_id: 7,
+                tab_id: created_local_tab,
+            },
+            &close_tab_control,
+            PendingDomainContext::None,
+        );
+        finish(
+            &mut application,
+            native_id,
+            &close_tab_control,
+            &snapshot(10, vec![tab(10, 100)]),
+        );
         assert!(matches!(
-            close_tab_rx.recv().unwrap().unwrap(),
-            crate::control::protocol::Response::TabCloseRequested {
+            close_tab_reply.recv().unwrap().unwrap(),
+            Response::TabCloseRequested {
                 window_id: 7,
                 tab_id,
                 ..
             } if tab_id == created_local_tab
         ));
         let remaining_tab = application.windows[&native_id]
-            .control_local_live_tab_id(&initial.id, 10)
+            .control_local_live_tab_id(&domain_id, 10)
             .unwrap();
         assert!(
             application.windows[&native_id]
@@ -5337,13 +5084,8 @@ mod tests {
         assert_eq!(value["event"]["truncated"], true);
     }
 
-    #[cfg(unix)]
     #[test]
     fn plugin_navigation_is_exact_atomic_non_activating_and_hook_suppressed() {
-        if !std::path::Path::new("/bin/sh").is_file() {
-            return;
-        }
-
         let shell = crate::config::ShellConfig {
             program: Some("/bin/sh".into()),
             args: vec!["-c".into(), "exit 0".into()],
@@ -5574,13 +5316,10 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    /// The same-window path and live-domain refusal are covered in
+    /// `app/tests.rs`.
     #[test]
-    fn plugin_tab_creation_is_exact_non_activating_and_hook_suppressed() {
-        if !std::path::Path::new("/bin/sh").is_file() {
-            return;
-        }
-
+    fn plugin_tab_creation_in_another_window_is_exact_non_activating_and_hook_suppressed() {
         let shell = crate::config::ShellConfig {
             program: Some("/bin/sh".into()),
             args: vec!["-c".into(), "exit 0".into()],
@@ -5637,34 +5376,6 @@ mod tests {
             0
         );
 
-        let created_same_window = plugin_event(
-            &mut application,
-            "tab-builder",
-            7,
-            crate::plugin::structured::StructuredResponseAction::CreateTab {
-                action_id: "new-current-task".into(),
-                window_id: Some(7),
-            },
-        );
-        assert_eq!(created_same_window["event"]["ok"], true);
-        assert_eq!(created_same_window["origin_window_id"], 7);
-        assert_eq!(created_same_window["event"]["window_id"], 7);
-        let same_window_tab = created_same_window["event"]["created_tab_id"]
-            .as_u64()
-            .unwrap() as usize;
-        assert_eq!(
-            application.windows[&native_id]
-                .tabs
-                .as_ref()
-                .unwrap()
-                .active_tab_id(),
-            Some(same_window_tab)
-        );
-        assert_eq!(
-            observed_creations.load(std::sync::atomic::Ordering::SeqCst),
-            0
-        );
-
         let stale = plugin_event(
             &mut application,
             "tab-builder",
@@ -5688,7 +5399,7 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .count(),
-            3
+            2
         );
 
         application.windows.get_mut(&native_id).unwrap().should_exit = true;
@@ -5714,46 +5425,9 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .count(),
-            3
+            2
         );
 
-        let target = application.windows.get_mut(&native_id).unwrap();
-        target.should_exit = false;
-        target
-            .tabs
-            .as_mut()
-            .unwrap()
-            .active_tab_mut()
-            .unwrap()
-            .live_domain = Some(crate::tabs::LiveDomainTab {
-            domain_id: "fake-domain".into(),
-            tab_id: 12,
-            pane_ids: HashMap::new(),
-        });
-        let live_domain = plugin_event(
-            &mut application,
-            "tab-builder",
-            9,
-            crate::plugin::structured::StructuredResponseAction::CreateTab {
-                action_id: "live-domain-window".into(),
-                window_id: Some(7),
-            },
-        );
-        assert_eq!(live_domain["event"]["ok"], false);
-        assert!(
-            live_domain["event"]["error"]
-                .as_str()
-                .unwrap()
-                .contains("live domain")
-        );
-        assert_eq!(
-            application.windows[&native_id]
-                .tabs
-                .as_ref()
-                .unwrap()
-                .count(),
-            3
-        );
         assert!(
             created.to_string().len()
                 <= crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES
@@ -5765,13 +5439,8 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn plugin_pane_creation_is_exact_atomic_and_non_activating() {
-        if !std::path::Path::new("/bin/sh").is_file() {
-            return;
-        }
-
         let shell = crate::config::ShellConfig {
             program: Some("/bin/sh".into()),
             args: vec!["-c".into(), "exit 0".into()],
@@ -6024,13 +5693,8 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn plugin_terminal_queries_are_exact_bounded_and_non_activating() {
-        if !std::path::Path::new("/bin/sh").is_file() {
-            return;
-        }
-
         let shell = crate::config::ShellConfig {
             program: Some("/bin/sh".into()),
             args: vec!["-c".into(), "exit 0".into()],
@@ -6246,13 +5910,8 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn plugin_terminal_input_is_exact_guarded_policy_gated_and_non_activating() {
-        if !std::path::Path::new("/bin/sh").is_file() {
-            return;
-        }
-
         let shell = crate::test_support::sleeping_shell();
         let mut tabs = crate::tabs::TabManager::for_test(shell);
         let target_tab = tabs
@@ -6492,12 +6151,8 @@ mod tests {
             .unwrap()
     }
 
-    #[cfg(unix)]
     #[test]
     fn plugin_window_scope_is_enforced_where_operations_execute() {
-        if !std::path::Path::new("/bin/sh").is_file() {
-            return;
-        }
         let (origin, other, _) = pane_transfer_fixture();
         let mut application =
             Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
@@ -6838,7 +6493,6 @@ mod tests {
 
     /// Windows 7 and 8 as described by [`actions_targeting_window_8`], both
     /// accepting external terminal input so only scope can refuse it.
-    #[cfg(unix)]
     fn two_window_scope_fixture() -> Application {
         let mut application =
             Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
@@ -6867,12 +6521,8 @@ mod tests {
         application
     }
 
-    #[cfg(unix)]
     #[test]
     fn window_scoped_grants_refuse_every_action_targeting_another_window() {
-        if !std::path::Path::new("/bin/sh").is_file() {
-            return;
-        }
         let inventory = |application: &Application| {
             serde_json::to_value(application.plugin_process_inventory()).unwrap()
         };
@@ -6915,13 +6565,9 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn plugin_host_results_continue_under_the_follow_up_rule() {
         use crate::plugin::structured::HandlerAuthority;
-        if !std::path::Path::new("/bin/sh").is_file() {
-            return;
-        }
         let mut application = two_window_scope_fixture();
         let origin = PluginOrigin {
             native_id: application.control_native_window_id(7).unwrap(),
@@ -7046,13 +6692,8 @@ mod tests {
         assert!(application.take_fatal_startup_error().is_none());
     }
 
-    #[cfg(unix)]
     #[test]
     fn each_window_reports_app_ready_under_its_own_stable_id() {
-        if !std::path::Path::new("/bin/sh").is_file() {
-            return;
-        }
-
         #[derive(Debug)]
         struct AppReadyObserver(std::sync::Arc<std::sync::Mutex<Vec<u64>>>);
 
@@ -7134,7 +6775,6 @@ mod tests {
         assert!(Application::from_config(config, None, launch).is_ok());
     }
 
-    #[cfg(unix)]
     #[test]
     fn non_utf8_cli_cwd_fails_before_windows_are_queued() {
         use std::os::unix::ffi::OsStringExt;
@@ -7192,7 +6832,6 @@ mod tests {
         assert!(!application.pending[0].allow_auto_restore);
     }
 
-    #[cfg(unix)]
     fn pane_transfer_fixture() -> (App, App, Option<u32>) {
         use crate::config::ShellConfig;
         use crate::panes::{PaneManager, SplitDirection};
@@ -7254,12 +6893,8 @@ mod tests {
         (source, destination, moved_child)
     }
 
-    #[cfg(unix)]
     #[test]
     fn cross_window_transfer_preserves_live_owner_and_retargets_destination_geometry() {
-        if !std::path::Path::new("/bin/sh").is_file() {
-            return;
-        }
         let (mut source, mut destination, moved_child) = pane_transfer_fixture();
 
         let attached = Application::transfer_focused_pane(&mut source, &mut destination).unwrap();
@@ -7313,12 +6948,8 @@ mod tests {
             .unwrap();
     }
 
-    #[cfg(unix)]
     #[test]
     fn exact_control_pane_transfer_validates_both_paths_before_detaching() {
-        if !std::path::Path::new("/bin/sh").is_file() {
-            return;
-        }
         let (mut source, mut destination, moved_child) = pane_transfer_fixture();
         let error = Application::transfer_control_pane(
             &mut source,
@@ -7387,12 +7018,8 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn plugin_pane_movement_routes_exactly_across_windows_and_is_atomic() {
-        if !std::path::Path::new("/bin/sh").is_file() {
-            return;
-        }
         let (source, destination, moved_child) = pane_transfer_fixture();
         let mut application =
             Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
@@ -7514,15 +7141,11 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn cross_window_transfer_rejects_live_endpoints_without_detaching_source() {
         use crate::tabs::LiveDomainTab;
         use std::collections::HashMap;
 
-        if !std::path::Path::new("/bin/sh").is_file() {
-            return;
-        }
         let (mut source, mut destination, moved_child) = pane_transfer_fixture();
         destination
             .tabs
@@ -7696,12 +7319,8 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn whole_tab_transfer_preserves_plugin_panes_pinning_and_closes_empty_source() {
-        if !std::path::Path::new("/bin/sh").is_file() {
-            return;
-        }
         let (mut source, mut destination, moved_child) = pane_transfer_fixture();
         let source_tab = source.tabs.as_mut().unwrap().active_tab_mut().unwrap();
         source_tab.tab_type = crate::tabs::TabType::Plugin {
@@ -7763,15 +7382,11 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_moved_tab_takes_its_agent_view_conversation_to_the_next_window() {
         use crate::agent_view::event::{AgentEvent, Handshake};
         use crate::agent_view::session::AgentSession;
         use crate::agent_view::transcript::Transcript;
-        if !std::path::Path::new("/bin/sh").is_file() {
-            return;
-        }
         let (mut source, mut destination, _) = pane_transfer_fixture();
         let mut transcript = Transcript::new("Claude Code", "default");
         transcript.apply(AgentEvent::Ready(Handshake::default()));
@@ -7789,12 +7404,8 @@ mod tests {
         assert_eq!(destination.agent_session_tab(id), Some(moved));
     }
 
-    #[cfg(unix)]
     #[test]
     fn exact_control_tab_transfer_is_atomic_and_returns_destination_identity() {
-        if !std::path::Path::new("/bin/sh").is_file() {
-            return;
-        }
         let (mut source, mut destination, moved_child) = pane_transfer_fixture();
         let error =
             Application::transfer_control_tab(&mut source, &mut destination, 0, 2).unwrap_err();
@@ -7823,12 +7434,8 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn plugin_tab_movement_preserves_state_and_refuses_final_source_tab() {
-        if !std::path::Path::new("/bin/sh").is_file() {
-            return;
-        }
         let (source, destination, moved_child) = pane_transfer_fixture();
         let mut application =
             Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
@@ -7948,12 +7555,8 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn plugin_pane_closure_targets_exact_same_or_sibling_window_and_preserves_tab() {
-        if !std::path::Path::new("/bin/sh").is_file() {
-            return;
-        }
         let (target, origin, _) = pane_transfer_fixture();
         let mut application =
             Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
@@ -8070,12 +7673,8 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn plugin_tab_closure_targets_exact_window_and_preserves_final_tab() {
-        if !std::path::Path::new("/bin/sh").is_file() {
-            return;
-        }
         let (mut target, origin, _) = pane_transfer_fixture();
         let target_tab_id = target.tabs.as_ref().unwrap().active_tab().unwrap().id;
         let survivor_id = target
@@ -8170,12 +7769,8 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn plugin_pane_layout_targets_exact_window_and_preserves_identity_and_focus() {
-        if !std::path::Path::new("/bin/sh").is_file() {
-            return;
-        }
         let (target, origin, _) = pane_transfer_fixture();
         let mut application =
             Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
@@ -8346,12 +7941,8 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn plugin_window_closure_is_exact_non_final_and_result_gated() {
-        if !std::path::Path::new("/bin/sh").is_file() {
-            return;
-        }
         let (target, origin, _) = pane_transfer_fixture();
         let mut application =
             Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
@@ -8523,12 +8114,8 @@ mod tests {
         assert!(!application.windows[&origin_native].should_exit);
     }
 
-    #[cfg(unix)]
     #[test]
     fn plugin_window_focus_is_exact_bounded_and_reuses_native_policy() {
-        if !std::path::Path::new("/bin/sh").is_file() {
-            return;
-        }
         let (target, origin, _) = pane_transfer_fixture();
         let mut application =
             Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
@@ -8605,14 +8192,10 @@ mod tests {
         assert!(!application.windows[&origin_native].should_exit);
     }
 
-    #[cfg(unix)]
     #[test]
     fn whole_tab_transfer_rejects_live_source_atomically() {
         use crate::tabs::LiveDomainTab;
 
-        if !std::path::Path::new("/bin/sh").is_file() {
-            return;
-        }
         let (mut source, mut destination, moved_child) = pane_transfer_fixture();
         let tab = source.tabs.as_mut().unwrap().active_tab_mut().unwrap();
         let pane_ids = tab
