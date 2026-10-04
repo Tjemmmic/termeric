@@ -120,7 +120,7 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `rect.rs`, `buffer.rs` | Rounded-rectangle pipeline and capacity-managed GPU upload buffers |
 | `text.rs`, `ui_text.rs` | Terminal glyph queue and text pipeline; chrome text in the desktop UI face |
 | `style.rs` | Resolved SGR cell style, decoration geometry, visibility, and color/face ordering |
-| `glyph_cache.rs` | Styled face matching, fallback diagnostics, shaping, rasterization, and glyph atlas |
+| `glyph_cache.rs` | Glyph and shaped-run lookup, shaping, rasterization, and upload; its `glyph_cache/` children hold the paged atlas allocator (`atlas.rs`), run and UI-layout caches (`caches.rs`), family coverage and the coverage report (`coverage.rs`), and font setup and cell metrics (`fonts.rs`) |
 | `row_cache.rs` | Persistent row geometry/GPU buffers and blink-phase invalidation |
 | `cursor.rs`, `ime.rs`, `quick_select.rs` | Cursor painting, IME preedit, copy-mode and quick-select overlays |
 | `image.rs`, `background_image.rs` | Inline-graphics and background-image pipelines |
