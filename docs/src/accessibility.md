@@ -13,7 +13,7 @@ A screen reader can reach:
 - new terminal output, which is announced politely as it appears;
 - the command palette, Settings, the shortcuts editor, the Commands panel, the Workspaces manager, and other dialogs, including their fields, lists, buttons, and current values;
 - the find bar, including its match count and toggle states, with an invalid regular expression announced right away;
-- notifications, where errors are announced right away and other messages politely.
+- notifications, where errors are announced right away and other messages politely; each one offers a Dismiss action (and activating it dismisses it too), so a notice that stays on screen never needs the mouse.
 
 While a dialog such as the command palette is open, only the dialog is presented, so the screen reader doesn't wander into the terminal behind it.
 

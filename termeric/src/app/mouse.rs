@@ -599,7 +599,7 @@ impl App {
         self.request_redraw(RedrawReason::PointerInput);
     }
 
-    /// A press on a toast dismisses it. Returns whether one was there.
+    /// A press on a toast dismisses it. Returns whether one was dismissed.
     pub(super) fn press_toast(&mut self, x: f32, y: f32) -> bool {
         let Some(id) = self
             .renderer
@@ -608,9 +608,13 @@ impl App {
         else {
             return false;
         };
-        self.toasts.dismiss(id);
-        self.request_redraw(RedrawReason::PointerInput);
-        true
+        // The toast drawn there may have expired since that frame; the press
+        // then goes to whatever is beneath.
+        let dismissed = self.toasts.dismiss(id);
+        if dismissed {
+            self.request_redraw(RedrawReason::PointerInput);
+        }
+        dismissed
     }
 
     /// A primary press on tab `idx` selects it and may start dragging it.

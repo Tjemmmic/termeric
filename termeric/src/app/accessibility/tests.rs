@@ -632,6 +632,65 @@ fn toasts_are_stable_bounded_live_regions_even_above_modals() {
     assert!(second.nodes.iter().any(|(id, _)| *id == toast));
 }
 
+#[test]
+fn toasts_are_dismissed_by_their_accessibility_actions_even_above_modals() {
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.toasts.error("first");
+    app.toasts.warning("second");
+    app.toasts.info("third");
+    app.command_palette.open();
+    let toast_ids = |app: &App| -> Vec<u64> {
+        app.toasts
+            .build_accessibility_info()
+            .iter()
+            .map(|toast| toast.id)
+            .collect()
+    };
+    let [first, second, third] = toast_ids(&app)[..] else {
+        panic!("three toasts expected");
+    };
+    let base = app.accessibility_snapshot();
+    let snapshot = app.with_toast_accessibility(base);
+    let node = &snapshot
+        .nodes
+        .iter()
+        .find(|(id, _)| *id == toast_node(first))
+        .unwrap()
+        .1;
+    assert!(node.supports_action(Action::Click));
+    assert!(node.supports_action(Action::CustomAction));
+    assert_eq!(
+        node.custom_actions()
+            .iter()
+            .map(|action| (action.id, action.description.as_ref()))
+            .collect::<Vec<_>>(),
+        [(TOAST_DISMISS_ACTION, "Dismiss")]
+    );
+
+    let request = |toast, action, data| ActionRequest {
+        action,
+        target_tree: TreeId::ROOT,
+        target_node: toast_node(toast),
+        data,
+    };
+    // Neither focus nor another custom action dismisses a toast.
+    app.handle_accessibility_action(request(third, Action::Focus, None));
+    app.handle_accessibility_action(request(
+        third,
+        Action::CustomAction,
+        Some(ActionData::CustomAction(SHORTCUT_CLEAR_ACTION)),
+    ));
+    app.handle_accessibility_action(request(first, Action::Click, None));
+    app.handle_accessibility_action(request(
+        second,
+        Action::CustomAction,
+        Some(ActionData::CustomAction(TOAST_DISMISS_ACTION)),
+    ));
+    assert_eq!(toast_ids(&app), [third]);
+    // The modal beneath the toasts saw none of it.
+    assert!(app.command_palette.is_active());
+}
+
 fn open_harvest_cellar_fixture(app: &mut App, count: usize) {
     let mut harvest = crate::harvest::HarvestMode::with_capacity(count.max(1));
     harvest.cellar.animation = crate::ui::animation::PanelAnimation::with_duration(0.0);

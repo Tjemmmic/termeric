@@ -110,6 +110,7 @@ const AGENTS_SUPERVISOR_TOGGLE: NodeId = NodeId(175);
 const AGENTS_ACTIVITY: NodeId = NodeId(176);
 const AGENT_VIEW_PANE: NodeId = NodeId(177);
 const SHORTCUT_CLEAR_ACTION: i32 = 1;
+const TOAST_DISMISS_ACTION: i32 = 2;
 const TAB_BASE: u64 = 1_000;
 const PANE_BASE: u64 = 10_000;
 const LINE_BASE: u64 = 1_000_000;
@@ -761,6 +762,11 @@ impl App {
     }
 
     fn handle_accessibility_action(&mut self, request: ActionRequest) {
+        // Toasts sit above every modal layer, as they do for the mouse.
+        if let Some(toast) = toast_id(request.target_node) {
+            self.handle_toast_accessibility_action(toast, &request);
+            return;
+        }
         if let Some(layer) = self.top_modal_layer() {
             match layer {
                 ModalLayer::Guardrail => self.handle_guardrail_accessibility_action(request),
@@ -2351,6 +2357,22 @@ impl App {
         true
     }
 
+    /// Clicking a toast or its Dismiss action dismisses it, as a mouse press
+    /// on it does, so a persistent notice never needs the mouse.
+    fn handle_toast_accessibility_action(&mut self, toast: u64, request: &ActionRequest) {
+        let dismiss = match request.action {
+            Action::Click => true,
+            Action::CustomAction => matches!(
+                request.data,
+                Some(ActionData::CustomAction(TOAST_DISMISS_ACTION))
+            ),
+            _ => false,
+        };
+        if dismiss && self.toasts.dismiss(toast) {
+            self.request_redraw(RedrawReason::Accessibility);
+        }
+    }
+
     fn with_toast_accessibility(&self, mut snapshot: SemanticSnapshot) -> SemanticSnapshot {
         let toasts = self.toasts.build_accessibility_info();
         if toasts.is_empty() {
@@ -2394,6 +2416,12 @@ impl App {
                     Live::Polite
                 },
             );
+            node.add_action(Action::Click);
+            node.add_action(Action::CustomAction);
+            node.push_custom_action(CustomAction {
+                id: TOAST_DISMISS_ACTION,
+                description: "Dismiss".into(),
+            });
             node.set_bounds(bounds_rect(placement.rect));
             snapshot.nodes.push((id, node));
             toast_ids.push(id);
@@ -5900,6 +5928,13 @@ fn is_search_node(node: NodeId) -> bool {
 
 fn toast_node(id: u64) -> NodeId {
     NodeId(TOAST_BASE.saturating_add(id))
+}
+
+/// The toast `node` stands for, when it is a toast's node.
+fn toast_id(node: NodeId) -> Option<u64> {
+    (TOAST_BASE..CONTEXT_ACTION_BASE)
+        .contains(&node.0)
+        .then(|| node.0 - TOAST_BASE)
 }
 
 #[cfg(test)]
