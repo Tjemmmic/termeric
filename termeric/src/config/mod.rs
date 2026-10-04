@@ -346,7 +346,7 @@ impl Config {
                 );
             }
         }
-        validate_range("font.size", self.font.size, FONT_SIZE_RANGE)?;
+        validate_range("font.size", self.font.size, FONT_SIZE_RANGE, Some("points"))?;
         if !(MIN_FONT_WEIGHT..=MAX_FONT_WEIGHT).contains(&self.font.weight) {
             bail!("font.weight must be between {MIN_FONT_WEIGHT} and {MAX_FONT_WEIGHT}");
         }
@@ -356,21 +356,29 @@ impl Config {
         if self.font.bold_weight < self.font.weight {
             bail!("font.bold_weight must be greater than or equal to font.weight");
         }
-        validate_range("font.line_height", self.font.line_height, LINE_HEIGHT_RANGE)?;
+        validate_range(
+            "font.line_height",
+            self.font.line_height,
+            LINE_HEIGHT_RANGE,
+            None,
+        )?;
         validate_range(
             "scrollback.lines",
             self.scrollback.lines,
             SCROLLBACK_LINES_RANGE,
+            Some("lines"),
         )?;
         validate_range(
             "scrollback.max_memory_mib",
             self.scrollback.max_memory_mib,
             SCROLLBACK_MEMORY_MIB_RANGE,
+            Some("MiB"),
         )?;
         validate_range(
             "scrollback.scroll_speed",
             self.scrollback.scroll_speed,
             SCROLL_SPEED_RANGE,
+            None,
         )?;
         validate_launch_profiles(&self.profiles)?;
         if self.copy_mode.patterns.len() > 32 {
@@ -387,9 +395,19 @@ impl Config {
                 format!("copy_mode pattern {:?} has an invalid regex", pattern.name)
             })?;
         }
-        validate_range("window.opacity", self.window.opacity, WINDOW_OPACITY_RANGE)?;
+        validate_range(
+            "window.opacity",
+            self.window.opacity,
+            WINDOW_OPACITY_RANGE,
+            None,
+        )?;
         self.window.background_image.validate()?;
-        validate_range("window.padding", self.window.padding, WINDOW_PADDING_RANGE)?;
+        validate_range(
+            "window.padding",
+            self.window.padding,
+            WINDOW_PADDING_RANGE,
+            Some("pixels"),
+        )?;
         if !(320..=16_384).contains(&self.window.width)
             || !(200..=16_384).contains(&self.window.height)
         {
@@ -399,11 +417,13 @@ impl Config {
             "cursor.blink_rate",
             self.cursor.blink_rate,
             CURSOR_BLINK_RATE_RANGE,
+            Some("milliseconds"),
         )?;
         validate_range(
             "bell.visual_duration_ms",
             self.bell.visual_duration_ms,
             BELL_DURATION_RANGE,
+            Some("milliseconds"),
         )?;
         if !(1..=termeric_core::ansi::MAX_OSC52_DECODED_BYTES)
             .contains(&self.security.osc52.max_bytes)
@@ -414,6 +434,7 @@ impl Config {
             "harvest.max_history",
             self.harvest.max_history,
             HARVEST_HISTORY_RANGE,
+            Some("commands"),
         )?;
         self.domains.validate()?;
         crate::agents::config::validate(&self.agents)?;
@@ -468,14 +489,21 @@ pub const SCROLLBACK_MEMORY_MIB_RANGE: RangeInclusive<usize> = 8..=4_096;
 pub const SCROLL_SPEED_RANGE: RangeInclusive<f64> = 0.1..=100.0;
 
 /// Refuse `value` outside `range`; NaN and infinities are outside every
-/// float range here.
-fn validate_range<T>(key: &str, value: T, range: RangeInclusive<T>) -> Result<()>
+/// float range here. The bounds print as the documentation writes them, a
+/// float with its decimal point ("0.1 and 1.0"), followed by `unit`.
+fn validate_range<T>(
+    key: &str,
+    value: T,
+    range: RangeInclusive<T>,
+    unit: Option<&str>,
+) -> Result<()>
 where
-    T: PartialOrd + std::fmt::Display,
+    T: PartialOrd + std::fmt::Debug,
 {
     if !range.contains(&value) {
+        let unit = unit.map(|unit| format!(" {unit}")).unwrap_or_default();
         bail!(
-            "{key} must be between {} and {}",
+            "{key} must be between {:?} and {:?}{unit}",
             range.start(),
             range.end()
         );
@@ -1137,6 +1165,7 @@ impl BackgroundImageConfig {
             "window.background_image.opacity",
             self.opacity,
             BACKGROUND_IMAGE_OPACITY_RANGE,
+            None,
         )?;
         if let Some(path) = self.path.as_ref() {
             let path = path.as_os_str().to_string_lossy();
@@ -1412,7 +1441,32 @@ mod tests {
 
         config.window.padding += 1;
         let error = config.validate().unwrap_err().to_string();
-        assert_eq!(error, "window.padding must be between 0 and 256");
+        assert_eq!(error, "window.padding must be between 0 and 256 pixels");
+    }
+
+    #[test]
+    fn range_errors_read_like_the_documentation() {
+        let error = |edit: fn(&mut Config)| {
+            let mut config = Config::default();
+            edit(&mut config);
+            config.validate().unwrap_err().to_string()
+        };
+        assert_eq!(
+            error(|config| config.window.opacity = 0.05),
+            "window.opacity must be between 0.1 and 1.0"
+        );
+        assert_eq!(
+            error(|config| config.font.size = 100.0),
+            "font.size must be between 8.0 and 72.0 points"
+        );
+        assert_eq!(
+            error(|config| config.cursor.blink_rate = 10),
+            "cursor.blink_rate must be between 100 and 5000 milliseconds"
+        );
+        assert_eq!(
+            error(|config| config.scrollback.scroll_speed = f64::NAN),
+            "scrollback.scroll_speed must be between 0.1 and 100.0"
+        );
     }
 
     #[test]
