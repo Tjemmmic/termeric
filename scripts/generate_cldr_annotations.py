@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Generate Termeric's compact, pinned English CLDR annotation index."""
+"""Generate Termeric's compact, pinned English CLDR annotation index.
+
+Each input is pinned by its SHA-256; download them from:
+
+--base     https://raw.githubusercontent.com/unicode-org/cldr-json/48.0.0/cldr-json/cldr-annotations-full/annotations/en/annotations.json
+--derived  https://raw.githubusercontent.com/unicode-org/cldr-json/48.0.0/cldr-json/cldr-annotations-derived-full/annotationsDerived/en/annotations.json
+--emoji    https://www.unicode.org/Public/17.0.0/emoji/emoji-test.txt
+"""
 
 from __future__ import annotations
 
@@ -246,7 +253,9 @@ def sha256(data: bytes) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--base", type=Path, required=True)
     parser.add_argument("--derived", type=Path, required=True)
     parser.add_argument("--emoji", type=Path, required=True)
