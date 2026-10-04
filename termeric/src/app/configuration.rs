@@ -842,9 +842,9 @@ impl App {
     /// pointer, keyboard, and accessibility input.
     pub(super) fn apply_session_panel_action(
         &mut self,
-        action: crate::session::panel::SessionPanelAction,
+        action: crate::ui::session_panel::SessionPanelAction,
     ) {
-        use crate::session::panel::SessionPanelAction;
+        use crate::ui::session_panel::SessionPanelAction;
 
         let workspace_mode = self.session_panel.is_workspace_mode();
         match action {

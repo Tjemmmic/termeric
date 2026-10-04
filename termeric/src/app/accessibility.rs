@@ -2019,7 +2019,7 @@ impl App {
     }
 
     fn handle_session_accessibility_action(&mut self, request: ActionRequest) {
-        use crate::session::panel::SessionPanelAction;
+        use crate::ui::session_panel::SessionPanelAction;
 
         match request.target_node {
             SESSION_BACK | SESSION_SNAPSHOTS => match request.action {
@@ -2132,8 +2132,8 @@ impl App {
 
     fn session_accessibility_layout(
         &self,
-        info: &crate::session::panel::SessionPanelInfo,
-    ) -> crate::session::panel::SessionPanelLayout {
+        info: &crate::ui::session_panel::SessionPanelInfo,
+    ) -> crate::ui::session_panel::SessionPanelLayout {
         let UiMetrics {
             width,
             height,
@@ -2141,7 +2141,7 @@ impl App {
             cell_width,
             cell_height,
         } = self.ui_metrics();
-        crate::session::panel::SessionPanelLayout::calculate(
+        crate::ui::session_panel::SessionPanelLayout::calculate(
             width,
             height,
             top,

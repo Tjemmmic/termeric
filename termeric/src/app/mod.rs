@@ -1271,7 +1271,7 @@ pub struct App {
     workspace_menu:
         Option<crate::ui::popup_menu::PopupMenu<crate::ui::workspace_menu::WorkspaceMenuAction>>,
     /// Session management panel
-    session_panel: crate::session::panel::SessionPanel,
+    session_panel: crate::ui::session_panel::SessionPanel,
     /// Custom commands panel
     commands_panel: crate::ui::commands::panel::CommandsPanel,
     /// This window's agents and supervisor at a glance.
@@ -1583,7 +1583,7 @@ impl App {
             workspace_menu: None,
             session_row_click: None,
             theme_preview: None,
-            session_panel: crate::session::panel::SessionPanel::new(),
+            session_panel: crate::ui::session_panel::SessionPanel::new(),
             commands_panel: crate::ui::commands::panel::CommandsPanel::new(),
             agents_panel: crate::ui::agents_panel::AgentsPanel::new(),
             agent_view: agent_view::AgentViewWindow::default(),

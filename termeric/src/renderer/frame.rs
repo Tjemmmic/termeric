@@ -48,7 +48,7 @@ pub struct ChromeFrame<'a> {
     pub search_bar: Option<&'a SearchBarInfo>,
     pub ime_preedit: Option<&'a ImePreeditRenderInfo>,
     pub workspace_menu: Option<&'a PopupMenuInfo>,
-    pub session_panel: Option<&'a crate::session::panel::SessionPanelInfo>,
+    pub session_panel: Option<&'a crate::ui::session_panel::SessionPanelInfo>,
     pub commands_panel: Option<&'a crate::ui::commands::panel::CommandsPanelInfo>,
     pub agents_panel: Option<&'a crate::ui::agents_panel::AgentsPanelInfo>,
     pub command_palette: Option<&'a PaletteInfo>,

@@ -1,7 +1,7 @@
 //! What the workspace panel lists, read from disk: saved workspaces or
 //! closed-tab snapshots.
 
-use super::panel::SessionEntry;
+use crate::ui::session_panel::SessionEntry;
 
 /// One reading of the panel's list.
 pub struct SessionListing {

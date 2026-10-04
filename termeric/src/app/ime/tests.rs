@@ -334,7 +334,7 @@ fn workspace_rename_ime_matches_paint_geometry_without_a_terminal() {
     let mut app = App::new_headless(Config::default()).unwrap();
     app.session_panel.set_reduced_motion(true);
     app.session_panel.set_test_entries(
-        vec![crate::session::panel::SessionEntry {
+        vec![crate::ui::session_panel::SessionEntry {
             id: "workspace-test".into(),
             display_name: "Roots".into(),
             subtitle: String::new(),
@@ -347,7 +347,7 @@ fn workspace_rename_ime_matches_paint_geometry_without_a_terminal() {
     assert!(app.session_panel.accessibility_set_rename(&name));
     for (width, cell) in [(800.0, 8.0), (1400.0, 16.0)] {
         let info = app.session_panel.build_info();
-        let layout = crate::session::panel::SessionPanelLayout::calculate(
+        let layout = crate::ui::session_panel::SessionPanelLayout::calculate(
             width,
             800.0,
             0.0,
@@ -582,7 +582,7 @@ fn preedit_cursor_must_be_a_valid_utf8_range() {
 }
 
 fn exercise_retained_rename_modal_ownership(app: &mut App) {
-    use crate::session::panel::{SessionEntry, SessionPanelAction};
+    use crate::ui::session_panel::{SessionEntry, SessionPanelAction};
     use winit::keyboard::{Key, NamedKey};
     for owner in ["settings", "shortcuts", "session", "commands"] {
         app.tab_rename = Some(TabRenameState::new(
@@ -753,7 +753,7 @@ fn modal_atomic_commits_never_fall_through_to_a_live_pty() {
         app.unicode_picker.finish_search_for_test();
     }
     app.session_panel.set_test_entries(
-        vec![crate::session::panel::SessionEntry {
+        vec![crate::ui::session_panel::SessionEntry {
             id: "workspace-fixture".into(),
             display_name: "Roots".into(),
             subtitle: String::new(),
@@ -761,7 +761,7 @@ fn modal_atomic_commits_never_fall_through_to_a_live_pty() {
         }],
         true,
     );
-    app.apply_session_panel_action(crate::session::panel::SessionPanelAction::Rename(
+    app.apply_session_panel_action(crate::ui::session_panel::SessionPanelAction::Rename(
         "workspace-fixture".into(),
     ));
     assert!(
@@ -804,7 +804,7 @@ fn modal_atomic_commits_never_fall_through_to_a_live_pty() {
         Some("ae\u{301}Qz")
     );
     let info = app.session_panel.build_info();
-    let layout = crate::session::panel::SessionPanelLayout::calculate(
+    let layout = crate::ui::session_panel::SessionPanelLayout::calculate(
         800.0, 600.0, 0.0, 8.0, 16.0, 1.0, true, true, 1,
     );
     let text = info.rename_text.as_deref().unwrap();
@@ -826,7 +826,7 @@ fn modal_atomic_commits_never_fall_through_to_a_live_pty() {
     app.modifiers = ModifiersState::empty();
     assert!(app.handle_session_rename_key(&Key::Named(NamedKey::Escape)));
     assert_eq!(app.session_panel.sessions()[0].display_name, "Roots");
-    app.apply_session_panel_action(crate::session::panel::SessionPanelAction::Close);
+    app.apply_session_panel_action(crate::ui::session_panel::SessionPanelAction::Close);
     exercise_retained_rename_modal_ownership(&mut app);
     app.tabs
         .as_mut()

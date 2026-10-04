@@ -23,6 +23,7 @@ pub mod modal;
 pub mod popup_menu;
 pub mod scroll;
 pub mod search_bar;
+pub mod session_panel;
 pub mod settings;
 pub mod shortcuts_panel;
 pub mod text_area;

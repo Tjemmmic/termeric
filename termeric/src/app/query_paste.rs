@@ -385,7 +385,7 @@ mod tests {
 
     fn open_workspace_rename(app: &mut App) {
         app.session_panel.set_test_entries(
-            vec![crate::session::panel::SessionEntry {
+            vec![crate::ui::session_panel::SessionEntry {
                 id: "paste-workspace-fixture".into(),
                 display_name: "Roots".into(),
                 subtitle: String::new(),
@@ -393,7 +393,7 @@ mod tests {
             }],
             true,
         );
-        app.apply_session_panel_action(crate::session::panel::SessionPanelAction::Rename(
+        app.apply_session_panel_action(crate::ui::session_panel::SessionPanelAction::Rename(
             "paste-workspace-fixture".into(),
         ));
     }
@@ -479,7 +479,7 @@ mod tests {
             app.session_panel.build_info().rename_text.as_deref(),
             Some("Roots")
         );
-        app.apply_session_panel_action(crate::session::panel::SessionPanelAction::CancelRename);
+        app.apply_session_panel_action(crate::ui::session_panel::SessionPanelAction::CancelRename);
         assert!(app.clipboard_paste_blocked());
         assert!(!app.paste_clipboard_payload("browse"));
         assert!(!app.session_panel.is_renaming());
@@ -928,9 +928,9 @@ mod tests {
         assert!(!app.paste_clipboard_payload("dropdown must not write"));
         app.settings_panel.close();
         exercise_workspace_rename_paste(&mut app);
-        app.apply_session_panel_action(crate::session::panel::SessionPanelAction::CancelRename);
+        app.apply_session_panel_action(crate::ui::session_panel::SessionPanelAction::CancelRename);
         assert!(!app.paste_clipboard_payload("browse must not write"));
-        app.apply_session_panel_action(crate::session::panel::SessionPanelAction::Close);
+        app.apply_session_panel_action(crate::ui::session_panel::SessionPanelAction::Close);
         exercise_tab_rename_paste(&mut app);
         app.search.cancel();
         assert!(app.paste_clipboard_payload("Z"));

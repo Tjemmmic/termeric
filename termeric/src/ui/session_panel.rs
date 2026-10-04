@@ -2,7 +2,7 @@
 //!
 //! A slide-in panel for listing, loading, and deleting saved sessions.
 
-use super::listing::SessionListing;
+use crate::session::listing::SessionListing;
 use crate::ui::animation::PanelAnimation;
 use crate::ui::geometry::Bounds;
 use crate::ui::text_input::{TextInput, TextInputEdit, TextLimit};

@@ -31,11 +31,11 @@ impl Renderer {
     /// The session panel's geometry, shared by its drawing and hit test.
     fn session_panel_layout(
         &self,
-        info: &crate::session::panel::SessionPanelInfo,
+        info: &crate::ui::session_panel::SessionPanelInfo,
         window_width: f32,
         window_height: f32,
-    ) -> crate::session::panel::SessionPanelLayout {
-        crate::session::panel::SessionPanelLayout::calculate(
+    ) -> crate::ui::session_panel::SessionPanelLayout {
+        crate::ui::session_panel::SessionPanelLayout::calculate(
             window_width,
             window_height,
             self.tab_bar_height(),
@@ -673,11 +673,11 @@ impl Renderer {
 
     pub(super) fn build_session_management_panel(
         &mut self,
-        info: &crate::session::panel::SessionPanelInfo,
+        info: &crate::ui::session_panel::SessionPanelInfo,
         window_width: f32,
         window_height: f32,
     ) {
-        use crate::session::panel::SessionPanelControl;
+        use crate::ui::session_panel::SessionPanelControl;
 
         let anim = info.animation;
         if anim <= 0.0 {
@@ -944,11 +944,11 @@ impl Renderer {
         &self,
         x: f32,
         y: f32,
-        info: &crate::session::panel::SessionPanelInfo,
+        info: &crate::ui::session_panel::SessionPanelInfo,
         window_width: f32,
         window_height: f32,
-    ) -> crate::session::panel::SessionPanelAction {
-        use crate::session::panel::{SessionPanelAction, SessionPanelControl};
+    ) -> crate::ui::session_panel::SessionPanelAction {
+        use crate::ui::session_panel::{SessionPanelAction, SessionPanelControl};
 
         let layout = self.session_panel_layout(info, window_width, window_height);
 

@@ -67,7 +67,7 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `input/` | Shortcut registry, focused mode-aware keyboard encoder, mouse state |
 | `tabs/` | Tab management |
 | `panes/` | Split-pane tree and layout |
-| `session/` | Session save/restore, the session panel, transcripts, and export |
+| `session/` | Per-terminal agent state, transcripts and their export, and what the workspace panel lists |
 | `workspace/` | Complete workspace schema, atomic storage, migration, and recovery |
 | `domain/` | Same-user local daemon, control protocol/client, PTY ownership, and GUI relay |
 | `control/` | Local control socket for running GUI processes: inventory, text queries, launches, opt-in input, and `agent-event` reports |

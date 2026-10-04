@@ -1283,7 +1283,7 @@ pub(crate) fn headless_palette_input_smoke(
                 )
                 .input_viewport(&query, query.len(), 24.0)
                 .unwrap(),
-                crate::session::panel::SessionPanelLayout::calculate(
+                crate::ui::session_panel::SessionPanelLayout::calculate(
                     width.max(800.0),
                     600.0,
                     0.0,

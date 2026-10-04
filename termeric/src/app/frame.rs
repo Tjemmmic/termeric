@@ -18,7 +18,7 @@ pub(super) struct ChromeInfo {
     pub(super) settings: Option<SettingsPanelInfo>,
     pub(super) search_bar: Option<SearchBarInfo>,
     pub(super) workspace_menu: Option<PopupMenuInfo>,
-    pub(super) session_panel: Option<crate::session::panel::SessionPanelInfo>,
+    pub(super) session_panel: Option<crate::ui::session_panel::SessionPanelInfo>,
     pub(super) commands_panel: Option<CommandsPanelInfo>,
     pub(super) agents_panel: Option<AgentsPanelInfo>,
     pub(super) palette: Option<PaletteInfo>,
@@ -123,12 +123,12 @@ impl App {
     fn session_panel_frame_info(
         &mut self,
         metrics: &UiMetrics,
-    ) -> Option<crate::session::panel::SessionPanelInfo> {
+    ) -> Option<crate::ui::session_panel::SessionPanelInfo> {
         if self.session_panel.is_closed() {
             return None;
         }
         let preview = self.session_panel.build_info();
-        let layout = crate::session::panel::SessionPanelLayout::calculate(
+        let layout = crate::ui::session_panel::SessionPanelLayout::calculate(
             metrics.width,
             metrics.height,
             metrics.tab_bar_height,

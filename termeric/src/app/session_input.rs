@@ -2,13 +2,13 @@
 
 use super::text_field_keys::FieldKey;
 use super::*;
-use crate::session::panel::SessionPanelAction;
+use crate::ui::session_panel::SessionPanelAction;
 use winit::keyboard::{Key, NamedKey};
 
 impl App {
     /// Keys for the workspace manager: renaming, the list, and dismissal.
     pub(super) fn handle_session_panel_key(&mut self, key: &Key) {
-        use crate::session::panel::SessionPanelKey;
+        use crate::ui::session_panel::SessionPanelKey;
         if self.handle_session_rename_key(key) {
             return;
         }
@@ -73,7 +73,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::panel::SessionEntry;
+    use crate::ui::session_panel::SessionEntry;
     use winit::event::Ime;
 
     fn rename_app() -> App {

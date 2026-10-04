@@ -122,9 +122,9 @@ impl App {
     /// double-click interval opens it; a single click only selects.
     fn promote_session_double_click(
         &mut self,
-        action: crate::session::panel::SessionPanelAction,
-    ) -> crate::session::panel::SessionPanelAction {
-        use crate::session::panel::SessionPanelAction;
+        action: crate::ui::session_panel::SessionPanelAction,
+    ) -> crate::ui::session_panel::SessionPanelAction {
+        use crate::ui::session_panel::SessionPanelAction;
         const DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(400);
         let SessionPanelAction::Select(id) = action else {
             self.session_row_click = None;
@@ -903,7 +903,7 @@ impl App {
                 let window_size = self.window.as_ref().map(|w| w.inner_size());
                 if let Some(size) = window_size {
                     let info = self.session_panel.build_info();
-                    let layout = crate::session::panel::SessionPanelLayout::calculate(
+                    let layout = crate::ui::session_panel::SessionPanelLayout::calculate(
                         size.width as f32,
                         size.height as f32,
                         renderer.tab_bar_height(),
@@ -1955,7 +1955,7 @@ mod tests {
 
     #[test]
     fn a_second_click_on_the_same_workspace_row_opens_it() {
-        use crate::session::panel::SessionPanelAction;
+        use crate::ui::session_panel::SessionPanelAction;
         let mut app = App::new_headless(crate::config::Config::default()).unwrap();
         let select = |id: &str| SessionPanelAction::Select(id.into());
 

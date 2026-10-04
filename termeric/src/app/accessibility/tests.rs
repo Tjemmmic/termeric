@@ -2512,9 +2512,9 @@ fn stale_custom_command_actions_cannot_retarget_another_command() {
     );
 }
 
-fn test_session_entries(count: usize) -> Vec<crate::session::panel::SessionEntry> {
+fn test_session_entries(count: usize) -> Vec<crate::ui::session_panel::SessionEntry> {
     (0..count)
-        .map(|index| crate::session::panel::SessionEntry {
+        .map(|index| crate::ui::session_panel::SessionEntry {
             id: format!("workspace-{index}"),
             display_name: format!("Workspace {index}"),
             subtitle: format!("{} tabs", index + 1),
