@@ -5,7 +5,6 @@ use super::paths::{RuntimePaths, effective_uid};
 use super::protocol::{self, ClientFrame, Request, Response, ServerFrame, UploadKind};
 use crate::panes::{PaneLayoutPreset, SplitDirection};
 use anyhow::Context;
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -962,7 +961,7 @@ fn receive_file_upload(
             (temporary, target_path, 0)
         }
     };
-    let prefix_sha256 = sha256_prefix(&mut temporary.file, offset)?;
+    let prefix_sha256 = super::io_util::sha256_prefix(&mut temporary.file, offset)?;
     if let Err(error) = write_server_frame(
         stream,
         &ServerFrame::Response {
@@ -1062,29 +1061,6 @@ fn receive_file_upload(
     };
     session.complete(response.clone());
     Ok(response)
-}
-
-fn sha256_prefix(file: &mut File, bytes: u64) -> anyhow::Result<String> {
-    file.seek(SeekFrom::Start(0))
-        .context("rewind retained upload for prefix verification")?;
-    let mut hasher = Sha256::new();
-    let mut remaining = bytes;
-    let mut buffer = vec![0_u8; protocol::MAX_STREAM_CHUNK_BYTES];
-    while remaining > 0 {
-        let wanted = usize::try_from(remaining.min(buffer.len() as u64))
-            .expect("bounded upload digest chunk fits usize");
-        let read = file
-            .read(&mut buffer[..wanted])
-            .context("read retained upload prefix")?;
-        if read == 0 {
-            anyhow::bail!("retained upload ended before its recorded offset");
-        }
-        hasher.update(&buffer[..read]);
-        remaining -= read as u64;
-    }
-    file.seek(SeekFrom::Start(bytes))
-        .context("restore retained upload offset after verification")?;
-    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn publish_temporary_upload(

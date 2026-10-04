@@ -1,6 +1,7 @@
 //! Local socket/file fixtures for deadline retention; no shells or providers.
 use super::test_support::{DOMAIN, state};
 use super::*;
+use sha2::{Digest, Sha256};
 
 const UPLOAD: &str = "22222222222222222222222222222222";
 

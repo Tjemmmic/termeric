@@ -2,10 +2,9 @@
 
 use super::paths::RuntimePaths;
 use super::protocol::{self, ClientFrame, Request, Response, ServerFrame, UploadKind};
-use super::{DomainTopologyEvent, validate_ssh_destination};
+use super::{DomainTopologyEvent, io_util, validate_ssh_destination};
 use anyhow::Context;
-use sha2::{Digest, Sha256};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::os::unix::net::UnixStream;
@@ -683,7 +682,8 @@ impl DomainClient {
                 }
             };
         protocol::validate_sha256(&prefix_sha256).map_err(UploadAttemptError::Fatal)?;
-        let local_prefix = sha256_prefix(file, offset).map_err(UploadAttemptError::Fatal)?;
+        let local_prefix =
+            io_util::sha256_prefix(file, offset).map_err(UploadAttemptError::Fatal)?;
         if local_prefix != prefix_sha256 {
             return Err(UploadAttemptError::Fatal(anyhow::anyhow!(
                 "local upload source does not match the daemon's retained prefix"
@@ -741,7 +741,7 @@ impl DomainClient {
             .metadata()
             .context("revalidate upload source before commit")
             .map_err(UploadAttemptError::Fatal)?;
-        if !upload_metadata_unchanged(expected_metadata, &current_metadata) {
+        if !io_util::metadata_unchanged(expected_metadata, &current_metadata) {
             let _ = cancel_upload_attempt(&mut stream);
             return Err(UploadAttemptError::Fatal(anyhow::anyhow!(
                 "upload source changed while it was being read"
@@ -932,39 +932,6 @@ fn upload_response_matches_kind(response: &Response, kind: UploadKind) -> bool {
                 UploadKind::Directory { .. }
             )
     )
-}
-
-fn upload_metadata_unchanged(before: &std::fs::Metadata, after: &std::fs::Metadata) -> bool {
-    before.is_file()
-        && after.is_file()
-        && before.dev() == after.dev()
-        && before.ino() == after.ino()
-        && before.len() == after.len()
-        && before.mtime() == after.mtime()
-        && before.mtime_nsec() == after.mtime_nsec()
-        && before.ctime() == after.ctime()
-        && before.ctime_nsec() == after.ctime_nsec()
-}
-
-fn sha256_prefix(file: &mut std::fs::File, bytes: u64) -> anyhow::Result<String> {
-    file.seek(SeekFrom::Start(0))
-        .context("rewind local upload source for prefix verification")?;
-    let mut hasher = Sha256::new();
-    let mut remaining = bytes;
-    let mut buffer = vec![0_u8; protocol::MAX_STREAM_CHUNK_BYTES];
-    while remaining > 0 {
-        let wanted = usize::try_from(remaining.min(buffer.len() as u64))
-            .expect("bounded upload digest chunk fits usize");
-        let read = file
-            .read(&mut buffer[..wanted])
-            .context("read local upload prefix")?;
-        if read == 0 {
-            anyhow::bail!("local upload source ended before the daemon resume offset");
-        }
-        hasher.update(&buffer[..read]);
-        remaining -= read as u64;
-    }
-    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn report_upload_progress(
@@ -1363,14 +1330,13 @@ mod tests {
     use super::{
         ClientFrame, DomainClient, DomainStream, Request, Response, ServerFrame, SshStream,
         UploadOptions, copy_with_flush, generate_upload_id, protocol, read_frame_with_timeout,
-        sha256_prefix, upload_metadata_unchanged, validate_ssh_destination,
+        validate_ssh_destination,
     };
     use crate::domain::RuntimePaths;
     use sha2::{Digest, Sha256};
     use std::collections::HashSet;
     use std::fs;
-    use std::io::{Read, Seek, Write};
-    use std::os::unix::fs::PermissionsExt;
+    use std::io::{Read, Write};
     use std::os::unix::net::UnixListener;
     use std::process::{Command, Stdio};
     use std::sync::atomic::AtomicBool;
@@ -1443,32 +1409,6 @@ mod tests {
             ids.iter()
                 .all(|upload_id| protocol::validate_upload_id(upload_id).is_ok())
         );
-    }
-
-    #[test]
-    fn upload_metadata_check_detects_same_size_source_changes() {
-        let temporary = tempfile::tempdir().unwrap();
-        let source = temporary.path().join("source.bin");
-        fs::write(&source, b"same size").unwrap();
-        let before = fs::metadata(&source).unwrap();
-        assert!(upload_metadata_unchanged(&before, &before));
-        fs::set_permissions(&source, fs::Permissions::from_mode(0o400)).unwrap();
-        let after = fs::metadata(&source).unwrap();
-        assert_eq!(before.len(), after.len());
-        assert!(!upload_metadata_unchanged(&before, &after));
-    }
-
-    #[test]
-    fn upload_prefix_digest_is_standard_and_leaves_the_resume_cursor() {
-        let temporary = tempfile::tempdir().unwrap();
-        let source = temporary.path().join("source.bin");
-        fs::write(&source, b"abcdef").unwrap();
-        let mut file = fs::File::open(source).unwrap();
-        assert_eq!(
-            sha256_prefix(&mut file, 3).unwrap(),
-            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-        );
-        assert_eq!(file.stream_position().unwrap(), 3);
     }
 
     #[test]

@@ -1,5 +1,6 @@
 //! Bounded writes for complete server frames on local domain connections.
 use super::protocol::{self, ServerFrame};
+use crate::domain::io_util;
 use std::io::Write;
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
@@ -30,72 +31,18 @@ struct FrameWriter<'a> {
     deadline: Instant,
 }
 
-impl FrameWriter<'_> {
-    fn remaining(&self) -> std::io::Result<Duration> {
-        let remaining = self.deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "domain server frame write deadline exceeded",
-            ))
-        } else {
-            Ok(remaining)
-        }
-    }
-}
+const EXPIRED: &str = "domain server frame write deadline exceeded";
 
 impl Write for FrameWriter<'_> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        loop {
-            self.remaining()?;
-            // Per-call nonblocking is essential: changing O_NONBLOCK would
-            // affect the concurrent reader's cloned descriptor. A blocking
-            // send can keep making progress internally beyond SO_SNDTIMEO.
-            // SAFETY: the borrowed socket and byte slice remain live for this
-            // call; send reads at most bytes.len() bytes and retains no pointer.
-            let sent = unsafe {
-                libc::send(
-                    self.stream.as_raw_fd(),
-                    bytes.as_ptr().cast(),
-                    bytes.len(),
-                    libc::MSG_DONTWAIT | libc::MSG_NOSIGNAL,
-                )
-            };
-            if sent >= 0 {
-                return Ok(sent as usize);
-            }
-            let error = std::io::Error::last_os_error();
-            match error.kind() {
-                std::io::ErrorKind::Interrupted => continue,
-                std::io::ErrorKind::WouldBlock => {}
-                _ => return Err(error),
-            }
-            let mut poll = libc::pollfd {
-                fd: self.stream.as_raw_fd(),
-                events: libc::POLLOUT,
-                revents: 0,
-            };
-            let timeout = self
-                .remaining()?
-                .as_millis()
-                .saturating_add(1)
-                .min(libc::c_int::MAX as u128) as libc::c_int;
-            // SAFETY: poll points to one initialized pollfd whose borrowed
-            // descriptor remains live; the timeout is finite and nonnegative.
-            let ready = unsafe { libc::poll(&mut poll, 1, timeout) };
-            if ready < 0 {
-                let error = std::io::Error::last_os_error();
-                if error.kind() != std::io::ErrorKind::Interrupted {
-                    return Err(error);
-                }
-            }
-            // Recheck the deadline even after readiness/EINTR. A HUP/ERR is
-            // resolved by the next nonblocking send, without resetting time.
-        }
+        let stream = &*self.stream;
+        io_util::write_before(self.deadline, stream.as_raw_fd(), EXPIRED, || {
+            io_util::send_nonblocking(stream, bytes)
+        })
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        self.remaining()?;
+        io_util::remaining(self.deadline, EXPIRED)?;
         self.stream.flush()
     }
 }

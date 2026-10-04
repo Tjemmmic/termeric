@@ -206,7 +206,7 @@ fn append_directory(
     }
     let after = fs::symlink_metadata(absolute)
         .with_context(|| format!("revalidate upload directory {}", absolute.display()))?;
-    if !metadata_unchanged(&before, &after) {
+    if !super::io_util::metadata_unchanged(&before, &after) {
         anyhow::bail!("directory upload tree changed during local preparation");
     }
     Ok(())
@@ -278,20 +278,10 @@ fn append_file(
     let after = source
         .metadata()
         .context("revalidate directory upload file")?;
-    if !metadata_unchanged(&opened, &after) {
+    if !super::io_util::metadata_unchanged(&opened, &after) {
         anyhow::bail!("directory upload entry changed while reading");
     }
     Ok(())
-}
-
-fn metadata_unchanged(before: &fs::Metadata, after: &fs::Metadata) -> bool {
-    before.dev() == after.dev()
-        && before.ino() == after.ino()
-        && before.len() == after.len()
-        && before.mtime() == after.mtime()
-        && before.mtime_nsec() == after.mtime_nsec()
-        && before.ctime() == after.ctime()
-        && before.ctime_nsec() == after.ctime_nsec()
 }
 
 fn check_cancelled(cancelled: Option<&AtomicBool>) -> anyhow::Result<()> {

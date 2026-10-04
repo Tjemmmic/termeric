@@ -8,6 +8,7 @@
 
 mod archive;
 mod client;
+mod io_util;
 pub mod model;
 pub(crate) mod paths;
 pub mod protocol;

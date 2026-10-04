@@ -1,7 +1,7 @@
 use super::*;
 use crate::domain::client::{ClientFrame, DomainCloser, protocol, relay_write};
 use std::fs::File;
-use std::io::Read;
+use std::io::{ErrorKind, Read};
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
 use std::sync::{
