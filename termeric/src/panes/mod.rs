@@ -1063,12 +1063,7 @@ impl PaneManager {
         target: PaneId,
         direction: SplitDirection,
     ) -> anyhow::Result<TerminalGeometry> {
-        let layout = self.tree.calculate_layout(Bounds {
-            x: 0.0,
-            y: 0.0,
-            width: self.total_width,
-            height: self.total_height,
-        });
+        let layout = self.tree.calculate_layout(self.root_rect());
         let rect = layout.get(&target).context("split target is missing")?;
         Ok(Self::child_geometry(
             rect.width,
@@ -1369,14 +1364,19 @@ impl PaneManager {
         self.recalculate_sizes();
     }
 
-    /// Calculate the layout for all panes
-    pub fn calculate_layout(&self) -> HashMap<PaneId, Bounds> {
-        let root_rect = Bounds {
+    /// The whole pane area, in pane-local coordinates.
+    fn root_rect(&self) -> Bounds {
+        Bounds {
             x: 0.0,
             y: 0.0,
             width: self.total_width,
             height: self.total_height,
-        };
+        }
+    }
+
+    /// Calculate the layout for all panes
+    pub fn calculate_layout(&self) -> HashMap<PaneId, Bounds> {
+        let root_rect = self.root_rect();
         if let Some(id) = self.zoomed.filter(|id| self.panes.contains_key(id)) {
             return HashMap::from([(id, root_rect)]);
         }
@@ -1407,12 +1407,7 @@ impl PaneManager {
         if self.zoomed.is_some() {
             return Vec::new();
         }
-        self.tree.get_dividers(Bounds {
-            x: 0.0,
-            y: 0.0,
-            width: self.total_width,
-            height: self.total_height,
-        })
+        self.tree.get_dividers(self.root_rect())
     }
 
     /// Resize the exact divider selected at mouse-down. This prevents a nested
@@ -1427,17 +1422,9 @@ impl PaneManager {
         if self.zoomed.is_some() {
             return None;
         }
-        let ratio = self.tree.resize_target(
-            Bounds {
-                x: 0.0,
-                y: 0.0,
-                width: self.total_width,
-                height: self.total_height,
-            },
-            pos_x,
-            pos_y,
-            target,
-        )?;
+        let ratio = self
+            .tree
+            .resize_target(self.root_rect(), pos_x, pos_y, target)?;
         self.recalculate_sizes();
         Some(ratio)
     }
@@ -1562,17 +1549,11 @@ impl PaneManager {
         self.validate_complete_live_layout()?;
         let changed = self
             .tree
-            .get_dividers(Bounds {
-                x: 0.0,
-                y: 0.0,
-                width: self.total_width,
-                height: self.total_height,
-            })
+            .get_dividers(self.root_rect())
             .iter()
             .any(|divider| divider.ratio_millis != 500);
         if changed {
-            self.tree.balance();
-            self.recalculate_sizes();
+            self.rebalance();
         }
         Ok(changed)
     }
@@ -1584,13 +1565,9 @@ impl PaneManager {
         preset: PaneLayoutPreset,
     ) -> anyhow::Result<()> {
         self.validate_complete_live_layout()?;
-        let applied = self.tree.apply_layout_preset(preset, self.focused);
-        if !applied {
+        if !self.rebuild_with_preset(preset) {
             anyhow::bail!("Pane layout split ID space is exhausted");
         }
-        self.zoomed = None;
-        self.navigation_memory.clear();
-        self.recalculate_sizes();
         Ok(())
     }
 
@@ -1604,19 +1581,29 @@ impl PaneManager {
         Ok(())
     }
 
+    /// Balance every divider. Unlike [`Self::balance_exact`], this counts
+    /// panes awaiting cleanup and reports only whether there was a split.
     pub fn balance(&mut self) -> bool {
         if self.panes.len() <= 1 {
             return false;
         }
-        self.tree.balance();
-        self.recalculate_sizes();
+        self.rebalance();
         true
     }
 
+    /// Apply a layout preset. Unlike [`Self::apply_layout_preset_exact`], this
+    /// counts panes awaiting cleanup and reports failure as `false`.
     pub fn apply_layout_preset(&mut self, preset: PaneLayoutPreset) -> bool {
-        if self.panes.len() <= 1 {
-            return false;
-        }
+        self.panes.len() > 1 && self.rebuild_with_preset(preset)
+    }
+
+    fn rebalance(&mut self) {
+        self.tree.balance();
+        self.recalculate_sizes();
+    }
+
+    /// Presets clear zoom because they replace the geometry.
+    fn rebuild_with_preset(&mut self, preset: PaneLayoutPreset) -> bool {
         if !self.tree.apply_layout_preset(preset, self.focused) {
             return false;
         }
