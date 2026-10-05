@@ -49,7 +49,7 @@ fn render_list(workspaces: &[WorkspaceListEntry], json: bool) -> anyhow::Result<
             None => [
                 workspace.id.clone(),
                 workspace.tab_count.to_string(),
-                workspace.updated_at.clone(),
+                whole_seconds(&workspace.updated_at),
                 crate::safe_text::display_line(&workspace.name, super::MAX_WORKSPACE_NAME_CHARS, 1),
             ],
             Some(warning) => [
@@ -91,6 +91,14 @@ fn render_list(workspaces: &[WorkspaceListEntry], json: bool) -> anyhow::Result<
         .join("\n"))
 }
 
+/// `timestamp` without its fraction of a second, which only orders saves.
+fn whole_seconds(timestamp: &str) -> String {
+    match timestamp.split_once('.') {
+        Some((whole, _)) => format!("{whole}Z"),
+        None => timestamp.to_owned(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,7 +107,7 @@ mod tests {
         WorkspaceListEntry {
             id: id.into(),
             name: name.into(),
-            updated_at: "2026-10-04T09:30:00Z".into(),
+            updated_at: "2026-10-04T09:30:00.250Z".into(),
             tab_count: tabs,
             pane_count: tabs + 1,
             warning: warning.map(str::to_owned),
@@ -139,7 +147,7 @@ mod tests {
                 "name": "Project A",
                 "tabs": 2,
                 "panes": 3,
-                "updated_at": "2026-10-04T09:30:00Z",
+                "updated_at": "2026-10-04T09:30:00.250Z",
                 "warning": null,
             }])
         );

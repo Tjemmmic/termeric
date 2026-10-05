@@ -64,6 +64,26 @@ pub fn workspace_dir(id: &str) -> Result<PathBuf> {
         .ok_or_else(|| anyhow::anyhow!("workspace data directory is unavailable"))
 }
 
+/// The time a save records, in milliseconds and strictly after every earlier
+/// one this process recorded: listings sort by it, and pruning keeps the
+/// newest, so two saves in the same instant must still have an order.
+pub(crate) fn save_timestamp() -> String {
+    static LAST_MILLIS: std::sync::Mutex<u128> = std::sync::Mutex::new(0);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let mut last = LAST_MILLIS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *last = now.max(*last + 1);
+    let millis = *last;
+    crate::session::format_unix_timestamp(
+        u64::try_from(millis / 1000).unwrap_or(u64::MAX),
+        Some((millis % 1000) as u32),
+    )
+}
+
 pub fn save_workspace(workspace: &mut WorkspaceSnapshot) -> Result<WorkspaceSaveReport> {
     let dir = workspace_dir(&workspace.id)?;
     save_workspace_to_dir(workspace, &dir)
@@ -120,13 +140,7 @@ fn save_workspace_to_dir_with_backup(
         }
     }
 
-    workspace.updated_at = crate::session::format_unix_timestamp(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs(),
-        None,
-    );
+    workspace.updated_at = save_timestamp();
     workspace.validate()?;
     let metadata = toml::to_string_pretty(workspace)?;
     // Loading refuses larger metadata, so writing it would replace a
@@ -1102,6 +1116,22 @@ mod tests {
     }
 
     #[test]
+    fn save_times_are_readable_and_strictly_increasing() {
+        let stamps: Vec<_> = (0..50).map(|_| save_timestamp()).collect();
+        assert!(
+            stamps.windows(2).all(|pair| pair[0] < pair[1]),
+            "{stamps:?}"
+        );
+        for stamp in &stamps {
+            assert_eq!(stamp.len(), "2026-01-01T00:00:00.000Z".len(), "{stamp}");
+            assert!(
+                crate::session::parse_utc_timestamp(stamp).is_some(),
+                "{stamp}"
+            );
+        }
+    }
+
+    #[test]
     fn only_the_newest_closed_tabs_are_kept_and_workspaces_never_pruned() {
         let temp = tempfile::tempdir().unwrap();
         set_test_workspaces_base_dir(Some(temp.path().to_path_buf()));
@@ -1109,7 +1139,7 @@ mod tests {
             let mut workspace = sample_workspace();
             workspace.id = format!("workspace-{index:04}");
             workspace.closed_tab = closed_tab;
-            workspace.updated_at = format!("2026-01-01T00:{:02}:{:02}Z", index / 60, index % 60);
+            // Saving stamps the time, so each save is newer than the last.
             save_workspace(&mut workspace).unwrap();
         };
         save(0, false);
@@ -1136,8 +1166,6 @@ mod tests {
                 let mut workspace = sample_workspace();
                 workspace.id = format!("workspace-{index:04}");
                 workspace.closed_tab = true;
-                workspace.updated_at =
-                    format!("2026-01-01T00:{:02}:{:02}Z", index / 60, index % 60);
                 save_workspace(&mut workspace).unwrap();
             }
             // Copy the oldest snapshot, which pruning would reach first.

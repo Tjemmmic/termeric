@@ -42,13 +42,7 @@ pub struct WorkspaceSnapshot {
 
 impl WorkspaceSnapshot {
     pub fn new(id: String, name: String, tabs: Vec<WorkspaceTabSnapshot>) -> Self {
-        let now = crate::session::format_unix_timestamp(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            None,
-        );
+        let now = super::storage::save_timestamp();
         Self {
             version: WORKSPACE_SCHEMA_VERSION,
             id,
