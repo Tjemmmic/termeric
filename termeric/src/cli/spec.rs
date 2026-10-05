@@ -270,12 +270,19 @@ mod tests {
             };
             for name in names {
                 let option = format!("--{name}");
+                // A value follows its option as the next argument or, as the
+                // completions offer it, after `=`.
                 let runs: Vec<Vec<OsString>> = if values.is_empty() {
                     vec![vec![option.clone().into()]]
                 } else {
                     values
                         .iter()
-                        .map(|value| vec![option.clone().into(), value.into()])
+                        .flat_map(|value| {
+                            [
+                                vec![option.clone().into(), value.into()],
+                                vec![format!("{option}={value}").into()],
+                            ]
+                        })
                         .collect()
                 };
                 for arguments in runs {

@@ -10,7 +10,7 @@ Termeric checks all options, and that every working directory exists, before it 
 termeric [WINDOW/TAB OPTIONS] [-- COMMAND ARG...]
 ```
 
-Options apply to the current tab or window. The first window and its first tab exist from the start; `--tab` starts another tab in the current window, and `--new-window` starts another window. Everything after `--` is the command for the current tab and must come last.
+Options apply to the current tab or window. The first window and its first tab exist from the start; `--tab` starts another tab in the current window, and `--new-window` starts another window. Everything after `--` is the command for the current tab and must come last. An option's value can follow it as the next argument or after `=` (`--title logs` or `--title=logs`).
 
 ```bash
 # Two tabs: one in ~/src, one in /tmp

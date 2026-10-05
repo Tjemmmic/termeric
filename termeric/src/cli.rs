@@ -9,7 +9,7 @@ mod workspace_args;
 use crate::panes::SplitDirection;
 use anyhow::Context;
 use std::collections::HashMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -306,12 +306,17 @@ fn parse_collected(
     let mut plan = LaunchPlan::default();
     let mut index = 0usize;
     while index < arguments.len() {
-        let argument = arguments[index]
+        let (argument, mut inline) = split_inline_value(&arguments[index]);
+        let argument = argument
             .to_str()
             .context("command-line options must be valid UTF-8")?;
         match argument {
-            "-h" | "--help" => return Ok(ParseOutcome::Print(help_text())),
+            "-h" | "--help" => {
+                reject_inline_value(argument, inline.as_ref())?;
+                return Ok(ParseOutcome::Print(help_text()));
+            }
             "-V" | "--version" => {
+                reject_inline_value(argument, inline.as_ref())?;
                 return Ok(ParseOutcome::Print(format!(
                     "termeric {}",
                     env!("CARGO_PKG_VERSION")
@@ -337,7 +342,7 @@ fn parse_collected(
                 window.tabs.push(TabLaunch::default());
             }
             "--split" => {
-                let value = next_utf8(&arguments, &mut index, "--split")?;
+                let value = option_utf8(&arguments, &mut index, &mut inline, "--split")?;
                 let direction = match value.as_str() {
                     "horizontal" | "h" => SplitDirection::Horizontal,
                     "vertical" | "v" => SplitDirection::Vertical,
@@ -348,20 +353,20 @@ fn parse_collected(
                 current_tab(window).splits.push(direction);
             }
             "--working-directory" | "--cwd" => {
-                let value = next_os(&arguments, &mut index, "--working-directory")?;
+                let value = option_os(&arguments, &mut index, &mut inline, "--working-directory")?;
                 let window = current_window(&mut plan);
                 reject_workspace_mix(window, "--working-directory")?;
                 current_tab(window).working_directory = Some(PathBuf::from(value));
             }
             "--title" => {
-                let value = next_utf8(&arguments, &mut index, "--title")?;
+                let value = option_utf8(&arguments, &mut index, &mut inline, "--title")?;
                 validate_single_line("window/tab title", &value)?;
                 let window = current_window(&mut plan);
                 reject_workspace_mix(window, "--title")?;
                 current_tab(window).title = Some(value);
             }
             "--command" => {
-                let program = next_utf8(&arguments, &mut index, "--command")?;
+                let program = option_utf8(&arguments, &mut index, &mut inline, "--command")?;
                 let window = current_window(&mut plan);
                 reject_workspace_mix(window, "--command")?;
                 set_target(
@@ -374,7 +379,7 @@ fn parse_collected(
                 )?;
             }
             "--terminal-profile" => {
-                let name = next_utf8(&arguments, &mut index, "--terminal-profile")?;
+                let name = option_utf8(&arguments, &mut index, &mut inline, "--terminal-profile")?;
                 crate::config::validate_terminal_profile_name(&name)?;
                 let window = current_window(&mut plan);
                 reject_workspace_mix(window, "--terminal-profile")?;
@@ -385,7 +390,7 @@ fn parse_collected(
                 )?;
             }
             "--profile" => {
-                let value = next_utf8(&arguments, &mut index, "--profile")?;
+                let value = option_utf8(&arguments, &mut index, &mut inline, "--profile")?;
                 let (plugin_id, profile) = value.split_once(':').ok_or_else(|| {
                     anyhow::anyhow!("--profile expects AGENT:PROFILE (for example codex:review)")
                 })?;
@@ -403,7 +408,7 @@ fn parse_collected(
                 )?;
             }
             "--workspace" => {
-                let value = next_utf8(&arguments, &mut index, "--workspace")?;
+                let value = option_utf8(&arguments, &mut index, &mut inline, "--workspace")?;
                 crate::workspace::validate_workspace_id(&value)?;
                 let window = current_window(&mut plan);
                 if !window.tabs_are_default() {
@@ -414,16 +419,16 @@ fn parse_collected(
                 window.workspace = Some(value);
             }
             "--geometry" => {
-                let value = next_utf8(&arguments, &mut index, "--geometry")?;
+                let value = option_utf8(&arguments, &mut index, &mut inline, "--geometry")?;
                 current_window(&mut plan).pixel_size = Some(parse_geometry(&value)?);
             }
             "--class" | "--app-id" => {
-                let value = next_utf8(&arguments, &mut index, argument)?;
+                let value = option_utf8(&arguments, &mut index, &mut inline, argument)?;
                 validate_identifier("application identity", &value)?;
                 current_window(&mut plan).app_id = Some(value);
             }
             "--renderer" => {
-                let value = next_utf8(&arguments, &mut index, "--renderer")?;
+                let value = option_utf8(&arguments, &mut index, &mut inline, "--renderer")?;
                 let parsed = match value.as_str() {
                     "auto" => crate::config::RendererBackend::Auto,
                     "gpu" => crate::config::RendererBackend::Gpu,
@@ -468,6 +473,8 @@ fn parse_collected(
                 "unexpected positional argument {argument:?}; put arbitrary commands after --"
             ),
         }
+        // Every option that takes a value has taken its inline one.
+        reject_inline_value(argument, inline.as_ref())?;
         index += 1;
     }
     let quick_access_windows = plan
@@ -519,7 +526,41 @@ fn set_target(tab: &mut TabLaunch, target: LaunchTarget, option: &str) -> anyhow
     Ok(())
 }
 
-fn next_os(arguments: &[OsString], index: &mut usize, option: &str) -> anyhow::Result<OsString> {
+/// Splits `--option=value` at its first `=` into the option and its value,
+/// as clap and the shell completions spell it. Any other argument comes back
+/// whole.
+fn split_inline_value(argument: &OsStr) -> (&OsStr, Option<OsString>) {
+    use std::os::unix::ffi::OsStrExt;
+    let bytes = argument.as_bytes();
+    match bytes.iter().position(|&byte| byte == b'=') {
+        // `--=x` names no option, so it stays whole and is rejected as one.
+        Some(equals) if equals > 2 && bytes.starts_with(b"--") => (
+            OsStr::from_bytes(&bytes[..equals]),
+            Some(OsStr::from_bytes(&bytes[equals + 1..]).to_owned()),
+        ),
+        _ => (argument, None),
+    }
+}
+
+/// An option that takes no value refuses the one given with `=`.
+fn reject_inline_value(option: &str, inline: Option<&OsString>) -> anyhow::Result<()> {
+    if inline.is_some() {
+        anyhow::bail!("{option} does not take a value");
+    }
+    Ok(())
+}
+
+/// The value of `option`: what followed its `=` (`--title=Logs`), else the
+/// next argument.
+fn option_os(
+    arguments: &[OsString],
+    index: &mut usize,
+    inline: &mut Option<OsString>,
+    option: &str,
+) -> anyhow::Result<OsString> {
+    if let Some(value) = inline.take() {
+        return Ok(value);
+    }
     *index += 1;
     arguments
         .get(*index)
@@ -527,8 +568,13 @@ fn next_os(arguments: &[OsString], index: &mut usize, option: &str) -> anyhow::R
         .ok_or_else(|| anyhow::anyhow!("{option} requires a value"))
 }
 
-fn next_utf8(arguments: &[OsString], index: &mut usize, option: &str) -> anyhow::Result<String> {
-    next_os(arguments, index, option)?
+fn option_utf8(
+    arguments: &[OsString],
+    index: &mut usize,
+    inline: &mut Option<OsString>,
+    option: &str,
+) -> anyhow::Result<String> {
+    option_os(arguments, index, inline, option)?
         .into_string()
         .map_err(|_| anyhow::anyhow!("{option} value must be valid UTF-8"))
 }
@@ -1661,6 +1707,72 @@ mod tests {
                     .map(OsString::from)
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn options_take_their_value_after_an_equals_sign_and_flags_refuse_one() {
+        use std::os::unix::ffi::OsStrExt;
+        assert_eq!(
+            run(&[
+                "--title=a=b",
+                "--cwd=/tmp",
+                "--renderer=software",
+                "--split=v",
+                "--class=org.example.Roots",
+            ]),
+            run(&[
+                "--title",
+                "a=b",
+                "--cwd",
+                "/tmp",
+                "--renderer",
+                "software",
+                "--split",
+                "v",
+                "--class",
+                "org.example.Roots",
+            ])
+        );
+        // The value is the rest of the argument, bytes and all.
+        let path = OsStr::from_bytes(b"/tmp/\xff");
+        let mut inline = OsString::from("--working-directory=");
+        inline.push(path);
+        let ParseOutcome::Run(plan) = parse([inline]).unwrap() else {
+            panic!("expected launch plan");
+        };
+        assert_eq!(
+            plan.windows[0].tabs[0].working_directory.as_deref(),
+            Some(std::path::Path::new(path))
+        );
+        // An empty value is a value, which then has to be valid.
+        assert!(parse([OsString::from("--title=")]).is_err());
+
+        for flag in [
+            "--tab=1",
+            "--new-window=yes",
+            "--separate-process=",
+            "--quick-access=1",
+            "--help=x",
+            "--version=x",
+        ] {
+            let error = parse([OsString::from(flag)]).unwrap_err().to_string();
+            let option = flag.split('=').next().unwrap();
+            assert_eq!(error, format!("{option} does not take a value"), "{flag}");
+        }
+        let error = parse([OsString::from("--bogus=1")])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("unknown option \"--bogus\""), "{error}");
+        let error = parse([OsString::from("--=x")]).unwrap_err().to_string();
+        assert!(error.contains("unknown option \"--=x\""), "{error}");
+        // After --, an equals sign is part of the command's own argument.
+        assert_eq!(
+            run(&["--", "env", "--title=x"]).windows[0].tabs[0].target,
+            LaunchTarget::Command {
+                program: "env".into(),
+                args: vec!["--title=x".into()]
+            }
         );
     }
 
