@@ -84,16 +84,15 @@ Limits:
 - files leaving your computer: up to 16 files per transfer, without recursing into directories;
 - `kitten transfer`'s delta mode (`--transmit-deltas`) and its permission-bypass password are not supported.
 
-File transfer works in local shell and profile panes and in tabs attached to a [live domain](live-domains.md). It is refused in a pane Termeric opened for a coding agent or plugin, wherever that pane sits, and in a [serial](profiles.md#serial-profiles) tab; a shell pane split into an agent's tab can transfer files.
+File transfer works in local shell and profile panes and in tabs attached to a [live domain](live-domains.md). Because the program starts a transfer, not you, it is refused in a pane Termeric opened for a coding agent or plugin, wherever that pane sits, and in a [serial](profiles.md#serial-profiles) tab; a shell pane split into an agent's tab can transfer files. To hand an agent a file, drop it on the agent's pane instead (below).
 
 ## Drag and drop files
 
-Drag a file or folder from your file manager onto the Termeric window to type its path at the cursor of the focused pane. Termeric quotes the path so spaces and special characters are safe in the shell, adds a space after it, and does not press Enter. Drop several files to insert several paths.
+Drag a file or folder from your file manager onto the Termeric window to type its path at the cursor of the focused pane. Termeric quotes the path so spaces and special characters are safe in the shell, adds a space after it, and does not press Enter. Drop several files to insert several paths. This works the same in a pane running a coding agent or plugin, so you can drop a screenshot into Claude Code or Codex to show it to the agent.
 
 Nothing is read or uploaded; only the path is typed. The pointer shows whether the focused pane accepts the drop, and Termeric shows a toast when it doesn't. A drop is refused:
 
-- in a pane Termeric opened for a coding agent or plugin, even one split into a shell tab, so a local path isn't sent to it by accident (a shell pane split into an agent's tab accepts drops);
-- in a [serial](profiles.md#serial-profiles) tab;
+- in a [serial](profiles.md#serial-profiles) tab, so this computer's paths aren't sent to the device;
 - in a read-only pane, or while broadcast input is on;
 - while a panel, search, copy mode, or another input mode is open.
 

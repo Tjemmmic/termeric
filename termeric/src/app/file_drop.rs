@@ -117,7 +117,7 @@ fn unsafe_drop_path_character(character: char) -> bool {
 
 impl App {
     /// Validate and quote one compositor-provided local path without reading
-    /// file contents or crossing a terminal/domain/plugin trust boundary.
+    /// file contents or crossing a terminal/domain trust boundary.
     #[cfg(test)]
     pub(super) fn dropped_path_payload(
         &self,
@@ -173,9 +173,9 @@ impl App {
                 source_identity: source.identity,
             });
         }
-        if !tab.pane_accepts_host_paths(tab.focused_terminal_identity().pane_id) {
+        if !tab.pane_accepts_dropped_paths(tab.focused_terminal_identity().pane_id) {
             return Err(
-                "File paths are not dropped into plugin, agent, or serial terminals, to prevent accidental data disclosure"
+                "File paths are not dropped into serial terminals, to keep this computer's paths off the device"
                     .into(),
             );
         }

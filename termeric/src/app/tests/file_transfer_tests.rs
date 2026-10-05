@@ -220,7 +220,7 @@ fn kitty_send_request(id: &str) -> termeric_core::KittyFileTransferCommand {
 }
 
 #[test]
-fn host_paths_follow_each_panes_launch_not_its_tab() {
+fn drops_reach_agent_panes_but_program_transfers_follow_each_panes_launch() {
     let config = Config {
         shell: crate::test_support::sleeping_shell(),
         ..Config::default()
@@ -243,7 +243,8 @@ fn host_paths_follow_each_panes_launch_not_its_tab() {
         cwd: None,
     };
 
-    // An agent split into a shell tab is refused, though its tab is a shell.
+    // An agent split into a shell tab takes a drop like a shell, but its
+    // program may not start a transfer, though its tab is a shell.
     let tabs = app.tabs.as_mut().unwrap();
     let shell_tab = tabs.active_tab_id().unwrap();
     let agent_pane = tabs
@@ -254,10 +255,9 @@ fn host_paths_follow_each_panes_launch_not_its_tab() {
         )
         .unwrap();
     tabs.active_tab_mut().unwrap().panes.focus(agent_pane);
-    assert!(
-        app.dropped_path_payload(path)
-            .unwrap_err()
-            .contains("data disclosure")
+    assert_eq!(
+        app.dropped_path_payload(path).unwrap(),
+        "'/tmp/project.txt' "
     );
     assert!(!kitty_request_awaits_consent(
         &mut app,
@@ -267,7 +267,8 @@ fn host_paths_follow_each_panes_launch_not_its_tab() {
     ));
     assert!(!app.info_overlay.is_active());
 
-    // A shell split into an agent tab is accepted, though its tab is not.
+    // The agent of an agent tab takes a drop and is refused a transfer; a
+    // shell split into that tab is accepted for both, though its tab is not.
     let tabs = app.tabs.as_mut().unwrap();
     tabs.new_tab_with_command(
         "/bin/sh",
@@ -281,7 +282,26 @@ fn host_paths_follow_each_panes_launch_not_its_tab() {
     )
     .unwrap();
     let agent_tab = tabs.active_tab_id().unwrap();
-    assert!(app.dropped_path_payload(path).is_err());
+    let agent_tab_pane = tabs
+        .active_tab()
+        .unwrap()
+        .focused_terminal_identity()
+        .pane_id;
+    assert!(matches!(
+        tabs.active_tab().unwrap().focused_pane().unwrap().launch,
+        crate::workspace::WorkspaceLaunch::Plugin { .. }
+    ));
+    assert_eq!(
+        app.dropped_path_payload(path).unwrap(),
+        "'/tmp/project.txt' "
+    );
+    assert!(!kitty_request_awaits_consent(
+        &mut app,
+        agent_tab,
+        agent_tab_pane,
+        "agent-tab"
+    ));
+    assert!(!app.info_overlay.is_active());
     let panes = &mut app.tabs.as_mut().unwrap().active_tab_mut().unwrap().panes;
     panes.adopt_primary_shell(crate::test_support::sleeping_shell());
     let shell_pane = panes.split(SplitDirection::Vertical).unwrap();
@@ -296,6 +316,32 @@ fn host_paths_follow_each_panes_launch_not_its_tab() {
         shell_pane,
         "shell-in-agent-tab"
     ));
+}
+
+#[test]
+fn serial_tabs_refuse_drops_and_program_transfers() {
+    let config = Config {
+        shell: crate::test_support::sleeping_shell(),
+        ..Config::default()
+    };
+    let mut app = App::new_headless_with_tabs(config);
+    let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
+    tab.set_serial_profile_launch("fixture", "Serial fixture".into());
+    let identity = tab.focused_terminal_identity();
+
+    let error = app
+        .dropped_path_payload(std::path::Path::new("/tmp/project.txt"))
+        .unwrap_err();
+    assert!(error.contains("serial terminals"), "{error}");
+    app.handle_terminal_event(RoutedTerminalEvent {
+        origin: TerminalEventOrigin {
+            tab_id: identity.tab_id,
+            pane_id: identity.pane_id,
+        },
+        event: TerminalEvent::KittyFileTransfer(kitty_send_request("serial")),
+    });
+    assert!(app.kitty_file_transfers.pending.is_none());
+    assert!(!app.info_overlay.is_active());
 }
 
 #[test]

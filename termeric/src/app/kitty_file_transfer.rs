@@ -387,7 +387,7 @@ impl App {
             );
             return;
         }
-        if !self.kitty_origin_accepts_host_paths(origin) {
+        if !self.kitty_origin_accepts_file_transfers(origin) {
             self.write_kitty_status(
                 origin,
                 command.reply_uses_8bit_controls,
@@ -620,7 +620,7 @@ impl App {
             );
             return;
         }
-        if !self.kitty_origin_accepts_host_paths(origin) {
+        if !self.kitty_origin_accepts_file_transfers(origin) {
             self.write_kitty_status(
                 origin,
                 command.reply_uses_8bit_controls,
@@ -692,13 +692,13 @@ impl App {
             .origin_for_pane(identity.tab_id, identity.pane_id)
     }
 
-    fn kitty_origin_accepts_host_paths(&self, origin: TerminalIdentity) -> bool {
+    fn kitty_origin_accepts_file_transfers(&self, origin: TerminalIdentity) -> bool {
         self.kitty_transfer_origin(origin).is_some()
             && self
                 .tabs
                 .as_ref()
                 .and_then(|tabs| tabs.tab_by_id(origin.tab_id))
-                .is_some_and(|tab| tab.pane_accepts_host_paths(origin.pane_id))
+                .is_some_and(|tab| tab.pane_accepts_program_file_transfers(origin.pane_id))
     }
 
     pub(super) fn handle_kitty_download_choice(
@@ -727,7 +727,7 @@ impl App {
             .pending
             .take()
             .expect("checked pending transfer");
-        if !self.kitty_origin_accepts_host_paths(pending.key.origin) {
+        if !self.kitty_origin_accepts_file_transfers(pending.key.origin) {
             self.write_kitty_status(
                 pending.key.origin,
                 pending.reply_uses_8bit_controls,
@@ -845,7 +845,7 @@ impl App {
             .pending_upload
             .take()
             .expect("checked pending upload");
-        if !self.kitty_origin_accepts_host_paths(pending.key.origin) {
+        if !self.kitty_origin_accepts_file_transfers(pending.key.origin) {
             self.write_kitty_status(
                 pending.key.origin,
                 pending.reply_uses_8bit_controls,

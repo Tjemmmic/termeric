@@ -544,13 +544,24 @@ impl Tab {
         !matches!(self.tab_type, TabType::Serial { .. })
     }
 
-    /// Whether the program in `pane_id` may be handed this computer's files:
-    /// Kitty file transfers and dropped paths. Plugin and agent programs are
-    /// refused wherever the pane sits, since a split or a move puts them in
-    /// any tab; a serial device is not a program on this computer at all.
+    /// Whether a file or folder the person drops on `pane_id` may be typed
+    /// into it as a quoted path. A drop is a deliberate act, so agent and
+    /// plugin panes take it just as a shell does; a serial device is not a
+    /// program on this computer, so it is never told this computer's paths.
     /// Live-domain panes are accepted; a path dropped on one becomes an
     /// upload the person confirms.
-    pub(crate) fn pane_accepts_host_paths(&self, pane_id: PaneId) -> bool {
+    pub(crate) fn pane_accepts_dropped_paths(&self, pane_id: PaneId) -> bool {
+        self.pane(pane_id).is_some()
+            && (self.live_domain.is_some() || !matches!(self.tab_type, TabType::Serial { .. }))
+    }
+
+    /// Whether the program in `pane_id` may ask to read or write this
+    /// computer's files through Kitty file transfer. Unlike a drop, the
+    /// program starts the transfer, so plugin and agent programs are refused
+    /// wherever the pane sits (a split or a move puts them in any tab), and
+    /// a serial device is refused as for drops. Live-domain panes are
+    /// accepted.
+    pub(crate) fn pane_accepts_program_file_transfers(&self, pane_id: PaneId) -> bool {
         let Some(pane) = self.pane(pane_id) else {
             return false;
         };
