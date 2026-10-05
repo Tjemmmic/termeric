@@ -122,6 +122,25 @@ class InstallScriptTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("no Termeric installation is recorded", result.stderr)
 
+    def test_finds_its_own_directory_whatever_cdpath_holds(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            staged_tree(root)
+            # A decoy that cd would pick for the relative "tree" through CDPATH.
+            decoy = root / "decoy"
+            (decoy / "tree").mkdir(parents=True)
+            package = root / "package"
+            result = subprocess.run(
+                ["sh", f"tree/{INSTALLER_NAME}", "--prefix", "/usr", "--destdir", str(package)],
+                cwd=root,
+                env={**os.environ, "HOME": str(root), "CDPATH": str(decoy)},
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(files_below(package), {f"usr/{path}" for path in manifest()})
+
     def test_destdir_stages_for_a_package_without_a_record(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -94,7 +94,8 @@ fi
 
 root="$destdir$prefix"
 record="$prefix/lib/termeric/installed-files"
-here=$(cd "$(dirname "$0")" && pwd)
+# CDPATH would send cd elsewhere, and make it print where it went.
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 
 refresh_caches() {
     if command -v update-desktop-database >/dev/null 2>&1 && [ -d "$prefix/share/applications" ]; then
