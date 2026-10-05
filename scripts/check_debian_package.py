@@ -70,14 +70,18 @@ DESKTOP_ENTRIES = {
 }
 
 
-def debian_path(path: str) -> str:
-    """Where cargo-deb puts a staged file: Debian policy compresses manual pages."""
+def packaged_path(path: str) -> str:
+    """Where a package puts a staged file under /usr.
+
+    Distribution packaging compresses manual pages: Debian policy has cargo-deb
+    gzip them, and makepkg's default zipman option does the same on Arch.
+    """
     return f"usr/{path}.gz" if path.startswith("share/man/") else f"usr/{path}"
 
 
 # The staged install tree under /usr, and the copyright file cargo-deb writes.
 EXPECTED_FILES = {
-    **{debian_path(path): mode for path, mode in manifest().items()},
+    **{packaged_path(path): mode for path, mode in manifest().items()},
     "usr/share/doc/termeric/copyright": 0o644,
 }
 

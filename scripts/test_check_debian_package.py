@@ -14,7 +14,7 @@ from scripts.check_debian_package import (
     EXPECTED_FILES,
     ICON_FILES,
     RUNTIME_DEPENDENCIES,
-    debian_path,
+    packaged_path,
     locked_libgit2_version,
     parse_desktop_entry,
     parse_os_release,
@@ -190,8 +190,8 @@ class DebianPackageCheckTests(unittest.TestCase):
             validate_package_metadata(Path("termeric.deb"))
 
     def test_expected_files_are_the_staged_tree_with_compressed_manual_pages(self):
-        self.assertEqual(debian_path("bin/termeric"), "usr/bin/termeric")
-        self.assertEqual(debian_path("share/man/man1/termeric.1"), "usr/share/man/man1/termeric.1.gz")
+        self.assertEqual(packaged_path("bin/termeric"), "usr/bin/termeric")
+        self.assertEqual(packaged_path("share/man/man1/termeric.1"), "usr/share/man/man1/termeric.1.gz")
         self.assertIn("usr/share/man/man1/termeric.1.gz", EXPECTED_FILES)
         self.assertIn("usr/share/metainfo/org.termeric.Termeric.metainfo.xml", EXPECTED_FILES)
 

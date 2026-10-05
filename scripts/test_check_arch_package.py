@@ -50,6 +50,23 @@ class ArchPackageCheckTests(unittest.TestCase):
         names, types = valid_inventory()
         self.assertEqual(validate_archive_inventory(names, types), names)
 
+    def test_inventory_expects_the_manual_page_that_zipman_compressed(self):
+        names, types = valid_inventory()
+        self.assertIn("usr/share/man/man1/termeric.1.gz", names)
+        self.assertNotIn("usr/share/man/man1/termeric.1", EXPECTED_FILES)
+        self.assertEqual(validate_archive_inventory(names, types), names)
+        uncompressed = [
+            name.removesuffix(".gz") if name.startswith("usr/share/man/") else name
+            for name in names
+        ]
+        with self.assertRaisesRegex(CheckError, "unexpected package file: usr/share/man/man1/termeric.1"):
+            validate_archive_inventory(uncompressed, types)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_package_tree(root, EXPECTED_FILES)
+            self.assertTrue((root / "usr/share/man/man1/termeric.1.gz").is_file())
+            validate_layout(root, exercise_native_tools=False)
+
     def test_inventory_rejects_missing_duplicate_and_unexpected_members(self):
         names, types = valid_inventory()
         with self.assertRaisesRegex(CheckError, "missing members"):

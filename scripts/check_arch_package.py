@@ -20,6 +20,7 @@ if __package__:
     from scripts.check_debian_package import (
         CARGO_LOCK,
         CheckError,
+        packaged_path,
         parse_os_release,
         require_tool,
         run,
@@ -32,6 +33,7 @@ else:
     from check_debian_package import (
         CARGO_LOCK,
         CheckError,
+        packaged_path,
         parse_os_release,
         require_tool,
         run,
@@ -45,9 +47,10 @@ else:
 PACKAGE_NAME = "termeric-git"
 CONFLICTING_PACKAGE_NAME = "termeric"
 TERMINFO_NAME = "xterm-termeric"
-# The staged install tree under /usr, and the license where Arch keeps it.
+# The staged install tree under /usr, with the manual page compressed by
+# makepkg's zipman, and the license where Arch keeps it.
 EXPECTED_FILES = {
-    **{f"usr/{path}": mode for path, mode in manifest().items()},
+    **{packaged_path(path): mode for path, mode in manifest().items()},
     "usr/share/licenses/termeric-git/LICENSE": 0o644,
 }
 METADATA_FILES = {".BUILDINFO", ".MTREE", ".PKGINFO"}
