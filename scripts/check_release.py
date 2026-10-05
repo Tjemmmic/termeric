@@ -6,12 +6,14 @@ the tag must be v plus the workspace version, CHANGELOG.md needs that
 version's section, and the AppStream metadata a matching release entry. A
 release that will be published (--publish) also needs the section's date set,
 and the same date in the metadata. --notes writes the section's text, for the
-GitHub release.
+GitHub release. --stamp DATE (or "today") dates the version's changelog section
+and AppStream release entry, right before tagging, so the two always agree.
 """
 
 from __future__ import annotations
 
 import argparse
+import datetime
 from pathlib import Path
 import re
 import sys
@@ -73,6 +75,27 @@ def metainfo_release_date(metainfo: str, version: str) -> str:
     raise ReleaseError(f"AppStream metadata has no release entry for {version}")
 
 
+def stamp_release(changelog: str, metainfo: str, version: str, date: str) -> tuple[str, str]:
+    """`changelog` and `metainfo` with `version`'s section and release entry
+    dated `date` (YYYY-MM-DD)."""
+    try:
+        datetime.date.fromisoformat(date)
+    except ValueError as error:
+        raise ReleaseError(f"{date!r} is not a YYYY-MM-DD date") from error
+    heading = re.compile(
+        rf"^## \[{re.escape(version)}\] - (?:\d{{4}}-\d{{2}}-\d{{2}}|Unreleased)$", re.MULTILINE
+    )
+    changelog, sections = heading.subn(f"## [{version}] - {date}", changelog, count=1)
+    if sections != 1:
+        raise ReleaseError(f"CHANGELOG.md has no section for {version}")
+    metainfo_release_date(metainfo, version)
+    release = re.compile(rf'(<release\b[^>]*\bversion="{re.escape(version)}"[^>]*\bdate=")[^"]*(")')
+    metainfo, entries = release.subn(rf"\g<1>{date}\g<2>", metainfo, count=1)
+    if entries != 1:
+        raise ReleaseError(f"AppStream release {version} has no date attribute to set")
+    return changelog, metainfo
+
+
 def check_release(
     cargo_toml: str,
     changelog: str,
@@ -110,7 +133,14 @@ def main(argv: list[str] | None = None) -> int:
         "--publish", action="store_true", help="also require the release date to be set"
     )
     parser.add_argument("--notes", type=Path, help="write the changelog section here")
+    parser.add_argument(
+        "--stamp",
+        metavar="DATE",
+        help='date the current version\'s changelog section and AppStream release (YYYY-MM-DD or "today")',
+    )
     arguments = parser.parse_args(argv)
+    if arguments.stamp is not None:
+        return stamp_files(arguments.stamp)
     try:
         version, notes = check_release(
             (ROOT / "Cargo.toml").read_text(encoding="utf-8"),
@@ -127,6 +157,27 @@ def main(argv: list[str] | None = None) -> int:
     print(version)
     return 0
 
+
+
+def stamp_files(date: str) -> int:
+    if date == "today":
+        date = datetime.date.today().isoformat()
+    changelog_path = ROOT / "CHANGELOG.md"
+    try:
+        version = workspace_package((ROOT / "Cargo.toml").read_text(encoding="utf-8"), "version")
+        changelog, metainfo = stamp_release(
+            changelog_path.read_text(encoding="utf-8"),
+            METAINFO.read_text(encoding="utf-8"),
+            version,
+            date,
+        )
+        changelog_path.write_text(changelog, encoding="utf-8")
+        METAINFO.write_text(metainfo, encoding="utf-8")
+    except (ReleaseError, OSError) as error:
+        print(f"release stamp failed: {error}", file=sys.stderr)
+        return 1
+    print(f"{version} dated {date}")
+    return 0
 
 if __name__ == "__main__":
     raise SystemExit(main())

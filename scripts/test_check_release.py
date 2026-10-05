@@ -8,6 +8,7 @@ from scripts.check_release import (
     changelog_section,
     check_release,
     metainfo_release_date,
+    stamp_release,
 )
 
 
@@ -111,6 +112,31 @@ class ReleaseCheckTests(unittest.TestCase):
             publish=False,
         )
         self.assertRegex(metainfo_release_date(METAINFO.read_text(encoding="utf-8"), version), r"^\d{4}-\d{2}-\d{2}$")
+
+
+class ReleaseStampTests(unittest.TestCase):
+    def test_stamping_dates_both_files_for_one_version_only(self):
+        changelog = CHANGELOG.replace("## [1.2.0] - 2026-11-02", "## [1.2.0] - Unreleased")
+        changelog, metainfo = stamp_release(changelog, METAINFO_XML, "1.2.0", "2026-12-24")
+        self.assertIn("## [1.2.0] - 2026-12-24", changelog)
+        self.assertIn("## [1.1.0] - 2026-10-01", changelog)
+        self.assertIn('<release version="1.2.0" date="2026-12-24"/>', metainfo)
+        self.assertIn('<release version="1.1.0" date="2026-10-01"/>', metainfo)
+        self.assertEqual(changelog_section(changelog, "1.2.0")[0], "2026-12-24")
+        self.assertEqual(metainfo_release_date(metainfo, "1.2.0"), "2026-12-24")
+
+    def test_stamping_refuses_a_bad_date_or_a_missing_version(self):
+        with self.assertRaisesRegex(ReleaseError, "not a YYYY-MM-DD date"):
+            stamp_release(CHANGELOG, METAINFO_XML, "1.2.0", "2026-13-01")
+        with self.assertRaisesRegex(ReleaseError, "no section for 9.9.9"):
+            stamp_release(CHANGELOG, METAINFO_XML, "9.9.9", "2026-12-24")
+        with self.assertRaisesRegex(ReleaseError, "no release entry for 1.0.0"):
+            stamp_release(
+                CHANGELOG.replace("[1.1.0] - 2026-10-01", "[1.0.0] - 2026-10-01"),
+                METAINFO_XML,
+                "1.0.0",
+                "2026-12-24",
+            )
 
 
 if __name__ == "__main__":
