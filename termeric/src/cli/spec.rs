@@ -336,12 +336,56 @@ mod tests {
         assert!(parse_strs(&["mcp", "--process="]).is_err());
     }
 
+    /// `argument` with its aliases named after its help, as `--help` names
+    /// them: clap_mangen leaves them out of the manual page.
+    fn with_aliases_in_help(argument: clap::Arg) -> clap::Arg {
+        let aliases = argument.get_visible_aliases().unwrap_or_default();
+        if aliases.is_empty() {
+            return argument;
+        }
+        let label = if aliases.len() == 1 {
+            "alias"
+        } else {
+            "aliases"
+        };
+        let names = aliases
+            .iter()
+            .map(|alias| format!("--{alias}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let help = argument
+            .get_help()
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        argument.help(format!("{help} [{label}: {names}]"))
+    }
+
+    #[test]
+    fn the_manual_page_names_every_alias_help_does() {
+        let page = String::from_utf8(manual_page().unwrap()).unwrap();
+        let help = crate::cli::help_text();
+        let spec = command_spec();
+        let aliases: Vec<&str> = spec
+            .get_arguments()
+            .flat_map(|argument| argument.get_visible_aliases().unwrap_or_default())
+            .collect();
+        assert_eq!(aliases, ["cwd", "class"]);
+        for alias in aliases {
+            let named = format!("[alias: --{alias}]");
+            assert!(help.contains(&named), "{named} is not in --help");
+            assert!(
+                page.contains(&named.replace('-', "\\-")),
+                "{named} is not in the manual page"
+            );
+        }
+    }
+
     /// One manual page for the whole command. clap_mangen's own subcommand
     /// section names a page per subcommand, which Termeric doesn't ship, so
     /// the subcommands point at their `--help` instead.
     fn manual_page() -> std::io::Result<Vec<u8>> {
         use roff::{Roff, bold, roman};
-        let spec = command_spec();
+        let spec = command_spec().mut_args(with_aliases_in_help);
         let man = clap_mangen::Man::new(spec.clone());
         let mut page = Vec::new();
         man.render_title(&mut page)?;
