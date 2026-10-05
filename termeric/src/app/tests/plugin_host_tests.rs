@@ -13,7 +13,7 @@ fn structured_plugin_completions_require_a_live_generation_and_plugin() {
         .unwrap();
     let completion =
         |generation, message: &str| crate::plugin::structured::StructuredHandlerCompletion {
-            window_id: winit::window::WindowId::dummy(),
+            window_id: 1,
             plugin_generation: generation,
             plugin_id: "completion-fixture".into(),
             request_id: 7,
@@ -77,7 +77,7 @@ fn structured_completion_hands_its_host_operation_to_the_application() {
     };
     let generation = app.plugin_runtime_generation;
     let completion = StructuredHandlerCompletion {
-        window_id: winit::window::WindowId::dummy(),
+        window_id: 1,
         plugin_generation: generation,
         plugin_id: "operation-fixture".into(),
         request_id: 3,
@@ -147,7 +147,7 @@ fn plugin_window_close_waits_for_only_the_exact_result_callback() {
         result_request_id: 41,
     });
     let completion = |request_id, result| crate::plugin::structured::StructuredHandlerCompletion {
-        window_id: winit::window::WindowId::dummy(),
+        window_id: 1,
         plugin_generation: generation,
         plugin_id: "window-closer".into(),
         request_id,
@@ -195,7 +195,7 @@ fn plugin_window_close_still_finishes_after_final_handler_failure() {
     });
     app.accept_structured_plugin_completion(
         crate::plugin::structured::StructuredHandlerCompletion {
-            window_id: winit::window::WindowId::dummy(),
+            window_id: 1,
             plugin_generation: app.plugin_runtime_generation,
             plugin_id: "window-closer".into(),
             request_id: 73,

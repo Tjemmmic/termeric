@@ -1329,6 +1329,8 @@ pub struct App {
     plugin_manager: PluginManager,
     /// The process's plugin handler host, shared with every other window.
     plugin_host: Arc<crate::plugin::structured::StructuredPluginHost>,
+    /// Whether this window is open, as its queued handler requests see it.
+    plugin_requests: crate::plugin::structured::WindowRequests,
     /// The host generation this window's plugins were built at; responses
     /// from any other generation are discarded.
     plugin_runtime_generation: u64,
@@ -1645,6 +1647,7 @@ impl App {
             plugin_manager: PluginManager::new(),
             plugin_runtime_generation: plugin_host.generation(),
             plugin_host,
+            plugin_requests: Default::default(),
             pending_plugin_window_close: None,
             reported_active_tab: None,
             command_palette: {

@@ -4561,7 +4561,7 @@ fn plugin_window_closure_is_exact_non_final_and_result_gated() {
         42,
     );
     let completion = |request_id| crate::plugin::structured::StructuredHandlerCompletion {
-        window_id: origin_native,
+        window_id: 7,
         plugin_generation: generation,
         plugin_id: "window-closer".into(),
         request_id,
@@ -4785,7 +4785,7 @@ fn one_plugin_reload_moves_every_window_to_one_generation() {
                 .unwrap()
                 .accept_structured_plugin_completion(
                     crate::plugin::structured::StructuredHandlerCompletion {
-                        window_id: *native,
+                        window_id: 1,
                         plugin_generation,
                         plugin_id: "absent".into(),
                         request_id: 1,
@@ -4850,6 +4850,50 @@ fn one_plugin_reload_moves_every_window_to_one_generation() {
     poll(&mut application);
     assert_eq!(application.plugin_host.generation(), after_window_reload);
     assert_eq!(reload_toasts(&application), vec![1, 1]);
+}
+
+#[test]
+fn a_plugin_result_never_reaches_a_window_that_took_a_closed_ones_native_id() {
+    let mut application =
+        Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
+    application.pending.clear();
+    // Window 7 asked and closed; window 8 then took its native ID, as a
+    // Wayland surface at a reused address does.
+    let native = WindowId::from(21_u64);
+    let mut window = App::new_headless(Config::default()).unwrap();
+    window.control_window_id = 8;
+    window
+        .plugin_manager
+        .register(crate::test_support::identity_plugin(
+            "late-fixture",
+            "Late Fixture",
+        ))
+        .unwrap();
+    let generation = window.plugin_runtime_generation;
+    application.windows.insert(native, window);
+    application.window_order = vec![native];
+    application.control_window_ids.insert(native, 8);
+    let completion = |window_id| crate::plugin::structured::StructuredHandlerCompletion {
+        window_id,
+        plugin_generation: generation,
+        plugin_id: "late-fixture".into(),
+        request_id: 5,
+        continuation: StructuredHandlerInvocation::fixture("late-fixture", Default::default()),
+        result: Ok(vec![StructuredResponseAction::ShowMessage {
+            message: "for the window that asked".into(),
+        }]),
+    };
+    let shown = |application: &Application| {
+        application.windows[&native]
+            .toasts
+            .iter()
+            .any(|toast| toast.message == "for the window that asked")
+    };
+
+    application.handle_structured_plugin_completed(completion(7));
+    assert!(!shown(&application));
+    application.handle_structured_plugin_completed(completion(8));
+    assert!(shown(&application), "window 8's own result reaches it");
 }
 
 #[test]

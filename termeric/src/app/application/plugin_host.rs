@@ -395,8 +395,18 @@ impl Application {
         &mut self,
         completion: crate::plugin::structured::StructuredHandlerCompletion,
     ) {
-        let origin_native_id = completion.window_id;
+        let origin_window_id = completion.window_id;
         let plugin_generation = completion.plugin_generation;
+        // A control ID is never reused, so a result for a window that has
+        // closed finds no window, rather than one that took its native ID.
+        let Ok(origin_native_id) = self.control_native_window_id(origin_window_id) else {
+            log::debug!(
+                "Discarding structured plugin response {} from {:?}: window {origin_window_id} closed",
+                completion.request_id,
+                completion.plugin_id
+            );
+            return;
+        };
         let Some(origin_window) = self.windows.get_mut(&origin_native_id) else {
             return;
         };
@@ -411,14 +421,6 @@ impl Application {
             );
             return;
         }
-        let Some(origin_window_id) = self.control_window_ids.get(&origin_native_id).copied() else {
-            log::warn!(
-                "Discarding {} from plugin {:?}: originating window has no stable ID",
-                host.operation.name(),
-                host.plugin_id
-            );
-            return;
-        };
         let origin = PluginOrigin {
             native_id: origin_native_id,
             window_id: origin_window_id,

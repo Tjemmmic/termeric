@@ -101,10 +101,9 @@ impl App {
         &mut self,
         invocation: StructuredHandlerInvocation,
     ) -> Result<u64, String> {
-        let window = self
-            .window
-            .as_ref()
-            .ok_or_else(|| "structured plugin handler requires a native window".to_string())?;
+        if self.window.is_none() {
+            return Err("structured plugin handler requires a native window".into());
+        }
         let proxy = super::EVENT_LOOP_PROXY
             .get()
             .cloned()
@@ -112,8 +111,10 @@ impl App {
         let deliver: crate::plugin::structured::CompletionSink = Arc::new(move |completion| {
             let _ = proxy.send_event(AppEvent::StructuredPluginCompleted(completion));
         });
+        // Results come back by control ID, which no later window takes.
         self.plugin_host.submit(
-            window.id(),
+            self.control_window_id,
+            &self.plugin_requests,
             self.plugin_runtime_generation,
             invocation,
             deliver,

@@ -224,7 +224,7 @@ A plugin has one handler process for every window of a Termeric process, so what
 
 Termeric starts the program with the first event and keeps it running. Each request is one line of JSON on standard input, with a `request_id`; the program answers each with one line of JSON on standard output carrying the same `request_id`, within 2 seconds, and must print nothing else there. Flush standard output after each line. Standard error is kept for error messages.
 
-The handler also receives the results of its queries and actions. If it fails a request, Termeric stops it and starts a fresh process for the next event. It is also restarted whenever the plugin registry or your configuration is reloaded, which happens when a plugin is installed, updated, enabled, disabled, or removed, and stopped when Termeric exits. Closing a window leaves it running for the other windows.
+The handler also receives the results of its queries and actions. If it fails a request, Termeric stops it and starts a fresh process for the next event. It is also restarted whenever the plugin registry or your configuration is reloaded, which happens when a plugin is installed, updated, enabled, disabled, or removed, and stopped when Termeric exits. Closing a window drops the requests it still has queued, which never reach the handler, and leaves the handler running for the other windows.
 
 ### Requests
 

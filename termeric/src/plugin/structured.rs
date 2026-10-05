@@ -20,7 +20,6 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
-use winit::window::WindowId;
 
 use std::os::unix::process::CommandExt;
 
@@ -502,7 +501,8 @@ pub(crate) fn validate_terminal_query_bounds(
 
 #[derive(Debug)]
 pub struct StructuredHandlerCompletion {
-    pub window_id: WindowId,
+    /// The control ID of the window that submitted the request.
+    pub window_id: u64,
     pub plugin_generation: u64,
     pub plugin_id: String,
     pub request_id: u64,
@@ -525,8 +525,36 @@ struct StructuredResponse {
 /// a channel in tests.
 pub type CompletionSink = Arc<dyn Fn(StructuredHandlerCompletion) + Send + Sync>;
 
+/// Whether a window that submits handler requests is still open, shared
+/// with every request it has queued. The window owns it, so dropping it as
+/// the window ends marks the window closed: the requests it still has
+/// queued are answered with an error rather than run, since nothing would
+/// take their results.
+#[derive(Debug)]
+pub struct WindowRequests {
+    open: Arc<AtomicBool>,
+}
+
+impl Default for WindowRequests {
+    fn default() -> Self {
+        Self {
+            open: Arc::new(AtomicBool::new(true)),
+        }
+    }
+}
+
+impl Drop for WindowRequests {
+    fn drop(&mut self) {
+        self.open.store(false, Ordering::Release);
+    }
+}
+
 struct WorkItem {
-    window_id: WindowId,
+    /// The submitting window's control ID. Results are routed by it rather
+    /// than by its winit ID, which another window can take once this one
+    /// closes (on Wayland it comes from the surface's address).
+    window_id: u64,
+    window_open: Arc<AtomicBool>,
     plugin_generation: u64,
     request_id: u64,
     invocation: StructuredHandlerInvocation,
@@ -588,8 +616,9 @@ impl PluginLane {
 }
 
 /// Serve one lane's queue until the host drops its sender, shuts down, or
-/// moves to another generation. Queued requests of an earlier generation are
-/// dropped unanswered, like the windows that would discard their results.
+/// moves to another generation. A request it takes that can no longer run
+/// (its generation ended, the host is shutting down, or its window closed)
+/// is answered with an error instead.
 fn run_lane(
     receiver: &Receiver<WorkItem>,
     state: &LaneState,
@@ -619,28 +648,52 @@ fn run_lane(
             Err(RecvTimeoutError::Timeout) => continue,
             Err(RecvTimeoutError::Disconnected) => break,
         };
-        if item.plugin_generation == lane_generation && !shutdown.load(Ordering::Acquire) {
-            let result = run_persistent_handler(
-                &mut handler,
-                &item.invocation,
-                item.request_id,
-                shutdown,
-                generation,
-                item.plugin_generation,
-            );
-            state.process.store(handler.is_some(), Ordering::Release);
-            let plugin_id = item.invocation.plugin_id.clone();
-            (item.deliver)(StructuredHandlerCompletion {
-                window_id: item.window_id,
-                plugin_generation: item.plugin_generation,
-                plugin_id,
-                request_id: item.request_id,
-                continuation: item.invocation,
-                result,
-            });
-        }
-        state.pending.fetch_sub(1, Ordering::AcqRel);
+        let result = match refusal(&item, shutdown, lane_generation) {
+            Some(refused) => Err(refused.into()),
+            None => {
+                let result = run_persistent_handler(
+                    &mut handler,
+                    &item.invocation,
+                    item.request_id,
+                    shutdown,
+                    generation,
+                    item.plugin_generation,
+                );
+                state.process.store(handler.is_some(), Ordering::Release);
+                result
+            }
+        };
+        answer(item, result, state);
     }
+}
+
+/// Why `item` can't run on a lane of `lane_generation`, if it can't.
+fn refusal(item: &WorkItem, shutdown: &AtomicBool, lane_generation: u64) -> Option<&'static str> {
+    if shutdown.load(Ordering::Acquire) {
+        Some("Termeric is shutting down")
+    } else if item.plugin_generation != lane_generation {
+        Some("plugins were reloaded before this request ran")
+    } else if !item.window_open.load(Ordering::Acquire) {
+        Some("its window closed before this request ran")
+    } else {
+        None
+    }
+}
+
+fn answer(
+    item: WorkItem,
+    result: Result<Vec<StructuredResponseAction>, String>,
+    state: &LaneState,
+) {
+    (item.deliver)(StructuredHandlerCompletion {
+        window_id: item.window_id,
+        plugin_generation: item.plugin_generation,
+        plugin_id: item.invocation.plugin_id.clone(),
+        request_id: item.request_id,
+        continuation: item.invocation,
+        result,
+    });
+    state.pending.fetch_sub(1, Ordering::AcqRel);
 }
 
 /// The process's one host for plugin event handlers, shared by every
@@ -704,11 +757,14 @@ impl StructuredPluginHost {
         retired.extend(threads);
     }
 
-    /// Queue one request on its plugin's lane and return its process-wide
-    /// request ID. `deliver` receives the completion.
+    /// Queue one request from the window with control ID `window_id` on its
+    /// plugin's lane and return its process-wide request ID. `deliver`
+    /// receives the completion, which names the same window; `window` says
+    /// whether it is still open when the request's turn comes.
     pub fn submit(
         &self,
-        window_id: WindowId,
+        window_id: u64,
+        window: &WindowRequests,
         plugin_generation: u64,
         invocation: StructuredHandlerInvocation,
         deliver: CompletionSink,
@@ -744,6 +800,7 @@ impl StructuredPluginHost {
         lane.state.pending.fetch_add(1, Ordering::AcqRel);
         let item = WorkItem {
             window_id,
+            window_open: Arc::clone(&window.open),
             plugin_generation,
             request_id,
             invocation,
@@ -1990,8 +2047,8 @@ done"#
     fn windows_share_one_handler_process_that_outlives_a_closed_window() {
         let host = Arc::new(StructuredPluginHost::default());
         let (deliver, completions) = completion_channel();
-        let first_window = WindowId::from(1_u64);
-        let second_window = WindowId::from(2_u64);
+        let first_window = WindowRequests::default();
+        let second_window = WindowRequests::default();
         let generation = host.generation();
 
         // Each window holds the host; the first window's handle goes away
@@ -1999,20 +2056,23 @@ done"#
         let first_handle = Arc::clone(&host);
         let first_request = first_handle
             .submit(
-                first_window,
+                1,
+                &first_window,
                 generation,
                 counting_handler("shared", 1),
                 Arc::clone(&deliver),
             )
             .unwrap();
         let first = receive(&completions);
-        assert_eq!(first.window_id, first_window);
+        assert_eq!(first.window_id, 1);
         assert_eq!(first.request_id, first_request);
         drop(first_handle);
+        drop(first_window);
 
         let second_request = host
             .submit(
-                second_window,
+                2,
+                &second_window,
                 generation,
                 counting_handler("shared", 1),
                 deliver,
@@ -2020,13 +2080,14 @@ done"#
             .unwrap();
         assert_eq!(second_request, first_request + 1);
         let second = receive(&completions);
-        assert_eq!(second.window_id, second_window);
+        assert_eq!(second.window_id, 2);
         assert_eq!(message_of(&second), message_of(&first));
     }
 
     #[test]
     fn a_slow_plugin_does_not_delay_another() {
         let host = StructuredPluginHost::default();
+        let window = WindowRequests::default();
         let (deliver, completions) = completion_channel();
         let generation = host.generation();
         let slow = persistent_fixture(
@@ -2036,20 +2097,10 @@ done"#
   printf '{"schema_version":1,"request_id":1,"actions":[]}\n'
 done"#,
         );
-        host.submit(
-            WindowId::from(1_u64),
-            generation,
-            slow,
-            Arc::clone(&deliver),
-        )
-        .unwrap();
-        host.submit(
-            WindowId::from(1_u64),
-            generation,
-            counting_handler("fast", 2),
-            deliver,
-        )
-        .unwrap();
+        host.submit(1, &window, generation, slow, Arc::clone(&deliver))
+            .unwrap();
+        host.submit(1, &window, generation, counting_handler("fast", 2), deliver)
+            .unwrap();
         let first = receive(&completions);
         assert_eq!(first.plugin_id, "fast");
         assert!(first.result.is_ok());
@@ -2061,10 +2112,12 @@ done"#,
     #[test]
     fn a_new_generation_stops_handlers_and_refuses_older_requests() {
         let host = StructuredPluginHost::default();
+        let window = WindowRequests::default();
         let (deliver, completions) = completion_channel();
         let old_generation = host.generation();
         host.submit(
-            WindowId::from(1_u64),
+            1,
+            &window,
             old_generation,
             counting_handler("reloaded", 1),
             Arc::clone(&deliver),
@@ -2077,7 +2130,8 @@ done"#,
         assert_ne!(new_generation, old_generation);
         assert!(
             host.submit(
-                WindowId::from(2_u64),
+                2,
+                &window,
                 old_generation,
                 counting_handler("reloaded", 2),
                 Arc::clone(&deliver),
@@ -2090,7 +2144,8 @@ done"#,
             || !std::path::Path::new(&format!("/proc/{old_pid}")).exists()
         ));
         host.submit(
-            WindowId::from(2_u64),
+            2,
+            &window,
             new_generation,
             counting_handler("reloaded", 2),
             deliver,
@@ -2102,11 +2157,13 @@ done"#,
     #[test]
     fn plugin_lanes_are_bounded_and_idle_ones_give_way() {
         let host = StructuredPluginHost::default();
+        let window = WindowRequests::default();
         let (deliver, completions) = completion_channel();
         let generation = host.generation();
         for index in 1..=MAX_PERSISTENT_HANDLERS as u64 {
             host.submit(
-                WindowId::from(1_u64),
+                1,
+                &window,
                 generation,
                 counting_handler(&format!("running-{index}"), index),
                 Arc::clone(&deliver),
@@ -2117,7 +2174,8 @@ done"#,
         // Every lane keeps a running process, so none gives way.
         assert!(
             host.submit(
-                WindowId::from(1_u64),
+                1,
+                &window,
                 generation,
                 counting_handler("overflow", 99),
                 Arc::clone(&deliver),
@@ -2131,7 +2189,8 @@ done"#,
         let generation = host.generation();
         for index in 1..=MAX_PERSISTENT_HANDLERS {
             host.submit(
-                WindowId::from(1_u64),
+                1,
+                &window,
                 generation,
                 persistent_fixture(&format!("exiting-{index}"), "exit 0"),
                 Arc::clone(&deliver),
@@ -2145,7 +2204,8 @@ done"#,
             || {
                 replacement = host
                     .submit(
-                        WindowId::from(1_u64),
+                        1,
+                        &window,
                         generation,
                         counting_handler("replacement", 9),
                         Arc::clone(&deliver),
@@ -2155,6 +2215,65 @@ done"#,
             }
         ));
         assert_eq!(receive(&completions).plugin_id, "replacement");
+    }
+
+    #[test]
+    fn a_closed_windows_queued_requests_are_answered_without_running() {
+        let temp = tempfile::tempdir().unwrap();
+        let log = temp.path().join("requests");
+        let release = temp.path().join("release");
+        // Each request is logged; the first waits to be released, so the
+        // second is still queued when its window closes.
+        let handler = persistent_fixture(
+            "logged",
+            &format!(
+                r#"n=1
+while IFS= read -r event; do
+  printf '%s\n' "$n" >> '{log}'
+  while [ "$n" = 1 ] && [ ! -e '{release}' ]; do sleep 0.01; done
+  printf '{{"schema_version":1,"request_id":%d,"actions":[]}}\n' "$n"
+  n=$((n + 1))
+done"#,
+                log = log.display(),
+                release = release.display(),
+            ),
+        );
+        let host = StructuredPluginHost::default();
+        let (deliver, completions) = completion_channel();
+        let generation = host.generation();
+        let staying = WindowRequests::default();
+        let closing = WindowRequests::default();
+        let first = host
+            .submit(
+                1,
+                &staying,
+                generation,
+                handler.clone(),
+                Arc::clone(&deliver),
+            )
+            .unwrap();
+        let queued = host
+            .submit(2, &closing, generation, handler, deliver)
+            .unwrap();
+        drop(closing);
+        std::fs::write(&release, "").unwrap();
+
+        let answered = receive(&completions);
+        assert_eq!(answered.request_id, first);
+        assert!(answered.result.is_ok(), "{:?}", answered.result);
+        let refused = receive(&completions);
+        assert_eq!(refused.request_id, queued);
+        assert_eq!(refused.window_id, 2);
+        assert!(
+            refused
+                .result
+                .as_ref()
+                .unwrap_err()
+                .contains("window closed"),
+            "{:?}",
+            refused.result
+        );
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "1\n");
     }
 
     #[test]
