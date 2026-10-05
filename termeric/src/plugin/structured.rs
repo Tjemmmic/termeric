@@ -650,7 +650,8 @@ fn run_lane(
 /// generation (a plugin reload) or the host's end stops them.
 pub struct StructuredPluginHost {
     lanes: Mutex<HashMap<String, PluginLane>>,
-    /// Lanes of earlier generations, joined when the host ends.
+    /// Lanes of earlier generations, and idle lanes that gave way, still
+    /// finishing; joined when the host ends.
     retired: Mutex<Vec<JoinHandle<()>>>,
     generation: Arc<AtomicU64>,
     next_request_id: AtomicU64,
@@ -691,10 +692,16 @@ impl StructuredPluginHost {
         let next = self.generation().wrapping_add(1).max(1);
         self.generation.store(next, Ordering::Release);
         let retiring = std::mem::take(&mut *self.lanes.lock().unwrap());
+        self.retire(retiring.into_values().map(|lane| lane.thread));
+        next
+    }
+
+    /// Keep `threads` until they finish, letting go of those that have, so
+    /// the list stays as short as the lanes still winding down.
+    fn retire(&self, threads: impl IntoIterator<Item = JoinHandle<()>>) {
         let mut retired = self.retired.lock().unwrap();
         retired.retain(|thread| !thread.is_finished());
-        retired.extend(retiring.into_values().map(|lane| lane.thread));
-        next
+        retired.extend(threads);
     }
 
     /// Queue one request on its plugin's lane and return its process-wide
@@ -723,7 +730,7 @@ impl StructuredPluginHost {
                     ));
                 };
                 let lane = lanes.remove(&idle).expect("idle lane was found");
-                self.retired.lock().unwrap().push(lane.thread);
+                self.retire([lane.thread]);
             }
             let lane = PluginLane::spawn(
                 &invocation.plugin_id,
@@ -2148,6 +2155,31 @@ done"#,
             }
         ));
         assert_eq!(receive(&completions).plugin_id, "replacement");
+    }
+
+    #[test]
+    fn retired_lanes_are_let_go_once_finished() {
+        let host = StructuredPluginHost::default();
+        let finished = thread::spawn(|| {});
+        assert!(crate::test_support::poll_until(
+            Duration::from_secs(3),
+            || finished.is_finished()
+        ));
+        let (stop, stopped) = std::sync::mpsc::channel::<()>();
+        let waiting = thread::spawn(move || {
+            let _ = stopped.recv();
+        });
+        host.retire([finished]);
+        host.retire([waiting]);
+        assert_eq!(host.retired.lock().unwrap().len(), 1);
+
+        drop(stop);
+        assert!(crate::test_support::poll_until(
+            Duration::from_secs(3),
+            || host.retired.lock().unwrap()[0].is_finished()
+        ));
+        host.retire([]);
+        assert!(host.retired.lock().unwrap().is_empty());
     }
 
     #[test]
