@@ -10,6 +10,7 @@ pub const PANE_DIVIDER_THICKNESS: f32 = 4.0;
 pub const PANE_DIVIDER_HIT_MARGIN: f32 = 8.0;
 
 use crate::config::ShellConfig;
+use crate::session::terminal_state::DiffWatch;
 use crate::terminal::events::{MAX_FORWARDED_TERMINAL_EVENTS_PER_POLL, drain_terminal_events};
 use crate::terminal::geometry::{TerminalArea, TerminalGeometry};
 use crate::terminal::shell_integration::{
@@ -312,9 +313,11 @@ impl Pane {
 
     /// Poll PTY output and immediately consume terminal-generated replies on
     /// this pane's own PTY. App-facing events are drained on every 4 KiB output
-    /// chunk and bounded before being returned.
+    /// chunk and bounded before being returned. `agent_features` is whether
+    /// they are on in the window that owns the pane.
     pub fn poll_events(
         &mut self,
+        agent_features: bool,
         mut on_output: impl FnMut(PaneId, &[u8]),
     ) -> (bool, Vec<TerminalEvent>) {
         let mut changed = self.integration.poll_notices();
@@ -334,13 +337,8 @@ impl Pane {
             };
             match event {
                 PtyEvent::Output(data) => {
-                    self.integration.observe_output(
-                        &data,
-                        matches!(
-                            self.launch,
-                            crate::workspace::WorkspaceLaunch::Plugin { .. }
-                        ),
-                    );
+                    self.integration
+                        .observe_output(&data, self.diff_watch(agent_features));
                     on_output(self.id, &data);
                     self.terminal.process(&data);
                     changed = true;
@@ -387,6 +385,22 @@ impl Pane {
             changed || self.closed != was_closed || !app_events.is_empty(),
             app_events,
         )
+    }
+
+    /// Whose diffs this pane's output is watched for: none while agent
+    /// features are off, everything in a terminal Termeric started as a
+    /// plugin or agent, and otherwise the agent a scan has seen in it.
+    fn diff_watch(&self, agent_features: bool) -> DiffWatch {
+        if !agent_features {
+            DiffWatch::Off
+        } else if matches!(
+            self.launch,
+            crate::workspace::WorkspaceLaunch::Plugin { .. }
+        ) {
+            DiffWatch::All
+        } else {
+            DiffWatch::SeenAgent
+        }
     }
 
     fn drain_terminal_events(&mut self, app_events: &mut Vec<TerminalEvent>) -> bool {
@@ -1238,7 +1252,8 @@ impl PaneManager {
 
         for pane in self.panes.values_mut() {
             let pane_id = pane.id;
-            let (pane_changed, events) = pane.poll_events(&mut on_output);
+            let (pane_changed, events) =
+                pane.poll_events(self.policy.agent_features, &mut on_output);
             changed |= pane_changed;
             for event in events {
                 if all_events.len() < MAX_FORWARDED_TERMINAL_EVENTS_PER_POLL {
@@ -1623,6 +1638,8 @@ impl PaneManager {
             .checked_add(1)
             .context("destination tab exhausted its stable pane ID space")?;
         pane.id = id;
+        // A pane moved here runs under this tab's host settings.
+        self.policy.apply(&mut pane.terminal, false);
         self.panes.insert(id, pane);
         assert!(
             self.tree.split(target, id, direction),

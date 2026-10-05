@@ -1349,6 +1349,8 @@ done
         HashMap::new(),
     )
     .unwrap();
+    // As the window's own tabs would be: with agent features on.
+    tabs.set_terminal_policy(app.terminal_policy(), false);
     app.tabs = Some(tabs);
     crate::session::set_test_sessions_base_dir(Some(temp.path().join("sessions")));
 

@@ -29,6 +29,7 @@ enabled = true
 It takes effect at once, without a restart, and Settings saves it like any other setting. While agent features are off:
 
 - Termeric doesn't look for agents in your terminals, so there are no agent badges, notifications, or agent status, and no per-second scan. An agent you start from a shell still runs; it's an ordinary program.
+- Termeric doesn't read the diffs agents print, so no tab counts unreviewed diffs. Turning agent features off forgets the diffs already read, and so does a tab or pane moved in from a window where they are on.
 - The command palette has no agent commands, the Keyboard Shortcuts list leaves out **New Agent** and **Agent View**, and the **Agents** page of Settings shows only the switch. Pressing **Ctrl+Shift+I** or **Ctrl+Shift+A** shows a notice saying where to turn agent features on.
 - There is no agent view, supervisor, Agents panel, context picker, or agent change review, and Harvest's sprout menu has no **Explain**.
 - Starting an agent profile, from `termeric --profile AGENT:PROFILE` or a saved workspace, fails with a message saying agent features are off.

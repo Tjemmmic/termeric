@@ -24,11 +24,8 @@ impl App {
                     1.0,
                 )
             });
-        let tabs = TabManager::new_with_area(
-            area,
-            self.config.shell.clone(),
-            crate::terminal::policy::TerminalPolicy::from_config(&self.config),
-        );
+        let tabs =
+            TabManager::new_with_area(area, self.config.shell.clone(), self.terminal_policy());
         self.tabs = Some(tabs);
         if self.launch.adopts_tab {
             // The torn-off tab moves in once the window exists.

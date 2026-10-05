@@ -13,6 +13,9 @@ pub(crate) struct TerminalPolicy {
     /// Whether Kitty file transfers may read files on this host.
     pub(crate) kitty_file_transmission: bool,
     pub(crate) xterm_keyboard_type: XtermKeyboardType,
+    /// Whether agent features are on in the window: only then is output
+    /// watched for agents' diffs and their count shown on tabs.
+    pub(crate) agent_features: bool,
 }
 
 impl TerminalPolicy {
@@ -24,11 +27,16 @@ impl TerminalPolicy {
             screen_checksum_reporting: false,
             kitty_file_transmission: false,
             xterm_keyboard_type: XtermKeyboardType::Normal,
+            agent_features: false,
         }
     }
 
-    pub(crate) fn from_config(config: &crate::config::Config) -> Self {
+    /// The policy `config` asks for. `agent_features` is whether they are
+    /// on in the window, which may keep them on a while after its
+    /// configuration turned them off.
+    pub(crate) fn from_config(config: &crate::config::Config, agent_features: bool) -> Self {
         Self {
+            agent_features,
             screen_checksum_reporting: config.security.allow_screen_checksum_reports,
             kitty_file_transmission: config.security.allow_kitty_file_transfers,
             xterm_keyboard_type: config.keyboard.xterm_type.terminal_type(),

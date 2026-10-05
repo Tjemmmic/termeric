@@ -897,14 +897,16 @@ impl TabManager {
         Ok(tab)
     }
 
-    /// Adopt a complete tab under a fresh destination-local ID. Pinned tabs
-    /// remain in the leading pinned prefix and become active after transfer.
+    /// Adopt a complete tab under a fresh destination-local ID and this
+    /// manager's host settings. Pinned tabs remain in the leading pinned
+    /// prefix and become active after transfer.
     pub(crate) fn attach_window_transferred_tab(&mut self, mut tab: Tab) -> usize {
         let id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
         tab.id = id;
         tab.has_activity = false;
         tab.panes.resize(self.area);
+        tab.apply_terminal_policy(&self.policy, false);
         let insertion = if tab.pinned {
             self.tabs.iter().take_while(|tab| tab.pinned).count()
         } else {
@@ -916,7 +918,8 @@ impl TabManager {
     }
 
     /// Adopt a transferred tab at one prevalidated final visual index. The tab
-    /// receives a fresh destination-local stable ID and becomes active.
+    /// receives a fresh destination-local stable ID and this manager's host
+    /// settings, and becomes active.
     pub(crate) fn attach_window_transferred_tab_at(
         &mut self,
         mut tab: Tab,
@@ -931,6 +934,7 @@ impl TabManager {
         tab.id = id;
         tab.has_activity = false;
         tab.panes.resize(self.area);
+        tab.apply_terminal_policy(&self.policy, false);
         self.tabs.insert(target, tab);
         self.active = target;
         Ok(id)
@@ -1798,8 +1802,8 @@ impl TabManager {
         changed
     }
 
-    /// Forget every terminal's agent and its reported status, as when agent
-    /// features are off. Returns whether any terminal changed.
+    /// Forget every terminal's agent, its reported status, and its diffs,
+    /// as when agent features are off. Returns whether any terminal changed.
     pub(crate) fn forget_agents(&mut self) -> bool {
         let mut changed = false;
         for tab in &mut self.tabs {
@@ -1876,7 +1880,12 @@ impl TabManager {
                     tab.close_progress()
                 },
                 tab_type: tab.tab_type.clone(),
-                unreviewed_diff_count: tab.unreviewed_diff_count(),
+                // Diff review is an agent feature.
+                unreviewed_diff_count: if self.policy.agent_features {
+                    tab.unreviewed_diff_count()
+                } else {
+                    0
+                },
                 agent_badge: tab.agent_badge(),
             })
             .collect()

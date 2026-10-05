@@ -40,6 +40,45 @@ fn set_agent_features(app: &mut App, enabled: bool) {
     assert_eq!(app.agent_features_enabled(), enabled);
 }
 
+/// A complete patch, as an agent prints one.
+const PATCH: &[u8] = b"--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new\nfinished\n";
+
+/// Make the focused terminal one Termeric started for Codex, and return
+/// what feeds its output, in place of its PTY.
+fn codex_terminal(app: &mut App) -> std::sync::mpsc::Sender<termeric_core::pty::PtyEvent> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let pane = app
+        .tabs
+        .as_mut()
+        .unwrap()
+        .active_tab_mut()
+        .unwrap()
+        .focused_pane_mut()
+        .unwrap();
+    pane.launch = crate::workspace::WorkspaceLaunch::Plugin {
+        plugin_id: "codex".into(),
+        profile: None,
+    };
+    pane.pty_rx = receiver;
+    sender
+}
+
+fn print(app: &mut App, output: &std::sync::mpsc::Sender<termeric_core::pty::PtyEvent>) {
+    output
+        .send(termeric_core::pty::PtyEvent::Output(PATCH.to_vec()))
+        .unwrap();
+    app.process_pty_events();
+}
+
+/// The unreviewed diffs the active tab's badge shows, and those it holds.
+fn diff_counts(app: &App) -> (usize, usize) {
+    let tabs = app.tabs.as_ref().unwrap();
+    (
+        tabs.tab_info()[tabs.active_index()].unreviewed_diff_count,
+        tabs.active_tab().unwrap().unreviewed_diff_count(),
+    )
+}
+
 #[test]
 fn a_fresh_configuration_offers_no_agent_features() {
     assert!(!Config::default().agent_features_enabled());
@@ -262,4 +301,55 @@ fn agent_features_live_in_their_own_table() {
     // `[agents]` holds only agent entries, so a switch there is no setting.
     assert!(toml::from_str::<Config>("[agents]\nenabled = true\n").is_err());
     assert!(toml::from_str::<Config>("[agent_features]\nenable = true\n").is_err());
+}
+
+#[test]
+fn no_diff_is_captured_or_counted_while_agent_features_are_off() {
+    let mut app = app_with_shell(Config::default());
+    let output = codex_terminal(&mut app);
+    print(&mut app, &output);
+    assert_eq!(diff_counts(&app), (0, 0), "nothing is captured while off");
+
+    set_agent_features(&mut app, true);
+    print(&mut app, &output);
+    assert_eq!(diff_counts(&app), (1, 1));
+
+    // Turning them off forgets the diff rather than hiding it, so it cannot
+    // come back unreviewed, or keep counting, with nothing to review it.
+    set_agent_features(&mut app, false);
+    assert_eq!(diff_counts(&app), (0, 0));
+    print(&mut app, &output);
+    assert_eq!(diff_counts(&app), (0, 0));
+
+    set_agent_features(&mut app, true);
+    assert_eq!(diff_counts(&app), (0, 0));
+    print(&mut app, &output);
+    assert_eq!(diff_counts(&app), (1, 1));
+}
+
+#[test]
+fn a_tab_moved_in_from_a_window_with_agent_features_on_brings_no_diffs() {
+    let mut source = app_with_shell(Config::default());
+    set_agent_features(&mut source, true);
+    let output = codex_terminal(&mut source);
+    print(&mut source, &output);
+    assert_eq!(diff_counts(&source), (1, 1));
+
+    let mut destination = app_with_shell(Config::default());
+    let tab = source
+        .tabs
+        .as_mut()
+        .unwrap()
+        .detach_active_tab_for_window_transfer()
+        .unwrap();
+    destination
+        .tabs
+        .as_mut()
+        .unwrap()
+        .attach_window_transferred_tab(tab);
+    assert_eq!(diff_counts(&destination).0, 0, "no badge, even at once");
+    assert!(destination.refresh_agent_sessions());
+    assert_eq!(diff_counts(&destination), (0, 0));
+    print(&mut destination, &output);
+    assert_eq!(diff_counts(&destination), (0, 0));
 }

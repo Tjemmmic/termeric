@@ -20,6 +20,18 @@ pub(crate) struct TerminalIntegration {
     notices: Vec<String>,
 }
 
+/// Whose diffs a terminal's output is watched for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DiffWatch {
+    /// Nobody's: agent features are off in the window that owns it.
+    Off,
+    /// The agent the latest scan saw in its foreground, for a terminal
+    /// started from a shell. Its first diff can arrive a scan late.
+    SeenAgent,
+    /// Everything it prints: Termeric started it as a plugin or agent.
+    All,
+}
+
 /// What the diff capture is told about this terminal's output.
 enum CaptureStep<'a> {
     Output(&'a [u8]),
@@ -74,17 +86,32 @@ impl TerminalIntegration {
         true
     }
 
-    /// `plugin` is whether Termeric started this terminal as a plugin or
-    /// agent. An agent started from a shell is captured too, once the agent
-    /// scan has seen it, so its first diff can arrive a scan late.
-    pub fn observe_output(&mut self, data: &[u8], plugin: bool) {
+    /// Record `data`, output this terminal printed, and capture the diffs
+    /// in it that `watch` asks for.
+    pub fn observe_output(&mut self, data: &[u8], watch: DiffWatch) {
         if let Some(recorder) = &mut self.transcript {
             let result = recorder.record_output(data);
             self.handle_write(result);
         }
-        if plugin || self.agent.is_some() {
+        let captured = match watch {
+            DiffWatch::Off => false,
+            DiffWatch::SeenAgent => self.agent.is_some(),
+            DiffWatch::All => true,
+        };
+        if captured {
             self.capture_diffs(CaptureStep::Output(data));
         }
+    }
+
+    /// Forget the agent and everything it reported or left for review, as
+    /// when agent features turn off. Returns whether anything changed.
+    pub fn forget_agent(&mut self) -> bool {
+        // The diffs go first, with any capture in progress, so forgetting
+        // the agent has no capture left to finish or report on.
+        let mut changed = self.diff_detector.clear();
+        changed |= self.agent_status.take().is_some();
+        changed |= self.set_agent(None);
+        changed
     }
 
     /// Called only once the owning PTY's output stream ends, not per poll.
@@ -204,7 +231,7 @@ mod tests {
         session.start_transcript(
             TranscriptRecorder::new(directory.path(), None, None, "Local", "fixture").unwrap(),
         );
-        session.observe_output(b"output \xf0\x9f", true);
+        session.observe_output(b"output \xf0\x9f", DiffWatch::All);
         session.record_input(b"input \xe2");
         session.finish_stream();
         session.finish_stream();
@@ -234,13 +261,13 @@ mod tests {
                 TranscriptRecorder::new(directory.path(), None, None, "Local", "first").unwrap();
             let first_path = first.path().to_owned();
             session.start_transcript(first);
-            session.observe_output(b"first \xf0\x9f", false);
+            session.observe_output(b"first \xf0\x9f", DiffWatch::SeenAgent);
             session.record_input(b"input \xe2");
             if !replace {
                 let mut first = session.stop_transcript().unwrap();
                 first.finish(std::time::Duration::from_secs(2)).unwrap();
                 // Unrecorded traffic cannot seed the next recording's carry.
-                session.observe_output(b"\xf0\x9f", false);
+                session.observe_output(b"\xf0\x9f", DiffWatch::SeenAgent);
                 session.record_input(b"\xe2");
             }
             let second =
@@ -248,7 +275,7 @@ mod tests {
             session.start_transcript(second);
             assert_eq!(recorded_text(&first_path, false), "first �");
             assert_eq!(recorded_text(&first_path, true), "input �");
-            session.observe_output(b"\x8c\xb1 second", false);
+            session.observe_output(b"\x8c\xb1 second", DiffWatch::SeenAgent);
             session.record_input(b"\x82\xac second");
             session.poll_notices();
             assert!(
@@ -272,10 +299,10 @@ mod tests {
             TranscriptRecorder::new(directory.path(), None, None, "Local", "fixture").unwrap(),
         );
         session.record_input(b"\xf0\x9f");
-        session.observe_output(b"\x8c\xb1", false);
+        session.observe_output(b"\x8c\xb1", DiffWatch::SeenAgent);
         session.record_input(b"\x8c\xb1");
         for _ in 0..100 {
-            session.observe_output(b"\xff", false);
+            session.observe_output(b"\xff", DiffWatch::SeenAgent);
             session.record_input(b"\xff");
             session.poll_notices();
         }
@@ -296,11 +323,11 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mut session = TerminalIntegration::default();
         let patch = b"--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new\n";
-        session.observe_output(patch, true);
+        session.observe_output(patch, DiffWatch::All);
         session.start_transcript(
             TranscriptRecorder::new(directory.path(), None, None, "Local", "fixture").unwrap(),
         );
-        session.observe_output(b"finished\n", true);
+        session.observe_output(b"finished\n", DiffWatch::All);
         let mut recorder = session.stop_transcript().unwrap();
         recorder.finish(std::time::Duration::from_secs(2)).unwrap();
         assert_eq!(recorded_text(recorder.path(), false), "finished\n");
@@ -323,7 +350,7 @@ mod tests {
             TranscriptRecorder::new(directory.path(), None, None, "Local", "fixture").unwrap(),
         );
         for part in [b"before \xf0\x9f".as_slice(), b"\x8c\xb1 after"] {
-            session.observe_output(part, false);
+            session.observe_output(part, DiffWatch::SeenAgent);
             session.record_input(part);
         }
         let mut recorder = session.stop_transcript().unwrap();
@@ -361,13 +388,13 @@ mod tests {
             .map(|id| format!("--- a/file-{id}\n+++ b/file-{id}\n@@ -1 +1 @@\n-old\n+new\n"))
             .collect();
         let stream = patches.join("");
-        session.observe_output(stream.as_bytes(), true);
+        session.observe_output(stream.as_bytes(), DiffWatch::All);
         // 79 adjacent-file completions, with the final file still pending.
         assert_eq!(session.diff_detector.latest_unreviewed().unwrap().id, 79);
-        session.observe_output(b"finished\n", true);
+        session.observe_output(b"finished\n", DiffWatch::All);
         let unicode = "--- a/根\n+++ b/根\n@@ -1 +1 @@\n-old\n+🌱";
         for byte in unicode.as_bytes().chunks(1) {
-            session.observe_output(byte, true);
+            session.observe_output(byte, DiffWatch::All);
         }
         session.finish_stream();
         session.finish_stream();
@@ -400,8 +427,8 @@ mod tests {
         let mut plugin = TerminalIntegration::default();
         let mut shell = TerminalIntegration::default();
         for _ in 0..100 {
-            plugin.observe_output(patch, true);
-            shell.observe_output(patch, false);
+            plugin.observe_output(patch, DiffWatch::All);
+            shell.observe_output(patch, DiffWatch::SeenAgent);
         }
         assert_eq!(plugin.diff_detector.unreviewed_count(), 0);
         assert_eq!(plugin.drain_notices().len(), 16);
@@ -413,7 +440,7 @@ mod tests {
     fn shell_output_is_captured_only_while_an_agent_runs_in_it() {
         let patch = b"--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new\nfinished\n";
         let mut shell = TerminalIntegration::default();
-        shell.observe_output(patch, false);
+        shell.observe_output(patch, DiffWatch::SeenAgent);
         assert_eq!(shell.diff_detector.unreviewed_count(), 0);
 
         shell.agent = Some(AgentSession {
@@ -422,7 +449,7 @@ mod tests {
             profile: None,
             process: None,
         });
-        shell.observe_output(patch, false);
+        shell.observe_output(patch, DiffWatch::SeenAgent);
         assert_eq!(shell.diff_detector.unreviewed_count(), 1);
         assert_eq!(
             shell.diff_detector.latest_unreviewed().unwrap().filename,
@@ -443,12 +470,15 @@ mod tests {
         let mut shell = TerminalIntegration::default();
         assert!(shell.set_agent(agent("claude")));
         assert!(!shell.set_agent(agent("claude")));
-        shell.observe_output(b"--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n", false);
+        shell.observe_output(
+            b"--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n",
+            DiffWatch::SeenAgent,
+        );
         assert!(shell.set_agent(None));
-        shell.observe_output(b"$ codex\n", false);
+        shell.observe_output(b"$ codex\n", DiffWatch::SeenAgent);
         assert!(shell.set_agent(agent("codex")));
         // Read on from the first agent's half, these lines would complete it.
-        shell.observe_output(b"+new\nfinished\n", false);
+        shell.observe_output(b"+new\nfinished\n", DiffWatch::SeenAgent);
         assert_eq!(shell.diff_detector.unreviewed_count(), 0);
         assert_eq!(
             shell.drain_notices().len(),
@@ -460,7 +490,7 @@ mod tests {
         // unterminated last line is not read as one.
         shell.observe_output(
             b"--- a/kept\n+++ b/kept\n@@ -1 +1 @@\n-old\n+new\n\x1b[2",
-            false,
+            DiffWatch::SeenAgent,
         );
         assert!(shell.set_agent(None));
         assert_eq!(

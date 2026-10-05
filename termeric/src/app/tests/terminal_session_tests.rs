@@ -1,5 +1,6 @@
 //! Raw local PTYs and synthetic output events only; no provider launches.
 use super::*;
+use crate::session::terminal_state::DiffWatch;
 
 #[test]
 fn transcript_utf8_carry_follows_owner_through_split_collapse_and_sibling_close() {
@@ -37,7 +38,8 @@ fn transcript_utf8_carry_follows_owner_through_split_collapse_and_sibling_close(
             TranscriptRecorder::new(directory.path(), None, None, "Local", "sibling").unwrap();
         sibling_path = recorder.path().to_owned();
         pane.integration.start_transcript(recorder);
-        pane.integration.observe_output(b"sibling \xe2", false);
+        pane.integration
+            .observe_output(b"sibling \xe2", DiffWatch::SeenAgent);
         pane.integration.record_input(b"sibling input \xc2");
         sender
             .send(PtyEvent::Output(b"\x8c\xb1 split \xe2".to_vec()))
@@ -113,7 +115,7 @@ fn single_and_split_diff_capture_waits_for_real_eof_not_poll_boundaries() {
                 tab.panes
                     .get_pane_mut(owner)
                     .unwrap()
-                    .poll_events(|_, _| {});
+                    .poll_events(true, |_, _| {});
             };
             let first = "--- a/根\n+++ b/根\n@@ -1 +1 @@\n-old\n+🌱\n";
             for byte in first.as_bytes().chunks(1) {
@@ -179,7 +181,7 @@ fn evicted_diff_review_cannot_copy_or_dismiss_a_newer_patch() {
         .unwrap()
         .pane_integration_mut(owner)
         .unwrap()
-        .observe_output(patch, true);
+        .observe_output(patch, DiffWatch::All);
     app.open_agent_diff_review(crate::tabs::TerminalIdentity {
         tab_id: entry.source.tab_id,
         pane_id: owner,
@@ -196,7 +198,7 @@ fn evicted_diff_review_cannot_copy_or_dismiss_a_newer_patch() {
             .pane_integration_mut(owner)
             .unwrap();
         for _ in 0..80 {
-            state.observe_output(patch, true);
+            state.observe_output(patch, DiffWatch::All);
         }
         assert!(state.diff_detector.detected_by_id(target.diff_id).is_none());
     }
@@ -458,6 +460,8 @@ fn transcript_controls_and_close_keep_independent_owner_state() {
 #[test]
 fn diff_observation_and_delayed_review_are_terminal_local() {
     let (mut app, directory, entry, _) = harvest_rerun_capture_fixture();
+    app.apply_config(app.config.clone().with_agent_features())
+        .unwrap();
     mark_capture_plugin_owner(&mut app, PaneId(0), "codex");
     mark_capture_plugin_owner(&mut app, PaneId(1), "claude-code");
     let mut senders = Vec::new();
@@ -524,7 +528,7 @@ fn diff_observation_and_delayed_review_are_terminal_local() {
         .unwrap()
         .observe_output(
             b"--- a/replacement\n+++ b/replacement\n@@ -1 +1 @@\n-old\n+new\nfinished\n",
-            true,
+            DiffWatch::All,
         );
     tab.pane_integration_mut(replacement)
         .unwrap()

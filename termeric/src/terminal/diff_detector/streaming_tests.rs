@@ -239,3 +239,34 @@ fn history_evicts_by_count_and_owned_capacity_without_reusing_ids() {
         }
     }
 }
+
+#[test]
+fn clearing_forgets_history_and_the_capture_in_progress_without_reusing_ids() {
+    let mut detector = DiffDetector::new();
+    detector.feed_bytes(format!("{PATCH}finished\n").as_bytes(), |_| {});
+    // Half a patch, ending in half a line, is in progress.
+    detector.feed_bytes(b"--- a/next\n+++ b/next\n@@ -1 +1 @@\n-old\n+ne", |_| {});
+    assert_eq!(detector.unreviewed_count(), 1);
+
+    assert!(detector.clear());
+    assert_eq!(detector.unreviewed_count(), 0);
+    assert!(detector.latest_unreviewed().is_none());
+    assert_eq!(
+        detector.history_bytes,
+        detector.detected.capacity() * std::mem::size_of::<DetectedDiff>()
+    );
+    assert!(!detector.clear(), "nothing is left to forget");
+
+    // What was in progress is not finished by later output, and nothing is
+    // reported about it.
+    let mut completed = Vec::new();
+    detector.feed_bytes(b"w\nfinished\n", |diff| completed.push(diff.id));
+    detector.finish_stream(|diff| completed.push(diff.id));
+    assert!(completed.is_empty());
+    assert_eq!(detector.take_notices().count(), 0);
+
+    detector.feed_bytes(format!("{PATCH}finished\n").as_bytes(), |diff| {
+        completed.push(diff.id);
+    });
+    assert_eq!(completed, [2]);
+}

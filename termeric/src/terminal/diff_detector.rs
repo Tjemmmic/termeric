@@ -366,6 +366,20 @@ impl DiffDetector {
         ].into_iter().filter_map(move |(flag, message)| (flags & flag != 0).then_some(message))
     }
 
+    /// Forget every diff and any capture in progress, as when nothing is
+    /// watched any more. Ids keep counting, so a review opened earlier can
+    /// never name a later diff. Returns whether an unreviewed diff was
+    /// forgotten.
+    pub fn clear(&mut self) -> bool {
+        let unreviewed = self.unreviewed_count() > 0;
+        self.state = ScanState::Idle;
+        self.framer = Framer::default();
+        self.detected.clear();
+        self.history_bytes = self.detected.capacity() * std::mem::size_of::<DetectedDiff>();
+        self.notices = 0;
+        unreviewed
+    }
+
     pub fn unreviewed_count(&self) -> usize {
         self.detected.iter().filter(|d| !d.reviewed).count()
     }

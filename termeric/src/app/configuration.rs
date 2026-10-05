@@ -366,11 +366,9 @@ impl App {
         }
         self.config = config;
         self.apply_config_side_effects(agents_changed);
+        let policy = self.terminal_policy();
         if keyboard_type_changed && let Some(tabs) = &mut self.tabs {
-            tabs.set_terminal_policy(
-                crate::terminal::policy::TerminalPolicy::from_config(&self.config),
-                true,
-            );
+            tabs.set_terminal_policy(policy, true);
         }
         Ok(())
     }
@@ -423,13 +421,11 @@ impl App {
         self.reset_cursor_blink();
         self.bell.set_config(self.config.bell.clone());
         self.load_configured_theme();
+        let policy = self.terminal_policy();
         if let Some(tabs) = &mut self.tabs {
             // Reapplying unrelated settings must not undo a keyboard type
             // selected by the foreground application through DECSET 1060/1061.
-            tabs.set_terminal_policy(
-                crate::terminal::policy::TerminalPolicy::from_config(&self.config),
-                false,
-            );
+            tabs.set_terminal_policy(policy, false);
             tabs.set_shell_config(self.config.shell.clone());
             for tab in tabs.all_tabs_mut() {
                 tab.panes.set_cwd_mode(self.config.panes.cwd);
@@ -460,6 +456,14 @@ impl App {
         self.keybinding_manager
             .load(self.config.keybindings.clone());
         self.request_redraw(RedrawReason::ConfigReload);
+    }
+
+    /// The host settings this window's terminals run under.
+    pub(super) fn terminal_policy(&self) -> crate::terminal::policy::TerminalPolicy {
+        crate::terminal::policy::TerminalPolicy::from_config(
+            &self.config,
+            self.agent_features_enabled(),
+        )
     }
 
     /// Hand Settings the installed and enabled state of each built-in agent.

@@ -137,7 +137,10 @@ pub(super) fn manager(app: &App) -> TabManager {
             20.0,
         ),
         app.config.shell.clone(),
-        crate::terminal::policy::TerminalPolicy::with_scrollback(1_000, 8 * 1024 * 1024),
+        crate::terminal::policy::TerminalPolicy {
+            agent_features: app.agent_features_enabled(),
+            ..crate::terminal::policy::TerminalPolicy::with_scrollback(1_000, 8 * 1024 * 1024)
+        },
     )
 }
 
