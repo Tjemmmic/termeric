@@ -1207,6 +1207,11 @@ pub struct App {
     /// Which actions a `[[shortcuts]]` entry left without their default
     /// shortcut, until that changes.
     displaced_shortcuts: crate::ui::toast::StandingNotice,
+    /// Agent features stay on after the configuration turned them off,
+    /// until this window's agent view conversations and supervisor end.
+    agent_features_held: bool,
+    /// The notice that they are, while they are.
+    agent_features_held_notice: crate::ui::toast::StandingNotice,
     /// The file the configured theme is read from whenever it exists,
     /// polled so the theme follows edits to it and loads when it appears.
     theme_file: Option<std::path::PathBuf>,
@@ -1584,6 +1589,8 @@ impl App {
             config_problem: Default::default(),
             theme_problem: Default::default(),
             displaced_shortcuts: Default::default(),
+            agent_features_held: false,
+            agent_features_held_notice: Default::default(),
             agents: crate::agents::AgentCatalog::default(),
             last_config_mtime: use_system_state
                 .then(|| std::fs::metadata(&config_path))
@@ -2813,6 +2820,7 @@ impl App {
             | self.settle_orphaned_supervisor_approval()
             | self.deliver_supervisor_messages()
             | self.agents_panel.take_refresh_due(Instant::now())
+            | self.release_agent_features()
         {
             self.redraw_scheduler
                 .request(redraw_scheduler::RedrawReason::WindowEvent);
@@ -3472,11 +3480,6 @@ impl App {
     /// the old file beside it, and then use the defaults. Only the confirmed
     /// Reset Configuration does this.
     fn reset_config_to_defaults(&mut self) {
-        // Asked before the file changes, so a refusal leaves it as it was.
-        if let Err(refusal) = self.agent_features_change_refusal(&Config::default()) {
-            self.toasts.error(format!("Reset refused: {refusal}"));
-            return;
-        }
         let backup =
             match crate::config::save::reset(&self.config_path, std::time::SystemTime::now()) {
                 Ok(backup) => backup,

@@ -250,7 +250,8 @@ impl App {
 
     /// Why tab `tab` may not move to `destination`: a window has one
     /// supervisor, and the supervisor's tab takes it along; and a
-    /// conversation cannot move to a window with agent features off.
+    /// conversation cannot move to a window whose configuration has agent
+    /// features off, even while they are held on there.
     pub(super) fn agent_view_tab_move_refusal(
         &self,
         destination: &App,
@@ -266,7 +267,7 @@ impl App {
             .agent_view
             .conversations()
             .any(|session| self.agent_session_tab(session.id()) == Some(tab));
-        (conversation && !destination.agent_features_enabled())
+        (conversation && !destination.agent_features_configured())
             .then(|| "Agent features are off in the other window".to_owned())
     }
 

@@ -5,18 +5,27 @@
 //! programs asking over the control socket are told the features are off.
 //! Agents running in terminals are ordinary programs and keep running.
 //!
-//! Turning the switch off ends nothing the person is in the middle of: it is
-//! refused while an agent view conversation or the supervisor runs here.
-//! Everything else agent-related that is open closes at once.
+//! Turning the switch off ends nothing the person is in the middle of: while
+//! an agent view conversation or the supervisor runs here, however the
+//! configuration changed, agent features stay on in this window, with a
+//! notice, and turn off once the last of them ends. Then everything else
+//! agent-related that is open closes at once.
 
 use super::*;
-use crate::agents::config::{AGENT_FEATURES_OFF, AGENT_FEATURES_OFF_REPLY};
+use crate::agents::config::{AGENT_FEATURES_HELD, AGENT_FEATURES_OFF, AGENT_FEATURES_OFF_REPLY};
 use crate::ui::command_palette::palette::PickKind;
 
 impl App {
-    /// Whether agent features are on in this window. Every agent entry point
-    /// asks this.
+    /// Whether agent features are on in this window: the configuration has
+    /// them on, or they are held on for a conversation. Every agent entry
+    /// point asks this.
     pub(super) fn agent_features_enabled(&self) -> bool {
+        self.config.agent_features_enabled() || self.agent_features_held
+    }
+
+    /// Whether this window's configuration has agent features on, as
+    /// opposed to their being held on until its conversations end.
+    pub(super) fn agent_features_configured(&self) -> bool {
         self.config.agent_features_enabled()
     }
 
@@ -37,26 +46,43 @@ impl App {
         self.request_redraw(RedrawReason::Action);
     }
 
-    /// Why `next` may not replace this window's configuration: it turns
-    /// agent features off while a conversation runs that turning them off
-    /// would have to end.
-    pub(super) fn agent_features_change_refusal(&self, next: &Config) -> Result<(), String> {
-        let turning_off = self.agent_features_enabled() && !next.agent_features_enabled();
-        let conversation =
-            self.supervisor_running() || self.agent_view.conversations().next().is_some();
-        if turning_off && conversation {
-            return Err(
-                "agent features stay on while an agent view conversation or the supervisor runs \
-                 in this window; end it, then turn them off"
-                    .into(),
-            );
+    /// Whether an agent view conversation or the supervisor runs in this
+    /// window: turning agent features off would have to end it.
+    fn agent_conversations_running(&self) -> bool {
+        self.supervisor_running() || self.agent_view.conversations().next().is_some()
+    }
+
+    /// Whether agent features stay on, held, once `next` replaces this
+    /// window's configuration: it turns them off while a conversation runs.
+    pub(super) fn holds_agent_features_against(&self, next: &Config) -> bool {
+        self.agent_features_enabled()
+            && !next.agent_features_enabled()
+            && self.agent_conversations_running()
+    }
+
+    /// Turn agent features off once the conversations they were held on for
+    /// have ended. Returns whether they turned off.
+    pub(super) fn release_agent_features(&mut self) -> bool {
+        if !self.agent_features_held || self.agent_conversations_running() {
+            return false;
         }
-        Ok(())
+        self.agent_features_held = false;
+        self.apply_config_side_effects(true);
+        true
     }
 
     /// Bring this window in line with the switch. Off, every agent surface
     /// closes and no terminal keeps an agent's recognition or status.
     pub(super) fn sync_agent_features(&mut self) {
+        if self.agent_features_held {
+            self.agent_features_held_notice.show(
+                &mut self.toasts,
+                crate::ui::toast::ToastSeverity::Info,
+                AGENT_FEATURES_HELD.to_owned(),
+            );
+        } else {
+            self.agent_features_held_notice.clear(&mut self.toasts);
+        }
         if self.agent_features_enabled() {
             return;
         }

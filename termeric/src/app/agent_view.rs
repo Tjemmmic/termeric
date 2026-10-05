@@ -1685,29 +1685,90 @@ mod tests {
         app.end_agent_session(id);
     }
 
+    /// Whether the notice that agent features stay on is showing.
+    fn held_notice(app: &App) -> bool {
+        app.toasts
+            .iter()
+            .any(|toast| toast.message == crate::agents::config::AGENT_FEATURES_HELD)
+    }
+
+    /// A configuration file reading `text`, which `app` loads and watches.
+    fn config_file(app: &mut App, text: &str) -> tempfile::TempDir {
+        let directory = tempfile::tempdir().unwrap();
+        app.config_path = directory.path().join("config.toml");
+        std::fs::write(&app.config_path, text).unwrap();
+        directory
+    }
+
     #[test]
-    fn agent_features_stay_on_until_the_conversations_end() {
+    fn a_reload_turning_agent_features_off_waits_for_the_conversations_to_end() {
         let (mut app, id) = app_with_waiting_session();
         app.open_agent_view(false);
         app.agent_view.state.show(id);
-        let mut off = app.config.clone();
-        off.agent_features.enabled = false;
+        let _directory = config_file(&mut app, "[window]\npadding = 9\n");
 
-        // A reload is refused as a whole, and so is the Settings switch.
-        let refusal = app.apply_config(off.clone()).unwrap_err();
-        assert!(refusal.contains("agent view conversation"), "{refusal}");
-        app.apply_settings_action(SettingsAction::SetAgentFeaturesEnabled(false));
+        // Every other setting applies; agent features stay on, and say so.
+        app.reload_config_from_disk();
+        assert_eq!(app.config.window.padding, 9);
+        assert!(!app.agent_features_configured());
         assert!(app.agent_features_enabled());
+        assert!(held_notice(&app));
         assert!(app.agent_view.session(id).is_some());
         assert!(app.agent_view.state.is_open());
-        let message = &app.toasts.iter().last().unwrap().message;
-        assert!(message.contains("agent features stay on"), "{message}");
+        assert_eq!(app.control_agents(1).len(), 1);
+        assert!(!app.release_agent_features(), "the conversation still runs");
 
+        // They turn off once it ends, without another reload.
         app.end_agent_session(id);
-        app.apply_config(off).unwrap();
+        app.poll_idle_sources(Instant::now());
         assert!(!app.agent_features_enabled());
+        assert!(!held_notice(&app));
         assert!(!app.agent_view.state.is_open());
+        assert!(!app.plugin_manager.contains("codex"));
         assert!(app.control_agents(1).is_empty());
+        assert_eq!(app.config.window.padding, 9);
+    }
+
+    #[test]
+    fn turning_agent_features_on_again_before_the_conversations_end_keeps_them() {
+        let (mut app, id) = app_with_waiting_session();
+        let directory = config_file(&mut app, "");
+        app.reload_config_from_disk();
+        assert!(held_notice(&app));
+
+        std::fs::write(
+            directory.path().join("config.toml"),
+            "[agent_features]\nenabled = true\n",
+        )
+        .unwrap();
+        app.reload_config_from_disk();
+        assert!(app.agent_features_configured());
+        assert!(!held_notice(&app));
+        app.end_agent_session(id);
+        app.poll_idle_sources(Instant::now());
+        assert!(app.agent_features_enabled());
+        assert!(app.plugin_manager.contains("codex"));
+    }
+
+    #[test]
+    fn the_settings_switch_and_a_reset_wait_for_the_conversations_too() {
+        for reset in [false, true] {
+            let (mut app, id) = app_with_waiting_session();
+            let _directory = config_file(&mut app, "[agent_features]\nenabled = true\n");
+            if reset {
+                app.reset_config_to_defaults();
+                assert!(app.saved_config.is_some());
+            } else {
+                app.apply_settings_action(SettingsAction::SetAgentFeaturesEnabled(false));
+            }
+            assert!(!app.agent_features_configured());
+            assert!(app.agent_features_enabled());
+            assert!(held_notice(&app));
+            app.end_agent_session(id);
+            app.poll_idle_sources(Instant::now());
+            assert!(!app.agent_features_enabled());
+            assert!(!held_notice(&app));
+        }
     }
 
     #[test]

@@ -35,7 +35,7 @@ It takes effect at once, without a restart, and Settings saves it like any other
 - Starting an agent profile, from `termeric --profile AGENT:PROFILE` or a saved workspace, fails with a message saying agent features are off.
 - Reports from agent hooks (`termeric agent-event`) are set aside, and agent requests over the [control socket](control.md), including every `termeric mcp` tool except `read_terminal`, are refused with a message saying how to turn agent features on.
 
-Turning agent features off closes everything agent-related that is open. It is refused while an agent view conversation or the supervisor runs in that window, so nothing you are in the middle of ends without asking: end the conversation or stop the supervisor, then turn agent features off. A configuration file that turns them off meanwhile is not applied; reload it once the conversations have ended.
+Turning agent features off closes everything agent-related that is open, and Termeric forgets which terminals run agents and the diffs they printed. Nothing you are in the middle of ends, though: while an agent view conversation or the supervisor runs in a window, agent features stay on there, with a notice saying they turn off once that window's agent conversations end, and they do so as soon as the last one ends or moves to another window. This is the same whether you turn them off in Settings, in `config.toml` (every other setting in the file applies at once), or with **Reset Configuration**. Turning them on again before then keeps them on. A conversation can't move to a window whose configuration has agent features off.
 
 ## Starting an agent
 

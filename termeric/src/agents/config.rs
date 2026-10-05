@@ -20,6 +20,11 @@ pub struct AgentFeaturesConfig {
 /// What Termeric says when asked for an agent feature while they are off.
 pub const AGENT_FEATURES_OFF: &str = "Agent features are off; turn them on in Settings → Agents";
 
+/// What Termeric says while agent features stay on, after the configuration
+/// turned them off, for the conversations that would otherwise end.
+pub const AGENT_FEATURES_HELD: &str =
+    "Agent features turn off once this window's agent conversations end";
+
 /// The same, for programs talking to Termeric, whose person may prefer the
 /// configuration file.
 pub const AGENT_FEATURES_OFF_REPLY: &str = "Agent features are off in Termeric; turn them on in Settings → Agents, or set enabled = true under [agent_features] in config.toml";

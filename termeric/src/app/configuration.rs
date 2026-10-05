@@ -341,10 +341,13 @@ impl App {
     /// Validate and atomically select a new configuration before applying it
     /// to all live subsystems. Invalid reloads leave the previous config live.
     /// A theme that does not load is not invalid: the theme on screen stays,
-    /// and a notice says why until a configured theme loads.
+    /// and a notice says why until a configured theme loads. Neither is one
+    /// that turns agent features off while a conversation they serve runs:
+    /// they stay on in this window until it ends.
     pub(super) fn apply_config(&mut self, config: Config) -> std::result::Result<(), String> {
         config.validate().map_err(|error| format!("{error:#}"))?;
-        self.agent_features_change_refusal(&config)?;
+        let agent_features_were_on = self.agent_features_enabled();
+        let hold_agent_features = self.holds_agent_features_against(&config);
         let keyboard_type_changed = config.keyboard.xterm_type != self.config.keyboard.xterm_type;
         if config.commands != self.config.commands {
             // Revoke ambiguous row authority before replacing the inventory or
@@ -358,13 +361,14 @@ impl App {
         }
         // The switch registers or removes every agent's launch integration.
         let agents_changed = config.agents != self.config.agents
-            || config.agent_features_enabled() != self.config.agent_features_enabled();
+            || agent_features_were_on != (config.agent_features_enabled() || hold_agent_features);
         // A new configured size is what the person now wants to see, so it
         // ends a zoom; other changes keep it.
         if config.font.size != self.config.font.size {
             self.font_zoom = None;
         }
         self.config = config;
+        self.agent_features_held = hold_agent_features;
         self.apply_config_side_effects(agents_changed);
         let policy = self.terminal_policy();
         if keyboard_type_changed && let Some(tabs) = &mut self.tabs {

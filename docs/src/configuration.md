@@ -354,7 +354,7 @@ Friendly names for remote hosts, at most 64. OpenSSH settings stay in `~/.ssh/co
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| `enabled` | `false` | Turn on everything agent-related: recognizing agents in terminals, the agent commands and shortcuts, the agent view, the supervisor, agent status, and answering `termeric mcp`. Off, Termeric offers no agent, whatever is installed. **Agent Features** on the Settings **Agents** page sets it too. |
+| `enabled` | `false` | Turn on everything agent-related: recognizing agents in terminals, the agent commands and shortcuts, the agent view, the supervisor, agent status, and answering `termeric mcp`. Off, Termeric offers no agent, whatever is installed. Turning it off while an agent view conversation or the supervisor runs leaves agent features on in that window until they end; see [Turning agent features on](agents.md#turning-agent-features-on). **Agent Features** on the Settings **Agents** page sets it too. |
 
 ```toml
 [agent_features]
