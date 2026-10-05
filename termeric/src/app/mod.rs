@@ -3229,8 +3229,9 @@ impl App {
                     }
                 }
             }
+            // Off, agent actions have no shortcut: the key is the terminal's.
             Action::NewAgent | Action::ToggleAgentView if !self.agent_features_enabled() => {
-                self.report_agent_features_off();
+                return false;
             }
             Action::NewAgent => {
                 self.open_agent_picker(crate::ui::command_palette::palette::AgentPlacement::NewTab);

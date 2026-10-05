@@ -1071,7 +1071,7 @@ fn recording_a_chord_another_action_uses_asks_before_changing_anything() {
         None
     );
     assert_eq!(
-        crate::input::ShortcutRegistry::displaced_defaults(&app.config.shortcuts),
+        crate::input::ShortcutRegistry::displaced_defaults(&app.config.shortcuts, false),
         []
     );
     app.config.validate().unwrap();
@@ -1170,5 +1170,80 @@ fn an_entry_taking_a_default_shortcut_is_noted_once_until_that_changes() {
     )
     .unwrap();
     app.reload_config_from_disk();
+    assert!(notices(&app).is_empty());
+}
+
+#[test]
+fn agent_shortcuts_are_no_conflict_while_agent_features_are_off() {
+    use crate::input::keybindings::{BindableAction, KeyChord};
+    let agent_view = KeyChord::new("a", true, false, true, false);
+    let mut app = App::new_headless(Config::default()).unwrap();
+    assert!(!app.agent_features_enabled());
+    record_shortcut(
+        &mut app,
+        BindableAction::RenameTab,
+        "A",
+        ModifiersState::CONTROL | ModifiersState::SHIFT,
+    );
+    assert!(
+        !app.info_overlay.is_awaiting_current(),
+        "no question names Agent View while it is off"
+    );
+    assert!(app.overlay_flow.is_none());
+    assert_eq!(
+        app.shortcut_registry.binding_for(BindableAction::RenameTab),
+        Some(&agent_view)
+    );
+
+    // The chord stays Rename Tab's once agent features are on; Agent View
+    // has none, as the saved configuration says.
+    app.apply_settings_action(SettingsAction::SetAgentFeaturesEnabled(true));
+    assert_eq!(
+        app.shortcut_registry
+            .binding_for(BindableAction::ToggleAgentView),
+        None
+    );
+    assert_eq!(
+        app.shortcut_registry.conflict_for(&agent_view),
+        Some(BindableAction::RenameTab)
+    );
+}
+
+#[test]
+fn agent_shortcuts_come_back_with_agent_features() {
+    use crate::input::keybindings::BindableAction;
+    let mut app = App::new_headless(Config::default()).unwrap();
+    let pressed = |app: &App| {
+        app.shortcut_registry.check(
+            &winit::keyboard::Key::Character("A".into()),
+            ModifiersState::CONTROL | ModifiersState::SHIFT,
+        )
+    };
+    assert_eq!(pressed(&app), None);
+    app.apply_settings_action(SettingsAction::SetAgentFeaturesEnabled(true));
+    assert_eq!(pressed(&app), Some(BindableAction::ToggleAgentView));
+    app.apply_settings_action(SettingsAction::SetAgentFeaturesEnabled(false));
+    assert_eq!(pressed(&app), None);
+}
+
+#[test]
+fn a_displaced_agent_shortcut_is_noted_only_while_agent_features_are_on() {
+    let notices = |app: &App| -> Vec<String> {
+        app.toasts
+            .iter()
+            .map(|toast| toast.message.clone())
+            .filter(|message| message.contains("has no shortcut"))
+            .collect()
+    };
+    let source = "[[shortcuts]]\naction = \"rename_tab\"\nkey = \"a\"\nctrl = true\nshift = true\n";
+    let (_directory, _path, mut app) = app_with_config_file(source);
+    assert!(notices(&app).is_empty());
+
+    app.apply_settings_action(SettingsAction::SetAgentFeaturesEnabled(true));
+    assert_eq!(
+        notices(&app),
+        ["Ctrl+Shift+A now runs Rename Tab; Agent View has no shortcut"]
+    );
+    app.apply_settings_action(SettingsAction::SetAgentFeaturesEnabled(false));
     assert!(notices(&app).is_empty());
 }

@@ -2,7 +2,7 @@
 
 The agent view is a panel docked to the right of your terminals where a coding agent works as a conversation instead of a terminal program. Termeric starts the agent without its terminal interface and talks to it directly, so permission prompts, questions, plans, edits, and command output appear as buttons, choices, and diffs you can click and read.
 
-> **Experimental.** Turn on [agent features](agents.md#turning-agent-features-on) first, then press **Ctrl+Shift+A** to open it. It drives Claude Code, Codex, and OpenCode; other agents, including Gemini CLI, still run in [terminals](agents.md). It cannot attach images or mention files, sessions end when Termeric quits (the agents keep the conversations, so you can continue them), and a new agent release can break it until Termeric catches up.
+> **Experimental.** Turn on [agent features](agents.md#turning-agent-features-on) first, then press **Ctrl+Shift+A** to open it; until then the key goes to the program in the terminal. It drives Claude Code, Codex, and OpenCode; other agents, including Gemini CLI, still run in [terminals](agents.md). It cannot attach images or mention files, sessions end when Termeric quits (the agents keep the conversations, so you can continue them), and a new agent release can break it until Termeric catches up.
 
 ## Opening it
 

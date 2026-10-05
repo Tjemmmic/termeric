@@ -253,8 +253,6 @@ pub struct ShortcutsPanel {
     recording_started: Option<std::time::Instant>,
     /// Note about the last recording.
     notice: Option<ShortcutNotice>,
-    /// Agent features are on, so their shortcuts are listed.
-    agent_features: bool,
 }
 
 impl ShortcutsPanel {
@@ -269,13 +267,7 @@ impl ShortcutsPanel {
             recording_action: None,
             recording_started: None,
             notice: None,
-            agent_features: false,
         }
-    }
-
-    /// List agent shortcuts only while agent features are on.
-    pub fn set_agent_features(&mut self, enabled: bool) {
-        self.agent_features = enabled;
     }
 
     /// Open the shortcuts panel
@@ -373,17 +365,15 @@ impl ShortcutsPanel {
         let mut last_category: Option<ShortcutCategory> = None;
 
         // Group by category so each header appears once, whatever order the
-        // action registry declares its members in.
-        let agent_features = self.agent_features;
-        let grouped = ShortcutCategory::ORDERED
-            .into_iter()
-            .flat_map(move |category| {
-                BindableAction::all()
-                    .iter()
-                    .copied()
-                    .filter(move |action| action.meta().category == category)
-                    .filter(move |action| agent_features || !action.is_agent_feature())
-            });
+        // action registry declares its members in. Actions the registry
+        // holds back are not listed.
+        let grouped = ShortcutCategory::ORDERED.into_iter().flat_map(|category| {
+            BindableAction::all()
+                .iter()
+                .copied()
+                .filter(move |action| action.meta().category == category)
+                .filter(|action| registry.offers(*action))
+        });
         for action in grouped {
             let meta = action.meta();
 
@@ -764,9 +754,10 @@ mod tests {
 
     #[test]
     fn every_category_header_appears_once_with_all_its_shortcuts_beneath_it() {
-        let mut panel = ShortcutsPanel::new();
-        panel.set_agent_features(true);
-        let entries = panel.build_entries(&ShortcutRegistry::new());
+        let panel = ShortcutsPanel::new();
+        let mut registry = ShortcutRegistry::new();
+        registry.set_agent_features(true);
+        let entries = panel.build_entries(&registry);
         let headers: Vec<_> = entries
             .iter()
             .filter(|entry| entry.is_header)
@@ -798,23 +789,23 @@ mod tests {
 
     #[test]
     fn agent_shortcuts_are_listed_only_while_agent_features_are_on() {
-        let mut panel = ShortcutsPanel::new();
-        let registry = ShortcutRegistry::new();
-        let listed = |panel: &ShortcutsPanel| {
+        let panel = ShortcutsPanel::new();
+        let mut registry = ShortcutRegistry::new();
+        let listed = |registry: &ShortcutRegistry| {
             panel
-                .build_entries(&registry)
+                .build_entries(registry)
                 .into_iter()
                 .filter(|entry| !entry.is_header)
                 .map(|entry| entry.action)
                 .collect::<Vec<_>>()
         };
-        let off = listed(&panel);
+        let off = listed(&registry);
         assert!(!off.contains(&BindableAction::NewAgent));
         assert!(!off.contains(&BindableAction::ToggleAgentView));
         assert!(off.contains(&BindableAction::ToggleSearch));
 
-        panel.set_agent_features(true);
-        let on = listed(&panel);
+        registry.set_agent_features(true);
+        let on = listed(&registry);
         assert!(on.contains(&BindableAction::NewAgent));
         assert!(on.contains(&BindableAction::ToggleAgentView));
         assert_eq!(on.len(), off.len() + 2);

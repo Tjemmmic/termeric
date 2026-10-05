@@ -433,6 +433,8 @@ impl App {
         }
         self.shortcut_registry = ShortcutRegistry::new();
         self.shortcut_registry
+            .set_agent_features(self.agent_features_enabled());
+        self.shortcut_registry
             .apply_overrides(&self.config.shortcuts);
         self.refresh_displaced_shortcuts_notice();
         self.compiled_copy_patterns = self
@@ -1147,7 +1149,10 @@ impl App {
     /// shortcut. The notice is shown again only when that list changes, so
     /// a dismissed one stays dismissed across reloads of the same file.
     fn refresh_displaced_shortcuts_notice(&mut self) {
-        let displaced = ShortcutRegistry::displaced_defaults(&self.config.shortcuts);
+        let displaced = ShortcutRegistry::displaced_defaults(
+            &self.config.shortcuts,
+            self.agent_features_enabled(),
+        );
         if displaced.is_empty() {
             self.displaced_shortcuts.clear(&mut self.toasts);
             return;

@@ -92,14 +92,40 @@ fn a_fresh_configuration_offers_no_agent_features() {
 }
 
 #[test]
-fn agent_shortcuts_and_commands_only_say_how_to_turn_them_on() {
-    let mut app = App::new_headless(Config::default()).unwrap();
-    for action in [Action::ToggleAgentView, Action::NewAgent] {
-        app.handle_action(action);
-        assert!(!app.agent_view.state.is_open());
-        assert!(!app.command_palette.is_active());
-        assert_eq!(latest_toast(&app), Some(AGENT_FEATURES_OFF));
+fn agent_shortcuts_reach_the_terminal_while_agent_features_are_off() {
+    let mut app = App::new_headless_running(
+        "stty raw -echo; printf READY; dd bs=1 count=2 2>/dev/null | od -An -tx1; sleep 0.1",
+        "agent-chords",
+    );
+    app.wait_for_screen_text("READY");
+    let toasts = app.toasts.iter().count();
+    app.modifiers = ModifiersState::CONTROL | ModifiersState::SHIFT;
+    for key in ["A", "I"] {
+        assert!(
+            !app.handle_bound_key(&winit::keyboard::Key::Character(key.into())),
+            "Ctrl+Shift+{key} is left to the terminal"
+        );
     }
+    // What the keyboard handler then writes for each key.
+    app.write_to_pty(b"\x01\x09");
+    app.wait_for_screen_text("01 09");
+    assert_eq!(app.toasts.iter().count(), toasts, "no notice");
+    assert!(!app.agent_view.state.is_open());
+    assert!(!app.command_palette.is_active());
+    // However else the actions are asked for, they do nothing.
+    for action in [Action::ToggleAgentView, Action::NewAgent] {
+        assert!(!app.handle_action(action));
+    }
+    assert_eq!(app.toasts.iter().count(), toasts);
+
+    set_agent_features(&mut app, true);
+    assert!(app.handle_bound_key(&winit::keyboard::Key::Character("A".into())));
+    assert!(app.agent_view.state.is_open());
+}
+
+#[test]
+fn agent_commands_say_how_to_turn_agent_features_on() {
+    let mut app = App::new_headless(Config::default()).unwrap();
     for id in ["agent.panel", "agent.view-new", "supervisor.start"] {
         assert!(app.run_agent_command(id), "{id} is an agent command");
         assert_eq!(latest_toast(&app), Some(AGENT_FEATURES_OFF));

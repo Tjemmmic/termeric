@@ -57,8 +57,6 @@ impl App {
     /// Bring this window in line with the switch. Off, every agent surface
     /// closes and no terminal keeps an agent's recognition or status.
     pub(super) fn sync_agent_features(&mut self) {
-        self.shortcuts_panel
-            .set_agent_features(self.agent_features_enabled());
         if self.agent_features_enabled() {
             return;
         }

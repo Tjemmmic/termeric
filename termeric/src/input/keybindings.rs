@@ -478,7 +478,8 @@ pub struct DisplacedDefault {
     pub action: BindableAction,
     pub chord: KeyChord,
     /// The action the chord runs now; none when the entry that took it was
-    /// overridden by a later entry of its own action.
+    /// overridden by a later entry of its own action, or belongs to an
+    /// agent action held back.
     pub taken_by: Option<BindableAction>,
 }
 
@@ -492,7 +493,7 @@ impl DisplacedDefault {
                 taken_by.meta().label
             ),
             None => format!(
-                "{lost} has no shortcut; an earlier [[shortcuts]] entry took {}",
+                "{lost} has no shortcut; a [[shortcuts]] entry took {}",
                 self.chord
             ),
         }
@@ -511,10 +512,15 @@ pub struct ShortcutRegistry {
     bindings: HashMap<BindableAction, Option<KeyChord>>,
     /// chord → action (reverse index for O(1) dispatch)
     key_map: HashMap<KeyChord, BindableAction>,
+    /// Whether agent actions are offered. While they are not, they behave
+    /// as if they had no shortcut: their chords run nothing and conflict
+    /// with nothing. Their bindings are kept for when they return.
+    agent_features: bool,
 }
 
 impl ShortcutRegistry {
-    /// Create a new registry populated with all default bindings.
+    /// Create a new registry populated with all default bindings, holding
+    /// back agent actions until agent features are turned on.
     pub fn new() -> Self {
         let mut bindings = HashMap::new();
         let mut key_map = HashMap::new();
@@ -529,7 +535,22 @@ impl ShortcutRegistry {
             }
         }
 
-        Self { bindings, key_map }
+        Self {
+            bindings,
+            key_map,
+            agent_features: false,
+        }
+    }
+
+    /// Offer agent actions or hold them back; see `agent_features`.
+    pub fn set_agent_features(&mut self, enabled: bool) {
+        self.agent_features = enabled;
+    }
+
+    /// Whether `action` is offered: every action is, except agent actions
+    /// while agent features are off.
+    pub fn offers(&self, action: BindableAction) -> bool {
+        self.agent_features || !action.is_agent_feature()
     }
 
     /// The defaults with `overrides` applied.
@@ -550,7 +571,15 @@ impl ShortcutRegistry {
     /// O(1) lookup — the hot path called on every keypress.
     pub fn check(&self, key: &Key, modifiers: ModifiersState) -> Option<BindableAction> {
         let chord = KeyChord::from_key_event(key, modifiers)?;
-        self.key_map.get(&chord).copied()
+        self.offered_holder(&chord)
+    }
+
+    /// The offered action `chord` runs.
+    fn offered_holder(&self, chord: &KeyChord) -> Option<BindableAction> {
+        self.key_map
+            .get(chord)
+            .copied()
+            .filter(|action| self.offers(*action))
     }
 
     /// Get the current binding for an action (for settings UI display).
@@ -579,15 +608,18 @@ impl ShortcutRegistry {
         self.bindings.insert(action, chord);
     }
 
-    /// Check what action a chord is currently bound to (for conflict detection).
+    /// The offered action a chord is currently bound to (for conflict
+    /// detection). An agent action held back is no conflict: giving its
+    /// chord to another action leaves it without one.
     pub fn conflict_for(&self, chord: &KeyChord) -> Option<BindableAction> {
-        self.key_map.get(chord).copied()
+        self.offered_holder(chord)
     }
 
-    /// How many actions are bound differently from their defaults.
+    /// How many offered actions are bound differently from their defaults.
     pub fn changed_count(&self) -> usize {
         BindableAction::all()
             .iter()
+            .filter(|action| self.offers(**action))
             .filter(|action| self.binding_for(**action) != action.meta().default_binding.as_ref())
             .count()
     }
@@ -641,11 +673,17 @@ impl ShortcutRegistry {
 
     /// The actions that `entries` leave without their default shortcut
     /// because another action's entry took it, while no entry of their own
-    /// says to unbind them.
-    pub fn displaced_defaults(entries: &[ShortcutOverride]) -> Vec<DisplacedDefault> {
-        let configured = Self::with_overrides(entries);
+    /// says to unbind them. With `agent_features` off, agent actions are
+    /// neither listed nor named as having taken a chord.
+    pub fn displaced_defaults(
+        entries: &[ShortcutOverride],
+        agent_features: bool,
+    ) -> Vec<DisplacedDefault> {
+        let mut configured = Self::with_overrides(entries);
+        configured.set_agent_features(agent_features);
         BindableAction::all()
             .iter()
+            .filter(|&&action| configured.offers(action))
             .filter_map(|&action| {
                 let chord = action.meta().default_binding?;
                 let has_entry = entries
@@ -1136,7 +1174,7 @@ mod tests {
             ]
         );
         assert_eq!(reg.binding_for(BindableAction::ToggleSearch), None);
-        assert!(ShortcutRegistry::displaced_defaults(&entries).is_empty());
+        assert!(ShortcutRegistry::displaced_defaults(&entries, true).is_empty());
     }
 
     #[test]
@@ -1210,10 +1248,72 @@ mod tests {
     }
 
     #[test]
+    fn agent_actions_held_back_have_no_shortcut_until_agent_features_return() {
+        let agent_view = KeyChord::new("a", true, false, true, false);
+        let pressed = |registry: &ShortcutRegistry| {
+            registry.check(
+                &Key::Character("A".into()),
+                ModifiersState::CONTROL | ModifiersState::SHIFT,
+            )
+        };
+        let mut reg = ShortcutRegistry::new();
+        assert!(!reg.offers(BindableAction::ToggleAgentView));
+        assert!(reg.offers(BindableAction::ToggleSearch));
+        assert_eq!(pressed(&reg), None);
+        assert_eq!(reg.conflict_for(&agent_view), None);
+        // The binding is kept, so it comes back.
+        assert_eq!(
+            reg.binding_for(BindableAction::ToggleAgentView),
+            Some(&agent_view)
+        );
+        reg.set_binding(BindableAction::ToggleAgentView, None);
+        assert_eq!(reg.changed_count(), 0, "a held-back change is not counted");
+        reg.set_binding(BindableAction::ToggleAgentView, Some(agent_view.clone()));
+
+        reg.set_agent_features(true);
+        assert_eq!(pressed(&reg), Some(BindableAction::ToggleAgentView));
+        assert_eq!(
+            reg.conflict_for(&agent_view),
+            Some(BindableAction::ToggleAgentView)
+        );
+
+        // A chord given to another action while they are held back is that
+        // action's when they return.
+        reg.set_agent_features(false);
+        reg.set_binding(BindableAction::RenameTab, Some(agent_view.clone()));
+        reg.set_agent_features(true);
+        assert_eq!(reg.binding_for(BindableAction::ToggleAgentView), None);
+        assert_eq!(pressed(&reg), Some(BindableAction::RenameTab));
+    }
+
+    #[test]
+    fn held_back_agent_actions_are_left_out_of_displaced_defaults() {
+        // Rename Tab takes Agent View's default.
+        let taken = [entry("rename_tab", Some("a"), true, true)];
+        assert!(ShortcutRegistry::displaced_defaults(&taken, false).is_empty());
+        assert_eq!(
+            ShortcutRegistry::displaced_defaults(&taken, true)[0].action,
+            BindableAction::ToggleAgentView
+        );
+
+        // Agent View takes New Tab's default: the chord runs nothing while
+        // agent features are off, so no action is named as running it.
+        let taking = [entry("toggle_agent_view", Some("t"), true, true)];
+        let off = ShortcutRegistry::displaced_defaults(&taking, false);
+        assert_eq!(off.len(), 1);
+        assert_eq!(off[0].action, BindableAction::NewTab);
+        assert_eq!(off[0].taken_by, None);
+        assert_eq!(
+            ShortcutRegistry::displaced_defaults(&taking, true)[0].taken_by,
+            Some(BindableAction::ToggleAgentView)
+        );
+    }
+
+    #[test]
     fn an_entry_taking_a_default_names_the_action_that_lost_it() {
         // Rename Tab takes New Tab's Ctrl+Shift+T.
         let entries = [entry("rename_tab", Some("t"), true, true)];
-        let displaced = ShortcutRegistry::displaced_defaults(&entries);
+        let displaced = ShortcutRegistry::displaced_defaults(&entries, true);
         assert_eq!(
             displaced,
             [DisplacedDefault {
@@ -1232,26 +1332,26 @@ mod tests {
             entry("rename_tab", Some("t"), true, true),
             entry("new_tab", None, false, false),
         ];
-        assert!(ShortcutRegistry::displaced_defaults(&unbound).is_empty());
+        assert!(ShortcutRegistry::displaced_defaults(&unbound, true).is_empty());
         let moved = [
             entry("rename_tab", Some("t"), true, true),
             entry("new_tab", Some("n"), true, true),
         ];
-        assert!(ShortcutRegistry::displaced_defaults(&moved).is_empty());
+        assert!(ShortcutRegistry::displaced_defaults(&moved, true).is_empty());
 
         // A later entry moving Rename Tab on leaves the chord to nobody.
         let overridden = [
             entry("rename_tab", Some("t"), true, true),
             entry("rename_tab", Some("r"), true, true),
         ];
-        let displaced = ShortcutRegistry::displaced_defaults(&overridden);
+        let displaced = ShortcutRegistry::displaced_defaults(&overridden, true);
         assert_eq!(displaced.len(), 1);
         assert_eq!(displaced[0].taken_by, None);
         assert_eq!(
             displaced[0].message(),
-            "New Tab has no shortcut; an earlier [[shortcuts]] entry took Ctrl+Shift+T"
+            "New Tab has no shortcut; a [[shortcuts]] entry took Ctrl+Shift+T"
         );
-        assert!(ShortcutRegistry::displaced_defaults(&[]).is_empty());
+        assert!(ShortcutRegistry::displaced_defaults(&[], true).is_empty());
     }
 
     #[test]
@@ -1297,7 +1397,7 @@ mod tests {
             for _ in 0..200 {
                 let mut entries = file.clone();
                 let mut reg = ShortcutRegistry::with_overrides(&entries);
-                let mut displaced = ShortcutRegistry::displaced_defaults(&entries);
+                let mut displaced = ShortcutRegistry::displaced_defaults(&entries, true);
                 for _ in 0..6 {
                     let action = actions[next(actions.len())];
                     reg.set_binding(action, chords[next(chords.len())].clone());
@@ -1310,7 +1410,7 @@ mod tests {
                     assert_eq!(first_shared_chord(&entries), None, "{entries:?}");
                     // The editor never leaves a new action unbound without
                     // an entry saying so.
-                    let now = ShortcutRegistry::displaced_defaults(&entries);
+                    let now = ShortcutRegistry::displaced_defaults(&entries, true);
                     assert!(
                         now.iter().all(|lost| displaced
                             .iter()
