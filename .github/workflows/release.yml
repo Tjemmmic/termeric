@@ -105,9 +105,11 @@ jobs:
           tar -C target/dist --owner=0 --group=0 --numeric-owner --sort=name \
             -czf "target/dist/$DIST_NAME.tar.gz" "$DIST_NAME"
           "target/dist/$DIST_NAME/bin/termeric" --version
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb@3.7.0
       - name: Make and check the .deb
         run: |
-          cargo install cargo-deb --locked --version 3.7.0
           cargo deb -p termeric --no-build
           python3 scripts/check_debian_package.py target/debian/termeric_*.deb
           cp target/debian/termeric_*.deb target/dist/
