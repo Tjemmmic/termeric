@@ -10,6 +10,11 @@ impl App {
         profile: Option<&str>,
     ) -> anyhow::Result<()> {
         let configured = match self.agents.get(plugin_id) {
+            Some(agent) if !self.agent_features_enabled() => anyhow::bail!(
+                "{} is a coding agent: {}",
+                agent.name,
+                crate::agents::config::AGENT_FEATURES_OFF_REPLY
+            ),
             Some(agent) => {
                 agent.enabled && profile.is_none_or(|name| agent.profiles.contains_key(name))
             }

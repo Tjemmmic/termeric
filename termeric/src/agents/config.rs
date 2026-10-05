@@ -1,10 +1,28 @@
-//! `[agents.<id>]`, `[agent_status]`, and `[agent_view]` configuration.
+//! `[agent_features]`, `[agents.<id>]`, `[agent_status]`, and `[agent_view]`
+//! configuration.
 
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
 use super::{AgentDefinition, AgentProfile};
+
+/// `[agent_features]`: the one switch for everything agent-related. Off,
+/// Termeric offers, recognizes, and runs no coding agent, whatever is
+/// installed. It is a table of its own because `[agents]` holds only
+/// `[agents.<id>]` entries.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AgentFeaturesConfig {
+    pub enabled: bool,
+}
+
+/// What Termeric says when asked for an agent feature while they are off.
+pub const AGENT_FEATURES_OFF: &str = "Agent features are off; turn them on in Settings → Agents";
+
+/// The same, for programs talking to Termeric, whose person may prefer the
+/// configuration file.
+pub const AGENT_FEATURES_OFF_REPLY: &str = "Agent features are off in Termeric; turn them on in Settings → Agents, or set enabled = true under [agent_features] in config.toml";
 
 /// `[agent_status]`: how agents that report through hooks are presented.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

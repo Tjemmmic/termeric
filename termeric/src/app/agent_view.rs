@@ -1458,6 +1458,7 @@ impl App {
     }
 
     fn control_session(&self, session_id: u64) -> Result<SessionId, String> {
+        self.require_agent_features()?;
         // A session started ahead of its first message is not a conversation
         // anyone outside may join.
         self.agent_view
@@ -1595,7 +1596,8 @@ mod tests {
     /// A window with one session, started by `prompt`, waiting for approval
     /// `r1` to run `command`.
     fn app_with_session_waiting_on(prompt: &str, command: &str) -> (App, SessionId) {
-        let mut app = App::new_headless(crate::config::Config::default()).unwrap();
+        let mut app =
+            App::new_headless(crate::config::Config::default().with_agent_features()).unwrap();
         let mut transcript = Transcript::new("Claude Code", "default");
         transcript.apply(AgentEvent::Ready(Handshake::default()));
         transcript.push_user(prompt.into(), Vec::new());
@@ -1681,6 +1683,31 @@ mod tests {
         );
         // Ending it again is harmless.
         app.end_agent_session(id);
+    }
+
+    #[test]
+    fn agent_features_stay_on_until_the_conversations_end() {
+        let (mut app, id) = app_with_waiting_session();
+        app.open_agent_view(false);
+        app.agent_view.state.show(id);
+        let mut off = app.config.clone();
+        off.agent_features.enabled = false;
+
+        // A reload is refused as a whole, and so is the Settings switch.
+        let refusal = app.apply_config(off.clone()).unwrap_err();
+        assert!(refusal.contains("agent view conversation"), "{refusal}");
+        app.apply_settings_action(SettingsAction::SetAgentFeaturesEnabled(false));
+        assert!(app.agent_features_enabled());
+        assert!(app.agent_view.session(id).is_some());
+        assert!(app.agent_view.state.is_open());
+        let message = &app.toasts.iter().last().unwrap().message;
+        assert!(message.contains("agent features stay on"), "{message}");
+
+        app.end_agent_session(id);
+        app.apply_config(off).unwrap();
+        assert!(!app.agent_features_enabled());
+        assert!(!app.agent_view.state.is_open());
+        assert!(app.control_agents(1).is_empty());
     }
 
     #[test]

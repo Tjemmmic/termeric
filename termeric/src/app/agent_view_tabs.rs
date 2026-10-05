@@ -249,7 +249,8 @@ impl App {
     }
 
     /// Why tab `tab` may not move to `destination`: a window has one
-    /// supervisor, and the supervisor's tab takes it along.
+    /// supervisor, and the supervisor's tab takes it along; and a
+    /// conversation cannot move to a window with agent features off.
     pub(super) fn agent_view_tab_move_refusal(
         &self,
         destination: &App,
@@ -258,8 +259,15 @@ impl App {
         let supervisor_tab = self
             .supervisor_session()
             .and_then(|id| self.agent_session_tab(id));
-        (supervisor_tab == Some(tab) && destination.supervisor_running())
-            .then(|| "The other window already has a supervisor".to_owned())
+        if supervisor_tab == Some(tab) && destination.supervisor_running() {
+            return Some("The other window already has a supervisor".to_owned());
+        }
+        let conversation = self
+            .agent_view
+            .conversations()
+            .any(|session| self.agent_session_tab(session.id()) == Some(tab));
+        (conversation && !destination.agent_features_enabled())
+            .then(|| "Agent features are off in the other window".to_owned())
     }
 
     /// Moves tab `from`'s conversation to `destination`'s tab `to`, and the
@@ -308,12 +316,17 @@ impl App {
 
     /// Adopts a tab's agent view that moved here with tab `tab`.
     pub(super) fn adopt_agent_view_tab(&mut self, tab: usize, transfer: AgentViewTransfer) {
+        let features = self.agent_features_enabled();
         let window = &mut self.agent_view;
         let mut panel = transfer.panel;
         match transfer.session {
+            // With agent features off here, only a blank session can have
+            // come along, and it ends with the panel it served.
+            Some(_) if !features => panel.session = None,
             Some(session) => window.attach_session(session, transfer.view, transfer.tracking),
             None => panel.session = None,
         }
+        panel.open &= features;
         window.tabs.insert(tab, panel);
     }
 
@@ -500,7 +513,7 @@ mod tests {
         let transfer = source.take_agent_view_tab(tab).unwrap();
         assert!(source.agent_view.session(first).is_none());
 
-        let mut destination = App::new_headless(Config::default()).unwrap();
+        let mut destination = App::new_headless(Config::default().with_agent_features()).unwrap();
         destination.adopt_agent_view_tab(42, transfer);
         assert!(destination.agent_view.session(first).is_some());
         assert_eq!(destination.agent_session_tab(first), Some(42));

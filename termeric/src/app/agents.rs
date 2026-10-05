@@ -72,9 +72,13 @@ pub(super) struct AgentTerminal {
 }
 
 impl App {
-    /// Re-identify agents at most once per [`AGENT_SCAN_INTERVAL`]. Returns
-    /// whether any terminal changed.
+    /// Re-identify agents at most once per [`AGENT_SCAN_INTERVAL`]. With
+    /// agent features off nothing is examined; a terminal that arrived
+    /// carrying an agent forgets it. Returns whether any terminal changed.
     pub(super) fn refresh_agent_sessions(&mut self) -> bool {
+        if !self.agent_features_enabled() {
+            return self.forget_terminal_agents();
+        }
         if self.last_agent_scan.elapsed() < AGENT_SCAN_INTERVAL {
             return false;
         }
@@ -84,8 +88,11 @@ impl App {
             .is_some_and(|tabs| tabs.refresh_agents(&self.agents))
     }
 
-    pub(super) fn next_agent_scan_deadline(&self) -> Instant {
-        self.last_agent_scan + AGENT_SCAN_INTERVAL
+    /// When terminals are next examined for agents; never while agent
+    /// features are off.
+    pub(super) fn next_agent_scan_deadline(&self) -> Option<Instant> {
+        self.agent_features_enabled()
+            .then(|| self.last_agent_scan + AGENT_SCAN_INTERVAL)
     }
 
     pub(super) fn focused_agent(&self) -> Option<FocusedAgent> {
@@ -207,6 +214,9 @@ impl App {
         window_id: u64,
     ) -> Vec<crate::control::protocol::AgentSummary> {
         use crate::control::protocol::{AgentState, AgentSummary, MAX_AGENT_SUMMARY_MESSAGE_BYTES};
+        if !self.agent_features_enabled() {
+            return Vec::new();
+        }
         let printable = |text: &str| text.chars().filter(|c| !c.is_control()).collect::<String>();
         self.agent_terminals()
             .into_iter()
@@ -274,6 +284,7 @@ impl App {
         supervisor: Option<&str>,
         peer_process: Option<u32>,
     ) -> Result<bool, String> {
+        self.require_agent_features()?;
         if let Some(token) = supervisor {
             return self.supervised_submit(token, peer_process, tab_id, pane_id, agent_id, text);
         }
@@ -408,7 +419,12 @@ impl App {
 
     /// Open the palette with commands that do not apply hidden.
     pub(super) fn open_command_palette(&mut self) {
-        let mut unavailable = self.unavailable_agent_commands();
+        // With agent features off their commands are not registered at all.
+        let mut unavailable = if self.agent_features_enabled() {
+            self.unavailable_agent_commands()
+        } else {
+            Vec::new()
+        };
         unavailable.extend(self.unavailable_domain_commands());
         self.command_palette.set_unavailable(unavailable);
         self.command_palette.open();
@@ -540,6 +556,12 @@ impl App {
 
     /// Run one `agent.*` palette command. Returns false for other ids.
     pub(super) fn run_agent_command(&mut self, id: &str) -> bool {
+        if (id.starts_with("agent.") || id.starts_with("supervisor."))
+            && !self.agent_features_enabled()
+        {
+            self.report_agent_features_off();
+            return true;
+        }
         match id {
             "agent.resume" => self.open_agent_picker(AgentPlacement::Resume),
             "agent.split-right" => self.open_agent_picker(AgentPlacement::SplitRight),
@@ -582,19 +604,22 @@ impl App {
 
 impl App {
     /// Apply a report from an agent's hooks to the terminal it names.
-    /// Returns whether this window owns that terminal.
+    /// Returns whether this window owns that terminal, or, when it does with
+    /// agent features off, why the report was set aside.
     pub(super) fn record_agent_report(
         &mut self,
         terminal_id: &str,
         report: AgentReport,
         reporter: Option<u32>,
-    ) -> bool {
+    ) -> Result<bool, String> {
+        let features = self.require_agent_features();
         let Some(tabs) = self.tabs.as_mut() else {
-            return false;
+            return Ok(false);
         };
         let Some(identity) = tabs.terminal_with_id(terminal_id) else {
-            return false;
+            return Ok(false);
         };
+        features?;
         // A program that inherited the terminal's identity but no longer
         // descends from its child, such as an agent inside a tmux server
         // started here, is not in this terminal; its report is received and
@@ -606,7 +631,7 @@ impl App {
         if let (Some(reporter), Some(child)) = (reporter, child)
             && !crate::agents::detect::descends_from(reporter, child)
         {
-            return true;
+            return Ok(true);
         }
         // Disabled agents are not tracked, but the report was delivered.
         if self
@@ -614,13 +639,13 @@ impl App {
             .get(&report.agent_id)
             .is_none_or(|agent| !agent.enabled)
         {
-            return true;
+            return Ok(true);
         }
         let Some(tab) = tabs.tab_mut_by_id(identity.tab_id) else {
-            return false;
+            return Ok(false);
         };
         let Some(session) = tab.pane_integration_mut(identity.pane_id) else {
-            return false;
+            return Ok(false);
         };
         let before = session.agent_status.as_ref().map(|status| status.activity);
         session.agent_status =
@@ -650,7 +675,7 @@ impl App {
         }
         self.redraw_scheduler
             .request(super::redraw_scheduler::RedrawReason::TerminalOutput);
-        true
+        Ok(true)
     }
 
     /// Record that the person typed `input` into the focused terminal.
@@ -1047,6 +1072,8 @@ impl App {
         &mut self,
         target: &AgentTarget,
     ) -> Result<termeric_core::term::TerminalMode, String> {
+        // Nothing is typed into an agent Termeric no longer recognizes.
+        self.require_agent_features()?;
         if let Some(tab) = self
             .tabs
             .as_mut()

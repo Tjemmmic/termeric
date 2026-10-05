@@ -770,6 +770,20 @@ impl Tab {
         changed
     }
 
+    /// Forget the agent in each of this tab's terminals and what it
+    /// reported. Change baselines stay, inert, so an agent recognized again
+    /// later keeps the one taken when it started. Returns whether any
+    /// terminal changed.
+    pub(crate) fn forget_agents(&mut self) -> bool {
+        let mut changed = false;
+        for pane in self.panes.all_panes_mut() {
+            let session = &mut pane.integration;
+            changed |= session.agent_status.take().is_some();
+            changed |= session.set_agent(None);
+        }
+        changed
+    }
+
     /// Start a change baseline for each agent that just appeared, and
     /// collect finished ones.
     fn track_agent_changes(&mut self) {

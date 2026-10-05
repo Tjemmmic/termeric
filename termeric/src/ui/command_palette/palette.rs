@@ -999,13 +999,15 @@ fn core_command_table() -> Vec<CoreCommand> {
 /// shortcut registry so they stay correct after user overrides.
 pub fn core_commands(
     harvest_enabled: bool,
+    agents_enabled: bool,
     shortcuts: &ShortcutRegistry,
 ) -> Vec<RegisteredCommand> {
     core_command_table()
         .into_iter()
-        // Harvest is an experimental beta and stays out of the palette
-        // unless explicitly enabled in configuration.
+        // Harvest and agent features are experimental and stay out of the
+        // palette unless explicitly turned on.
         .filter(|command| harvest_enabled || command.category != CoreCategory::Harvest)
+        .filter(|command| agents_enabled || command.category != CoreCategory::Agents)
         .map(|command| {
             let (source, shortcut) = match command.run {
                 CoreRun::Bound(key) => (
@@ -1143,7 +1145,7 @@ mod tests {
 
     fn test_palette() -> CommandPalette {
         let mut palette = CommandPalette::new();
-        palette.replace_core_commands(core_commands(true, &ShortcutRegistry::new()));
+        palette.replace_core_commands(core_commands(true, true, &ShortcutRegistry::new()));
         palette
     }
 
@@ -1200,15 +1202,35 @@ mod tests {
     #[test]
     fn harvest_commands_are_hidden_until_enabled() {
         let registry = ShortcutRegistry::new();
-        let disabled = core_commands(false, &registry);
+        let disabled = core_commands(false, true, &registry);
         assert!(disabled.iter().all(|command| command.category != "Harvest"));
-        let enabled = core_commands(true, &registry);
+        let enabled = core_commands(true, true, &registry);
         assert!(enabled.iter().any(|command| command.category == "Harvest"));
     }
 
     #[test]
+    fn agent_commands_are_hidden_until_agent_features_are_on() {
+        let registry = ShortcutRegistry::new();
+        let off = core_commands(true, false, &registry);
+        assert!(off.iter().all(|command| command.category != "Agents"));
+        assert!(off.iter().all(|command| !command.id.starts_with("agent.")
+            && !command.id.starts_with("supervisor.")
+            && command.id != "core.toggle-transcript"));
+        assert!(off.iter().any(|command| command.id == "core.new-tab"));
+        let on = core_commands(true, true, &registry);
+        for id in [
+            "agent.new",
+            "agent.view",
+            "supervisor.start",
+            "core.toggle-transcript",
+        ] {
+            assert!(on.iter().any(|command| command.id == id), "{id}");
+        }
+    }
+
+    #[test]
     fn tab_snapshots_are_reached_through_the_workspace_manager_only() {
-        let commands = core_commands(false, &ShortcutRegistry::new());
+        let commands = core_commands(false, false, &ShortcutRegistry::new());
         assert!(
             commands
                 .iter()
@@ -1222,7 +1244,7 @@ mod tests {
     #[test]
     fn command_shortcut_hints_follow_user_overrides() {
         let split_shortcut = |registry: &ShortcutRegistry| {
-            core_commands(false, registry)
+            core_commands(false, false, registry)
                 .into_iter()
                 .find(|command| command.id == "core.split-vertical")
                 .unwrap()
@@ -1245,7 +1267,7 @@ mod tests {
     #[test]
     fn core_command_ids_are_unique() {
         // Recency, availability, and accessibility all key on the ID.
-        let commands = core_commands(true, &ShortcutRegistry::new());
+        let commands = core_commands(true, true, &ShortcutRegistry::new());
         let ids: std::collections::HashSet<_> =
             commands.iter().map(|command| command.id.as_str()).collect();
         assert_eq!(ids.len(), commands.len());
@@ -1379,7 +1401,7 @@ mod tests {
     #[test]
     fn replace_plugin_commands_removes_disabled_plugin_sources() {
         let mut palette = CommandPalette::new();
-        palette.replace_core_commands(core_commands(true, &ShortcutRegistry::new()));
+        palette.replace_core_commands(core_commands(true, true, &ShortcutRegistry::new()));
         palette.replace_plugin_commands(vec![RegisteredCommand {
             id: "codex.open".into(),
             title: "Open Codex".into(),
@@ -1413,7 +1435,7 @@ mod tests {
     #[test]
     fn terminal_profile_commands_replace_cleanly_and_execute_as_app_actions() {
         let mut palette = CommandPalette::new();
-        palette.replace_core_commands(core_commands(true, &ShortcutRegistry::new()));
+        palette.replace_core_commands(core_commands(true, true, &ShortcutRegistry::new()));
         palette.replace_launch_profile_commands(vec![RegisteredCommand {
             id: "profile.open.dev".into(),
             title: "New Tab: dev".into(),

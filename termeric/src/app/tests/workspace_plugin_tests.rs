@@ -122,7 +122,11 @@ pub(super) fn fixture() -> (App, tempfile::TempDir, WorkspaceTabSnapshot) {
         layout,
         panes,
     };
-    (App::new_headless(config).unwrap(), dir, snapshot)
+    (
+        App::new_headless(config.with_agent_features()).unwrap(),
+        dir,
+        snapshot,
+    )
 }
 
 pub(super) fn manager(app: &App) -> TabManager {

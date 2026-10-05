@@ -34,7 +34,7 @@ fn complete_workspace_round_trip_restores_nested_panes_plugin_profile_and_focus(
                 ..Default::default()
             },
         );
-        let mut app = App::new_headless(config).unwrap();
+        let mut app = App::new_headless(config.with_agent_features()).unwrap();
         let mut tabs = TabManager::new(
             80,
             24,
@@ -182,7 +182,7 @@ fn workspace_restore_partially_recovers_missing_cwd_profile_and_cli() {
             .program = Some(fake_cli.display().to_string());
         config.agents.entry("codex".into()).or_default().program =
             Some(temp.path().join("missing-codex").display().to_string());
-        let mut app = App::new_headless(config).unwrap();
+        let mut app = App::new_headless(config.with_agent_features()).unwrap();
         let mut current = TabManager::new(80, 24, ShellConfig::default(), 100, 1024 * 1024);
         current
             .new_tab_with_command(
@@ -848,7 +848,7 @@ fn cli_named_profile_launches_the_exact_builtin_plugin_profile() {
             ..Default::default()
         },
     );
-    let mut app = App::new_headless(config).unwrap();
+    let mut app = App::new_headless(config.with_agent_features()).unwrap();
     app.allow_auto_restore = false;
     app.launch.tabs[0].target = crate::cli::LaunchTarget::Plugin {
         plugin_id: "codex".into(),

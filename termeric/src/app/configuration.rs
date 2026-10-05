@@ -344,6 +344,7 @@ impl App {
     /// and a notice says why until a configured theme loads.
     pub(super) fn apply_config(&mut self, config: Config) -> std::result::Result<(), String> {
         config.validate().map_err(|error| format!("{error:#}"))?;
+        self.agent_features_change_refusal(&config)?;
         let keyboard_type_changed = config.keyboard.xterm_type != self.config.keyboard.xterm_type;
         if config.commands != self.config.commands {
             // Revoke ambiguous row authority before replacing the inventory or
@@ -355,7 +356,9 @@ impl App {
             self.commands_panel.retain_browse_targets(&retained);
             self.retain_commands_accessibility_rows(&retained);
         }
-        let agents_changed = config.agents != self.config.agents;
+        // The switch registers or removes every agent's launch integration.
+        let agents_changed = config.agents != self.config.agents
+            || config.agent_features_enabled() != self.config.agent_features_enabled();
         // A new configured size is what the person now wants to see, so it
         // ends a zoom; other changes keep it.
         if config.font.size != self.config.font.size {
@@ -450,6 +453,7 @@ impl App {
         if agents_changed {
             self.reload_plugins_for_agents();
         }
+        self.sync_agent_features();
         self.sync_harvest_from_config();
         self.sync_accessibility_preferences();
         self.refresh_launch_profile_commands();
@@ -459,7 +463,14 @@ impl App {
     }
 
     /// Hand Settings the installed and enabled state of each built-in agent.
+    /// With agent features off the page shows only their switch, so nothing
+    /// is looked up.
     pub(super) fn sync_agent_settings_rows(&mut self) {
+        if !self.agent_features_enabled() {
+            self.settings_panel
+                .set_agents(Vec::new(), String::new(), String::new());
+            return;
+        }
         let rows = crate::agents::builtin_agent_names()
             .filter_map(|(id, label)| {
                 let agent = self.agents.get(id)?;
@@ -512,7 +523,8 @@ impl App {
         self.plugin_manager.clear();
         self.agents = crate::agents::AgentCatalog::from_config(&self.config.agents);
         self.sync_agent_settings_rows();
-        for agent in self.agents.enabled() {
+        let features = self.agent_features_enabled();
+        for agent in self.agents.enabled().filter(|_| features) {
             let plugin = crate::plugin::agent::AgentPlugin::new(agent.clone());
             if let Err(error) = self.plugin_manager.register(Box::new(plugin)) {
                 log::error!("Failed to register agent {:?}: {error}", agent.id);
@@ -577,11 +589,20 @@ impl App {
         log::info!("Loaded {} plugin(s)", self.plugin_manager.count());
     }
 
+    /// Register the built-in commands the configuration offers, with the
+    /// current shortcut hints.
+    pub(super) fn refresh_core_commands(&mut self) {
+        self.command_palette.replace_core_commands(
+            crate::ui::command_palette::palette::core_commands(
+                self.config.harvest.enabled,
+                self.agent_features_enabled(),
+                &self.shortcut_registry,
+            ),
+        );
+    }
+
     pub(super) fn sync_harvest_from_config(&mut self) {
-        self.command_palette.replace_core_commands(core_commands(
-            self.config.harvest.enabled,
-            &self.shortcut_registry,
-        ));
+        self.refresh_core_commands();
         if self.config.harvest.enabled {
             if let Some(harvest) = &mut self.harvest {
                 harvest
@@ -786,6 +807,9 @@ impl App {
                 config.harvest.show_indicators = enabled;
             }
             SettingsAction::SetHarvestMaxHistory(limit) => config.harvest.max_history = limit,
+            SettingsAction::SetAgentFeaturesEnabled(enabled) => {
+                config.agent_features.enabled = enabled;
+            }
             SettingsAction::SetAgentEnabled { agent_id, enabled } => {
                 // Built-in agents are on by default: record only an opt-out.
                 let entry = config.agents.entry(agent_id.clone()).or_default();
@@ -1111,10 +1135,7 @@ impl App {
         self.shortcut_registry.set_binding(action, chord);
         self.shortcut_registry
             .record_overrides(&mut self.config.shortcuts);
-        self.command_palette.replace_core_commands(core_commands(
-            self.config.harvest.enabled,
-            &self.shortcut_registry,
-        ));
+        self.refresh_core_commands();
         self.refresh_displaced_shortcuts_notice();
     }
 

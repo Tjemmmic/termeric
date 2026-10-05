@@ -62,6 +62,9 @@ pub struct Config {
     /// User-defined custom commands / shortcuts
     #[serde(default)]
     pub commands: Vec<CustomCommand>,
+    /// `[agent_features]`: whether any agent feature is offered at all.
+    #[serde(default)]
+    pub agent_features: crate::agents::config::AgentFeaturesConfig,
     /// `[agents.<id>]`: overrides for built-in coding agents and definitions
     /// of custom ones.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -461,6 +464,19 @@ impl Config {
             }
         }
         Ok(())
+    }
+
+    /// Whether agent features are on. Every agent-related surface asks
+    /// this, never the field itself.
+    pub fn agent_features_enabled(&self) -> bool {
+        self.agent_features.enabled
+    }
+
+    /// This configuration with agent features on, for tests of them.
+    #[cfg(test)]
+    pub(crate) fn with_agent_features(mut self) -> Self {
+        self.agent_features.enabled = true;
+        self
     }
 
     /// Resolve one validated terminal launch profile by its stable name.

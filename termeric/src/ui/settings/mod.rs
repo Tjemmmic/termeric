@@ -751,6 +751,8 @@ pub enum SettingsAction {
     SetHarvestIndicators(bool),
     /// Change the Harvest history capacity.
     SetHarvestMaxHistory(usize),
+    /// Turn every agent feature on or off.
+    SetAgentFeaturesEnabled(bool),
     /// Offer or hide one built-in coding agent.
     SetAgentEnabled { agent_id: String, enabled: bool },
     /// Show what setting up agent status hooks would change.
@@ -1601,30 +1603,35 @@ impl SettingsPanel {
             ],
         ));
 
-        // Agents: built-in agents by name, then a summary of custom ones.
-        {
-            let mut items: Vec<SettingItem> = self
-                .agent_rows
-                .iter()
-                .map(|row| {
-                    if !row.installed {
-                        return SettingItem {
-                            label: row.label,
-                            value: "Not installed".into(),
-                            kind: SettingKind::ReadOnly,
-                        };
-                    }
-                    SettingItem {
+        // Agents: the switch for all of them; while it is on, built-in agents
+        // by name, a summary of custom ones, and the rest of their settings.
+        let features = toggle(
+            "Agent Features",
+            config.agent_features_enabled(),
+            SettingsAction::SetAgentFeaturesEnabled,
+        );
+        if !config.agent_features_enabled() {
+            result.push((SettingsSection::Agents, vec![features]));
+        } else {
+            let mut items = vec![features];
+            items.extend(self.agent_rows.iter().map(|row| {
+                if !row.installed {
+                    return SettingItem {
                         label: row.label,
-                        value: on_off(row.enabled).into(),
-                        kind: SettingKind::Dropdown {
-                            options: on_off_options(),
-                            selected: usize::from(!row.enabled),
-                            choose: Choose::Agent(row.id),
-                        },
-                    }
-                })
-                .collect();
+                        value: "Not installed".into(),
+                        kind: SettingKind::ReadOnly,
+                    };
+                }
+                SettingItem {
+                    label: row.label,
+                    value: on_off(row.enabled).into(),
+                    kind: SettingKind::Dropdown {
+                        options: on_off_options(),
+                        selected: usize::from(!row.enabled),
+                        choose: Choose::Agent(row.id),
+                    },
+                }
+            }));
             items.push(SettingItem {
                 label: "Custom Agents",
                 value: self.custom_agent_summary.clone(),

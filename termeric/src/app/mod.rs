@@ -2,6 +2,7 @@
 
 mod accessibility;
 mod agent_changes;
+mod agent_features;
 mod agent_hooks;
 mod agent_view;
 mod agent_view_input;
@@ -105,7 +106,6 @@ use crate::terminal::search::Search;
 use crate::terminal::splash::show_splash;
 use crate::terminal::url::{UrlCache, UrlDetector};
 use crate::ui::command_palette::PaletteOwner;
-use crate::ui::command_palette::palette::core_commands;
 use crate::ui::command_palette::{CommandPalette, PaletteResult};
 use crate::ui::context_picker::ContextPicker;
 use crate::ui::diff_review::DiffReviewOverlay;
@@ -1701,10 +1701,7 @@ impl App {
 
         // Initialize command palette and apply all runtime config through the
         // same path used by reload, settings changes, and reset.
-        app.command_palette.replace_core_commands(core_commands(
-            app.config.harvest.enabled,
-            &app.shortcut_registry,
-        ));
+        app.refresh_core_commands();
         app.apply_config_side_effects(false);
         app.sync_plugins_from_config();
         app.mark_config_saved();
@@ -2898,9 +2895,9 @@ impl App {
     fn next_idle_deadline(&self, now: Instant) -> Option<Instant> {
         let mut deadlines = vec![
             self.last_config_check + Self::CONFIG_POLL_INTERVAL,
-            self.next_agent_scan_deadline(),
             self.git_watcher.next_poll_deadline(),
         ];
+        deadlines.extend(self.next_agent_scan_deadline());
         deadlines.extend(self.next_agent_submit_deadline());
         deadlines.extend(self.agents_panel.refresh_deadline());
         deadlines.extend(self.next_agent_change_deadline(now));
@@ -3232,6 +3229,9 @@ impl App {
                     }
                 }
             }
+            Action::NewAgent | Action::ToggleAgentView if !self.agent_features_enabled() => {
+                self.report_agent_features_off();
+            }
             Action::NewAgent => {
                 self.open_agent_picker(crate::ui::command_palette::palette::AgentPlacement::NewTab);
                 self.request_redraw(RedrawReason::Action);
@@ -3471,6 +3471,11 @@ impl App {
     /// the old file beside it, and then use the defaults. Only the confirmed
     /// Reset Configuration does this.
     fn reset_config_to_defaults(&mut self) {
+        // Asked before the file changes, so a refusal leaves it as it was.
+        if let Err(refusal) = self.agent_features_change_refusal(&Config::default()) {
+            self.toasts.error(format!("Reset refused: {refusal}"));
+            return;
+        }
         let backup =
             match crate::config::save::reset(&self.config_path, std::time::SystemTime::now()) {
                 Ok(backup) => backup,

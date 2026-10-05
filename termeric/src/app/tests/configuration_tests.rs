@@ -4,7 +4,7 @@ use super::*;
 
 #[test]
 fn headless_config_application_updates_agents_harvest_and_palette() {
-    let mut config = Config::default();
+    let mut config = Config::default().with_agent_features();
     config.harvest.enabled = true;
     config.harvest.max_history = 7;
     config.agents.insert(
@@ -174,7 +174,7 @@ fn a_window_closed_beside_others_leaves_no_automatic_archive() {
 
 #[test]
 fn only_agent_settings_reregister_plugins() {
-    let mut app = App::new_headless(Config::default()).unwrap();
+    let mut app = App::new_headless(Config::default().with_agent_features()).unwrap();
     assert!(app.plugin_manager.contains("codex"));
     let generation = app.plugin_runtime_generation;
 

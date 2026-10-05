@@ -130,6 +130,9 @@ impl App {
     /// nothing else would say why. Agents never set up are not mentioned.
     pub(super) fn warn_about_outdated_agent_hooks(&mut self) {
         static CHECKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !self.agent_features_enabled() {
+            return;
+        }
         if CHECKED.swap(true, std::sync::atomic::Ordering::Relaxed) {
             return;
         }
@@ -303,6 +306,13 @@ impl App {
             self.apply_hook_changes(pending);
         }
         true
+    }
+
+    /// Close the setup dialog without changing any file.
+    pub(super) fn close_agent_hook_setup(&mut self) {
+        if let Some(pending) = self.pending_hook_change.take() {
+            self.info_overlay.dismiss(pending.request_id);
+        }
     }
 
     pub(super) fn cancel_pending_hook_change(&mut self, request_id: u64) {

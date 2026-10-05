@@ -222,7 +222,7 @@ fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
         profile: None,
         process: None,
     });
-    let mut app = App::new_headless(Config::default()).unwrap();
+    let mut app = App::new_headless(Config::default().with_agent_features()).unwrap();
     app.tabs = Some(tabs);
     let target = super::agents::AgentTarget {
         identity: crate::tabs::TerminalIdentity { tab_id, pane_id },
@@ -435,7 +435,7 @@ fn hook_reports_track_an_agent_started_from_a_shell_until_it_exits() {
             HashMap::new(),
         )
         .unwrap();
-    let mut app = App::new_headless(Config::default()).unwrap();
+    let mut app = App::new_headless(Config::default().with_agent_features()).unwrap();
     let shown = app.notifications.capture_tracked_commands_for_test();
     app.tabs = Some(tabs);
     let terminal_id = app
@@ -480,14 +480,20 @@ fn hook_reports_track_an_agent_started_from_a_shell_until_it_exits() {
         last_message: None,
         transcript_path: None,
     };
-    assert!(!app.record_agent_report("1.00", report(AgentEventKind::Working), None));
+    assert_eq!(
+        app.record_agent_report("1.00", report(AgentEventKind::Working), None),
+        Ok(false)
+    );
     // A program outside this terminal's session that borrowed its identity
     // is received and set aside.
-    assert!(app.record_agent_report(
-        &terminal_id,
-        report(AgentEventKind::Working),
-        Some(std::process::id())
-    ));
+    assert_eq!(
+        app.record_agent_report(
+            &terminal_id,
+            report(AgentEventKind::Working),
+            Some(std::process::id())
+        ),
+        Ok(true)
+    );
     assert!(
         app.tabs
             .as_ref()
@@ -500,11 +506,14 @@ fn hook_reports_track_an_agent_started_from_a_shell_until_it_exits() {
             .is_none()
     );
     // The hook runs inside the terminal, as the foreground job does.
-    assert!(app.record_agent_report(
-        &terminal_id,
-        report(AgentEventKind::Working),
-        Some(foreground)
-    ));
+    assert_eq!(
+        app.record_agent_report(
+            &terminal_id,
+            report(AgentEventKind::Working),
+            Some(foreground)
+        ),
+        Ok(true)
+    );
     let session = |app: &App| {
         app.tabs
             .as_ref()
@@ -528,14 +537,17 @@ fn hook_reports_track_an_agent_started_from_a_shell_until_it_exits() {
 
     // Looking at the terminal answers the request; away from it, it waits.
     app.window_focused = false;
-    assert!(app.record_agent_report(
-        &terminal_id,
-        AgentReport {
-            detail: Some("Approve shell: cargo test".into()),
-            ..report(AgentEventKind::NeedsInput)
-        },
-        None
-    ));
+    assert_eq!(
+        app.record_agent_report(
+            &terminal_id,
+            AgentReport {
+                detail: Some("Approve shell: cargo test".into()),
+                ..report(AgentEventKind::NeedsInput)
+            },
+            None
+        ),
+        Ok(true)
+    );
     let status = session(&app).1.unwrap();
     assert!(status.needs_attention());
     {
@@ -559,7 +571,10 @@ fn hook_reports_track_an_agent_started_from_a_shell_until_it_exits() {
             )]
         );
         // A repeated request is not news.
-        app.record_agent_report(&terminal_id, report(AgentEventKind::NeedsInput), None);
+        assert_eq!(
+            app.record_agent_report(&terminal_id, report(AgentEventKind::NeedsInput), None),
+            Ok(true)
+        );
         assert!(shown().is_empty());
     }
     app.window_focused = true;
@@ -919,9 +934,13 @@ fn the_agents_panel_lists_agents_by_urgency_and_shows_the_chosen_one() {
         !empty
             .unavailable_agent_commands()
             .contains(&"supervisor.activity".to_string())
-            && !crate::ui::command_palette::palette::core_commands(false, &empty.shortcut_registry)
-                .iter()
-                .any(|command| command.id == "supervisor.activity"),
+            && !crate::ui::command_palette::palette::core_commands(
+                false,
+                true,
+                &empty.shortcut_registry
+            )
+            .iter()
+            .any(|command| command.id == "supervisor.activity"),
         "the panel replaces the activity dialog"
     );
 }
@@ -1011,7 +1030,7 @@ fn a_read_only_agent_refuses_context_with_its_own_reason() {
         process: None,
     });
     assert!(tab.toggle_focused_pane_read_only());
-    let mut app = App::new_headless(Config::default()).unwrap();
+    let mut app = App::new_headless(Config::default().with_agent_features()).unwrap();
     app.tabs = Some(tabs);
     let target = super::agents::AgentTarget {
         identity: crate::tabs::TerminalIdentity { tab_id, pane_id },
@@ -1319,7 +1338,7 @@ done
         );
     }
 
-    let mut app = App::new_headless(config).unwrap();
+    let mut app = App::new_headless(config.with_agent_features()).unwrap();
     let mut tabs = TabManager::for_test(ShellConfig::default());
     tabs.new_tab_with_command(
         "/bin/sh",
@@ -1506,7 +1525,7 @@ done
         },
     );
     config.supervisor.mode = SupervisorMode::Assist;
-    let mut app = App::new_headless(config).unwrap();
+    let mut app = App::new_headless(config.with_agent_features()).unwrap();
     app.supervisor_rules_path = temp.path().join("supervisor.md");
     let mut tabs = TabManager::for_test(ShellConfig::default());
     tabs.new_tab_with_command(
@@ -1609,17 +1628,20 @@ done
         .pane_terminal_id(worker.pane_id)
         .unwrap()
         .to_owned();
-    assert!(app.record_agent_report(
-        &worker_id,
-        AgentReport {
-            agent_id: "codex".into(),
-            event: AgentEventKind::NeedsInput,
-            detail: Some("Approve shell: cargo test".into()),
-            last_message: None,
-            transcript_path: None,
-        },
-        None
-    ));
+    assert_eq!(
+        app.record_agent_report(
+            &worker_id,
+            AgentReport {
+                agent_id: "codex".into(),
+                event: AgentEventKind::NeedsInput,
+                detail: Some("Approve shell: cargo test".into()),
+                last_message: None,
+                transcript_path: None,
+            },
+            None
+        ),
+        Ok(true)
+    );
     wait_until_told(
         &mut app,
         &format!(

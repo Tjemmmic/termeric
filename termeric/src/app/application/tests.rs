@@ -3892,6 +3892,11 @@ fn a_moved_tab_takes_its_agent_view_conversation_to_the_next_window() {
     use crate::agent_view::session::AgentSession;
     use crate::agent_view::transcript::Transcript;
     let (mut source, mut destination, _) = pane_transfer_fixture();
+    for window in [&mut source, &mut destination] {
+        window
+            .apply_config(window.config.clone().with_agent_features())
+            .unwrap();
+    }
     let mut transcript = Transcript::new("Claude Code", "default");
     transcript.apply(AgentEvent::Ready(Handshake::default()));
     transcript.push_user("fix the build".into(), Vec::new());
@@ -3900,6 +3905,20 @@ fn a_moved_tab_takes_its_agent_view_conversation_to_the_next_window() {
     source.agent_view.sessions.push(session);
     source.open_agent_view(true);
     source.agent_view.state.show(id);
+
+    // A window with agent features off takes no conversation.
+    let mut off = destination.config.clone();
+    off.agent_features.enabled = false;
+    destination.apply_config(off).unwrap();
+    let error = Application::transfer_active_tab(&mut source, &mut destination).unwrap_err();
+    assert!(
+        error.to_string().contains("Agent features are off"),
+        "{error:#}"
+    );
+    assert!(source.agent_view.session(id).is_some());
+    destination
+        .apply_config(destination.config.clone().with_agent_features())
+        .unwrap();
 
     let moved = Application::transfer_active_tab(&mut source, &mut destination).unwrap();
     source.reconcile_agent_view_tabs();
@@ -5064,14 +5083,14 @@ fn one_agents_change_reloads_plugins_once_for_every_window() {
     application.pending.clear();
     let natives = [WindowId::from(31_u64), WindowId::from(32_u64)];
     for native in natives {
-        let mut window = App::new_headless(Config::default()).unwrap();
+        let mut window = App::new_headless(Config::default().with_agent_features()).unwrap();
         window.plugin_host = Arc::clone(&application.plugin_host);
         window.sync_plugins_from_config();
         assert!(window.plugin_manager.contains("codex"));
         application.windows.insert(native, window);
     }
     let generation = application.plugin_host.generation();
-    let mut changed = Config::default();
+    let mut changed = Config::default().with_agent_features();
     changed.agents.insert(
         "codex".into(),
         crate::agents::AgentConfig {
@@ -5127,4 +5146,35 @@ fn local_tabs_never_move_into_a_live_domain_window() {
             .any(|(pane, _)| pane.pty.child_id() == moved_child)
     );
     assert_eq!(destination.tabs.as_ref().unwrap().count(), 1);
+}
+
+#[test]
+fn agents_are_listed_only_from_windows_with_agent_features_on() {
+    use crate::control::protocol::Response;
+    let mut application =
+        Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
+    application.pending.clear();
+    let natives = [WindowId::from(41_u64), WindowId::from(42_u64)];
+    for (control_id, native) in natives.into_iter().enumerate() {
+        application
+            .windows
+            .insert(native, App::new_headless(Config::default()).unwrap());
+        application
+            .control_window_ids
+            .insert(native, control_id as u64 + 1);
+    }
+    assert_eq!(
+        application.list_control_agents(None).unwrap_err(),
+        crate::agents::config::AGENT_FEATURES_OFF_REPLY
+    );
+
+    // One window with them on answers for the process.
+    let window = application.windows.get_mut(&natives[0]).unwrap();
+    window
+        .apply_config(window.config.clone().with_agent_features())
+        .unwrap();
+    assert!(matches!(
+        application.list_control_agents(None),
+        Ok(Response::Agents { agents, .. }) if agents.is_empty()
+    ));
 }

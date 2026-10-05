@@ -1798,6 +1798,16 @@ impl TabManager {
         changed
     }
 
+    /// Forget every terminal's agent and its reported status, as when agent
+    /// features are off. Returns whether any terminal changed.
+    pub(crate) fn forget_agents(&mut self) -> bool {
+        let mut changed = false;
+        for tab in &mut self.tabs {
+            changed |= tab.forget_agents();
+        }
+        changed
+    }
+
     /// The open terminal whose processes inherited `terminal_id`.
     pub(crate) fn terminal_with_id(&self, terminal_id: &str) -> Option<TerminalIdentity> {
         self.tabs

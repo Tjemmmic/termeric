@@ -46,35 +46,7 @@ impl Application {
             return self.read_control_text(window_id, tab_id, pane_id, history_lines, max_bytes);
         }
         if let Request::ListAgents { supervisor } = &request {
-            let mut claimed = supervisor.is_none();
-            let mut agents = Vec::new();
-            for (native_id, control_id) in &self.control_window_ids {
-                let Some(window) = self
-                    .windows
-                    .get(native_id)
-                    .filter(|window| !window.should_exit)
-                else {
-                    continue;
-                };
-                match supervisor {
-                    None => agents.extend(window.control_agents(*control_id)),
-                    Some(token) if window.owns_supervisor_token(token) => {
-                        claimed = true;
-                        agents.extend(window.supervised_agents(*control_id));
-                    }
-                    Some(_) => {}
-                }
-            }
-            if !claimed {
-                return Err("That supervisor is no longer running".into());
-            }
-            agents.sort_by_key(|agent| (agent.window_id, agent.tab_id, agent.pane_id));
-            let truncated = crate::control::protocol::fit_agent_summaries(&mut agents);
-            return Ok(Response::Agents {
-                process_id: std::process::id(),
-                agents,
-                truncated,
-            });
+            return self.list_control_agents(supervisor.as_deref());
         }
         if let Request::ReadConversation {
             window_id,
@@ -109,16 +81,20 @@ impl Application {
                 last_message,
                 transcript_path,
             );
-            let owned = self.windows.values_mut().any(|window| {
-                window.record_agent_report(&terminal_id, report.clone(), peer_process)
-            });
+            let mut owned = Ok(false);
+            for window in self.windows.values_mut() {
+                owned = window.record_agent_report(&terminal_id, report.clone(), peer_process);
+                if owned != Ok(false) {
+                    break;
+                }
+            }
             self.remove_closed_windows(event_loop);
-            return if owned {
-                Ok(Response::AgentEventRecorded {
+            return match owned {
+                Ok(true) => Ok(Response::AgentEventRecorded {
                     process_id: std::process::id(),
-                })
-            } else {
-                Err("No terminal in this process has that identity".into())
+                }),
+                Ok(false) => Err("No terminal in this process has that identity".into()),
+                Err(reply) => Err(reply),
             };
         }
 
@@ -354,6 +330,53 @@ impl Application {
         .map_err(|error| bounded_control_error(&error));
         self.control_replays.record(request, result.clone());
         result
+    }
+
+    /// The agents in this process's windows for the control protocol: every
+    /// one, or with a supervisor token only those that supervisor oversees.
+    pub(super) fn list_control_agents(
+        &self,
+        supervisor: Option<&str>,
+    ) -> std::result::Result<crate::control::protocol::Response, String> {
+        use crate::control::protocol::Response;
+        // With agent features off in every window there are no agents to
+        // list, and a program asking should learn why.
+        if !self
+            .windows
+            .values()
+            .any(|window| !window.should_exit && window.agent_features_enabled())
+        {
+            return Err(crate::agents::config::AGENT_FEATURES_OFF_REPLY.into());
+        }
+        let mut claimed = supervisor.is_none();
+        let mut agents = Vec::new();
+        for (native_id, control_id) in &self.control_window_ids {
+            let Some(window) = self
+                .windows
+                .get(native_id)
+                .filter(|window| !window.should_exit)
+            else {
+                continue;
+            };
+            match supervisor {
+                None => agents.extend(window.control_agents(*control_id)),
+                Some(token) if window.owns_supervisor_token(token) => {
+                    claimed = true;
+                    agents.extend(window.supervised_agents(*control_id));
+                }
+                Some(_) => {}
+            }
+        }
+        if !claimed {
+            return Err("That supervisor is no longer running".into());
+        }
+        agents.sort_by_key(|agent| (agent.window_id, agent.tab_id, agent.pane_id));
+        let truncated = crate::control::protocol::fit_agent_summaries(&mut agents);
+        Ok(Response::Agents {
+            process_id: std::process::id(),
+            agents,
+            truncated,
+        })
     }
 
     pub(super) fn create_control_window(

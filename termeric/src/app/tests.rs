@@ -532,6 +532,8 @@ fn synthetic_agent(id: &str) -> crate::agents::AgentDefinition {
 /// Make `plugin_id` a configured agent, so that the check made before each
 /// write to an agent recognizes the terminal Termeric launched it in.
 fn register_capture_agent(app: &mut App, plugin_id: &str) {
+    app.apply_config(app.config.clone().with_agent_features())
+        .unwrap();
     app.agents = crate::agents::AgentCatalog::from_config(&std::collections::BTreeMap::from([(
         plugin_id.to_string(),
         crate::agents::AgentConfig {
@@ -667,6 +669,7 @@ fn latest_toast(app: &App) -> Option<&str> {
 
 mod notification_owner_tests;
 
+mod agent_features_tests;
 mod agent_tests;
 mod configuration_tests;
 mod control_tests;

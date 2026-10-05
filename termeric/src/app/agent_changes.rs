@@ -405,6 +405,17 @@ impl App {
         true
     }
 
+    /// Leave change review: the list, the diff's actions, a revert awaiting
+    /// confirmation, and a job whose result would open them again.
+    pub(super) fn close_agent_change_review(&mut self) {
+        if let Some(pending) = self.pending_revert.take() {
+            self.info_overlay.dismiss(pending.request_id);
+        }
+        self.agent_change_review = None;
+        self.agent_change_list = None;
+        self.agent_change_job = None;
+    }
+
     pub(super) fn cancel_pending_revert(&mut self, request_id: u64) {
         if self
             .pending_revert

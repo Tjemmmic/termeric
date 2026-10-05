@@ -199,6 +199,12 @@ impl BindableAction {
     pub fn from_id(id: &str) -> Option<Self> {
         Self::all().iter().find(|a| a.meta().id == id).copied()
     }
+
+    /// Whether the action belongs to agent features, which are offered only
+    /// while they are on.
+    pub fn is_agent_feature(self) -> bool {
+        matches!(self, Self::NewAgent | Self::ToggleAgentView)
+    }
 }
 
 // ── ShortcutCategory ────────────────────────────────────────────────────────
