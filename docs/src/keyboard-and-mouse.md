@@ -113,9 +113,9 @@ Open the editor with **Keyboard Shortcuts** in the command palette, or from **Se
 2. Press `Enter` (or click the row) to record, then press the new key combination.
 3. To remove a binding, select the row and press `Delete`, or press `Backspace` or `Delete` while recording. Press `Escape` to cancel recording. Recording also stops after 15 seconds.
 
-If the combination already belongs to another action, it moves to the one you're editing and the other action is left unbound; the editor tells you which one.
+If the combination already belongs to another action, Termeric asks before changing anything, naming the combination and both actions. Choose **Reassign** to move it to the action you're editing and leave the other action without a shortcut, or **Cancel** to keep both as they were; `Escape`, or `Enter` before you move to a button with `Tab`, also cancels.
 
-Changes take effect immediately. They're written to your configuration file when you save, with **Save** in Settings or **Save Configuration** in the command palette. Saving changes only the `[[shortcuts]]` entries of the actions you changed, and of any action it left unbound; it adds an entry at the end for an action that had none, and your other entries keep their order, spelling, and comments.
+Changes take effect immediately. They're written to your configuration file when you save, with **Save** in Settings or **Save Configuration** in the command palette. Saving changes only the `[[shortcuts]]` entries of the actions you changed, and of any action you left without a shortcut, which gets an entry that unbinds it; it adds an entry at the end for an action that had none, and your other entries keep their order, spelling, and comments. An entry that a later entry of the same action overrides is removed if it names a combination another action now uses.
 
 `Escape`, `Backspace`, and `Delete` can't be recorded as shortcuts, even with modifiers.
 
@@ -146,7 +146,7 @@ Key names are case-insensitive. Use the character for letter, digit, and symbol 
 
 Shortcuts match the character your keyboard layout produces, not the physical key. On a digit or symbol key, `Shift` is part of the character rather than a separate modifier, so write the character you type and leave `shift` out: `key = "?"` with `ctrl = true` is `Ctrl+?` however your layout types `?`, and on a layout such as AZERTY, where the digits need `Shift`, `Ctrl+1` still goes to tab 1. `shift = true` on a digit or symbol key makes no difference. On letter keys `Shift` counts, so `Ctrl+Shift+C` and `Ctrl+C` are different shortcuts. `+` and `=` count as the same key, because they share one on most layouts: `Ctrl+=` also answers `Ctrl+Shift+=`, which types `+`.
 
-Giving an action a shortcut that another action already uses takes it from that action, which is left unbound, the same as recording it in Settings.
+Two entries can't give one combination to different actions: the file doesn't load, and the error names both entries (counting from 0), the combination, and both actions. An entry may take a combination that is another action's default, though. That action is then left without a shortcut, and a notice says so, such as "Ctrl+Shift+T now runs Rename Tab; New Tab has no shortcut", until the action gets an entry of its own, either a new shortcut or one that unbinds it. The notice appears once when the file loads and again only if what it says changes.
 
 Termeric reloads the file when you save it, so the change takes effect at once. See [Configuration](configuration.md) for where the file lives.
 

@@ -908,6 +908,14 @@ enum OverlayFlow {
     FileUpload(PendingFileUpload),
     /// Reset Configuration awaiting confirmation.
     ConfigReset { request_id: u64 },
+    /// A recorded shortcut that another action uses, awaiting confirmation
+    /// before `holder` loses it to `action`.
+    ShortcutReassign {
+        request_id: u64,
+        action: crate::input::keybindings::BindableAction,
+        chord: crate::input::keybindings::KeyChord,
+        holder: crate::input::keybindings::BindableAction,
+    },
     /// Opening a workspace over tabs running programs, awaiting confirmation.
     WorkspaceOpen {
         request_id: u64,
@@ -1196,6 +1204,9 @@ pub struct App {
     /// The notice that the configured theme does not load, so another one is
     /// on screen: it stays until a configured theme loads.
     theme_problem: crate::ui::toast::StandingNotice,
+    /// Which actions a `[[shortcuts]]` entry left without their default
+    /// shortcut, until that changes.
+    displaced_shortcuts: crate::ui::toast::StandingNotice,
     /// The file the configured theme is read from whenever it exists,
     /// polled so the theme follows edits to it and loads when it appears.
     theme_file: Option<std::path::PathBuf>,
@@ -1572,6 +1583,7 @@ impl App {
             saved_config: None,
             config_problem: Default::default(),
             theme_problem: Default::default(),
+            displaced_shortcuts: Default::default(),
             agents: crate::agents::AgentCatalog::default(),
             last_config_mtime: use_system_state
                 .then(|| std::fs::metadata(&config_path))

@@ -6,6 +6,8 @@ use crate::input::keybindings::{BindableAction, KeyChord};
 const TAB_BAR_HOVER_FADE_SECONDS: f32 = 0.1;
 const CONFIG_RESET_CHOICE: &str = "config-reset";
 const CONFIG_KEEP_CHOICE: &str = "config-keep";
+const SHORTCUT_REASSIGN_CHOICE: &str = "shortcut-reassign";
+const SHORTCUT_KEEP_CHOICE: &str = "shortcut-keep";
 
 impl App {
     /// Ask before Reset Configuration replaces the file. The confirmation has
@@ -433,6 +435,7 @@ impl App {
         self.shortcut_registry = ShortcutRegistry::new();
         self.shortcut_registry
             .apply_overrides(&self.config.shortcuts);
+        self.refresh_displaced_shortcuts_notice();
         self.compiled_copy_patterns = self
             .config
             .copy_mode
@@ -1006,9 +1009,99 @@ impl App {
                     self.set_shortcut(action, None);
                 }
             }
-            ShortcutsAction::SetShortcut { action, chord } => self.set_shortcut(action, chord),
+            ShortcutsAction::SetShortcut { action, chord } => self.request_shortcut(action, chord),
             ShortcutsAction::None => {}
         }
+    }
+
+    /// Bind `action` to `chord`, first asking when another action uses the
+    /// chord: nothing changes unless the person agrees to leave that action
+    /// without a shortcut.
+    fn request_shortcut(&mut self, action: BindableAction, chord: Option<KeyChord>) {
+        if let Some(chord) = &chord
+            && let Some(holder) = self.shortcut_registry.conflict_for(chord)
+            && holder != action
+        {
+            self.confirm_shortcut_reassign(action, chord.clone(), holder);
+            return;
+        }
+        self.set_shortcut(action, chord);
+    }
+
+    /// Ask before `chord` moves from `holder` to `action`. Like the other
+    /// confirmations it has no letter shortcut, so a key still held from
+    /// recording cannot answer it.
+    fn confirm_shortcut_reassign(
+        &mut self,
+        action: BindableAction,
+        chord: KeyChord,
+        holder: BindableAction,
+    ) {
+        let (label, holder_label) = (action.meta().label, holder.meta().label);
+        let lines = vec![
+            format!("{chord} is the shortcut for {holder_label}."),
+            format!("Use it for {label} and leave {holder_label} without a shortcut?"),
+            String::new(),
+            "  Reassign".into(),
+            "  Cancel".into(),
+        ];
+        let request_id = self.info_overlay.show_choices(
+            "Reassign Shortcut",
+            lines,
+            vec![
+                crate::ui::info_overlay::InfoOverlayChoice::new(
+                    SHORTCUT_REASSIGN_CHOICE,
+                    "Reassign",
+                    3,
+                    None,
+                ),
+                crate::ui::info_overlay::InfoOverlayChoice::new(
+                    SHORTCUT_KEEP_CHOICE,
+                    "Cancel",
+                    4,
+                    None,
+                ),
+            ],
+        );
+        self.overlay_flow = Some(OverlayFlow::ShortcutReassign {
+            request_id,
+            action,
+            chord,
+            holder,
+        });
+    }
+
+    /// Answer the reassign confirmation. Returns whether the choice was its.
+    pub(super) fn handle_shortcut_reassign_choice(
+        &mut self,
+        request_id: u64,
+        choice_id: &str,
+    ) -> bool {
+        let (action, chord, holder) = match &self.overlay_flow {
+            Some(OverlayFlow::ShortcutReassign {
+                request_id: pending,
+                action,
+                chord,
+                holder,
+            }) if *pending == request_id => (*action, chord.clone(), *holder),
+            _ => return false,
+        };
+        if !matches!(choice_id, SHORTCUT_REASSIGN_CHOICE | SHORTCUT_KEEP_CHOICE) {
+            return false;
+        }
+        self.info_overlay.dismiss(request_id);
+        self.overlay_flow = None;
+        if choice_id == SHORTCUT_REASSIGN_CHOICE {
+            // A reload while the question was open may have moved the chord;
+            // the person agreed to take it from `holder` alone.
+            if self.shortcut_registry.conflict_for(&chord) == Some(holder) {
+                self.set_shortcut(action, Some(chord));
+            } else {
+                self.request_shortcut(action, Some(chord));
+            }
+        }
+        self.request_redraw(RedrawReason::Action);
+        true
     }
 
     /// Bind `action` to `chord` as the shortcuts editor does, and record the
@@ -1022,6 +1115,28 @@ impl App {
             self.config.harvest.enabled,
             &self.shortcut_registry,
         ));
+        self.refresh_displaced_shortcuts_notice();
+    }
+
+    /// Say which actions a `[[shortcuts]]` entry left without their default
+    /// shortcut. The notice is shown again only when that list changes, so
+    /// a dismissed one stays dismissed across reloads of the same file.
+    fn refresh_displaced_shortcuts_notice(&mut self) {
+        let displaced = ShortcutRegistry::displaced_defaults(&self.config.shortcuts);
+        if displaced.is_empty() {
+            self.displaced_shortcuts.clear(&mut self.toasts);
+            return;
+        }
+        let message = displaced
+            .iter()
+            .map(crate::input::keybindings::DisplacedDefault::message)
+            .collect::<Vec<_>>()
+            .join(". ");
+        self.displaced_shortcuts.show(
+            &mut self.toasts,
+            crate::ui::toast::ToastSeverity::Info,
+            message,
+        );
     }
 }
 

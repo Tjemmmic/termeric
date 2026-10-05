@@ -305,7 +305,7 @@ alias = "prod"
 
 ### [[shortcuts]]
 
-Changes to built-in keyboard shortcuts. The shortcut editor in Settings (Keyboard page) writes these for you. See [Keyboard and mouse](keyboard-and-mouse.md) for the list of actions.
+Changes to built-in keyboard shortcuts. The shortcut editor in Settings (Keyboard page) writes these for you. See [Keyboard and mouse](keyboard-and-mouse.md) for the list of actions. Two entries that give one key combination to different actions keep the file from loading, and the error names both. An entry that takes another action's default combination leaves that action without a shortcut, and a notice names it.
 
 | Setting | Default | Description |
 | --- | --- | --- |

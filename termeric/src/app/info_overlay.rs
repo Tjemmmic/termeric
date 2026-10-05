@@ -160,6 +160,9 @@ impl App {
                 if self.handle_config_reset_choice(request_id, &choice_id) {
                     return;
                 }
+                if self.handle_shortcut_reassign_choice(request_id, &choice_id) {
+                    return;
+                }
                 if self.handle_workspace_choice(request_id, &choice_id) {
                     return;
                 }

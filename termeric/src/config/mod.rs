@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
 
-use crate::input::keybindings::{BindableAction, KeyBinding, ShortcutOverride};
+use crate::input::keybindings::{BindableAction, KeyBinding, ShortcutOverride, first_shared_chord};
 
 /// Application configuration
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -384,6 +384,17 @@ impl Config {
                     shortcut.action
                 );
             }
+        }
+        if let Some((earlier, later)) = first_shared_chord(&self.shortcuts) {
+            let chord = self.shortcuts[later]
+                .to_binding()
+                .and_then(|(_, chord)| chord)
+                .expect("a shared chord is a chord");
+            bail!(
+                "shortcuts[{earlier}] and shortcuts[{later}] both give {chord}, to {:?} and to {:?}; a shortcut runs one action, so remove or change one of them",
+                self.shortcuts[earlier].action,
+                self.shortcuts[later].action
+            );
         }
         if self.copy_mode.patterns.len() > 32 {
             bail!("copy_mode.patterns must contain at most 32 entries");
@@ -2135,6 +2146,46 @@ key = \"z\"
         assert!(error.contains("\"toggle_pane_zom\""), "{error}");
         let fixed = source.replace("toggle_pane_zom", "toggle_pane_zoom");
         Config::from_toml(&fixed, path).unwrap();
+    }
+
+    #[test]
+    fn two_actions_given_one_shortcut_are_refused_naming_both() {
+        let path = std::path::Path::new("config.toml");
+        let source = "\
+[[shortcuts]]
+action = \"new_tab\"
+key = \"T\"
+ctrl = true
+shift = true
+
+[[shortcuts]]
+action = \"copy\"
+key = \"k\"
+ctrl = true
+
+[[shortcuts]]
+action = \"rename_tab\"
+key = \"t\"
+ctrl = true
+shift = true
+";
+        let error = format!("{:#}", Config::from_toml(source, path).unwrap_err());
+        assert!(error.contains("shortcuts[0] and shortcuts[2]"), "{error}");
+        assert!(error.contains("Ctrl+Shift+T"), "{error}");
+        assert!(error.contains("\"new_tab\""), "{error}");
+        assert!(error.contains("\"rename_tab\""), "{error}");
+
+        // One action given its chord twice, or an entry taking another
+        // action's default, is no conflict between entries.
+        Config::from_toml(&source.replacen("new_tab", "rename_tab", 1), path).unwrap();
+        let only_rename = "\
+[[shortcuts]]
+action = \"rename_tab\"
+key = \"t\"
+ctrl = true
+shift = true
+";
+        Config::from_toml(only_rename, path).unwrap();
     }
 
     #[test]

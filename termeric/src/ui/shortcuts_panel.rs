@@ -80,11 +80,9 @@ pub struct ShortcutsPanelInfo {
     pub notice: Option<ShortcutNotice>,
 }
 
-/// What happened to the last recorded shortcut, when it needs saying.
+/// What happened to the last recording, when it needs saying.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShortcutNotice {
-    /// The chord belonged to this other action, which is now unset.
-    Reassigned(&'static str),
     /// No key arrived before recording gave up.
     TimedOut,
 }
@@ -92,7 +90,6 @@ pub enum ShortcutNotice {
 impl ShortcutNotice {
     pub fn message(&self) -> String {
         match self {
-            Self::Reassigned(label) => format!("{label} is now unset"),
             Self::TimedOut => "Recording timed out".to_string(),
         }
     }
@@ -464,24 +461,17 @@ impl ShortcutsPanel {
                         None => ShortcutsAction::None,
                     }
                 }
+                // A chord another action uses is the app's to confirm
+                // before anything changes.
                 ShortcutsKey::RecordedChord(chord) => {
                     self.recording = false;
                     self.recording_started = None;
-                    let action = self.recording_action.take();
-                    if let Some(a) = action {
-                        // Check for conflict
-                        if let Some(conflicting) = registry.conflict_for(&chord) {
-                            if conflicting != a {
-                                self.notice =
-                                    Some(ShortcutNotice::Reassigned(conflicting.meta().label));
-                            }
-                        }
-                        ShortcutsAction::SetShortcut {
-                            action: a,
+                    match self.recording_action.take() {
+                        Some(action) => ShortcutsAction::SetShortcut {
+                            action,
                             chord: Some(chord),
-                        }
-                    } else {
-                        ShortcutsAction::None
+                        },
+                        None => ShortcutsAction::None,
                     }
                 }
                 _ => ShortcutsAction::None,
@@ -855,7 +845,7 @@ mod tests {
     }
 
     #[test]
-    fn recording_notices_name_the_unset_action_or_the_timeout() {
+    fn a_recorded_chord_is_asked_for_and_a_timeout_is_noted() {
         let mut panel = ShortcutsPanel::new();
         let registry = ShortcutRegistry::new();
         let search = registry
@@ -872,10 +862,15 @@ mod tests {
             .unwrap()
             .action;
         assert_ne!(recorded, BindableAction::ToggleSearch);
-        panel.handle_key(ShortcutsKey::RecordedChord(search), &registry);
-        let notice = panel.build_info(&registry).notice.unwrap();
-        assert_eq!(notice, ShortcutNotice::Reassigned("Find"));
-        assert_eq!(notice.message(), "Find is now unset");
+        // Find's chord is asked for like any other; the app confirms it.
+        assert_eq!(
+            panel.handle_key(ShortcutsKey::RecordedChord(search.clone()), &registry),
+            ShortcutsAction::SetShortcut {
+                action: recorded,
+                chord: Some(search)
+            }
+        );
+        assert!(panel.build_info(&registry).notice.is_none());
 
         panel.handle_key(ShortcutsKey::Enter, &registry);
         assert!(panel.tick_recording_timeout(std::time::Duration::ZERO));

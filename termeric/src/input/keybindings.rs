@@ -377,6 +377,9 @@ fn capitalize_key(key: &str) -> String {
 
 /// One `[[shortcuts]]` entry in config.toml. Entries apply in order on top
 /// of the defaults, each as if it had been recorded in the shortcuts editor.
+/// Entries of two different actions never give one chord
+/// (`first_shared_chord`), so an action with entries is bound as its last
+/// entry says, whatever the order.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ShortcutOverride {
@@ -416,6 +419,77 @@ impl ShortcutOverride {
             .as_ref()
             .map(|key| KeyChord::new(key, self.ctrl, self.alt, self.shift, self.super_key));
         Some((action, chord))
+    }
+}
+
+/// The first two entries, as indexes into `entries`, that give one chord to
+/// two different actions: `(earlier, later)`. Entries naming an unknown
+/// action are left to the caller.
+pub fn first_shared_chord(entries: &[ShortcutOverride]) -> Option<(usize, usize)> {
+    let bindings: Vec<_> = entries.iter().map(ShortcutOverride::to_binding).collect();
+    bindings.iter().enumerate().find_map(|(later, binding)| {
+        let Some((action, Some(chord))) = binding else {
+            return None;
+        };
+        bindings[..later]
+            .iter()
+            .position(|earlier| {
+                matches!(earlier, Some((other, Some(taken))) if other != action && taken == chord)
+            })
+            .map(|earlier| (earlier, later))
+    })
+}
+
+/// Remove each entry that a later entry of its own action overrides and whose
+/// chord an entry of another action gives. It binds nothing any more, and
+/// kept, it would give that chord to two actions.
+fn drop_overridden_shared_chords(entries: &mut Vec<ShortcutOverride>) {
+    let bindings: Vec<_> = entries.iter().map(ShortcutOverride::to_binding).collect();
+    let keep: Vec<bool> = bindings
+        .iter()
+        .enumerate()
+        .map(|(index, binding)| {
+            let Some((action, Some(chord))) = binding else {
+                return true;
+            };
+            let overridden = bindings[index + 1..]
+                .iter()
+                .any(|later| matches!(later, Some((other, _)) if other == action));
+            let shared = bindings.iter().any(
+                |entry| matches!(entry, Some((other, Some(taken))) if other != action && taken == chord),
+            );
+            !(overridden && shared)
+        })
+        .collect();
+    let mut keep = keep.into_iter();
+    entries.retain(|_| keep.next().unwrap_or(true));
+}
+
+/// An action left without its default shortcut by another action's
+/// `[[shortcuts]]` entry, though no entry of its own unbinds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisplacedDefault {
+    pub action: BindableAction,
+    pub chord: KeyChord,
+    /// The action the chord runs now; none when the entry that took it was
+    /// overridden by a later entry of its own action.
+    pub taken_by: Option<BindableAction>,
+}
+
+impl DisplacedDefault {
+    pub fn message(&self) -> String {
+        let lost = self.action.meta().label;
+        match self.taken_by {
+            Some(taken_by) => format!(
+                "{} now runs {}; {lost} has no shortcut",
+                self.chord,
+                taken_by.meta().label
+            ),
+            None => format!(
+                "{lost} has no shortcut; an earlier [[shortcuts]] entry took {}",
+                self.chord
+            ),
+        }
     }
 }
 
@@ -515,51 +589,69 @@ impl ShortcutRegistry {
     /// Bring `entries`, the configured `[[shortcuts]]`, to the bindings this
     /// registry holds, touching only the entries of actions bound
     /// differently: each such action's last entry is changed in place, and
-    /// an action without a fitting entry gets a new one at the end. Every
-    /// other entry keeps its place and spelling, so the file a save writes
-    /// changes only where the bindings did.
+    /// an action without an entry gets a new one at the end. Every other
+    /// entry keeps its place and spelling, so the file a save writes changes
+    /// only where the bindings did. An action that lost its shortcut here
+    /// gets an entry that unbinds it, so the file says so rather than
+    /// leaving it to whichever entry took the chord.
     pub fn record_overrides(&self, entries: &mut Vec<ShortcutOverride>) {
-        let configured = Self::with_overrides(entries);
-        for &action in BindableAction::all() {
-            let binding = self.binding_for(action);
-            if configured.binding_for(action) == binding {
-                continue;
-            }
-            if let Some(entry) = entries
-                .iter_mut()
-                .rev()
-                .find(|entry| BindableAction::from_id(&entry.action) == Some(action))
-            {
-                *entry = ShortcutOverride::new(action, binding);
-            }
-        }
-        // A changed entry can take its new chord from, or give its old one
-        // back to, an action that a later entry or a default binds. Entries
-        // appended last settle every action that still differs. Bound actions
-        // go first: no two hold one chord here, so none takes another's, and
-        // an action that lost its chord to one of them needs no entry.
-        let configured = Self::with_overrides(entries);
-        for &action in BindableAction::all() {
-            let binding = self.binding_for(action);
-            if binding.is_some() && configured.binding_for(action) != binding {
-                entries.push(ShortcutOverride::new(action, binding));
-            }
-        }
-        let configured = Self::with_overrides(entries);
-        for &action in BindableAction::all() {
-            if self.binding_for(action).is_none() && configured.binding_for(action).is_some() {
-                entries.push(ShortcutOverride::new(action, None));
-            }
-        }
         debug_assert!(
-            {
-                let recorded = Self::with_overrides(entries);
-                BindableAction::all()
-                    .iter()
-                    .all(|action| recorded.binding_for(*action) == self.binding_for(*action))
-            },
-            "the recorded shortcuts must load as the registry's bindings"
+            first_shared_chord(entries).is_none(),
+            "configured shortcuts give no chord to two actions"
         );
+        // Each pass leaves every action that has an entry bound as here, so
+        // only actions without one can still differ, and each of those gets
+        // an entry: the passes settle within one per action.
+        for _ in 0..=BindableAction::all().len() {
+            drop_overridden_shared_chords(entries);
+            let configured = Self::with_overrides(entries);
+            let differing: Vec<BindableAction> = BindableAction::all()
+                .iter()
+                .copied()
+                .filter(|action| configured.binding_for(*action) != self.binding_for(*action))
+                .collect();
+            if differing.is_empty() {
+                debug_assert!(
+                    first_shared_chord(entries).is_none(),
+                    "recorded shortcuts give no chord to two actions"
+                );
+                return;
+            }
+            for action in differing {
+                let recorded = ShortcutOverride::new(action, self.binding_for(action));
+                match entries
+                    .iter_mut()
+                    .rev()
+                    .find(|entry| BindableAction::from_id(&entry.action) == Some(action))
+                {
+                    Some(entry) => *entry = recorded,
+                    None => entries.push(recorded),
+                }
+            }
+        }
+        debug_assert!(false, "recording shortcuts did not settle: {entries:?}");
+        log::error!("Recording shortcuts did not settle; a save may not keep every change");
+    }
+
+    /// The actions that `entries` leave without their default shortcut
+    /// because another action's entry took it, while no entry of their own
+    /// says to unbind them.
+    pub fn displaced_defaults(entries: &[ShortcutOverride]) -> Vec<DisplacedDefault> {
+        let configured = Self::with_overrides(entries);
+        BindableAction::all()
+            .iter()
+            .filter_map(|&action| {
+                let chord = action.meta().default_binding?;
+                let has_entry = entries
+                    .iter()
+                    .any(|entry| BindableAction::from_id(&entry.action) == Some(action));
+                (!has_entry && configured.binding_for(action).is_none()).then(|| DisplacedDefault {
+                    action,
+                    taken_by: configured.conflict_for(&chord),
+                    chord,
+                })
+            })
+            .collect()
     }
 }
 
@@ -1020,8 +1112,8 @@ mod tests {
             ]
         );
 
-        // Taking a chord in the editor needs no entry for the action that
-        // lost it: replaying the entry takes it again.
+        // Taking a chord in the editor says in the file that the action
+        // which had it is unbound, so loading it is no surprise.
         let find = KeyChord::new("f", true, false, true, false);
         assert_eq!(reg.binding_for(BindableAction::ToggleSearch), Some(&find));
         reg.set_binding(BindableAction::NewTab, Some(find));
@@ -1030,9 +1122,130 @@ mod tests {
             all_bindings(&ShortcutRegistry::with_overrides(&entries)),
             all_bindings(&reg)
         );
-        assert_eq!(entries.len(), 3);
-        assert_eq!(entries[2], entry("new_tab", Some("f"), true, true));
+        assert_eq!(
+            entries[2..],
+            [
+                entry("toggle_search", None, false, false),
+                entry("new_tab", Some("f"), true, true)
+            ]
+        );
         assert_eq!(reg.binding_for(BindableAction::ToggleSearch), None);
+        assert!(ShortcutRegistry::displaced_defaults(&entries).is_empty());
+    }
+
+    #[test]
+    fn recording_drops_overridden_entries_rather_than_share_a_chord() {
+        // Copy's first entry is overridden by its second, so Ctrl+J is free.
+        let mut entries = vec![
+            entry("copy", Some("j"), true, false),
+            entry("scroll_page_up", Some("PageUp"), true, false),
+            entry("copy", Some("k"), true, false),
+        ];
+        let mut reg = ShortcutRegistry::with_overrides(&entries);
+        assert_eq!(
+            reg.conflict_for(&KeyChord::new("j", true, false, false, false)),
+            None
+        );
+
+        // Giving Ctrl+J to Paste would leave two actions' entries naming it.
+        reg.set_binding(
+            BindableAction::Paste,
+            Some(KeyChord::new("j", true, false, false, false)),
+        );
+        reg.record_overrides(&mut entries);
+        assert_eq!(
+            entries,
+            [
+                entry("scroll_page_up", Some("PageUp"), true, false),
+                entry("copy", Some("k"), true, false),
+                entry("paste", Some("j"), true, false),
+            ]
+        );
+        assert_eq!(first_shared_chord(&entries), None);
+        assert_eq!(
+            all_bindings(&ShortcutRegistry::with_overrides(&entries)),
+            all_bindings(&reg)
+        );
+    }
+
+    #[test]
+    fn entries_of_two_actions_may_not_share_a_chord() {
+        let new_tab = entry("new_tab", Some("T"), true, true);
+        let rename = entry("rename_tab", Some("t"), true, true);
+        assert_eq!(
+            first_shared_chord(&[
+                new_tab.clone(),
+                entry("copy", Some("k"), true, false),
+                rename.clone()
+            ]),
+            Some((0, 2))
+        );
+        // One action may be given a chord twice, the second entry winning.
+        assert_eq!(
+            first_shared_chord(&[new_tab.clone(), new_tab.clone()]),
+            None
+        );
+        // Unbinding entries name no chord.
+        assert_eq!(
+            first_shared_chord(&[
+                entry("copy", None, false, false),
+                entry("paste", None, false, false)
+            ]),
+            None
+        );
+        // Shift is no part of a caseless character, so these are one chord.
+        assert_eq!(
+            first_shared_chord(&[
+                entry("copy", Some("?"), true, true),
+                entry("paste", Some("?"), true, false)
+            ]),
+            Some((0, 1))
+        );
+    }
+
+    #[test]
+    fn an_entry_taking_a_default_names_the_action_that_lost_it() {
+        // Rename Tab takes New Tab's Ctrl+Shift+T.
+        let entries = [entry("rename_tab", Some("t"), true, true)];
+        let displaced = ShortcutRegistry::displaced_defaults(&entries);
+        assert_eq!(
+            displaced,
+            [DisplacedDefault {
+                action: BindableAction::NewTab,
+                chord: KeyChord::new("t", true, false, true, false),
+                taken_by: Some(BindableAction::RenameTab),
+            }]
+        );
+        assert_eq!(
+            displaced[0].message(),
+            "Ctrl+Shift+T now runs Rename Tab; New Tab has no shortcut"
+        );
+
+        // An entry of New Tab's own says what it wants: nothing is lost.
+        let unbound = [
+            entry("rename_tab", Some("t"), true, true),
+            entry("new_tab", None, false, false),
+        ];
+        assert!(ShortcutRegistry::displaced_defaults(&unbound).is_empty());
+        let moved = [
+            entry("rename_tab", Some("t"), true, true),
+            entry("new_tab", Some("n"), true, true),
+        ];
+        assert!(ShortcutRegistry::displaced_defaults(&moved).is_empty());
+
+        // A later entry moving Rename Tab on leaves the chord to nobody.
+        let overridden = [
+            entry("rename_tab", Some("t"), true, true),
+            entry("rename_tab", Some("r"), true, true),
+        ];
+        let displaced = ShortcutRegistry::displaced_defaults(&overridden);
+        assert_eq!(displaced.len(), 1);
+        assert_eq!(displaced[0].taken_by, None);
+        assert_eq!(
+            displaced[0].message(),
+            "New Tab has no shortcut; an earlier [[shortcuts]] entry took Ctrl+Shift+T"
+        );
+        assert!(ShortcutRegistry::displaced_defaults(&[]).is_empty());
     }
 
     #[test]
@@ -1060,21 +1273,46 @@ mod tests {
                 .wrapping_add(1_442_695_040_888_963_407);
             (state >> 33) as usize % bound
         };
-        for _ in 0..200 {
-            let mut entries = vec![
+        // Files as a person may write them: one entry per action, and one
+        // with an overridden entry that took a default (New Tab's) for good.
+        let files = [
+            vec![
                 entry("scroll_page_up", Some("PageUp"), true, false),
                 entry("new_tab", Some("k"), true, false),
-            ];
-            let mut reg = ShortcutRegistry::with_overrides(&entries);
-            for _ in 0..6 {
-                let action = actions[next(actions.len())];
-                reg.set_binding(action, chords[next(chords.len())].clone());
-                reg.record_overrides(&mut entries);
-                assert_eq!(
-                    all_bindings(&ShortcutRegistry::with_overrides(&entries)),
-                    all_bindings(&reg),
-                    "{entries:?}"
-                );
+            ],
+            vec![
+                entry("copy", Some("t"), true, true),
+                entry("scroll_page_up", Some("PageUp"), true, false),
+                entry("copy", Some("k"), true, false),
+            ],
+        ];
+        for file in &files {
+            assert_eq!(first_shared_chord(file), None);
+            for _ in 0..200 {
+                let mut entries = file.clone();
+                let mut reg = ShortcutRegistry::with_overrides(&entries);
+                let mut displaced = ShortcutRegistry::displaced_defaults(&entries);
+                for _ in 0..6 {
+                    let action = actions[next(actions.len())];
+                    reg.set_binding(action, chords[next(chords.len())].clone());
+                    reg.record_overrides(&mut entries);
+                    assert_eq!(
+                        all_bindings(&ShortcutRegistry::with_overrides(&entries)),
+                        all_bindings(&reg),
+                        "{entries:?}"
+                    );
+                    assert_eq!(first_shared_chord(&entries), None, "{entries:?}");
+                    // The editor never leaves a new action unbound without
+                    // an entry saying so.
+                    let now = ShortcutRegistry::displaced_defaults(&entries);
+                    assert!(
+                        now.iter().all(|lost| displaced
+                            .iter()
+                            .any(|before| before.action == lost.action)),
+                        "{entries:?}"
+                    );
+                    displaced = now;
+                }
             }
         }
     }
@@ -1110,8 +1348,14 @@ mod tests {
         assert_eq!(loaded.binding_for(BindableAction::Copy), Some(&paste));
         assert_eq!(loaded.binding_for(BindableAction::Paste), None);
         assert_eq!(all_bindings(&loaded), all_bindings(&set));
-        // The entry for Copy alone says so.
-        assert_eq!(entries, [entry("copy", Some("v"), true, true)]);
+        // The file says both what Copy took and that Paste lost it.
+        assert_eq!(
+            entries,
+            [
+                entry("copy", Some("v"), true, true),
+                entry("paste", None, false, false)
+            ]
+        );
     }
 
     #[test]

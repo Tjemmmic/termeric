@@ -965,3 +965,210 @@ fn ctrl_r_in_settings_does_not_reset() {
     assert!(!app.config.bell.visual);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
 }
+
+/// Record `key` with `modifiers` for `action` in the shortcuts editor
+/// through the keyboard, as a person does.
+fn record_shortcut(
+    app: &mut App,
+    action: crate::input::keybindings::BindableAction,
+    key: &str,
+    modifiers: ModifiersState,
+) {
+    use crate::ui::shortcuts_panel::ShortcutsAction;
+    if !app.shortcuts_panel.is_active() {
+        app.shortcuts_panel.open();
+    }
+    app.apply_shortcuts_action(ShortcutsAction::StartRecording(action));
+    assert!(app.shortcuts_panel.is_recording());
+    app.modifiers = modifiers;
+    app.handle_shortcuts_panel_key(&winit::keyboard::Key::Character(key.into()));
+    app.modifiers = ModifiersState::empty();
+}
+
+#[test]
+fn recording_a_chord_another_action_uses_asks_before_changing_anything() {
+    use crate::input::keybindings::{BindableAction, KeyChord};
+    use crate::ui::info_overlay::{InfoOverlayAction, InfoOverlayFocus};
+    use crate::ui::modal::ModalLayer;
+    let new_tab = KeyChord::new("t", true, false, true, false);
+    let ctrl_shift = ModifiersState::CONTROL | ModifiersState::SHIFT;
+    let mut app = App::new_headless(Config::default()).unwrap();
+    let rename_tab = app
+        .shortcut_registry
+        .binding_for(BindableAction::RenameTab)
+        .cloned();
+    let unchanged = |app: &App| {
+        assert_eq!(
+            app.shortcut_registry.binding_for(BindableAction::NewTab),
+            Some(&new_tab)
+        );
+        assert_eq!(
+            app.shortcut_registry
+                .binding_for(BindableAction::RenameTab)
+                .cloned(),
+            rename_tab
+        );
+        assert!(app.config.shortcuts.is_empty());
+    };
+
+    // The question names the chord and both actions, and nothing has
+    // changed while it is open.
+    record_shortcut(&mut app, BindableAction::RenameTab, "T", ctrl_shift);
+    assert_eq!(app.top_modal_layer(), Some(ModalLayer::InfoOverlay));
+    assert_eq!(app.info_overlay.title(), "Reassign Shortcut");
+    assert_eq!(
+        app.info_overlay.lines()[..2],
+        [
+            "Ctrl+Shift+T is the shortcut for New Tab.",
+            "Use it for Rename Tab and leave New Tab without a shortcut?"
+        ]
+    );
+    unchanged(&app);
+
+    // Cancel, Escape, and Enter on the default focus all keep both.
+    let request_id = app.info_overlay.request_id();
+    app.apply_info_overlay_action(InfoOverlayAction::Choose {
+        request_id,
+        choice_id: "shortcut-keep".into(),
+    });
+    assert!(!app.info_overlay.is_awaiting_current());
+    assert!(app.shortcuts_panel.is_active());
+    unchanged(&app);
+    for key in [
+        winit::keyboard::NamedKey::Escape,
+        winit::keyboard::NamedKey::Enter,
+    ] {
+        record_shortcut(&mut app, BindableAction::RenameTab, "T", ctrl_shift);
+        assert!(app.info_overlay.is_awaiting_current());
+        app.handle_info_overlay_key(&winit::keyboard::Key::Named(key), false);
+        assert!(!app.info_overlay.is_awaiting_current(), "{key:?}");
+        assert!(app.overlay_flow.is_none());
+        unchanged(&app);
+    }
+
+    // Tab reaches Reassign, and Enter takes the chord, leaving New Tab
+    // unbound in the file too.
+    record_shortcut(&mut app, BindableAction::RenameTab, "T", ctrl_shift);
+    app.handle_info_overlay_key(
+        &winit::keyboard::Key::Named(winit::keyboard::NamedKey::Tab),
+        false,
+    );
+    assert_eq!(
+        app.info_overlay.focus(),
+        Some(&InfoOverlayFocus::Choice("shortcut-reassign".into()))
+    );
+    app.handle_info_overlay_key(
+        &winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter),
+        false,
+    );
+    assert!(!app.info_overlay.is_awaiting_current());
+    assert_eq!(
+        app.shortcut_registry.binding_for(BindableAction::RenameTab),
+        Some(&new_tab)
+    );
+    assert_eq!(
+        app.shortcut_registry.binding_for(BindableAction::NewTab),
+        None
+    );
+    assert_eq!(
+        crate::input::ShortcutRegistry::displaced_defaults(&app.config.shortcuts),
+        []
+    );
+    app.config.validate().unwrap();
+
+    // A chord nothing uses is taken without a question.
+    record_shortcut(&mut app, BindableAction::NewTab, "N", ctrl_shift);
+    assert!(!app.info_overlay.is_awaiting_current());
+    assert_eq!(
+        app.shortcut_registry.binding_for(BindableAction::NewTab),
+        Some(&KeyChord::new("n", true, false, true, false))
+    );
+}
+
+#[test]
+fn a_reassignment_answered_after_a_reload_moved_the_chord_asks_again() {
+    use crate::input::keybindings::{BindableAction, KeyChord};
+    use crate::ui::info_overlay::InfoOverlayAction;
+    let chord = KeyChord::new("t", true, false, true, false);
+    let (_directory, path, mut app) = app_with_config_file("");
+    record_shortcut(
+        &mut app,
+        BindableAction::RenameTab,
+        "T",
+        ModifiersState::CONTROL | ModifiersState::SHIFT,
+    );
+    let request_id = app.info_overlay.request_id();
+
+    // Meanwhile the file gives Ctrl+Shift+T to Copy instead.
+    std::fs::write(
+        &path,
+        "[[shortcuts]]\naction = \"copy\"\nkey = \"t\"\nctrl = true\nshift = true\n",
+    )
+    .unwrap();
+    app.reload_config_from_disk();
+    assert_eq!(
+        app.shortcut_registry.conflict_for(&chord),
+        Some(BindableAction::Copy)
+    );
+
+    // Agreeing to take it from New Tab is no answer for Copy.
+    app.apply_info_overlay_action(InfoOverlayAction::Choose {
+        request_id,
+        choice_id: "shortcut-reassign".into(),
+    });
+    assert_eq!(
+        app.shortcut_registry.conflict_for(&chord),
+        Some(BindableAction::Copy)
+    );
+    assert!(app.info_overlay.is_awaiting_current());
+    assert_eq!(
+        app.info_overlay.lines()[0],
+        "Ctrl+Shift+T is the shortcut for Copy Selection."
+    );
+}
+
+#[test]
+fn an_entry_taking_a_default_shortcut_is_noted_once_until_that_changes() {
+    use crate::input::keybindings::{BindableAction, KeyChord};
+    let notices = |app: &App| -> Vec<String> {
+        app.toasts
+            .iter()
+            .map(|toast| toast.message.clone())
+            .filter(|message| message.contains("has no shortcut"))
+            .collect()
+    };
+    let source = "[[shortcuts]]\naction = \"rename_tab\"\nkey = \"t\"\nctrl = true\nshift = true\n";
+    let (_directory, path, mut app) = app_with_config_file(source);
+    assert_eq!(
+        app.shortcut_registry.binding_for(BindableAction::RenameTab),
+        Some(&KeyChord::new("t", true, false, true, false))
+    );
+    assert_eq!(
+        notices(&app),
+        ["Ctrl+Shift+T now runs Rename Tab; New Tab has no shortcut"]
+    );
+
+    // Reloading the same file, or changing an unrelated setting, does not
+    // repeat it.
+    app.reload_config_from_disk();
+    app.apply_settings_action(SettingsAction::SetVisualBell(false));
+    assert_eq!(notices(&app).len(), 1);
+
+    // Giving New Tab a shortcut of its own ends it.
+    record_shortcut(
+        &mut app,
+        BindableAction::NewTab,
+        "N",
+        ModifiersState::CONTROL | ModifiersState::SHIFT,
+    );
+    assert!(notices(&app).is_empty());
+
+    // A file that unbinds New Tab itself says what it means: no notice.
+    std::fs::write(
+        &path,
+        format!("{source}\n[[shortcuts]]\naction = \"new_tab\"\n"),
+    )
+    .unwrap();
+    app.reload_config_from_disk();
+    assert!(notices(&app).is_empty());
+}
