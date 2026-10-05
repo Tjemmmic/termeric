@@ -320,13 +320,20 @@ mod tests {
             parse_strs(&["mcp", "--help"]),
             Ok(ParseOutcome::Print(help)) if help.contains("termeric mcp [OPTIONS]") && help.contains("--process <PID>")
         ));
-        assert!(matches!(
-            parse_strs(&["mcp", "--process", "42"]),
-            Ok(ParseOutcome::Mcp {
-                process_id: Some(42),
-                ..
-            })
-        ));
+        for arguments in [&["mcp", "--process", "42"][..], &["mcp", "--process=42"]] {
+            assert!(
+                matches!(
+                    parse_strs(arguments),
+                    Ok(ParseOutcome::Mcp {
+                        process_id: Some(42),
+                        ..
+                    })
+                ),
+                "{arguments:?}"
+            );
+        }
+        assert!(parse_strs(&["mcp", "--help=x"]).is_err());
+        assert!(parse_strs(&["mcp", "--process="]).is_err());
     }
 
     /// One manual page for the whole command. clap_mangen's own subcommand

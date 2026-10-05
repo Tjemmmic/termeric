@@ -231,12 +231,16 @@ fn parse_mcp(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
     let mut process_id = None;
     let mut supervisor = None;
     let mut rest = arguments.iter();
-    while let Some(flag) = rest.next() {
-        if matches!(flag.to_str(), Some("-h" | "--help")) {
+    while let Some(argument) = rest.next() {
+        let (flag, inline) = split_inline_value(argument);
+        if inline.is_none() && matches!(flag.to_str(), Some("-h" | "--help")) {
             return Ok(ParseOutcome::Print(spec::mcp_help()));
         }
-        let value = rest.next().and_then(|value| value.to_str());
-        match (flag.to_str(), value) {
+        let value = inline.or_else(|| rest.next().cloned());
+        match (
+            flag.to_str(),
+            value.as_ref().and_then(|value| value.to_str()),
+        ) {
             (Some("--process"), Some(value)) if process_id.is_none() => {
                 process_id = Some(
                     value
