@@ -132,11 +132,10 @@ impl App {
         authority: crate::domain::DomainAuthority,
         domain_id: String,
     ) -> Result<()> {
-        let window_id = self
-            .window
-            .as_ref()
-            .map(|window| window.id())
-            .context("live-domain topology requires a native window")?;
+        if self.window.is_none() {
+            anyhow::bail!("live-domain topology requires a native window");
+        }
+        let window_key = self.window_key();
         let proxy = EVENT_LOOP_PROXY
             .get()
             .cloned()
@@ -158,7 +157,7 @@ impl App {
                             retry_delay = std::time::Duration::from_millis(250);
                             window_open = proxy
                                 .send_event(AppEvent::LiveDomainTopology {
-                                    window_id,
+                                    window: window_key,
                                     domain_id: domain_id.clone(),
                                     result: Ok(event),
                                 })
@@ -174,7 +173,7 @@ impl App {
                     {
                         failure_reported = proxy
                             .send_event(AppEvent::LiveDomainTopology {
-                                window_id,
+                                window: window_key,
                                 domain_id: domain_id.clone(),
                                 result: Err(format!("{error:#}")),
                             })

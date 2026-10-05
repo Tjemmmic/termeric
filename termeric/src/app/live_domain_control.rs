@@ -39,11 +39,12 @@ impl App {
         }
         let inserted = self.pending_live_domain_controls.insert(control.clone());
         debug_assert!(inserted);
-        let Some(window_id) = self.window.as_ref().map(|window| window.id()) else {
+        if self.window.is_none() {
             self.pending_live_domain_controls.remove(&control);
             self.restore_live_domain_preview(&control);
             return Err("Live-domain controls require an attached native window".into());
-        };
+        }
+        let window_key = self.window_key();
         let Some(proxy) = EVENT_LOOP_PROXY.get().cloned() else {
             self.pending_live_domain_controls.remove(&control);
             self.restore_live_domain_preview(&control);
@@ -69,7 +70,7 @@ impl App {
                     })
                     .map_err(|error| format!("{error:#}"));
                 let _ = proxy.send_event(AppEvent::LiveDomainControlCompleted {
-                    window_id,
+                    window: window_key,
                     control: worker_control,
                     result,
                 });

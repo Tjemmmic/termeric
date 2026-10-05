@@ -138,6 +138,14 @@ pub(super) struct UiMetrics {
     pub cell_height: f32,
 }
 
+/// The window a background task returns its result to: the window's control
+/// ID, which no later window of the process takes. A winit `WindowId` can't
+/// name it, since on Wayland that comes from the surface's address, which a
+/// window opened after this one closes can reuse, and the request counters a
+/// result carries start alike in every window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct WindowKey(u64);
+
 #[derive(Debug)]
 pub(crate) enum AppEvent {
     Pty,
@@ -154,60 +162,60 @@ pub(crate) enum AppEvent {
         >,
     },
     LiveDomainControlCompleted {
-        window_id: winit::window::WindowId,
+        window: WindowKey,
         control: LiveDomainControl,
         result: std::result::Result<crate::domain::model::DomainSnapshot, String>,
     },
     LiveDomainTopology {
-        window_id: winit::window::WindowId,
+        window: WindowKey,
         domain_id: String,
         result: std::result::Result<crate::domain::DomainTopologyEvent, String>,
     },
     DomainPickerLoaded {
-        window_id: winit::window::WindowId,
+        window: WindowKey,
         generation: u64,
         result: std::result::Result<Vec<crate::domain::model::DomainSummary>, String>,
     },
     DomainPickerPrepared {
-        window_id: winit::window::WindowId,
+        window: WindowKey,
         generation: u64,
         result: std::result::Result<crate::domain::model::DomainSnapshot, String>,
     },
     ContextGathered {
-        window_id: winit::window::WindowId,
+        window: WindowKey,
         request_id: u64,
         result: std::result::Result<String, String>,
     },
     FileUploadCompleted {
-        window_id: winit::window::WindowId,
+        window: WindowKey,
         request_id: u64,
         result: std::result::Result<FileUploadCompletion, String>,
     },
     FileUploadProgress {
-        window_id: winit::window::WindowId,
+        window: WindowKey,
         request_id: u64,
         bytes_sent: u64,
         total_bytes: u64,
     },
     KittyFileTransferCompleted {
-        window_id: winit::window::WindowId,
+        window: WindowKey,
         token: u64,
         result: kitty_file_transfer::WorkerCompletion,
     },
     KittyFileUploadCompleted {
-        window_id: winit::window::WindowId,
+        window: WindowKey,
         token: u64,
         result: kitty_file_transfer::UploadWorkerCompletion,
     },
     StructuredPluginCompleted(crate::plugin::structured::StructuredHandlerCompletion),
     AccessKit(accesskit_winit::Event),
     RendererDeviceLost {
-        window_id: winit::window::WindowId,
+        window: WindowKey,
         generation: u64,
         failure: crate::renderer::RendererDeviceFailure,
     },
     BackgroundImageLoaded {
-        window_id: winit::window::WindowId,
+        window: WindowKey,
         generation: u64,
         path: PathBuf,
         result: std::result::Result<crate::renderer::DecodedBackgroundImage, String>,
@@ -217,35 +225,20 @@ pub(crate) enum AppEvent {
 }
 
 impl AppEvent {
-    /// For a result a background task returns to one window: that window,
-    /// and why it is redrawn.
-    fn window_target(&self) -> Option<(winit::window::WindowId, RedrawReason)> {
+    /// For a result a background task returns to one window and nothing
+    /// else: that window, and why it is redrawn.
+    fn window_target(&self) -> Option<(WindowKey, RedrawReason)> {
         Some(match self {
-            Self::AccessKit(event) => (event.window_id, RedrawReason::Accessibility),
-            Self::RendererDeviceLost { window_id, .. } => {
-                (*window_id, RedrawReason::SurfaceRecovery)
-            }
-            Self::BackgroundImageLoaded { window_id, .. } => {
-                (*window_id, RedrawReason::BackgroundTask)
-            }
-            Self::LiveDomainTopology { window_id, .. } => {
-                (*window_id, RedrawReason::BackgroundTask)
-            }
-            Self::DomainPickerLoaded { window_id, .. } => {
-                (*window_id, RedrawReason::BackgroundTask)
-            }
-            Self::ContextGathered { window_id, .. } => (*window_id, RedrawReason::BackgroundTask),
-            Self::FileUploadCompleted { window_id, .. } => {
-                (*window_id, RedrawReason::BackgroundTask)
-            }
-            Self::FileUploadProgress { window_id, .. } => {
-                (*window_id, RedrawReason::BackgroundTask)
-            }
-            Self::KittyFileTransferCompleted { window_id, .. } => {
-                (*window_id, RedrawReason::BackgroundTask)
-            }
-            Self::KittyFileUploadCompleted { window_id, .. } => {
-                (*window_id, RedrawReason::BackgroundTask)
+            Self::RendererDeviceLost { window, .. } => (*window, RedrawReason::SurfaceRecovery),
+            Self::BackgroundImageLoaded { window, .. }
+            | Self::LiveDomainTopology { window, .. }
+            | Self::DomainPickerLoaded { window, .. }
+            | Self::ContextGathered { window, .. }
+            | Self::FileUploadCompleted { window, .. }
+            | Self::FileUploadProgress { window, .. }
+            | Self::KittyFileTransferCompleted { window, .. }
+            | Self::KittyFileUploadCompleted { window, .. } => {
+                (*window, RedrawReason::BackgroundTask)
             }
             _ => return None,
         })
@@ -253,10 +246,16 @@ impl AppEvent {
 }
 
 impl App {
+    /// The key background work this window starts tags its results with.
+    /// Application assigns the control ID before the window is created, and
+    /// every such task needs a created window, so no task sees another ID.
+    pub(crate) fn window_key(&self) -> WindowKey {
+        WindowKey(self.control_window_id)
+    }
+
     /// Apply a result `AppEvent::window_target` routed to this window.
     fn handle_window_event_result(&mut self, event: AppEvent) {
         match event {
-            AppEvent::AccessKit(event) => self.handle_accesskit_event(event),
             AppEvent::RendererDeviceLost {
                 generation,
                 failure,
@@ -1743,12 +1742,12 @@ impl App {
     /// Initialize the renderer
     fn init_renderer(&mut self, window: Arc<Window>) -> Result<()> {
         let scale_factor = window.scale_factor() as f32;
-        let window_id = window.id();
+        let window_key = self.window_key();
         let generation = self.renderer_generation;
         let failure_callback = EVENT_LOOP_PROXY.get().cloned().map(|proxy| {
             Arc::new(move |failure| {
                 let _ = proxy.send_event(AppEvent::RendererDeviceLost {
-                    window_id,
+                    window: window_key,
                     generation,
                     failure,
                 });

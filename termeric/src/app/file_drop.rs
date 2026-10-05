@@ -269,11 +269,12 @@ impl App {
 
     pub(super) fn start_file_upload(&mut self, upload: PendingFileUpload) {
         let request_id = upload.request_id;
-        let Some(window_id) = self.window.as_ref().map(|window| window.id()) else {
+        if self.window.is_none() {
             self.toasts
                 .error("Live-domain uploads require an attached native window");
             return;
-        };
+        }
+        let window_key = self.window_key();
         let Some(proxy) = super::EVENT_LOOP_PROXY.get().cloned() else {
             self.toasts
                 .error("Live-domain upload event channel is unavailable");
@@ -339,7 +340,7 @@ impl App {
                             announced_total = true;
                             last_reported = bytes_sent;
                             let _ = progress_proxy.send_event(AppEvent::FileUploadProgress {
-                                window_id,
+                                window: window_key,
                                 request_id,
                                 bytes_sent,
                                 total_bytes,
@@ -397,7 +398,7 @@ impl App {
                 })()
                 .map_err(|error| format!("{error:#}"));
                 let _ = proxy.send_event(AppEvent::FileUploadCompleted {
-                    window_id,
+                    window: window_key,
                     request_id,
                     result,
                 });

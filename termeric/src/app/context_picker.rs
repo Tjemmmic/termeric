@@ -121,13 +121,14 @@ impl App {
         else {
             return;
         };
-        let Some(window_id) = self.window.as_ref().map(|window| window.id()) else {
+        if self.window.is_none() {
             self.handle_context_gathered(
                 request_id,
                 Err("Context gathering requires a native window".into()),
             );
             return;
-        };
+        }
+        let window_key = self.window_key();
         let Some(proxy) = super::EVENT_LOOP_PROXY.get().cloned() else {
             self.handle_context_gathered(
                 request_id,
@@ -140,7 +141,7 @@ impl App {
             .spawn(move || {
                 let result = crate::agents::context::gather_context(request);
                 let _ = proxy.send_event(super::AppEvent::ContextGathered {
-                    window_id,
+                    window: window_key,
                     request_id,
                     result,
                 });

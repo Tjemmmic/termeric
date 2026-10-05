@@ -1,7 +1,7 @@
 //! Process-level ownership for independent native windows.
 
 use super::{
-    App, AppEvent, PendingPluginWindowClose, Requester, clear_agent_view_wake_pending,
+    App, AppEvent, PendingPluginWindowClose, Requester, WindowKey, clear_agent_view_wake_pending,
     clear_pty_wake_pending, clear_transcript_wake_pending, redraw_scheduler::RedrawReason,
 };
 use crate::cli::{LaunchPlan, WindowLaunch};
@@ -184,7 +184,7 @@ type ControlResponder =
 
 struct PendingDomainControl {
     request: crate::control::protocol::Request,
-    window_id: WindowId,
+    window: WindowKey,
     control: super::LiveDomainControl,
     context: PendingDomainContext,
     responders: Vec<ControlResponder>,
@@ -537,6 +537,51 @@ impl Application {
         Ok((native_id, self.live_window(native_id, window_id)?))
     }
 
+    /// The open window background work tagged with `key`. Once that window
+    /// has closed there is none, even when a later window took its native ID.
+    fn keyed_window(&self, key: WindowKey) -> Option<&App> {
+        let native_id = self.control_native_window_id(key.0).ok()?;
+        self.windows.get(&native_id)
+    }
+
+    fn keyed_window_mut(&mut self, key: WindowKey) -> Option<&mut App> {
+        let native_id = self.control_native_window_id(key.0).ok()?;
+        self.windows.get_mut(&native_id)
+    }
+
+    /// Hand a result `AppEvent::window_target` names to its window, or drop
+    /// it if that window has closed.
+    fn deliver_window_result(&mut self, key: WindowKey, reason: RedrawReason, event: AppEvent) {
+        let Some(window) = self.keyed_window_mut(key) else {
+            log::debug!("Discarding a background result for closed window {key:?}");
+            return;
+        };
+        window.redraw_scheduler.request(reason);
+        window.handle_window_event_result(event);
+    }
+
+    /// The daemon's answer to a live-domain control reaches the window that
+    /// sent it, if still open, and then every control client waiting on it.
+    fn deliver_live_domain_control_completed(
+        &mut self,
+        key: WindowKey,
+        control: &super::LiveDomainControl,
+        result: &std::result::Result<crate::domain::model::DomainSnapshot, String>,
+    ) {
+        match self.keyed_window_mut(key) {
+            Some(window) => {
+                window
+                    .redraw_scheduler
+                    .request(RedrawReason::BackgroundTask);
+                window.handle_live_domain_control_completed(control.clone(), result.clone());
+            }
+            None => {
+                log::debug!("Discarding a live-domain control result for closed window {key:?}");
+            }
+        }
+        self.complete_live_domain_control(key, control, result);
+    }
+
     fn remove_closed_windows(&mut self, event_loop: &ActiveEventLoop) {
         let surviving = self
             .windows
@@ -771,15 +816,23 @@ impl ApplicationHandler<AppEvent> for Application {
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: AppEvent) {
-        if let Some((window_id, reason)) = event.window_target() {
-            if let Some(window) = self.windows.get_mut(&window_id) {
-                window.redraw_scheduler.request(reason);
-                window.handle_window_event_result(event);
-            }
+        if let Some((window, reason)) = event.window_target() {
+            self.deliver_window_result(window, reason, event);
             self.remove_closed_windows(event_loop);
             return;
         }
         let process_pty = match event {
+            // AccessKit names its window by native ID. Each window's adapter
+            // ends with the window, so it only speaks for the window that
+            // holds that ID.
+            AppEvent::AccessKit(event) => {
+                if let Some(window) = self.windows.get_mut(&event.window_id) {
+                    window.redraw_scheduler.request(RedrawReason::Accessibility);
+                    window.handle_accesskit_event(event);
+                }
+                self.remove_closed_windows(event_loop);
+                return;
+            }
             AppEvent::SystemAccessibilityChanged(preferences) => {
                 self.system_accessibility = preferences;
                 for window in self.windows.values_mut() {
@@ -808,36 +861,34 @@ impl ApplicationHandler<AppEvent> for Application {
                 return;
             }
             AppEvent::LiveDomainControlCompleted {
-                window_id,
+                window,
                 control,
                 result,
             } => {
-                if let Some(window) = self.windows.get_mut(&window_id) {
-                    window
-                        .redraw_scheduler
-                        .request(RedrawReason::BackgroundTask);
-                    window.handle_live_domain_control_completed(control.clone(), result.clone());
-                }
-                self.complete_live_domain_control(window_id, &control, &result);
+                self.deliver_live_domain_control_completed(window, &control, &result);
                 self.remove_closed_windows(event_loop);
                 return;
             }
             AppEvent::DomainPickerPrepared {
-                window_id,
+                window,
                 generation,
                 result,
             } => {
-                let requested = if let Some(window) = self.windows.get_mut(&window_id) {
-                    window
-                        .redraw_scheduler
-                        .request(RedrawReason::BackgroundTask);
-                    window.handle_domain_picker_prepared(generation, result);
-                    window
-                        .requested_window_launch
-                        .take()
-                        .map(|launch| (window.config.clone(), launch))
-                } else {
-                    None
+                let requested = match self.keyed_window_mut(window) {
+                    Some(window) => {
+                        window
+                            .redraw_scheduler
+                            .request(RedrawReason::BackgroundTask);
+                        window.handle_domain_picker_prepared(generation, result);
+                        window
+                            .requested_window_launch
+                            .take()
+                            .map(|launch| (window.config.clone(), launch))
+                    }
+                    None => {
+                        log::debug!("Discarding a domain preparation for closed window {window:?}");
+                        None
+                    }
                 };
                 if let Some((config, launch)) = requested {
                     if let Err(error) = self.queue_window(config, launch) {
@@ -870,8 +921,7 @@ impl ApplicationHandler<AppEvent> for Application {
                 true
             }
             AppEvent::Git => false,
-            AppEvent::AccessKit(_)
-            | AppEvent::RendererDeviceLost { .. }
+            AppEvent::RendererDeviceLost { .. }
             | AppEvent::BackgroundImageLoaded { .. }
             | AppEvent::LiveDomainTopology { .. }
             | AppEvent::DomainPickerLoaded { .. }

@@ -153,9 +153,10 @@ impl App {
         let Some(configured_path) = self.background_image_path.clone() else {
             return;
         };
-        let Some(window_id) = self.window.as_ref().map(|window| window.id()) else {
+        if self.window.is_none() {
             return;
-        };
+        }
+        let window_key = self.window_key();
         let Some(proxy) = EVENT_LOOP_PROXY.get().cloned() else {
             return;
         };
@@ -167,7 +168,7 @@ impl App {
             .spawn(move || {
                 let result = crate::renderer::load_background_image(&resolved_path);
                 let _ = proxy.send_event(AppEvent::BackgroundImageLoaded {
-                    window_id,
+                    window: window_key,
                     generation,
                     path: resolved_path,
                     result,

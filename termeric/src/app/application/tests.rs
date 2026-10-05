@@ -1079,7 +1079,7 @@ fn live_domain_creation_completion_returns_authoritative_gui_ids_and_replays() {
     type Reply = Receiver<std::result::Result<Response, String>>;
     fn pend(
         application: &mut Application,
-        window: WindowId,
+        window: WindowKey,
         request: &Request,
         control: &LiveDomainControl,
         context: PendingDomainContext,
@@ -1089,7 +1089,7 @@ fn live_domain_creation_completion_returns_authoritative_gui_ids_and_replays() {
             .pending_domain_controls
             .push(PendingDomainControl {
                 request: request.clone(),
-                window_id: window,
+                window,
                 control: control.clone(),
                 context,
                 responders: vec![responder],
@@ -1099,17 +1099,11 @@ fn live_domain_creation_completion_returns_authoritative_gui_ids_and_replays() {
     /// The daemon's answer reaches the window, then the control client.
     fn finish(
         application: &mut Application,
-        window: WindowId,
+        window: WindowKey,
         control: &LiveDomainControl,
         snapshot: &DomainSnapshot,
     ) {
-        let result = Ok(snapshot.clone());
-        application
-            .windows
-            .get_mut(&window)
-            .unwrap()
-            .handle_live_domain_control_completed(control.clone(), result.clone());
-        application.complete_live_domain_control(window, control, &result);
+        application.deliver_live_domain_control_completed(window, control, &Ok(snapshot.clone()));
     }
     let tab = |id, pane| LiveTab::fixture(id, LivePaneLayout::pane(pane));
     let split_tab = |id, split_id, direction, ratio_millis, first, second| -> LiveTab {
@@ -1160,6 +1154,7 @@ fn live_domain_creation_completion_returns_authoritative_gui_ids_and_replays() {
     application.windows.insert(native_id, window);
     application.window_order.push(native_id);
     application.control_window_ids.insert(native_id, 7);
+    let key = WindowKey(7);
     let domain_id = initial.id.clone();
 
     // A retry with the same ID waits on the same completion; the same ID
@@ -1174,7 +1169,7 @@ fn live_domain_creation_completion_returns_authoritative_gui_ids_and_replays() {
     };
     let create_reply = pend(
         &mut application,
-        native_id,
+        key,
         &create_request,
         &create_control,
         PendingDomainContext::None,
@@ -1201,7 +1196,7 @@ fn live_domain_creation_completion_returns_authoritative_gui_ids_and_replays() {
     ));
     finish(
         &mut application,
-        native_id,
+        key,
         &create_control,
         &snapshot(20, vec![tab(10, 100), tab(20, 200)]),
     );
@@ -1229,7 +1224,7 @@ fn live_domain_creation_completion_returns_authoritative_gui_ids_and_replays() {
     };
     let split_reply = pend(
         &mut application,
-        native_id,
+        key,
         &Request::SplitPane {
             request_id: "7".repeat(32),
             window_id: 7,
@@ -1247,7 +1242,7 @@ fn live_domain_creation_completion_returns_authoritative_gui_ids_and_replays() {
             split_tab(20, 55, SplitDirection::Vertical, 500, 200, 201),
         ],
     );
-    finish(&mut application, native_id, &split_control, &split);
+    finish(&mut application, key, &split_control, &split);
     assert!(matches!(
         split_reply.recv().unwrap().unwrap(),
         Response::PaneCreated {
@@ -1273,12 +1268,12 @@ fn live_domain_creation_completion_returns_authoritative_gui_ids_and_replays() {
     };
     let unproven_reply = pend(
         &mut application,
-        native_id,
+        key,
         &unproven_close_request,
         &unproven_close_control,
         PendingDomainContext::None,
     );
-    application.complete_live_domain_control(native_id, &unproven_close_control, &Ok(split));
+    application.complete_live_domain_control(key, &unproven_close_control, &Ok(split));
     let unproven_error = unproven_reply.recv().unwrap().unwrap_err();
     assert!(unproven_error.contains("still contains the pane"));
     assert_eq!(
@@ -1293,7 +1288,7 @@ fn live_domain_creation_completion_returns_authoritative_gui_ids_and_replays() {
     };
     let resize_reply = pend(
         &mut application,
-        native_id,
+        key,
         &Request::ResizeDivider {
             request_id: "b".repeat(32),
             window_id: 7,
@@ -1308,7 +1303,7 @@ fn live_domain_creation_completion_returns_authoritative_gui_ids_and_replays() {
     );
     finish(
         &mut application,
-        native_id,
+        key,
         &resize_control,
         &snapshot(
             20,
@@ -1363,7 +1358,7 @@ fn live_domain_creation_completion_returns_authoritative_gui_ids_and_replays() {
     ));
     let move_pane_reply = pend(
         &mut application,
-        native_id,
+        key,
         &Request::MovePane {
             request_id: "d".repeat(32),
             source_window_id: 7,
@@ -1380,7 +1375,7 @@ fn live_domain_creation_completion_returns_authoritative_gui_ids_and_replays() {
     let destination = || split_tab(10, 56, SplitDirection::Horizontal, 500, 100, 201);
     finish(
         &mut application,
-        native_id,
+        key,
         &move_pane_control,
         &snapshot(10, vec![destination(), tab(20, 200)]),
     );
@@ -1416,7 +1411,7 @@ fn live_domain_creation_completion_returns_authoritative_gui_ids_and_replays() {
     ));
     let move_tab_reply = pend(
         &mut application,
-        native_id,
+        key,
         &Request::MoveTab {
             request_id: "c".repeat(32),
             source_window_id: 7,
@@ -1429,7 +1424,7 @@ fn live_domain_creation_completion_returns_authoritative_gui_ids_and_replays() {
     );
     finish(
         &mut application,
-        native_id,
+        key,
         &move_tab_control,
         &snapshot(10, vec![tab(20, 200), destination()]),
     );
@@ -1454,7 +1449,7 @@ fn live_domain_creation_completion_returns_authoritative_gui_ids_and_replays() {
     };
     let close_pane_reply = pend(
         &mut application,
-        native_id,
+        key,
         &Request::ClosePane {
             request_id: "8".repeat(32),
             window_id: 7,
@@ -1466,7 +1461,7 @@ fn live_domain_creation_completion_returns_authoritative_gui_ids_and_replays() {
     );
     finish(
         &mut application,
-        native_id,
+        key,
         &close_pane_control,
         &snapshot(10, vec![tab(20, 200), tab(10, 100)]),
     );
@@ -1495,7 +1490,7 @@ fn live_domain_creation_completion_returns_authoritative_gui_ids_and_replays() {
     };
     let close_tab_reply = pend(
         &mut application,
-        native_id,
+        key,
         &Request::CloseTab {
             request_id: "9".repeat(32),
             window_id: 7,
@@ -1506,7 +1501,7 @@ fn live_domain_creation_completion_returns_authoritative_gui_ids_and_replays() {
     );
     finish(
         &mut application,
-        native_id,
+        key,
         &close_tab_control,
         &snapshot(10, vec![tab(10, 100)]),
     );
@@ -4894,6 +4889,172 @@ fn a_plugin_result_never_reaches_a_window_that_took_a_closed_ones_native_id() {
     assert!(!shown(&application));
     application.handle_structured_plugin_completed(completion(8));
     assert!(shown(&application), "window 8's own result reaches it");
+}
+
+/// Window 8 holding the native ID that window 7 had before it closed, as a
+/// Wayland surface at a reused address does.
+fn window_that_took_a_closed_ones_native_id() -> (Application, WindowId) {
+    let mut application =
+        Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
+    application.pending.clear();
+    let native = WindowId::from(21_u64);
+    let mut window = App::new_headless(Config::default()).unwrap();
+    window.control_window_id = 8;
+    application.windows.insert(native, window);
+    application.window_order = vec![native];
+    application.control_window_ids.insert(native, 8);
+    (application, native)
+}
+
+fn deliver(application: &mut Application, event: AppEvent) {
+    let (window, reason) = event.window_target().expect("a single-window result");
+    application.deliver_window_result(window, reason, event);
+}
+
+#[test]
+fn background_results_name_their_window_by_key() {
+    let window = WindowKey(8);
+    let results = [
+        AppEvent::RendererDeviceLost {
+            window,
+            generation: 0,
+            failure: crate::renderer::RendererDeviceFailure {
+                reason: wgpu::DeviceLostReason::Unknown,
+                message: String::new(),
+            },
+        },
+        AppEvent::BackgroundImageLoaded {
+            window,
+            generation: 0,
+            path: "/background.png".into(),
+            result: Err(String::new()),
+        },
+        AppEvent::LiveDomainTopology {
+            window,
+            domain_id: String::new(),
+            result: Err(String::new()),
+        },
+        AppEvent::DomainPickerLoaded {
+            window,
+            generation: 0,
+            result: Err(String::new()),
+        },
+        AppEvent::ContextGathered {
+            window,
+            request_id: 0,
+            result: Err(String::new()),
+        },
+        AppEvent::FileUploadCompleted {
+            window,
+            request_id: 0,
+            result: Err(String::new()),
+        },
+        AppEvent::FileUploadProgress {
+            window,
+            request_id: 0,
+            bytes_sent: 0,
+            total_bytes: 0,
+        },
+    ];
+    for result in results {
+        assert_eq!(
+            result.window_target().map(|(key, _)| key),
+            Some(window),
+            "{result:?}"
+        );
+    }
+}
+
+#[test]
+fn a_background_result_never_reaches_a_window_that_took_a_closed_ones_native_id() {
+    let (mut application, native) = window_that_took_a_closed_ones_native_id();
+    let window = application.windows.get_mut(&native).unwrap();
+    window.background_image_loading = true;
+    // Each window counts its image loads from the same start, so window 7's
+    // result matches window 8's own load in all but the window.
+    let generation = window.background_image_generation;
+    let loaded = |window| AppEvent::BackgroundImageLoaded {
+        window,
+        generation,
+        path: "/nonexistent/background.png".into(),
+        result: Err("unreadable image".into()),
+    };
+    let warned = |application: &Application| {
+        application.windows[&native]
+            .toasts
+            .iter()
+            .any(|toast| toast.message.contains("unreadable image"))
+    };
+
+    deliver(&mut application, loaded(WindowKey(7)));
+    assert!(application.windows[&native].background_image_loading);
+    assert!(!warned(&application));
+
+    deliver(&mut application, loaded(WindowKey(8)));
+    assert!(!application.windows[&native].background_image_loading);
+    assert!(warned(&application), "window 8's own result reaches it");
+}
+
+#[test]
+fn a_live_domain_answer_for_a_closed_window_answers_its_clients_but_not_a_newer_window() {
+    use crate::app::LiveDomainControl;
+    use crate::control::protocol::Request;
+    use crate::domain::model::{DomainSnapshot, LivePaneLayout, LiveTab, SpawnSpec};
+
+    let (mut application, native) = window_that_took_a_closed_ones_native_id();
+    let control = LiveDomainControl::SpawnTab {
+        domain_id: "reused-native-id".into(),
+        spawn: SpawnSpec::default(),
+    };
+    // Both windows sent the same control; only window 7's has a waiting
+    // control client.
+    application
+        .windows
+        .get_mut(&native)
+        .unwrap()
+        .pending_live_domain_controls
+        .insert(control.clone());
+    let (responder, reply) = std::sync::mpsc::sync_channel(1);
+    application
+        .pending_domain_controls
+        .push(PendingDomainControl {
+            request: Request::CreateTab {
+                request_id: "7".repeat(32),
+                window_id: 7,
+            },
+            window: WindowKey(7),
+            control: control.clone(),
+            context: PendingDomainContext::None,
+            responders: vec![responder],
+        });
+    let snapshot = DomainSnapshot::fixture(
+        "reused-native-id",
+        10,
+        vec![LiveTab::fixture(10, LivePaneLayout::pane(100))],
+    );
+
+    application.deliver_live_domain_control_completed(WindowKey(7), &control, &Ok(snapshot));
+    let answer = reply.recv().unwrap().unwrap_err();
+    assert!(answer.contains("GUI stable ID is unavailable"), "{answer}");
+    assert!(application.pending_domain_controls.is_empty());
+    let window = &application.windows[&native];
+    assert!(window.pending_live_domain_controls.contains(&control));
+    assert_eq!(window.toasts.iter().count(), 0);
+
+    application.deliver_live_domain_control_completed(
+        WindowKey(8),
+        &control,
+        &Err("daemon stopped".into()),
+    );
+    let window = &application.windows[&native];
+    assert!(!window.pending_live_domain_controls.contains(&control));
+    assert!(
+        window
+            .toasts
+            .iter()
+            .any(|toast| toast.message.contains("daemon stopped")),
+        "window 8's own result reaches it"
+    );
 }
 
 #[test]

@@ -194,11 +194,12 @@ impl Application {
             let _ = responder.send(result);
             return None;
         }
-        let result = self
+        let window = self
             .windows
             .get_mut(&window_id)
-            .expect("resolved live control window remains present")
-            .start_live_domain_control(control.clone());
+            .expect("resolved live control window remains present");
+        let key = window.window_key();
+        let result = window.start_live_domain_control(control.clone());
         if let Err(error) = result {
             let result = Err(bounded_control_error(&error));
             self.control_replays.record(request.clone(), result.clone());
@@ -207,7 +208,7 @@ impl Application {
         }
         self.pending_domain_controls.push(PendingDomainControl {
             request: request.clone(),
-            window_id,
+            window: key,
             control,
             context,
             responders: vec![responder],
@@ -215,9 +216,12 @@ impl Application {
         None
     }
 
+    /// Answer the control clients waiting on `control` from the window with
+    /// `key`. A window that closed meanwhile still gets its clients answered,
+    /// with an error where the answer needed the window.
     pub(super) fn complete_live_domain_control(
         &mut self,
-        window_id: WindowId,
+        key: WindowKey,
         control: &crate::app::LiveDomainControl,
         result: &std::result::Result<crate::domain::model::DomainSnapshot, String>,
     ) {
@@ -226,20 +230,19 @@ impl Application {
         let Some(index) = self
             .pending_domain_controls
             .iter()
-            .position(|pending| pending.window_id == window_id && pending.control == *control)
+            .position(|pending| pending.window == key && pending.control == *control)
         else {
             return;
         };
         let pending = self.pending_domain_controls.remove(index);
+        let window = self.keyed_window(key);
         let response = match result {
             Err(error) => Err(bounded_control_error(error)),
             Ok(snapshot) => match &pending.request {
                 Request::CreateTab {
                     request_id,
                     window_id: control_window_id,
-                } => self
-                    .windows
-                    .get(&window_id)
+                } => window
                     .and_then(|window| {
                         window
                             .control_local_live_tab_id(&snapshot.id, snapshot.active_tab)
@@ -263,7 +266,7 @@ impl Application {
                     .iter()
                     .find(|tab| tab.id == snapshot.active_tab)
                     .and_then(|tab| {
-                        self.windows.get(&window_id).and_then(|window| {
+                        window.and_then(|window| {
                             window.control_local_live_pane_id(
                                 &snapshot.id,
                                 tab.id,
@@ -317,8 +320,7 @@ impl Application {
                             .iter()
                             .any(|tab| tab.panes.iter().any(|pane| pane.id == *remote_pane_id)) =>
                     {
-                        self.windows
-                            .get(&window_id)
+                        window
                             .ok_or_else(|| {
                                 "GUI window disappeared after live-domain pane closure".into()
                             })
@@ -348,9 +350,7 @@ impl Application {
                 } => match pending.context {
                     PendingDomainContext::ResizeDivider {
                         previous_ratio_millis,
-                    } => self
-                        .windows
-                        .get(&window_id)
+                    } => window
                         .ok_or_else(|| {
                             "GUI window disappeared after live-domain divider resize".into()
                         })
@@ -385,9 +385,7 @@ impl Application {
                     destination_window_id,
                     destination_index,
                 } => match pending.context {
-                    PendingDomainContext::MoveTab { changed } => self
-                        .windows
-                        .get(&window_id)
+                    PendingDomainContext::MoveTab { changed } => window
                         .ok_or_else(|| {
                             "GUI window disappeared after live-domain tab movement".into()
                         })
@@ -463,8 +461,7 @@ impl Application {
                                     .into(),
                             )
                         } else {
-                            self.windows
-                                .get(&window_id)
+                            window
                                 .ok_or_else(|| {
                                     "GUI window disappeared after live-domain pane movement".into()
                                 })

@@ -92,13 +92,14 @@ impl App {
     }
 
     fn discover_domains(&mut self, generation: u64, authority: crate::domain::DomainAuthority) {
-        let Some(window_id) = self.window.as_ref().map(|window| window.id()) else {
+        if self.window.is_none() {
             self.handle_domain_picker_loaded(
                 generation,
                 Err("Domain discovery requires a native window".into()),
             );
             return;
-        };
+        }
+        let window_key = self.window_key();
         let Some(proxy) = EVENT_LOOP_PROXY.get().cloned() else {
             self.handle_domain_picker_loaded(
                 generation,
@@ -118,7 +119,7 @@ impl App {
                     })
                     .map_err(|error| format!("{error:#}"));
                 let _ = proxy.send_event(AppEvent::DomainPickerLoaded {
-                    window_id,
+                    window: window_key,
                     generation,
                     result,
                 });
@@ -132,13 +133,14 @@ impl App {
     }
 
     fn prepare_domain_window(&mut self, generation: u64, target: crate::domain::DomainTarget) {
-        let Some(window_id) = self.window.as_ref().map(|window| window.id()) else {
+        if self.window.is_none() {
             self.handle_domain_picker_prepared(
                 generation,
                 Err("Domain attachment requires a native window".into()),
             );
             return;
-        };
+        }
+        let window_key = self.window_key();
         let Some(proxy) = EVENT_LOOP_PROXY.get().cloned() else {
             self.handle_domain_picker_prepared(
                 generation,
@@ -163,7 +165,7 @@ impl App {
                     })
                     .map_err(|error| format!("{error:#}"));
                 let _ = proxy.send_event(AppEvent::DomainPickerPrepared {
-                    window_id,
+                    window: window_key,
                     generation,
                     result,
                 });

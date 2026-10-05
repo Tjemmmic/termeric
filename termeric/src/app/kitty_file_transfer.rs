@@ -750,7 +750,7 @@ impl App {
         {
             return true;
         }
-        let Some(window_id) = self.window.as_ref().map(|window| window.id()) else {
+        if self.window.is_none() {
             self.write_kitty_status(
                 pending.key.origin,
                 pending.reply_uses_8bit_controls,
@@ -762,7 +762,8 @@ impl App {
                 ),
             );
             return true;
-        };
+        }
+        let window_key = self.window_key();
         let Some(proxy) = EVENT_LOOP_PROXY.get().cloned() else {
             self.write_kitty_status(
                 pending.key.origin,
@@ -778,7 +779,7 @@ impl App {
         };
         let cancellation = Arc::new(AtomicBool::new(false));
         let worker = start_worker(
-            window_id,
+            window_key,
             pending.token,
             pending.key.id.clone(),
             pending.reply_uses_8bit_controls,
@@ -867,7 +868,7 @@ impl App {
         {
             return true;
         }
-        let Some(window_id) = self.window.as_ref().map(|window| window.id()) else {
+        if self.window.is_none() {
             self.write_kitty_status(
                 pending.key.origin,
                 pending.reply_uses_8bit_controls,
@@ -879,7 +880,8 @@ impl App {
                 ),
             );
             return true;
-        };
+        }
+        let window_key = self.window_key();
         let Some(proxy) = EVENT_LOOP_PROXY.get().cloned() else {
             self.write_kitty_status(
                 pending.key.origin,
@@ -895,7 +897,7 @@ impl App {
         };
         let cancellation = Arc::new(AtomicBool::new(false));
         let sender = match start_upload_worker(
-            window_id,
+            window_key,
             pending.token,
             pending.key.id.clone(),
             pending.paths,
@@ -1476,7 +1478,7 @@ fn resolve_home_relative_path(name: &str) -> Result<PathBuf, String> {
 }
 
 fn start_upload_worker(
-    window_id: winit::window::WindowId,
+    window_key: super::WindowKey,
     token: u64,
     session_id: String,
     paths: Vec<UploadPath>,
@@ -1497,7 +1499,7 @@ fn start_upload_worker(
                 |result| {
                     proxy
                         .send_event(AppEvent::KittyFileUploadCompleted {
-                            window_id,
+                            window: window_key,
                             token,
                             result,
                         })
@@ -1510,7 +1512,7 @@ fn start_upload_worker(
 }
 
 fn start_worker(
-    window_id: winit::window::WindowId,
+    window_key: super::WindowKey,
     token: u64,
     session_id: String,
     reply_uses_8bit_controls: bool,
@@ -1530,7 +1532,7 @@ fn start_worker(
                 |result| {
                     proxy
                         .send_event(AppEvent::KittyFileTransferCompleted {
-                            window_id,
+                            window: window_key,
                             token,
                             result,
                         })
