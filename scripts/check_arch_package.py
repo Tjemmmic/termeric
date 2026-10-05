@@ -183,6 +183,10 @@ def one_field(fields: dict[str, list[str]], name: str) -> str:
     return values[0]
 
 
+# The architectures the PKGBUILD's arch=() lists.
+SUPPORTED_ARCHITECTURES = ("x86_64", "aarch64")
+
+
 def dependency_name(value: str) -> str:
     return re.split(r"[<>=]", value, maxsplit=1)[0]
 
@@ -195,8 +199,9 @@ def validate_package_metadata(fields: dict[str, list[str]]) -> dict[str, object]
         raise CheckError(f"package name is {name!r}, expected {PACKAGE_NAME!r}")
     if not re.fullmatch(r"[0-9][0-9A-Za-z.+_:-]*", version):
         raise CheckError(f"package version is invalid: {version!r}")
-    if architecture != "x86_64":
-        raise CheckError(f"package architecture is {architecture!r}, expected 'x86_64'")
+    if architecture not in SUPPORTED_ARCHITECTURES:
+        expected = " or ".join(repr(name) for name in SUPPORTED_ARCHITECTURES)
+        raise CheckError(f"package architecture is {architecture!r}, expected {expected}")
     dependencies = {dependency_name(value) for value in fields.get("depend", [])}
     missing_dependencies = sorted(REQUIRED_DEPENDENCIES - dependencies)
     if missing_dependencies:

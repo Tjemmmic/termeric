@@ -15,6 +15,7 @@ from scripts.check_arch_package import (
     parse_pkginfo,
     parse_os_release,
     parse_verbose_types,
+    SUPPORTED_ARCHITECTURES,
     validate_archive_inventory,
     validate_archive_modes,
     validate_layout,
@@ -129,6 +130,21 @@ class ArchPackageCheckTests(unittest.TestCase):
         fields["license"].remove("Unicode-3.0")
         with self.assertRaisesRegex(CheckError, "Unicode-3.0"):
             validate_package_metadata(fields)
+
+    def test_metadata_accepts_each_listed_architecture_only(self):
+        for architecture in ("x86_64", "aarch64"):
+            fields = valid_metadata()
+            fields["arch"] = [architecture]
+            self.assertEqual(validate_package_metadata(fields)["architecture"], architecture)
+        fields = valid_metadata()
+        fields["arch"] = ["i686"]
+        with self.assertRaisesRegex(CheckError, "expected 'x86_64' or 'aarch64'"):
+            validate_package_metadata(fields)
+
+    def test_srcinfo_declares_the_architectures_the_checker_accepts(self):
+        srcinfo = Path(__file__).resolve().parent.parent / "packaging/arch/.SRCINFO"
+        fields = parse_pkginfo(srcinfo.read_text(encoding="utf-8"))
+        self.assertEqual(fields["arch"], list(SUPPORTED_ARCHITECTURES))
 
     def test_srcinfo_declares_the_licenses_the_checker_requires(self):
         srcinfo = Path(__file__).resolve().parent.parent / "packaging/arch/.SRCINFO"

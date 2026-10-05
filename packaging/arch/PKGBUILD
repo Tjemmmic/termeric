@@ -5,7 +5,7 @@ _pkgname=termeric
 pkgver=0.1.0.r0.g0000000
 pkgrel=1
 pkgdesc="GPU-accelerated terminal emulator themed around roots and rhizomes"
-arch=('x86_64')
+arch=('x86_64' 'aarch64')
 url="https://github.com/Tjemmmic/termeric"
 # Termeric is MIT. The rest covers what the binary links, as listed in the
 # shipped THIRD_PARTY_NOTICES.md: the Rust crates, the Unicode CLDR data, and
