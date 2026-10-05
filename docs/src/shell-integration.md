@@ -87,7 +87,7 @@ The sprout menu lists what you can do with a command. **Show Sprout Menu** in th
 | Re-run | Types the command into the terminal it came from and presses Enter |
 | Search | Opens search limited to that command's output |
 | Scroll to | Scrolls the terminal to that command |
-| Explain | Sends the command and its output to a [coding agent](agents.md) running in Termeric |
+| Explain | Sends the command and its output to a [coding agent](agents.md) running in Termeric; offered only while [agent features](agents.md#turning-agent-features-on) are on |
 
 Use Up, Down, Home, and End to choose an action, Enter to run it, and Escape to close the menu.
 

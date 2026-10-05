@@ -2,7 +2,7 @@
 
 Termeric runs AI coding agents, the command-line tools that read and edit a repository from a terminal, in ordinary tabs and split panes. It recognizes an agent however you start it, shows what each agent is doing on its tab, notifies you when one needs you, and lets you review, stage, or revert the files an agent changed.
 
-> **Experimental.** Agent support is on by default; install an agent and it is offered. Status badges and notifications work only for Claude Code and Codex, after you run **Set Up Agent Status…**. The supervisor and `termeric mcp` are the newest parts and have seen the least real use.
+> **Experimental.** Agent features are off until you turn them on (see below); an installed agent alone changes nothing. Status badges and notifications work only for Claude Code and Codex, after you run **Set Up Agent Status…**. The supervisor and `termeric mcp` are the newest parts and have seen the least real use.
 
 Four agents are built in, and you can add any other command-line agent in your configuration:
 
@@ -16,6 +16,25 @@ Four agents are built in, and you can add any other command-line agent in your c
 Only agents whose program is installed on your `PATH` are offered. Turn any of them off on the **Agents** page of Settings.
 
 Claude Code, Codex, and OpenCode can also run in the [agent view](agent-view.md), a panel docked beside your terminals that shows the conversation with native buttons instead of the agent's own terminal interface.
+
+## Turning agent features on
+
+Everything on this page and in the [agent view](agent-view.md) is behind one switch, which is off in a fresh installation. Turn it on with **Agent Features** at the top of the **Agents** page of Settings, or in `config.toml`:
+
+```toml
+[agent_features]
+enabled = true
+```
+
+It takes effect at once, without a restart, and Settings saves it like any other setting. While agent features are off:
+
+- Termeric doesn't look for agents in your terminals, so there are no agent badges, notifications, or agent status, and no per-second scan. An agent you start from a shell still runs; it's an ordinary program.
+- The command palette has no agent commands, the Keyboard Shortcuts list leaves out **New Agent** and **Agent View**, and the **Agents** page of Settings shows only the switch. Pressing **Ctrl+Shift+I** or **Ctrl+Shift+A** shows a notice saying where to turn agent features on.
+- There is no agent view, supervisor, Agents panel, context picker, or agent change review, and Harvest's sprout menu has no **Explain**.
+- Starting an agent profile, from `termeric --profile AGENT:PROFILE` or a saved workspace, fails with a message saying agent features are off.
+- Reports from agent hooks (`termeric agent-event`) are set aside, and agent requests over the [control socket](control.md), including every `termeric mcp` tool except `read_terminal`, are refused with a message saying how to turn agent features on.
+
+Turning agent features off closes everything agent-related that is open. It is refused while an agent view conversation or the supervisor runs in that window, so nothing you are in the middle of ends without asking: end the conversation or stop the supervisor, then turn agent features off. A configuration file that turns them off meanwhile is not applied; reload it once the conversations have ended.
 
 ## Starting an agent
 
@@ -83,7 +102,7 @@ Setup lists the files it will change and waits for you to confirm. Your other se
 
 If you set `CLAUDE_CONFIG_DIR` or `CODEX_HOME` only in your shell's startup file, a Termeric started from your desktop won't see it. Set it in the agent's `env` in your configuration too, and setup will find the right file.
 
-Each hook runs `termeric agent-event AGENT EVENT`. It does nothing outside a Termeric terminal, never prints, and always succeeds, so it cannot slow down or break an agent. **Remove Agent Status Hooks…** takes the hooks out again. The Settings page shows **Needs updating** when you should run setup again, for example after moving the Termeric program.
+Each hook runs `termeric agent-event AGENT EVENT`. It does nothing outside a Termeric terminal or while agent features are off, never prints, and always succeeds, so it cannot slow down or break an agent. **Remove Agent Status Hooks…** takes the hooks out again. The Settings page shows **Needs updating** when you should run setup again, for example after moving the Termeric program.
 
 ### Finding agents
 
@@ -149,7 +168,7 @@ The supervisor's messages don't need `security.allow_gui_control_input`: startin
 
 ## Letting an agent use Termeric: `termeric mcp`
 
-`termeric mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server on standard input and output. It gives an agent these tools:
+`termeric mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server on standard input and output. While [agent features](#turning-agent-features-on) are on, it gives an agent these tools:
 
 | Tool | What it does |
 | --- | --- |

@@ -174,7 +174,7 @@ Every command that changes something carries a request ID, which Termeric genera
 
 ## Safety
 
-- The socket accepts only your own user, but any program running as you can use it. It can list your windows, read the text in any pane, and launch programs, even with typing turned off. It can also list your coding agents, with their state, what they are waiting for, and their last answer, and read [agent view](agent-view.md) conversations, as [`termeric mcp`](agents.md#letting-an-agent-use-termeric-termeric-mcp) does; that needs no opt-in either.
+- The socket accepts only your own user, but any program running as you can use it. It can list your windows, read the text in any pane, and launch programs, even with typing turned off. While [agent features](agents.md#turning-agent-features-on) are on, it can also list your coding agents, with their state, what they are waiting for, and their last answer, and read [agent view](agent-view.md) conversations, as [`termeric mcp`](agents.md#letting-an-agent-use-termeric-termeric-mcp) does; that needs no opt-in either. While they are off, those requests are refused.
 - Nothing lets a script read a terminal's environment, command line, working directory, clipboard, or scrollback beyond the 256 lines `get-text` allows.
 - Values passed with `--env` can show up in shell history and process listings; use `--env-stdin` from a private file for secrets.
 - Don't enable `allow_gui_control_input` on a machine where you run programs you don't trust as your own user.

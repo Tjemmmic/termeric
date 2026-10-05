@@ -348,9 +348,24 @@ Friendly names for remote hosts, at most 64. OpenSSH settings stay in `~/.ssh/co
 | `destination` | required | An OpenSSH host alias or `user@host`. |
 | `description` | unset | One-line description, up to 256 characters. |
 
+### [agent_features]
+
+> **Experimental.** See [Agents in terminals](agents.md#turning-agent-features-on).
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| `enabled` | `false` | Turn on everything agent-related: recognizing agents in terminals, the agent commands and shortcuts, the agent view, the supervisor, agent status, and answering `termeric mcp`. Off, Termeric offers no agent, whatever is installed. **Agent Features** on the Settings **Agents** page sets it too. |
+
+```toml
+[agent_features]
+enabled = true
+```
+
 ### [agents.ID]
 
 > **Experimental.** Coding-agent support may change between releases. See [Agents in terminals](agents.md).
+
+These settings, and `[agent_status]`, `[agent_view]`, and `[supervisor]` below, apply while [`agent_features.enabled`](#agent_features) is on.
 
 Settings for the built-in agents (`claude-code`, `codex`, `gemini`, `opencode`), or a custom agent under any other ID. For a built-in agent every key is an override; [Agents in terminals](agents.md) lists each built-in agent's program and arguments. IDs are 1 to 64 letters, digits, `-`, and `_`.
 

@@ -19,8 +19,8 @@ The **ID** column is the name to use in your configuration file; see [Change key
 | `Ctrl+,` | Open Settings | `toggle_settings` |
 | `F11` | Toggle fullscreen | `toggle_fullscreen` |
 | `Escape` | Clear the selection. With nothing selected, the key goes to the program. | `clear_selection` |
-| `Ctrl+Shift+I` | New agent (see [Agents in terminals](agents.md)) | `new_agent` |
-| `Ctrl+Shift+A` | Open or close the [agent view](agent-view.md) (experimental) | `toggle_agent_view` |
+| `Ctrl+Shift+I` | New agent, while [agent features](agents.md#turning-agent-features-on) are on | `new_agent` |
+| `Ctrl+Shift+A` | Open or close the [agent view](agent-view.md) (experimental), while agent features are on | `toggle_agent_view` |
 | none | Insert a Unicode character by name | `open_unicode_picker` |
 
 ### Tabs

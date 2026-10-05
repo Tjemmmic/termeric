@@ -80,8 +80,8 @@ This page sums up what Termeric supports today. Use it to check whether somethin
 
 ## Experimental
 
-- **Coding agents in terminals.** Recognizing Claude Code, Codex, Gemini CLI, OpenCode, and your own agents, with status badges, change review, and a supervisor. Status reporting needs **Set Up Agent Status…**. See [Agents in terminals](agents.md).
-- **Agent view.** A docked panel that runs Claude Code, Codex, or OpenCode as a conversation instead of a terminal. Open it with Ctrl+Shift+A. See [Agent view](agent-view.md).
+- **Coding agents in terminals.** Recognizing Claude Code, Codex, Gemini CLI, OpenCode, and your own agents, with status badges, change review, and a supervisor. Off by default: turn on **Agent Features** on the **Agents** page of Settings or set `enabled = true` under `[agent_features]`. Status reporting also needs **Set Up Agent Status…**. See [Agents in terminals](agents.md).
+- **Agent view.** A docked panel that runs Claude Code, Codex, or OpenCode as a conversation instead of a terminal. With agent features on, open it with Ctrl+Shift+A. See [Agent view](agent-view.md).
 - **Harvest.** A visual history of your commands and their output. Turn it on under **Experimental** in Settings or with `enabled = true` under `[harvest]`.
 - **Controlling a running Termeric.** Listing windows and reading terminal text from scripts. Sending input is off until you set `security.allow_gui_control_input`. See [Controlling a running Termeric](control.md).
 - **Live domains.** Terminals kept alive by a background daemon, locally or over SSH, that you can detach from and reattach to. See [Live domains](live-domains.md).

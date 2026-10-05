@@ -39,7 +39,7 @@ termeric --profile claude-code:review
 | `--command PROGRAM` | Run `PROGRAM`, with no arguments, instead of your shell. |
 | `-- PROGRAM ARG...` | Run `PROGRAM` with every remaining argument passed exactly, even ones starting with `-`. Nothing is interpreted by a shell. |
 | `--terminal-profile NAME` | Start the current tab from the terminal profile `NAME` (see [Profiles](profiles.md)). |
-| `--profile AGENT:PROFILE` | Start a [coding agent](agents.md) with one of its profiles, such as `codex:review`. |
+| `--profile AGENT:PROFILE` | Start a [coding agent](agents.md) with one of its profiles, such as `codex:review`. Needs [agent features](agents.md#turning-agent-features-on) on. |
 | `--workspace ID` | Restore one saved [workspace](workspaces-and-sessions.md), by its ID (`workspace-…`), into this window; [`termeric workspace list`](#termeric-workspace-list) prints the IDs. It can't be combined with tab, directory, title, command, profile, or split options in the same window. |
 | `--geometry WIDTHxHEIGHT` | Set the window's initial size in physical pixels, from 160x120 to 16384x16384. |
 | `--class NAME`, `--app-id NAME` | Set the window's X11 class and Wayland application ID, for window manager rules. The default is `org.termeric.Termeric`. A window with another ID doesn't match Termeric's desktop entry, so on Wayland it may show a generic icon. |
@@ -99,7 +99,7 @@ Lists your saved workspaces, most recently saved first: each one's ID, tab count
 termeric mcp [--process PID]
 ```
 
-Serves Termeric's agent tools over the Model Context Protocol on standard input and output, for a coding agent to use. Inside a Termeric terminal it talks to that terminal's Termeric; elsewhere to the only running Termeric, or to the one named by `--process`. See [Agents in terminals](agents.md#letting-an-agent-use-termeric-termeric-mcp).
+Serves Termeric's agent tools over the Model Context Protocol on standard input and output, for a coding agent to use. Inside a Termeric terminal it talks to that terminal's Termeric; elsewhere to the only running Termeric, or to the one named by `--process`. While [agent features](agents.md#turning-agent-features-on) are off in that Termeric, its tools are refused with a message saying how to turn them on. See [Agents in terminals](agents.md#letting-an-agent-use-termeric-termeric-mcp).
 
 ### `termeric agent-event`
 

@@ -14,7 +14,7 @@ Termeric keeps your shells in tabs, panes, and windows, draws them with your GPU
 - **Shell integration** for Bash, Zsh, Fish, Nushell, and Elvish: prompt jumping and failed-command navigation
 - **Search, keyboard copy mode, and quick-select hints** for links, paths, and hashes
 - **A command palette, a Settings dialog, and rebindable shortcuts**
-- **Coding-agent integration** (experimental) for Claude Code, Codex, Gemini CLI, OpenCode, and your own agents
+- **Coding-agent integration** (experimental, off until you turn it on) for Claude Code, Codex, Gemini CLI, OpenCode, and your own agents
 - **Automation**: launch from the command line, add plugins, and script a running Termeric (experimental)
 
 ## Status
