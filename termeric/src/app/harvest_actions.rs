@@ -229,6 +229,7 @@ impl App {
             live_content_available: live_region.is_some(),
             source_alternate_screen,
             retained_output_truncated: target.output_truncated,
+            agent_features: self.agent_features_enabled(),
         }
     }
 
@@ -528,6 +529,11 @@ impl App {
                 }
                 self.toasts.info("Search scoped to command output");
                 self.request_redraw(RedrawReason::Action);
+            }
+            // A menu shown before agent features were turned off still
+            // lists Explain.
+            SproutAction::Explain if !self.agent_features_enabled() => {
+                self.report_agent_features_off();
             }
             SproutAction::Explain => {
                 let cmd = command_text;

@@ -868,8 +868,53 @@ fn workspace_menu_is_a_menu_whose_items_focus_and_activate_like_the_keyboard() {
 }
 
 #[test]
-fn sprout_semantics_are_request_scoped_and_never_invoke_explain_in_tests() {
+fn explain_is_not_offered_while_agent_features_are_off() {
+    use crate::harvest::sprouts::SproutAction;
     let mut app = App::new_headless(Config::default()).unwrap();
+    open_harvest_cellar_fixture(&mut app, 1);
+    let entry = app
+        .harvest
+        .as_ref()
+        .unwrap()
+        .cellar
+        .latest()
+        .unwrap()
+        .clone();
+    let availability = app.sprout_availability_for_entry(&entry);
+    assert!(!availability.agent_features);
+    app.harvest.as_mut().unwrap().show_sprout_menu(
+        entry.row.max(0) as usize,
+        0,
+        Some(entry.clone()),
+        availability,
+    );
+    let menu = app.harvest.as_ref().unwrap().sprout_menu.as_ref().unwrap();
+    assert!(!menu.actions.contains(&SproutAction::Explain));
+    app.accessibility_snapshot();
+    assert!(
+        app.accessibility
+            .harvest
+            .nodes
+            .keys()
+            .all(|target| !matches!(
+                target,
+                HarvestSemanticTarget::SproutAction {
+                    action: SproutAction::Explain,
+                    ..
+                }
+            ))
+    );
+    // Even asked for directly, nothing is handed to an agent.
+    app.execute_sprout_action(SproutAction::Explain, Some(entry));
+    assert_eq!(
+        app.toasts.iter().last().map(|toast| toast.message.as_str()),
+        Some(crate::agents::config::AGENT_FEATURES_OFF)
+    );
+}
+
+#[test]
+fn sprout_semantics_are_request_scoped_and_never_invoke_explain_in_tests() {
+    let mut app = App::new_headless(Config::default().with_agent_features()).unwrap();
     open_harvest_cellar_fixture(&mut app, 1);
     let entry = app
         .harvest

@@ -79,6 +79,9 @@ pub struct SproutAvailability {
     pub live_content_available: bool,
     pub source_alternate_screen: bool,
     pub retained_output_truncated: bool,
+    /// Agent features are on, so Explain, which hands the command to an
+    /// agent, is offered at all.
+    pub agent_features: bool,
 }
 
 impl SproutAvailability {
@@ -204,7 +207,11 @@ impl SproutMenu {
         command: Option<CommandEntry>,
         availability: SproutAvailability,
     ) -> Self {
-        let actions = SproutAction::all().to_vec();
+        let actions = SproutAction::all()
+            .iter()
+            .copied()
+            .filter(|action| *action != SproutAction::Explain || availability.agent_features)
+            .collect::<Vec<_>>();
         let selected = actions
             .iter()
             .position(|action| availability.action_enabled(*action))
@@ -432,6 +439,7 @@ mod tests {
             live_content_available: true,
             source_alternate_screen: false,
             retained_output_truncated: false,
+            agent_features: true,
         };
         let mut menu = SproutMenu::new(1, 0, 0, None, availability);
 
@@ -454,6 +462,7 @@ mod tests {
             live_content_available: false,
             source_alternate_screen: false,
             retained_output_truncated: true,
+            agent_features: true,
         };
         let mut menu = SproutMenu::new(1, 0, 0, None, availability);
         assert_eq!(
@@ -470,6 +479,26 @@ mod tests {
         assert_eq!(menu.selected_action(), Some(&SproutAction::Explain));
         menu.select_up();
         assert_eq!(menu.selected_action(), Some(&SproutAction::Rerun));
+    }
+
+    #[test]
+    fn explain_is_left_out_while_agent_features_are_off() {
+        let on = SproutAvailability {
+            command_available: true,
+            agent_features: true,
+            ..SproutAvailability::default()
+        };
+        let menu = SproutMenu::new(1, 0, 0, None, on);
+        assert!(menu.actions.contains(&SproutAction::Explain));
+
+        let off = SproutAvailability {
+            agent_features: false,
+            ..on
+        };
+        let mut menu = SproutMenu::new(1, 0, 0, None, off);
+        assert!(!menu.actions.contains(&SproutAction::Explain));
+        assert!(!menu.select(SproutAction::Explain));
+        assert_eq!(menu.actions.len(), SproutAction::all().len() - 1);
     }
 
     #[test]
