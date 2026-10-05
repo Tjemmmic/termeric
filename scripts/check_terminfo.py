@@ -126,7 +126,7 @@ def check_database(compiled: Path, env: dict[str, str]) -> None:
         "rs2=\\E[!p",
         "u8=\\E[?1;2;4;8c",
         "Smulx=\\E[4:%p1%dm",
-        "Setulc=\\E[58:2::%p1%{65536}%/%d:%p1%{256}%/%{255}%&%d:%p1%{255}%&%d%;m",
+        "Setulc=\\E[58:2::%p1%{65536}%/%d:%p1%{256}%/%{255}%&%d:%p1%{255}%&%dm",
         "Ss=\\E[%p1%d q",
         "Se=\\E[ q",
         "Ms=\\E]52;%p1%s;%p2%s\\E\\\\",
@@ -293,13 +293,16 @@ def main() -> int:
     if not SOURCE.is_file():
         raise CheckError(f"terminfo source is missing: {SOURCE}")
 
+    tic = require_tool("tic")
+    # tic compiles an entry it only warns about, such as a %; without a %?.
+    warnings = run([tic, "-c", "-x", str(SOURCE)], dict(os.environ)).stderr
+    if warnings.strip():
+        raise CheckError(f"tic -c warns about the entry: {warnings.decode(errors='replace')}")
+
     with tempfile.TemporaryDirectory(prefix="termeric-terminfo-") as directory:
         compiled = Path(directory) / "database"
         compiled.mkdir()
-        run(
-            [require_tool("tic"), "-x", "-o", str(compiled), str(SOURCE)],
-            dict(os.environ),
-        )
+        run([tic, "-x", "-o", str(compiled), str(SOURCE)], dict(os.environ))
         env = dict(os.environ)
         env.update(
             {

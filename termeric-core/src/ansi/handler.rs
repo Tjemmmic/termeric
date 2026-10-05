@@ -432,7 +432,7 @@ const TERMINFO_CAPABILITIES: &[TerminfoCapability] = &[
     (
         b"Setulc",
         None,
-        b"\x1b[58:2::%p1%{65536}%/%d:%p1%{256}%/%{255}%&%d:%p1%{255}%&%d%;m",
+        b"\x1b[58:2::%p1%{65536}%/%d:%p1%{256}%/%{255}%&%d:%p1%{255}%&%dm",
     ),
     (b"Ss", None, b"\x1b[%p1%d q"),
     (b"Se", None, b"\x1b[ q"),
