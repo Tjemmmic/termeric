@@ -444,7 +444,7 @@ impl App {
             })
             .collect();
         if agents_changed {
-            self.reload_plugins();
+            self.reload_plugins_for_agents();
         }
         self.sync_harvest_from_config();
         self.sync_accessibility_preferences();
@@ -483,11 +483,21 @@ impl App {
         self.settings_panel.set_agents(rows, summary, status);
     }
 
-    /// Reload plugins after this window changed them (in the plugin manager)
-    /// or its agents changed: a new host generation stops every handler, and
-    /// the Application brings the other windows to it.
+    /// Reload plugins after this window changed them in the plugin manager:
+    /// a new host generation stops every handler, and the Application brings
+    /// the other windows to it.
     pub(super) fn reload_plugins(&mut self) {
         self.plugin_host.advance_generation();
+        self.sync_plugins_from_config();
+    }
+
+    /// Reload plugins after this window's agents changed, since their IDs can
+    /// shadow plugins. Each window reloads its configuration on its own, so
+    /// one change reaches every window; only the first starts a new host
+    /// generation, and the rest rebuild their plugins in it.
+    fn reload_plugins_for_agents(&mut self) {
+        self.plugin_host
+            .advance_generation_for_agents(&self.config.agents);
         self.sync_plugins_from_config();
     }
 

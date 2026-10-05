@@ -4897,6 +4897,48 @@ fn a_plugin_result_never_reaches_a_window_that_took_a_closed_ones_native_id() {
 }
 
 #[test]
+fn one_agents_change_reloads_plugins_once_for_every_window() {
+    let mut application =
+        Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
+    application.pending.clear();
+    let natives = [WindowId::from(31_u64), WindowId::from(32_u64)];
+    for native in natives {
+        let mut window = App::new_headless(Config::default()).unwrap();
+        window.plugin_host = Arc::clone(&application.plugin_host);
+        window.sync_plugins_from_config();
+        assert!(window.plugin_manager.contains("codex"));
+        application.windows.insert(native, window);
+    }
+    let generation = application.plugin_host.generation();
+    let mut changed = Config::default();
+    changed.agents.insert(
+        "codex".into(),
+        crate::agents::AgentConfig {
+            enabled: Some(false),
+            ..Default::default()
+        },
+    );
+
+    // Each window reloads the changed file on its own poll.
+    for native in natives {
+        application
+            .windows
+            .get_mut(&native)
+            .unwrap()
+            .apply_config(changed.clone())
+            .unwrap();
+    }
+    application.sync_plugin_generations(Instant::now());
+
+    let reloaded = application.plugin_host.generation();
+    assert_eq!(reloaded, generation + 1, "the handlers were reloaded once");
+    for window in application.windows.values() {
+        assert_eq!(window.plugin_runtime_generation, reloaded);
+        assert!(!window.plugin_manager.contains("codex"));
+    }
+}
+
+#[test]
 fn local_tabs_never_move_into_a_live_domain_window() {
     let (mut source, mut destination, moved_child) = pane_transfer_fixture();
     destination.launch.domain = Some(crate::domain::DomainTarget {

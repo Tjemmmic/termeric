@@ -224,7 +224,7 @@ A plugin has one handler process for every window of a Termeric process, so what
 
 Termeric starts the program with the first event and keeps it running. Each request is one line of JSON on standard input, with a `request_id`; the program answers each with one line of JSON on standard output carrying the same `request_id`, within 2 seconds, and must print nothing else there. Flush standard output after each line. Standard error is kept for error messages.
 
-The handler also receives the results of its queries and actions. If it fails a request, Termeric stops it and starts a fresh process for the next event. It is also restarted whenever the plugin registry or your configuration is reloaded, which happens when a plugin is installed, updated, enabled, disabled, or removed, and stopped when Termeric exits. Closing a window drops the requests it still has queued, which never reach the handler, and leaves the handler running for the other windows.
+The handler also receives the results of its queries and actions. If it fails a request, Termeric stops it and starts a fresh process for the next event. It is also restarted whenever plugins are reloaded, which happens when a plugin is installed, updated, enabled, disabled, or removed, or when your `[agents]` configuration changes (once for the whole process, however many windows are open), and stopped when Termeric exits. Requests still queued when the handler restarts are dropped, and so are a closed window's queued requests; they never reach the handler. Closing a window leaves the handler running for the other windows.
 
 ### Requests
 
@@ -301,7 +301,7 @@ What the actions do, and their rules:
 - `close-tab` can't close a window's last tab, and `close-pane` can't close a tab's last pane.
 - `move-tab` reorders a tab within a window (`destination_index` counts from 0) or moves it to another, but can't take a window's last tab. `move-pane` moves a pane next to `target_pane_id` in another tab.
 - `direction` is `vertical` (to the right) or `horizontal` (below). `preset` is `columns`, `rows`, `grid`, `tall`, or `fat`, as in the **Layout** commands (see [Tabs, panes, and windows](tabs-panes-windows.md)).
-- `close-window` with `window-close:all-windows` closes any window but the last one left. Plain `window-close` closes only the origin window, only when the conversation began with one of the plugin's commands, and may close the last window. The origin window closes after the handler has answered the result.
+- `close-window` with `window-close:all-windows` closes any window but the last one left. Plain `window-close` closes only the origin window, only when the conversation began with one of the plugin's commands, and may close the last window. The origin window closes after the handler has answered the result, or, if plugins are reloaded before the result reaches the handler, once the reload drops it.
 
 ### Results
 

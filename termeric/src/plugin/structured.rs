@@ -9,10 +9,11 @@
 //! response sits in its bounded follow-up chain.
 
 use super::permission::{Capability, PermissionScope, PluginPermissions};
+use crate::agents::AgentConfig;
 use crate::line_reader::read_bounded_line;
 use crate::panes::PaneLayoutPreset;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -616,9 +617,11 @@ impl PluginLane {
 }
 
 /// Serve one lane's queue until the host drops its sender, shuts down, or
-/// moves to another generation. A request it takes that can no longer run
-/// (its generation ended, the host is shutting down, or its window closed)
-/// is answered with an error instead.
+/// moves to another generation. Every request is answered exactly once:
+/// one that can no longer run (its generation ended, the host is shutting
+/// down, or its window closed) is answered with an error instead, so a
+/// window waiting on a result, such as one a plugin closes, never waits
+/// forever.
 fn run_lane(
     receiver: &Receiver<WorkItem>,
     state: &LaneState,
@@ -665,6 +668,15 @@ fn run_lane(
         };
         answer(item, result, state);
     }
+    drop(handler);
+    // A lane stops only once the host has dropped, or is about to drop, its
+    // sender, so this ends; what is still queued, or slips in as the
+    // generation turns, is answered rather than lost.
+    for item in receiver {
+        let refused = refusal(&item, shutdown, lane_generation)
+            .unwrap_or("plugins were reloaded before this request ran");
+        answer(item, Err(refused.into()), state);
+    }
 }
 
 /// Why `item` can't run on a lane of `lane_generation`, if it can't.
@@ -707,6 +719,9 @@ pub struct StructuredPluginHost {
     /// finishing; joined when the host ends.
     retired: Mutex<Vec<JoinHandle<()>>>,
     generation: Arc<AtomicU64>,
+    /// The agents the current generation's plugins were built with, once a
+    /// window's agents changed: their IDs can shadow plugins.
+    agents: Mutex<Option<BTreeMap<String, AgentConfig>>>,
     next_request_id: AtomicU64,
     shutdown: Arc<AtomicBool>,
 }
@@ -726,6 +741,7 @@ impl Default for StructuredPluginHost {
             lanes: Mutex::new(HashMap::new()),
             retired: Mutex::new(Vec::new()),
             generation: Arc::new(AtomicU64::new(1)),
+            agents: Mutex::new(None),
             next_request_id: AtomicU64::new(1),
             shutdown: Arc::new(AtomicBool::new(false)),
         }
@@ -747,6 +763,22 @@ impl StructuredPluginHost {
         let retiring = std::mem::take(&mut *self.lanes.lock().unwrap());
         self.retire(retiring.into_values().map(|lane| lane.thread));
         next
+    }
+
+    /// Start a new generation for a window whose agents changed to
+    /// `agents`, unless the current generation was already started for
+    /// them. Every window notices one change to the configuration file on
+    /// its own, so only the first of them reloads the handlers; the others
+    /// rebuild their plugins in the generation it started. Returns whether
+    /// this started one.
+    pub fn advance_generation_for_agents(&self, agents: &BTreeMap<String, AgentConfig>) -> bool {
+        let mut current = self.agents.lock().unwrap();
+        if current.as_ref() == Some(agents) {
+            return false;
+        }
+        *current = Some(agents.clone());
+        self.advance_generation();
+        true
     }
 
     /// Keep `threads` until they finish, letting go of those that have, so
@@ -2274,6 +2306,74 @@ done"#,
             refused.result
         );
         assert_eq!(std::fs::read_to_string(&log).unwrap(), "1\n");
+    }
+
+    #[test]
+    fn a_new_generation_answers_the_requests_it_cancels() {
+        let host = StructuredPluginHost::default();
+        let (deliver, completions) = completion_channel();
+        let generation = host.generation();
+        let window = WindowRequests::default();
+        // A handler that never answers holds the lane while more queue up.
+        let silent = persistent_fixture("silent", "while IFS= read -r event; do :; done");
+        let running = host
+            .submit(1, &window, generation, silent.clone(), Arc::clone(&deliver))
+            .unwrap();
+        let queued: Vec<_> = (0..3)
+            .map(|_| {
+                host.submit(1, &window, generation, silent.clone(), Arc::clone(&deliver))
+                    .unwrap()
+            })
+            .collect();
+        host.advance_generation();
+
+        let mut answered: Vec<_> = (0..4).map(|_| receive(&completions)).collect();
+        answered.sort_by_key(|completion| completion.request_id);
+        assert_eq!(answered[0].request_id, running);
+        assert!(answered[0].result.is_err());
+        for (completion, request_id) in answered[1..].iter().zip(queued) {
+            assert_eq!(completion.request_id, request_id);
+            assert_eq!(completion.plugin_generation, generation);
+            assert!(
+                completion.result.as_ref().unwrap_err().contains("reloaded"),
+                "{:?}",
+                completion.result
+            );
+        }
+        assert!(
+            completions
+                .recv_timeout(Duration::from_millis(100))
+                .is_err(),
+            "each request is answered once"
+        );
+    }
+
+    #[test]
+    fn agent_changes_start_one_generation_however_many_windows_notice() {
+        let host = StructuredPluginHost::default();
+        let first = host.generation();
+        let mut agents = BTreeMap::new();
+        agents.insert(
+            "codex".to_string(),
+            AgentConfig {
+                enabled: Some(false),
+                ..AgentConfig::default()
+            },
+        );
+        assert!(host.advance_generation_for_agents(&agents));
+        let second = host.generation();
+        assert_ne!(second, first);
+        assert!(!host.advance_generation_for_agents(&agents));
+        assert_eq!(host.generation(), second);
+
+        // A registry reload in between leaves the agents as they were.
+        host.advance_generation();
+        let third = host.generation();
+        assert!(!host.advance_generation_for_agents(&agents));
+        assert_eq!(host.generation(), third);
+
+        assert!(host.advance_generation_for_agents(&BTreeMap::new()));
+        assert_ne!(host.generation(), third);
     }
 
     #[test]
