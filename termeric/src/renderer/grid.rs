@@ -1,6 +1,7 @@
 //! A terminal grid's rows, cursor, and scrollbar, cached row by row.
 
 use super::*;
+use crate::ui::geometry::Bounds;
 
 fn hash_text_clip<H: Hasher>(clip: TextClip, hasher: &mut H) {
     clip.left.to_bits().hash(hasher);
@@ -363,55 +364,59 @@ impl Renderer {
             }
         }
 
-        // Draw scrollbar (only when there is scrollback content)
+        // The scrollbar, where the pointer finds it too.
         let scrollback_len = grid.scrollback_len();
-        if scrollback_len > 0 {
+        if let Some(scrollbar) = PaneScrollbar::of_pane(
+            Bounds::new(
+                offset_x,
+                offset_y,
+                pane_width,
+                pane_rows as f32 * cell_height,
+            ),
+            scrollback_len > 0,
+        ) {
             let visible_rows = pane_rows.min(grid.rows());
             let total_rows = scrollback_len + visible_rows;
+            let Bounds {
+                x: scrollbar_x,
+                y: scrollbar_top,
+                width: scrollbar_width,
+                height: scrollbar_height,
+            } = scrollbar.track;
+            let track_color = [1.0_f32, 1.0, 1.0, 0.05];
+            self.rect_pipeline.push_rounded_rect(
+                scrollbar_x,
+                scrollbar_top,
+                scrollbar_width,
+                scrollbar_height,
+                track_color,
+                3.0,
+            );
 
-            let scrollbar_width = 6.0_f32;
-            let scrollbar_margin = 2.0_f32;
-            let scrollbar_x = offset_x + pane_width - scrollbar_width - scrollbar_margin;
-            let scrollbar_top = offset_y;
-            let scrollbar_bottom = offset_y + pane_rows as f32 * cell_height;
-            let scrollbar_height = scrollbar_bottom - scrollbar_top;
+            // Minimum thumb size of 32px keeps it targetable on HiDPI
+            // displays even when scrollback vastly exceeds the viewport.
+            let thumb_ratio = (visible_rows as f32) / (total_rows as f32);
+            let thumb_height = (scrollbar_height * thumb_ratio)
+                .max(32.0)
+                .min(scrollbar_height);
+            let max_offset = scrollback_len;
+            let scroll_fraction = if max_offset > 0 {
+                scroll_offset as f32 / max_offset as f32
+            } else {
+                0.0
+            };
+            let thumb_travel = scrollbar_height - thumb_height;
+            let thumb_y = scrollbar_top + thumb_travel * (1.0 - scroll_fraction);
 
-            if scrollbar_height > 20.0 {
-                let track_color = [1.0_f32, 1.0, 1.0, 0.05];
-                self.rect_pipeline.push_rounded_rect(
-                    scrollbar_x,
-                    scrollbar_top,
-                    scrollbar_width,
-                    scrollbar_height,
-                    track_color,
-                    3.0,
-                );
-
-                // Minimum thumb size of 32px keeps it targetable on HiDPI
-                // displays even when scrollback vastly exceeds the viewport.
-                let thumb_ratio = (visible_rows as f32) / (total_rows as f32);
-                let thumb_height = (scrollbar_height * thumb_ratio)
-                    .max(32.0)
-                    .min(scrollbar_height);
-                let max_offset = scrollback_len;
-                let scroll_fraction = if max_offset > 0 {
-                    scroll_offset as f32 / max_offset as f32
-                } else {
-                    0.0
-                };
-                let thumb_travel = scrollbar_height - thumb_height;
-                let thumb_y = scrollbar_top + thumb_travel * (1.0 - scroll_fraction);
-
-                let thumb_color = [1.0_f32, 1.0, 1.0, 0.25];
-                self.rect_pipeline.push_rounded_rect(
-                    scrollbar_x,
-                    thumb_y,
-                    scrollbar_width,
-                    thumb_height,
-                    thumb_color,
-                    3.0,
-                );
-            }
+            let thumb_color = [1.0_f32, 1.0, 1.0, 0.25];
+            self.rect_pipeline.push_rounded_rect(
+                scrollbar_x,
+                thumb_y,
+                scrollbar_width,
+                thumb_height,
+                thumb_color,
+                3.0,
+            );
         }
     }
 }

@@ -214,6 +214,8 @@ Hold `Ctrl` and click a link to open it with your desktop's default handler (`xd
 
 Programs such as `vim`, `htop`, and `tmux` can ask for mouse input. While they do, clicks, drags, and the wheel go to the program. Hold `Shift` to select text or scroll the scrollback yourself instead; `Alt+Shift`+drag selects a block. `Ctrl+Click` on a link still opens it.
 
+The find box, notices, and scrollbars drawn over a pane keep the mouse for themselves: clicks, pointer movement, and the wheel over them never reach the program beneath. A drag the program already started keeps going to it as the pointer crosses them.
+
 While a program asks for mouse input, middle and right clicks go to it; hold `Shift` and middle-click to paste the primary selection instead. Otherwise Termeric ignores right clicks.
 
 ### Scroll
@@ -222,7 +224,7 @@ The mouse wheel scrolls the pane under the pointer, without focusing it; anywher
 
 A program that asks for mouse input gets the wheel from the pane it runs in, and full-screen programs such as `less` that request it get arrow keys instead. Hold `Shift` to scroll the scrollback. A read-only pane, or any pane while broadcast input is armed, only scrolls its scrollback.
 
-When a pane has scrollback, a scrollbar appears along its right edge; drag it to scroll.
+When a pane has scrollback, a scrollbar appears along its right edge; drag it to scroll. The wheel over a scrollbar scrolls that pane's scrollback, even while its program asks for mouse input, and the wheel over the find box or a notice scrolls nothing.
 
 ### Panes and tabs
 

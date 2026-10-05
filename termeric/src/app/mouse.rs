@@ -311,9 +311,9 @@ impl App {
         }
         match state {
             ElementState::Pressed => {
+                let chrome = self.floating_chrome_at(position);
                 if button == MouseButton::Left && !self.pointer_panel_owns_input() {
-                    // Check if click is on the scrollbar
-                    if self.is_click_on_scrollbar(position.0, position.1) {
+                    if matches!(chrome, Some(FloatingChrome::Scrollbar(_))) {
                         if self.focus_pane_at(position, content_top, padding) {
                             self.refresh_focused_terminal_surfaces();
                         }
@@ -481,7 +481,7 @@ impl App {
                         }
                     }
                 }
-                if self.press_search_bar(button, self.search_bar_click_at(position)) {
+                if self.press_floating_chrome(button, chrome) {
                     return;
                 }
                 if self.press_terminal(
@@ -538,6 +538,23 @@ impl App {
             window.inner_size().width as f32,
             &info,
         )
+    }
+
+    /// A press of any button on chrome floating over the panes is that
+    /// chrome's, never the pane's beneath it. The find box works it; on a
+    /// scrollbar, which the primary button drags before this, it does
+    /// nothing, as on a toast (whose presses are taken before any of this).
+    /// Returns false when no chrome is there.
+    fn press_floating_chrome(
+        &mut self,
+        button: MouseButton,
+        chrome: Option<FloatingChrome>,
+    ) -> bool {
+        match chrome {
+            None => false,
+            Some(FloatingChrome::FindBox(click)) => self.press_search_bar(button, click),
+            Some(FloatingChrome::Toast | FloatingChrome::Scrollbar(_)) => true,
+        }
     }
 
     /// A press of any button on the find box (`click`) is the find box's,
@@ -971,7 +988,15 @@ impl App {
 
         self.refresh_terminal_pointer_cursor();
 
-        if self.try_report_mouse_motion(position, cell_width, cell_height, content_top, padding) {
+        let chrome = self.floating_chrome_at(position);
+        if self.try_report_mouse_motion(
+            position,
+            chrome,
+            cell_width,
+            cell_height,
+            content_top,
+            padding,
+        ) {
             return;
         }
 
@@ -991,8 +1016,9 @@ impl App {
         if delta.abs() < 0.001 {
             return;
         }
-        let target = self.wheel_target();
-        self.scroll_terminal(delta, target);
+        if let WheelRoute::Terminal(target) = self.wheel_route() {
+            self.scroll_terminal(delta, target);
+        }
     }
 
     /// Horizontal wheel events are reportable to terminal applications but do
@@ -1006,19 +1032,21 @@ impl App {
         } else {
             crate::input::WheelDirection::Right
         };
-        if let Some(target) = self.wheel_target()
+        if let WheelRoute::Terminal(Some(target)) = self.wheel_route()
             && let Some(cell) = target.cell
         {
             self.report_wheel(target.identity, cell, direction);
         }
     }
 
-    fn wheel_target(&self) -> Option<WheelTarget> {
-        let position = self.last_cursor_pos?;
-        let renderer = self.renderer.as_ref()?;
+    fn wheel_route(&self) -> WheelRoute {
+        let Some((position, renderer)) = self.last_cursor_pos.zip(self.renderer.as_ref()) else {
+            return WheelRoute::Terminal(None);
+        };
         let (cell_width, cell_height) = renderer.cell_size();
-        self.wheel_target_at(
+        self.wheel_route_at(
             position,
+            self.floating_chrome_at(position),
             cell_width,
             cell_height,
             renderer.content_top(),
@@ -1026,19 +1054,31 @@ impl App {
         )
     }
 
-    fn wheel_target_at(
+    /// Where a wheel step at `position`, over `chrome` if any, goes. Over a
+    /// pane's scrollbar it scrolls that pane's scrollback, never reaching
+    /// its program; over other chrome nothing scrolls.
+    fn wheel_route_at(
         &self,
         position: (f64, f64),
+        chrome: Option<FloatingChrome>,
         cell_width: f32,
         cell_height: f32,
         content_top: f32,
         padding: f32,
-    ) -> Option<WheelTarget> {
-        let pane = self.pane_at_pointer(position, content_top, padding)?;
-        Some(WheelTarget {
-            identity: pane.identity,
-            cell: self.pane_protocol_cell(pane, position, cell_width, cell_height),
-        })
+    ) -> WheelRoute {
+        match chrome {
+            Some(FloatingChrome::Scrollbar(identity)) => WheelRoute::Terminal(Some(WheelTarget {
+                identity,
+                cell: None,
+            })),
+            Some(FloatingChrome::Toast | FloatingChrome::FindBox(_)) => WheelRoute::Chrome,
+            None => WheelRoute::Terminal(self.pane_at_pointer(position, content_top, padding).map(
+                |pane| WheelTarget {
+                    identity: pane.identity,
+                    cell: self.pane_protocol_cell(pane, position, cell_width, cell_height),
+                },
+            )),
+        }
     }
 
     /// One wheel step for `target`, or for the focused pane when the pointer
@@ -1247,9 +1287,13 @@ impl App {
         true
     }
 
+    /// Report pointer motion at `position`, over `chrome` if any, to the
+    /// focused pane's program when it asks for it. Hover over chrome is the
+    /// chrome's, but a drag the program holds keeps reporting across it.
     fn try_report_mouse_motion(
         &mut self,
         position: (f64, f64),
+        chrome: Option<FloatingChrome>,
         cell_width: f32,
         cell_height: f32,
         content_top: f32,
@@ -1261,7 +1305,8 @@ impl App {
             self.terminal_mouse_capture = None;
             return false;
         }
-        if self.modifiers.shift_key() && self.terminal_mouse_capture.is_none() {
+        if self.terminal_mouse_capture.is_none() && (self.modifiers.shift_key() || chrome.is_some())
+        {
             return false;
         }
         let Some((col, row)) =
@@ -1300,7 +1345,7 @@ impl App {
         let icon = self.last_cursor_pos.zip(self.renderer.as_ref()).map_or(
             winit::window::CursorIcon::Default,
             |(position, renderer)| {
-                if self.floating_chrome_at(position) {
+                if self.floating_chrome_at(position).is_some() {
                     return winit::window::CursorIcon::Default;
                 }
                 let (cell_width, cell_height) = renderer.cell_size();
@@ -1316,17 +1361,26 @@ impl App {
         window.set_cursor(icon);
     }
 
-    /// Whether chrome drawn over the panes lies at `position`: the find box,
-    /// a toast, or a pane's scrollbar. Each takes presses there before the
-    /// pane does, so the pointer is its plain arrow, never the terminal's.
-    fn floating_chrome_at(&self, position: (f64, f64)) -> bool {
-        self.search_bar_click_at(position) != SearchBarClick::None
-            || self.renderer.as_ref().is_some_and(|renderer| {
-                renderer
-                    .toast_hit_test(position.0 as f32, position.1 as f32)
-                    .is_some()
-            })
-            || self.is_click_on_scrollbar(position.0, position.1)
+    /// The chrome drawn over the panes at `position`, frontmost first: a
+    /// toast, the find box, or a pane's scrollbar. Presses, hover reports,
+    /// the wheel, and the pointer's shape all ask this, so none reaches the
+    /// program beneath chrome, and over it the pointer is a plain arrow.
+    fn floating_chrome_at(&self, position: (f64, f64)) -> Option<FloatingChrome> {
+        let (x, y) = (position.0 as f32, position.1 as f32);
+        // The hit test sees the toasts of the last frame; one that has
+        // expired since is gone.
+        let toast = self
+            .renderer
+            .as_ref()
+            .and_then(|renderer| renderer.toast_hit_test(x, y))
+            .is_some_and(|id| self.toasts.contains(id));
+        if toast {
+            return Some(FloatingChrome::Toast);
+        }
+        match self.search_bar_click_at(position) {
+            SearchBarClick::None => self.scrollbar_at(position).map(FloatingChrome::Scrollbar),
+            click => Some(FloatingChrome::FindBox(click)),
+        }
     }
 
     /// Ctrl makes the pointer a hand over links, so pressing or releasing it
@@ -1670,46 +1724,26 @@ impl App {
         self.request_redraw(RedrawReason::Focus);
     }
 
-    /// Check if a click position is within the scrollbar area
-    pub(super) fn is_click_on_scrollbar(&self, x: f64, y: f64) -> bool {
-        let Some(renderer) = &self.renderer else {
-            return false;
-        };
-        // Scrollbar is 6px wide + 2px margin from the terminal area's right
-        // edge, with an expanded hit area
-        let scrollbar_hit_width = 16.0_f32;
-        let scrollbar_x = renderer.content_right() - scrollbar_hit_width;
-
-        let content_top = renderer.content_top();
-        let padding = renderer.padding();
-        let content_left = renderer.tab_bar_width();
-
-        if let Some(panes) = self
-            .tabs
-            .as_ref()
-            .and_then(TabManager::active_tab)
-            .and_then(|tab| tab.split_panes())
-        {
-            return panes.iter_with_layout().any(|(pane, rect)| {
-                let pane_right = content_left + padding + rect.x + rect.width;
-                let pane_top = content_top + rect.y;
-                pane.terminal.grid().scrollback_len() > 0
-                    && (x as f32) >= pane_right - scrollbar_hit_width
-                    && (x as f32) < pane_right
-                    && (y as f32) >= pane_top
-                    && (y as f32) < pane_top + rect.height
-            });
-        }
-
-        // Check if there's actually scrollback content
-        let has_scrollback = self
-            .tabs
-            .as_ref()
-            .and_then(|tabs| tabs.active_tab())
-            .and_then(crate::tabs::Tab::focused_terminal)
-            .is_some_and(|terminal| terminal.grid().scrollback_len() > 0);
-
-        has_scrollback && x as f32 >= scrollbar_x
+    /// The pane of the active tab whose scrollbar takes the pointer at
+    /// `position`, by the geometry the renderer draws it with.
+    fn scrollbar_at(&self, position: (f64, f64)) -> Option<crate::tabs::TerminalIdentity> {
+        let renderer = self.renderer.as_ref()?;
+        let tab = self.tabs.as_ref()?.active_tab()?;
+        let lone = tab.panes.pane_count() == 1;
+        let placement = self.pointer_pane_placement(renderer.content_top(), renderer.padding());
+        let (x, y) = (position.0 as f32, position.1 as f32);
+        let layout = tab.panes.calculate_layout();
+        let pane_id = layout.into_iter().find_map(|(pane_id, rect)| {
+            let grid = tab.panes.get_pane(pane_id)?.terminal.grid();
+            placement
+                .pane_scrollbar(rect, lone, grid, renderer.cell_size())
+                .filter(|scrollbar| scrollbar.hit.contains(x, y))
+                .map(|_| pane_id)
+        })?;
+        Some(crate::tabs::TerminalIdentity {
+            tab_id: tab.id,
+            pane_id,
+        })
     }
 
     /// Map a vertical mouse position to a scroll offset and apply it
@@ -1813,6 +1847,26 @@ pub(super) struct PointerPane {
 struct WheelTarget {
     identity: crate::tabs::TerminalIdentity,
     cell: Option<(usize, usize)>,
+}
+
+/// Where one wheel step goes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum WheelRoute {
+    /// Chrome under the pointer takes it, and nothing scrolls.
+    Chrome,
+    /// A pane, or the focused pane when the pointer is over none.
+    Terminal(Option<WheelTarget>),
+}
+
+/// Chrome drawn over the panes, which owns the pointer wherever it is
+/// drawn: no press, hover, or wheel there reaches the program beneath.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FloatingChrome {
+    Toast,
+    /// The find box, and the part of it there.
+    FindBox(SearchBarClick),
+    /// The scrollbar of the pane it is drawn in.
+    Scrollbar(crate::tabs::TerminalIdentity),
 }
 
 fn pointer_route(identity: crate::tabs::TerminalIdentity) -> crate::tabs::TerminalEventOrigin {
@@ -2050,7 +2104,7 @@ mod tests {
                 app.active_terminal_mut().unwrap().set_mode(mode, true);
                 let position = mouse_report_position(&app);
                 if motion {
-                    app.try_report_mouse_motion(position, 10.0, 20.0, 0.0, 0.0);
+                    app.try_report_mouse_motion(position, None, 10.0, 20.0, 0.0, 0.0);
                 }
                 app.try_report_mouse_release(MouseButton::Left, position, 10.0, 20.0, 0.0, 0.0);
                 let bytes = fenced_harvest_capture(&mut app, &captures);
@@ -2081,7 +2135,7 @@ mod tests {
         assert_eq!(app.terminal_mouse_capture, capture);
         // Modifier changes must not turn a captured application drag into selection.
         app.modifiers = ModifiersState::SHIFT | ModifiersState::ALT;
-        assert!(app.try_report_mouse_motion(position, 10.0, 20.0, 0.0, 0.0));
+        assert!(app.try_report_mouse_motion(position, None, 10.0, 20.0, 0.0, 0.0));
         assert!(app.try_report_mouse_release(MouseButton::Left, position, 10.0, 20.0, 0.0, 0.0));
         assert!(app.terminal_mouse_capture.is_none());
         assert!(!app.try_report_mouse_release(MouseButton::Left, position, 10.0, 20.0, 0.0, 0.0));
@@ -2090,7 +2144,7 @@ mod tests {
         app.active_terminal_mut()
             .unwrap()
             .set_mode(TerminalMode::MOUSE_ANY_EVENT, true);
-        assert!(app.try_report_mouse_motion(position, 10.0, 20.0, 0.0, 0.0));
+        assert!(app.try_report_mouse_motion(position, None, 10.0, 20.0, 0.0, 0.0));
         assert_eq!(
             fenced_harvest_capture(&mut app, &captures)[0],
             b"\x1b[<0;2;2M\x1b[<44;2;2M\x1b[<12;2;2m\x1b[<35;2;2M"
@@ -2137,7 +2191,7 @@ mod tests {
             let panes = &mut app.tabs.as_mut().unwrap().active_tab_mut().unwrap().panes;
             panes.get_pane_mut(original).unwrap().closed = false;
             panes.focus(original);
-            app.try_report_mouse_motion(position, 10.0, 20.0, 0.0, 0.0);
+            app.try_report_mouse_motion(position, None, 10.0, 20.0, 0.0, 0.0);
             app.try_report_mouse_release(MouseButton::Left, position, 10.0, 20.0, 0.0, 0.0);
             let bytes = fenced_harvest_capture(&mut app, &captures);
             for (index, bytes) in bytes.iter().enumerate() {
@@ -2251,6 +2305,14 @@ mod tests {
         ((rect.x + 15.0) as f64, (rect.y + 30.0) as f64)
     }
 
+    /// Where a wheel step at `position` goes with no chrome there.
+    fn terminal_wheel_target(app: &App, position: (f64, f64)) -> Option<WheelTarget> {
+        match app.wheel_route_at(position, None, 10.0, 20.0, 0.0, 0.0) {
+            WheelRoute::Terminal(target) => target,
+            WheelRoute::Chrome => panic!("no chrome lies at {position:?}"),
+        }
+    }
+
     fn pane_scroll_offset(app: &App, pane: PaneId) -> usize {
         app.active_panes()
             .get_pane(pane)
@@ -2289,7 +2351,7 @@ mod tests {
         }
         panes.focus(left);
 
-        let target = app.wheel_target_at(pane_position(&app, right), 10.0, 20.0, 0.0, 0.0);
+        let target = terminal_wheel_target(&app, pane_position(&app, right));
         assert_eq!(target.map(|target| target.identity.pane_id), Some(right));
         app.scroll_terminal(3.0, target);
         assert_eq!(pane_scroll_offset(&app, right), 3);
@@ -2335,7 +2397,7 @@ mod tests {
         );
 
         for (pane, delta) in [(reporting, 1.0), (scrolling, -1.0)] {
-            let target = app.wheel_target_at(pane_position(&app, pane), 10.0, 20.0, 0.0, 0.0);
+            let target = terminal_wheel_target(&app, pane_position(&app, pane));
             app.scroll_terminal(delta, target);
         }
 
@@ -2371,7 +2433,7 @@ mod tests {
             true,
         );
         pane.read_only = true;
-        let target = app.wheel_target_at(pane_position(&app, hovered), 10.0, 20.0, 0.0, 0.0);
+        let target = terminal_wheel_target(&app, pane_position(&app, hovered));
         app.scroll_terminal(1.0, target);
 
         app.active_panes_mut()
@@ -2387,6 +2449,99 @@ mod tests {
 
         let bytes = fenced_harvest_capture(&mut app, &captures);
         assert!(bytes.iter().all(Vec::is_empty), "{bytes:?}");
+    }
+
+    #[test]
+    fn chrome_over_a_pane_keeps_hover_and_the_wheel_from_its_program() {
+        use crate::app::tests::{fenced_harvest_capture, harvest_rerun_capture_fixture_in};
+        use termeric_core::term::TerminalMode;
+        let (mut app, _directory, _, captures) = harvest_rerun_capture_fixture_in(true);
+        let focused = app.active_panes().focused_id();
+        let identity = app
+            .tabs
+            .as_ref()
+            .unwrap()
+            .active_tab()
+            .unwrap()
+            .focused_terminal_identity();
+        let terminal = &mut app
+            .active_panes_mut()
+            .get_pane_mut(focused)
+            .unwrap()
+            .terminal;
+        terminal.process(b"history\r\n".repeat(80).as_slice());
+        terminal.set_mode(
+            TerminalMode::MOUSE_ANY_EVENT | TerminalMode::MOUSE_SGR,
+            true,
+        );
+        let position = pane_position(&app, focused);
+        let chrome = [
+            FloatingChrome::Toast,
+            FloatingChrome::FindBox(SearchBarClick::Background),
+            FloatingChrome::FindBox(SearchBarClick::Query(0)),
+            FloatingChrome::Scrollbar(identity),
+        ];
+
+        // Hover over chrome is the chrome's.
+        for chrome in chrome {
+            assert!(!app.try_report_mouse_motion(position, Some(chrome), 10.0, 20.0, 0.0, 0.0));
+        }
+        // The wheel over the find box or a toast scrolls nothing; over a
+        // scrollbar it scrolls that pane's scrollback, though its program
+        // asks for the wheel.
+        for chrome in &chrome[..3] {
+            let route = app.wheel_route_at(position, Some(*chrome), 10.0, 20.0, 0.0, 0.0);
+            assert_eq!(route, WheelRoute::Chrome, "{chrome:?}");
+        }
+        let route = app.wheel_route_at(position, Some(chrome[3]), 10.0, 20.0, 0.0, 0.0);
+        let WheelRoute::Terminal(target) = route else {
+            panic!("a scrollbar's wheel goes to its pane: {route:?}");
+        };
+        app.scroll_terminal(3.0, target);
+        assert_eq!(pane_scroll_offset(&app, focused), 3);
+        app.scroll_terminal(-3.0, target);
+        assert_eq!(pane_scroll_offset(&app, focused), 0);
+
+        // Beside chrome, hover is reported; a drag the program holds keeps
+        // reporting across chrome. These are all the program receives.
+        assert!(app.try_report_mouse_motion(position, None, 10.0, 20.0, 0.0, 0.0));
+        assert!(app.try_report_mouse_press(MouseButton::Left, position, 10.0, 20.0, 0.0, 0.0));
+        assert!(app.try_report_mouse_motion(position, Some(chrome[1]), 10.0, 20.0, 0.0, 0.0));
+        assert_only_pane_received(
+            &captures,
+            fenced_harvest_capture(&mut app, &captures),
+            focused,
+            b"\x1b[<35;2;2M\x1b[<0;2;2M\x1b[<32;2;2M",
+        );
+    }
+
+    #[test]
+    fn every_press_on_a_scrollbar_is_the_scrollbars() {
+        use crate::app::tests::fenced_harvest_capture;
+        use termeric_core::term::TerminalMode;
+        let (mut app, _directory, captures, target) = middle_click_fixture();
+        app.active_panes_mut()
+            .get_pane_mut(target)
+            .unwrap()
+            .terminal
+            .set_mode(
+                TerminalMode::MOUSE_BUTTON_EVENT | TerminalMode::MOUSE_SGR,
+                true,
+            );
+        let identity = crate::tabs::TerminalIdentity {
+            tab_id: app.tabs.as_ref().unwrap().active_tab_id().unwrap(),
+            pane_id: target,
+        };
+        for button in [MouseButton::Middle, MouseButton::Right] {
+            assert!(app.press_floating_chrome(button, Some(FloatingChrome::Scrollbar(identity))));
+        }
+        assert!(!app.press_floating_chrome(MouseButton::Middle, None));
+        assert_only_pane_received(
+            &captures,
+            fenced_harvest_capture(&mut app, &captures),
+            target,
+            b"",
+        );
     }
 
     /// The capture fixture's panes with an in-memory primary selection

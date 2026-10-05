@@ -281,6 +281,89 @@ impl PanePlacement {
             }
         }
     }
+
+    /// The columns and rows the pane laid out at `rect` shows of its
+    /// `grid_size` grid in cells of `cell_size`: a `lone` pane shows every
+    /// cell of its grid, as an unsplit terminal did; a split pane shows the
+    /// whole cells its rectangle holds.
+    pub fn pane_cells(
+        rect: Bounds,
+        lone: bool,
+        grid_size: (usize, usize),
+        cell_size: (f32, f32),
+    ) -> (usize, usize) {
+        if lone {
+            grid_size
+        } else {
+            (
+                ((rect.width / cell_size.0).floor() as usize).max(1),
+                ((rect.height / cell_size.1).floor() as usize).max(1),
+            )
+        }
+    }
+
+    /// The scrollbar the pane laid out at `rect` draws for `grid`, if any.
+    pub fn pane_scrollbar(
+        self,
+        rect: Bounds,
+        lone: bool,
+        grid: &termeric_core::Grid,
+        cell_size: (f32, f32),
+    ) -> Option<PaneScrollbar> {
+        let bounds = self.pane_bounds(rect, lone);
+        let (_, rows) = Self::pane_cells(rect, lone, (grid.cols(), grid.rows()), cell_size);
+        PaneScrollbar::of_pane(
+            Bounds::new(
+                bounds.x,
+                bounds.y,
+                bounds.width.max(0.0),
+                rows as f32 * cell_size.1,
+            ),
+            grid.scrollback_len() > 0,
+        )
+    }
+}
+
+/// A pane's scrollbar, drawn along its right edge while it has scrollback.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PaneScrollbar {
+    /// The drawn track, which the thumb moves along.
+    pub track: Bounds,
+    /// The strip at the pane's right edge that takes the pointer: as tall
+    /// as the track and wider, so the thin track is easy to hit.
+    pub hit: Bounds,
+}
+
+impl PaneScrollbar {
+    const WIDTH: f32 = 6.0;
+    /// The gap between the track and the pane's right edge.
+    const MARGIN: f32 = 2.0;
+    const HIT_WIDTH: f32 = 16.0;
+    /// A track no taller than this is not drawn.
+    const MIN_HEIGHT: f32 = 20.0;
+
+    /// The scrollbar of a pane whose shown rows cover `rows_area`, when it
+    /// has scrollback and room to draw one.
+    pub fn of_pane(rows_area: Bounds, has_scrollback: bool) -> Option<Self> {
+        if !has_scrollback || rows_area.height <= Self::MIN_HEIGHT {
+            return None;
+        }
+        let right = rows_area.right();
+        Some(Self {
+            track: Bounds::new(
+                right - Self::WIDTH - Self::MARGIN,
+                rows_area.y,
+                Self::WIDTH,
+                rows_area.height,
+            ),
+            hit: Bounds::new(
+                right - Self::HIT_WIDTH,
+                rows_area.y,
+                Self::HIT_WIDTH,
+                rows_area.height,
+            ),
+        })
+    }
 }
 
 /// One pane to draw: its terminal's presented state and its layout
@@ -445,5 +528,49 @@ mod tests {
                 height: 200.0,
             }
         );
+    }
+
+    #[test]
+    fn a_pane_scrollbar_runs_down_its_shown_rows_at_its_right_edge() {
+        let placement = PanePlacement {
+            left: 40.0,
+            top: 30.0,
+            right: 840.0,
+            bottom: 630.0,
+            padding: 8.0,
+        };
+        let rect = Bounds::new(100.0, 50.0, 305.0, 210.0);
+        let cell = (10.0, 20.0);
+        // A lone pane shows its whole grid; a split one the whole cells of
+        // its rectangle, and at least one.
+        assert_eq!(
+            PanePlacement::pane_cells(rect, true, (80, 24), cell),
+            (80, 24)
+        );
+        assert_eq!(
+            PanePlacement::pane_cells(rect, false, (80, 24), cell),
+            (30, 10)
+        );
+        assert_eq!(
+            PanePlacement::pane_cells(Bounds::default(), false, (80, 24), cell),
+            (1, 1)
+        );
+
+        let mut grid = termeric_core::Grid::new(80, 20);
+        assert_eq!(placement.pane_scrollbar(rect, true, &grid, cell), None);
+        grid.scroll_up();
+        assert!(grid.scrollback_len() > 0);
+        // Inside the lone pane's padding, beside its 20 rows; the pointer
+        // finds it in a wider strip ending at the pane's edge.
+        let scrollbar = placement.pane_scrollbar(rect, true, &grid, cell).unwrap();
+        assert_eq!(scrollbar.track, Bounds::new(824.0, 38.0, 6.0, 400.0));
+        assert_eq!(scrollbar.hit, Bounds::new(816.0, 38.0, 16.0, 400.0));
+        // A split pane's runs down the rows its rectangle shows.
+        let scrollbar = placement.pane_scrollbar(rect, false, &grid, cell).unwrap();
+        assert_eq!(scrollbar.track, Bounds::new(445.0, 80.0, 6.0, 200.0));
+        assert_eq!(scrollbar.hit, Bounds::new(437.0, 80.0, 16.0, 200.0));
+        // Too short a pane draws none.
+        let short = Bounds::new(100.0, 50.0, 305.0, 20.0);
+        assert_eq!(placement.pane_scrollbar(short, false, &grid, cell), None);
     }
 }

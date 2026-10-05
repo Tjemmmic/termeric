@@ -119,7 +119,7 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `grid.rs` | `build_pane_grid()`: a grid's cached rows, cursor, and scrollbar |
 | `headless_tests.rs`, `image_crop_smoke.rs`, `benchmark.rs`, `visual_baseline.json` | GPU smokes run by `gpu_render_smoke`, the visual baseline they compare against, and the headless renderer benchmark (test builds only) |
 | `shaders/` | WGSL for the rectangle, text, and image pipelines (the background image draws through the image pipeline) |
-| `types.rs` | `*Info` structs, click/action enums, `PaneRenderData`, and `PanePlacement`, which places panes in the window (re-exported via `pub use types::*`) |
+| `types.rs` | `*Info` structs, click/action enums, `PaneRenderData`, and `PanePlacement`, which places panes and their scrollbars (`PaneScrollbar`) in the window (re-exported via `pub use types::*`) |
 | `draw.rs` | Shared card, shadow, scrollbar, button, and focus-ring drawing for dialogs and menus |
 | `rect.rs`, `buffer.rs` | Rounded-rectangle pipeline and capacity-managed GPU upload buffers |
 | `text.rs`, `ui_text.rs` | Terminal glyph queue and text pipeline; chrome text in the desktop UI face |
@@ -185,14 +185,16 @@ In `app/event_loop.rs` (MouseInput handler), before anything else:
 4. Everything else goes to `handle_mouse_input`
 
 In `app/mouse.rs` (`handle_mouse_input`): 0. The docked agent view claims presses on its area and divider when `pointer_panel_owns_input()` is false; a press elsewhere returns the keyboard to the terminals
-1. Native scrollbar/divider presses only when `pointer_panel_owns_input()` is false
+1. A primary press on a pane's scrollbar (when no find box or toast is drawn over it) or a divider, only when `pointer_panel_owns_input()` is false
 2. Global Settings button (preserves direct panel-to-Settings switching)
 3. The top panel layer (Settings, Workspaces menu, session, Commands, or Agents panel) intercepts its clicks, including outside-click dismissal, before background controls
-4. Tab bar and search bar, then toggling a pane in or out of an armed broadcast target set
+4. Tab bar, then any press on chrome floating over the panes (`press_floating_chrome`: the find box works it, a scrollbar swallows other buttons), then toggling a pane in or out of an armed broadcast target set
 5. Pane focus, Ctrl+Click hyperlink, and terminal mouse reporting when requested; Shift bypasses to native selection
 6. Terminal selection (default)
 
 The same panel-ownership predicate blocks background divider hover from returning before panel hover handling. Non-primary panel presses are consumed; terminal-protocol releases keep their separate completion path. Native gestures are finalized on window focus loss or modal takeover, before dismissal/animation cleanup can discard that ownership. Terminal-geometry synchronization also finalizes gestures for resize, scale, font/configuration, and topology paths; never clear divider state directly and orphan a live-domain preview. Scrollbar capture is an optional stable terminal identity, not a boolean. Revalidate it at the scroll mutation boundary and on focus-surface refresh so a held gesture cannot scroll a newly selected tab or pane. Divider drags likewise require their original open tab to remain selected and their exact divider to remain visible. Finish invalid drags through the shared control path; never silently discard an unacknowledged live-domain preview.
+
+Chrome floating over the panes (toasts, the find box, and pane scrollbars) owns the pointer wherever it is drawn. `App::floating_chrome_at` finds it frontmost first, through `toast_hit_test`, `search_bar_hit_test`, and `PanePlacement::pane_scrollbar` (the geometry `build_pane_grid` draws scrollbars with), and it is the one check behind presses, hover reports, the wheel, and the pointer's shape. Hover over chrome is never reported to the program beneath, though a drag the program holds keeps reporting; the wheel over a scrollbar scrolls that pane's scrollback without reporting, and over other chrome it scrolls nothing.
 
 **Any `is_open()`/`is_active()` that stays true after closing will block ALL clicks below it in the chain.**
 
@@ -226,7 +228,7 @@ Mouse, focus, alternate-scroll, and paste reports snapshot mode from the termina
 - Child modules access the parent's private fields via `&mut self` on `impl Renderer` blocks
 - Types in `types.rs` are re-exported via `pub use types::*` in mod.rs; a type defined in another sub-module needs its own `pub use` there (e.g. `PopupMenuInfo`)
 - A hit test must use the same geometry as the `build_*` function that drew the element: the tab bar shares one geometry source (`TabChrome`), the side panels and the find box each compute one `*Layout` that their builder and hit test both use (`commands_panel_layout`, `session_panel_layout`, `SearchBarLayout::calculate`)
-- Terminal panes are placed by `PanePlacement::pane_bounds` for drawing, the Git completion anchor, pointer-to-cell mapping, the IME caret, and accessibility. It is the one place a tab's only pane differs from split panes: it fills the terminal area inside the padding on every side (its grid starts one padding below the tab bar) and shows its grid's own cells, while split panes sit at their layout rectangles from the area's top edge
+- Terminal panes are placed by `PanePlacement::pane_bounds` for drawing, the Git completion anchor, pointer-to-cell mapping, the IME caret, and accessibility. It is the one place a tab's only pane differs from split panes: it fills the terminal area inside the padding on every side (its grid starts one padding below the tab bar) and shows its grid's own cells, while split panes sit at their layout rectangles from the area's top edge. `PanePlacement::pane_cells` is how many cells each shows, and `PanePlacement::pane_scrollbar` where its scrollbar is drawn and hit
 
 ### Animation Timing
 

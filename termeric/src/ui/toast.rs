@@ -166,6 +166,11 @@ impl ToastManager {
         true
     }
 
+    /// Whether toast `id` is still shown, so a press would dismiss it.
+    pub fn contains(&self, id: u64) -> bool {
+        self.toasts.iter().any(|toast| toast.id == id)
+    }
+
     pub fn dismiss(&mut self, id: u64) -> bool {
         let before = self.toasts.len();
         self.toasts.retain(|toast| toast.id != id);

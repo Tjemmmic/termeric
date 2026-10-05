@@ -321,16 +321,12 @@ impl Renderer {
         let placement = self.pane_placement();
         for pane in panes {
             let bounds = placement.pane_bounds(pane.rect, lone_pane);
-            // A lone pane shows every cell of its grid, as an unsplit terminal
-            // did; a split pane shows the whole cells its rectangle holds.
-            let (pane_cols, pane_rows) = if lone_pane {
-                (pane.grid.cols(), pane.grid.rows())
-            } else {
-                (
-                    ((pane.rect.width / cell_width).floor() as usize).max(1),
-                    ((pane.rect.height / cell_height).floor() as usize).max(1),
-                )
-            };
+            let (pane_cols, pane_rows) = PanePlacement::pane_cells(
+                pane.rect,
+                lone_pane,
+                (pane.grid.cols(), pane.grid.rows()),
+                (cell_width, cell_height),
+            );
             let pane_width = bounds.width.max(0.0);
 
             self.build_pane_grid(
