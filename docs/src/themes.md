@@ -60,7 +60,7 @@ Or point at a theme file anywhere on disk:
 path = "/home/me/themes/my-theme.toml"
 ```
 
-When `path` is set it wins over `name`. If the configured theme cannot be loaded, Termeric shows `turmeric` (or, when it is already running, keeps the theme on screen) with a notice that stays until a configured theme loads. Your other settings still apply, and saving keeps your theme setting as you wrote it until you choose another theme, so a theme file that is only missing for a while comes back once it is there again.
+When `path` is set it wins over `name`. If the configured theme cannot be loaded, Termeric shows `turmeric` (or, when it is already running, keeps the theme on screen) with a notice that stays until a configured theme loads. Your other settings still apply, and saving keeps your theme setting as you wrote it until you choose another theme. Termeric keeps watching for the theme's file, so a file that is only missing for a while loads within a second of being back, and the notice goes away.
 
 A program running in the terminal can still change colors for its own terminal with OSC 4, 10, 11, and 12 (see [Terminal compatibility](compatibility.md)). Those changes last until the program resets them and do not affect other tabs.
 
@@ -70,7 +70,7 @@ Put a theme file in `~/.config/termeric/themes/`. The file name without `.toml` 
 
 Start from the [example theme](https://github.com/Tjemmmic/termeric/blob/main/assets/themes/custom-example.toml), or copy one of the built-in files from `termeric/themes/` in the source tree.
 
-While a custom theme is in use, Termeric watches its file. Save an edit and the window updates within a second. If the edited file has an error, a notice explains it and the current colors stay.
+While a custom theme is configured, Termeric watches its file. Save an edit and the window updates within a second. If the edited file has an error, or the file is removed, the current colors stay and a notice explains why until the file loads again. A custom file that appears with the name of the configured built-in theme replaces it the same way.
 
 ### Theme file format
 

@@ -1,8 +1,6 @@
 //! "Change Theme…": a palette quick pick that previews each theme as it is
 //! highlighted, keeps the chosen one, and restores the original on cancel.
 
-use std::path::PathBuf;
-
 use super::App;
 use crate::config::theme::Theme;
 use crate::ui::command_palette::palette::{
@@ -13,7 +11,6 @@ use crate::ui::command_palette::palette::{
 /// the one previewed now.
 pub(super) struct ThemePreview {
     original: Theme,
-    original_source: Option<PathBuf>,
     shown: String,
 }
 
@@ -56,7 +53,6 @@ impl App {
         );
         self.theme_preview = Some(ThemePreview {
             original: self.theme.clone(),
-            original_source: self.active_theme_path.clone(),
             shown: current,
         });
     }
@@ -75,8 +71,8 @@ impl App {
                 return;
             }
             let highlighted = highlighted.to_owned();
-            if let Ok((theme, source)) = Theme::resolve(&highlighted, None) {
-                self.apply_theme(theme, source);
+            if let Ok(theme) = Theme::resolve(&highlighted, None) {
+                self.apply_theme(theme);
             }
             if let Some(preview) = &mut self.theme_preview {
                 preview.shown = highlighted;
@@ -86,7 +82,16 @@ impl App {
         let Some(preview) = self.theme_preview.take() else {
             return;
         };
-        self.apply_theme(preview.original, preview.original_source);
+        self.apply_theme(preview.original);
+    }
+
+    /// Show `theme`, the configured theme as it now loads. While the picker
+    /// previews another, it becomes the theme that cancelling puts back.
+    pub(super) fn show_configured_theme(&mut self, theme: Theme) {
+        match &mut self.theme_preview {
+            Some(preview) => preview.original = theme,
+            None => self.apply_theme(theme),
+        }
     }
 
     /// Keep the picked theme and save it to the configuration.
@@ -112,11 +117,12 @@ impl App {
     /// Make `name` the configured theme in memory and end any preview.
     fn adopt_theme(&mut self, name: &str) -> anyhow::Result<()> {
         self.theme_preview = None;
-        let (theme, source) = Theme::resolve(name, None)?;
+        // A theme that does not load is refused before it becomes the
+        // configured one.
+        Theme::resolve(name, None)?;
         self.config.theme.name = name.to_string();
         self.config.theme.path = None;
-        self.apply_theme(theme, source);
-        self.theme_problem.clear(&mut self.toasts);
+        self.load_configured_theme();
         Ok(())
     }
 }
@@ -156,7 +162,7 @@ mod tests {
         assert!(app.theme_preview.is_none());
         assert_eq!(
             app.theme.meta.name,
-            Theme::resolve(&original, None).unwrap().0.meta.name
+            Theme::resolve(&original, None).unwrap().meta.name
         );
     }
 

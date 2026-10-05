@@ -788,6 +788,119 @@ fn a_theme_that_does_not_load_stays_configured_until_another_is_chosen() {
     assert!(lasting_toasts(&app).is_empty());
 }
 
+/// Make the next poll look at the files it watches, without treating the
+/// configuration file as changed.
+fn poll_files_now(app: &mut App) {
+    app.last_config_mtime = std::fs::metadata(&app.config_path)
+        .and_then(|metadata| metadata.modified())
+        .ok();
+    app.last_config_check = Instant::now()
+        .checked_sub(App::CONFIG_POLL_INTERVAL)
+        .expect("the clock is past one poll interval");
+    app.poll_config_for_hot_reload();
+}
+
+/// Write `text` as the theme file at `path`, modified `second` seconds into
+/// the epoch, so each write is a change however coarse the file clock is.
+fn write_theme(path: &std::path::Path, text: &str, second: u64) {
+    std::fs::write(path, text).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(second))
+        .unwrap();
+}
+
+/// Turmeric's palette under another name.
+fn custom_theme(name: &str) -> String {
+    include_str!("../../../themes/roots/turmeric.toml").replacen(
+        "name = \"Turmeric\"",
+        &format!("name = \"{name}\""),
+        1,
+    )
+}
+
+#[test]
+fn a_theme_that_breaks_while_running_keeps_a_notice_until_it_loads() {
+    let directory = tempfile::tempdir().unwrap();
+    let theme_path = directory.path().join("arrowroot.toml");
+    write_theme(&theme_path, &custom_theme("Arrowroot"), 1_000);
+    let config = format!("[theme]\npath = {:?}\n", theme_path.display().to_string());
+    let (_config_directory, _path, mut app) = app_with_config_file(&config);
+    assert_eq!(app.theme.meta.name, "Arrowroot");
+
+    write_theme(&theme_path, "[meta\nname = \"Arrowroot\"\n", 1_001);
+    poll_files_now(&mut app);
+    assert_eq!(app.theme.meta.name, "Arrowroot", "the colors stay");
+    let problems = lasting_toasts(&app);
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(
+        problems[0].starts_with("Theme could not be loaded; showing Arrowroot"),
+        "{problems:?}"
+    );
+    assert!(problems[0].contains("arrowroot.toml"), "{problems:?}");
+
+    // Nothing changed: no reload, and the notice stays.
+    poll_files_now(&mut app);
+    assert_eq!(lasting_toasts(&app), problems);
+
+    write_theme(&theme_path, &custom_theme("Arrowroot Two"), 1_002);
+    poll_files_now(&mut app);
+    assert_eq!(app.theme.meta.name, "Arrowroot Two");
+    assert!(lasting_toasts(&app).is_empty());
+}
+
+#[test]
+fn a_missing_theme_file_loads_when_it_appears_and_follows_edits_after() {
+    let directory = tempfile::tempdir().unwrap();
+    let theme_path = directory.path().join("arrowroot.toml");
+    let config = format!("[theme]\npath = {:?}\n", theme_path.display().to_string());
+    let (_config_directory, _path, mut app) = app_with_config_file(&config);
+    assert_eq!(app.theme.meta.name, "Turmeric");
+    assert_eq!(lasting_toasts(&app).len(), 1);
+
+    // Still missing: nothing to do.
+    poll_files_now(&mut app);
+    assert_eq!(lasting_toasts(&app).len(), 1);
+
+    write_theme(&theme_path, &custom_theme("Arrowroot"), 1_000);
+    poll_files_now(&mut app);
+    assert_eq!(app.theme.meta.name, "Arrowroot");
+    assert!(lasting_toasts(&app).is_empty());
+
+    write_theme(&theme_path, &custom_theme("Arrowroot Two"), 1_001);
+    poll_files_now(&mut app);
+    assert_eq!(app.theme.meta.name, "Arrowroot Two");
+
+    // Gone again: the colors stay, and the notice says why.
+    std::fs::remove_file(&theme_path).unwrap();
+    poll_files_now(&mut app);
+    assert_eq!(app.theme.meta.name, "Arrowroot Two");
+    assert_eq!(lasting_toasts(&app).len(), 1);
+}
+
+#[test]
+fn a_theme_edited_during_a_preview_is_the_one_cancelling_puts_back() {
+    let directory = tempfile::tempdir().unwrap();
+    let theme_path = directory.path().join("arrowroot.toml");
+    write_theme(&theme_path, &custom_theme("Arrowroot"), 1_000);
+    let config = format!("[theme]\npath = {:?}\n", theme_path.display().to_string());
+    let (_config_directory, _path, mut app) = app_with_config_file(&config);
+
+    app.open_theme_picker();
+    app.command_palette.select_command("dracula");
+    app.sync_theme_preview();
+    write_theme(&theme_path, &custom_theme("Arrowroot Two"), 1_001);
+    poll_files_now(&mut app);
+    assert_eq!(app.theme.meta.name, "Dracula", "the preview stays");
+
+    // Cancelling puts back the configured theme as it is now.
+    app.command_palette.close();
+    app.sync_theme_preview();
+    assert_eq!(app.theme.meta.name, "Arrowroot Two");
+}
+
 #[test]
 fn reset_configuration_asks_first_and_keeps_the_old_file() {
     let original = "# Mine.\n[bell]\nvisual = false\n";

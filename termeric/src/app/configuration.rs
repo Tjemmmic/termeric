@@ -283,33 +283,56 @@ impl App {
         }
 
         changed |= self.poll_background_image();
+        changed |= self.poll_configured_theme();
+        changed
+    }
 
-        let Some(theme_path) = self.active_theme_path.clone() else {
-            return changed;
+    /// Load the configured theme again when its file appeared, changed, or
+    /// went away since it was last loaded.
+    fn poll_configured_theme(&mut self) -> bool {
+        let Some(file) = self.theme_file.clone() else {
+            return false;
         };
-        let theme_mtime = std::fs::metadata(&theme_path)
-            .and_then(|metadata| metadata.modified())
-            .ok();
-        if theme_mtime == self.last_theme_mtime {
-            return changed;
+        if modified_time(&file) == self.theme_file_modified {
+            return false;
         }
-        changed = true;
-        self.last_theme_mtime = theme_mtime;
+        if self.load_configured_theme() {
+            self.toasts
+                .info(format!("Theme reloaded: {}", file.display()));
+        }
+        true
+    }
 
-        match Theme::load(&theme_path) {
+    /// Show the configured theme and watch the file it is read from. A theme
+    /// that does not load leaves the one on screen, with a notice that stays
+    /// until a configured theme loads. Returns whether it loaded.
+    pub(super) fn load_configured_theme(&mut self) -> bool {
+        let name = self.config.theme.name.clone();
+        let path = self.config.theme.path.clone();
+        // Noted before reading, so a change made during the read is seen by
+        // the next poll.
+        self.theme_file = Theme::configured_file(&name, path.as_deref());
+        self.theme_file_modified = self.theme_file.as_deref().and_then(modified_time);
+        match Theme::resolve(&name, path.as_deref()) {
             Ok(theme) => {
-                self.apply_theme(theme, Some(theme_path.clone()));
-                self.toasts
-                    .info(format!("Theme reloaded: {}", theme_path.display()));
+                self.show_configured_theme(theme);
+                self.theme_problem.clear(&mut self.toasts);
+                true
             }
             Err(error) => {
-                log::warn!("Theme hot-reload failed: {error:#}");
-                self.toasts.warning(format!(
-                    "Theme reload failed; keeping current theme: {error:#}"
-                ));
+                let message = format!(
+                    "Theme could not be loaded; showing {}: {error:#}",
+                    self.theme.meta.name
+                );
+                log::warn!("{message}");
+                self.theme_problem.show(
+                    &mut self.toasts,
+                    crate::ui::toast::ToastSeverity::Warning,
+                    message,
+                );
+                false
             }
         }
-        changed
     }
 
     /// Validate and atomically select a new configuration before applying it
@@ -393,24 +416,7 @@ impl App {
         self.cursor_blink_period = (self.config.cursor.blink_rate as f32 / 1000.0) * 2.0;
         self.reset_cursor_blink();
         self.bell.set_config(self.config.bell.clone());
-        match Theme::resolve(&self.config.theme.name, self.config.theme.path.as_deref()) {
-            Ok((theme, source)) => {
-                self.apply_theme(theme, source);
-                self.theme_problem.clear(&mut self.toasts);
-            }
-            Err(error) => {
-                let message = format!(
-                    "Theme could not be loaded; showing {}: {error:#}",
-                    self.theme.meta.name
-                );
-                log::warn!("{message}");
-                self.theme_problem.show(
-                    &mut self.toasts,
-                    crate::ui::toast::ToastSeverity::Warning,
-                    message,
-                );
-            }
-        }
+        self.load_configured_theme();
         if let Some(tabs) = &mut self.tabs {
             // Reapplying unrelated settings must not undo a keyboard type
             // selected by the foreground application through DECSET 1060/1061.
@@ -654,15 +660,10 @@ impl App {
         self.request_redraw(RedrawReason::ConfigReload);
     }
 
-    pub(super) fn apply_theme(&mut self, theme: Theme, source: Option<std::path::PathBuf>) {
+    /// Show `theme`, which may be a preview rather than the configured one.
+    pub(super) fn apply_theme(&mut self, theme: Theme) {
         self.settings_panel.set_theme_meta(theme.meta.clone());
         self.theme = theme;
-        self.last_theme_mtime = source.as_ref().and_then(|path| {
-            std::fs::metadata(path)
-                .and_then(|metadata| metadata.modified())
-                .ok()
-        });
-        self.active_theme_path = source;
         // Glyphs are coverage masks tinted per vertex, so only the colors
         // change; the atlas stays valid and previews switch without stalls.
         if let Some(renderer) = &mut self.renderer {
@@ -1011,6 +1012,13 @@ impl App {
             &self.shortcut_registry,
         ));
     }
+}
+
+/// When the file at `path` was last modified, or `None` when there is none.
+fn modified_time(path: &std::path::Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
 }
 
 /// Set, append, or remove one position in the ordered font fallback chain;

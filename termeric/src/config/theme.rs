@@ -147,23 +147,39 @@ impl Theme {
         names
     }
 
-    /// Resolve a configured theme and return the file that should be watched,
-    /// if the selected theme is file-backed.
-    pub fn resolve(name: &str, explicit_path: Option<&Path>) -> Result<(Self, Option<PathBuf>)> {
-        if let Some(path) = explicit_path {
-            return Self::load(path).map(|theme| (theme, Some(path.to_path_buf())));
-        }
-        Self::resolve_named_in_dir(name, &super::Config::themes_dir())
+    /// Resolve a configured theme: the file at `explicit_path`, else the
+    /// custom theme `name`, else the built-in one.
+    pub fn resolve(name: &str, explicit_path: Option<&Path>) -> Result<Self> {
+        Self::resolve_in_dir(name, explicit_path, &super::Config::themes_dir())
     }
 
-    fn resolve_named_in_dir(name: &str, custom_dir: &Path) -> Result<(Self, Option<PathBuf>)> {
-        if Path::new(name).components().count() == 1 {
-            let custom_path = custom_dir.join(format!("{name}.toml"));
-            if custom_path.is_file() {
-                return Self::load(&custom_path).map(|theme| (theme, Some(custom_path)));
-            }
+    /// The file a configured theme is read from whenever it exists:
+    /// `explicit_path`, or the custom theme file for `name`. Watching it
+    /// follows edits to the theme and finds it when it appears.
+    pub fn configured_file(name: &str, explicit_path: Option<&Path>) -> Option<PathBuf> {
+        Self::configured_file_in_dir(name, explicit_path, &super::Config::themes_dir())
+    }
+
+    fn configured_file_in_dir(
+        name: &str,
+        explicit_path: Option<&Path>,
+        custom_dir: &Path,
+    ) -> Option<PathBuf> {
+        match explicit_path {
+            Some(path) => Some(path.to_path_buf()),
+            None => (Path::new(name).components().count() == 1)
+                .then(|| custom_dir.join(format!("{name}.toml"))),
         }
-        Self::load_builtin(name).map(|theme| (theme, None))
+    }
+
+    fn resolve_in_dir(name: &str, explicit_path: Option<&Path>, custom_dir: &Path) -> Result<Self> {
+        if let Some(path) = explicit_path {
+            return Self::load(path);
+        }
+        match Self::configured_file_in_dir(name, None, custom_dir) {
+            Some(path) if path.is_file() => Self::load(&path),
+            _ => Self::load_builtin(name),
+        }
     }
 
     /// Get ANSI color by index (0-15)
@@ -652,24 +668,39 @@ mod tests {
     }
 
     #[test]
-    fn resolve_explicit_path_returns_watch_source() {
+    fn an_explicit_path_is_loaded_and_is_the_configured_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("warm-root.toml");
         std::fs::write(&path, include_str!("../../themes/roots/turmeric.toml")).unwrap();
 
-        let (theme, source) = Theme::resolve("ignored", Some(&path)).unwrap();
+        let theme = Theme::resolve("ignored", Some(&path)).unwrap();
         assert_eq!(theme.meta.name, "Turmeric");
-        assert_eq!(source, Some(path));
+        assert_eq!(Theme::configured_file("ignored", Some(&path)), Some(path));
     }
 
     #[test]
-    fn resolve_custom_name_returns_watch_source() {
+    fn a_custom_theme_file_is_the_configured_file_even_before_it_exists() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("warm-root.toml");
-        std::fs::write(&path, include_str!("../../themes/roots/turmeric.toml")).unwrap();
+        assert_eq!(
+            Theme::configured_file_in_dir("warm-root", None, dir.path()),
+            Some(path.clone())
+        );
+        assert!(Theme::resolve_in_dir("warm-root", None, dir.path()).is_err());
 
-        let (_, source) = Theme::resolve_named_in_dir("warm-root", dir.path()).unwrap();
-        assert_eq!(source, Some(path));
+        let custom = include_str!("../../themes/roots/turmeric.toml").replacen(
+            "name = \"Turmeric\"",
+            "name = \"Warm Root\"",
+            1,
+        );
+        std::fs::write(&path, custom).unwrap();
+        let theme = Theme::resolve_in_dir("warm-root", None, dir.path()).unwrap();
+        assert_eq!(theme.meta.name, "Warm Root");
+        // A name that is a path names no custom file.
+        assert_eq!(
+            Theme::configured_file_in_dir("../warm-root", None, dir.path()),
+            None
+        );
     }
 
     #[test]

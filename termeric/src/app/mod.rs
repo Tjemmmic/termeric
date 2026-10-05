@@ -1197,10 +1197,12 @@ pub struct App {
     /// The notice that the configured theme does not load, so another one is
     /// on screen: it stays until a configured theme loads.
     theme_problem: crate::ui::toast::StandingNotice,
-    /// File backing the active custom/explicit theme, when applicable.
-    active_theme_path: Option<std::path::PathBuf>,
-    /// Last observed mtime of the active file-backed theme.
-    last_theme_mtime: Option<std::time::SystemTime>,
+    /// The file the configured theme is read from whenever it exists,
+    /// polled so the theme follows edits to it and loads when it appears.
+    theme_file: Option<std::path::PathBuf>,
+    /// When `theme_file` was last modified as of the last load, or `None`
+    /// while it does not exist.
+    theme_file_modified: Option<std::time::SystemTime>,
     /// Last known cursor visibility (for snap detection)
     last_cursor_visible: bool,
     /// Highest tab ID we've seen (to detect truly new tabs)
@@ -1494,15 +1496,9 @@ impl App {
         // A configured theme that does not load stays configured, so a save
         // never replaces it; turmeric is shown meanwhile, and applying the
         // configuration below says why.
-        let (theme, active_theme_path) =
-            Theme::resolve(&config.theme.name, config.theme.path.as_deref())
-                .unwrap_or_else(|_| (Theme::default(), None));
+        let theme = Theme::resolve(&config.theme.name, config.theme.path.as_deref())
+            .unwrap_or_else(|_| Theme::default());
         let runtime_plugin_paths = crate::plugin::runtime::PluginPaths::configured();
-        let last_theme_mtime = active_theme_path.as_ref().and_then(|path| {
-            std::fs::metadata(path)
-                .and_then(|metadata| metadata.modified())
-                .ok()
-        });
 
         // Initialize bell from config
         let bell = Bell::new(config.bell.clone());
@@ -1581,8 +1577,8 @@ impl App {
                 .and_then(Result::ok)
                 .and_then(|metadata| metadata.modified().ok()),
             config_path,
-            active_theme_path,
-            last_theme_mtime,
+            theme_file: None,
+            theme_file_modified: None,
             last_cursor_visible: true,
             max_seen_tab_id: None,
             last_cursor_terminal: None,
