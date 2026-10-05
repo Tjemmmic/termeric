@@ -2,8 +2,9 @@
 # Install Termeric from this directory, or uninstall a previous installation.
 #
 # MANIFEST beside this script lists the files to install and their modes. An
-# installation records the files it wrote in PREFIX/lib/termeric/installed-files
-# for --uninstall. With --destdir the files are staged for a package manager,
+# installation records each file in PREFIX/lib/termeric/installed-files before
+# writing it, so --uninstall removes even an install that failed partway. With
+# --destdir the files are staged for a package manager,
 # which tracks them itself, so nothing is recorded and no cache is refreshed.
 
 set -eu
@@ -137,7 +138,7 @@ fi
 
 [ -f "$here/MANIFEST" ] || fail "MANIFEST is missing beside install.sh"
 
-pending=""
+recording=false
 if [ -z "$destdir" ]; then
     if [ -f "$record" ]; then
         # An upgrade: remove the previous files first, so any the new version
@@ -145,15 +146,25 @@ if [ -z "$destdir" ]; then
         remove_recorded
     fi
     mkdir -p "$(dirname "$record")"
-    pending="$record.new"
-    : >"$pending"
+    : >"$record"
+    recording=true
 fi
+
+# A copy cut short leaves no temporary file behind.
+temporary=""
+trap 'if [ -n "$temporary" ]; then rm -f "$temporary"; fi' EXIT
+trap 'exit 1' HUP INT TERM
 
 binary="$prefix/bin/termeric"
 while read -r mode path; do
     source="$here/$path"
     target="$root/$path"
     [ -f "$source" ] || fail "MANIFEST lists $path, which is missing"
+    # Record each file before writing it, so that whatever an install cut
+    # short leaves behind, --uninstall finds.
+    if [ "$recording" = true ]; then
+        printf '%s\n' "$prefix/$path" >>"$record"
+    fi
     mkdir -p "$(dirname "$target")"
     # Write beside the target and rename over it, so a running Termeric
     # keeps its executable and a failure never leaves half a file.
@@ -176,17 +187,14 @@ while read -r mode path; do
     esac
     chmod "$mode" "$temporary"
     mv -f "$temporary" "$target"
-    if [ -n "$pending" ]; then
-        printf '%s\n' "$prefix/$path" >>"$pending"
-    fi
+    temporary=""
 done <"$here/MANIFEST"
 
-if [ -z "$pending" ]; then
+if [ "$recording" = false ]; then
     printf 'Staged Termeric for %s in %s\n' "$prefix" "$root"
     exit 0
 fi
 
-mv -f "$pending" "$record"
 refresh_caches
 printf 'Installed Termeric in %s\n' "$prefix"
 case ":${PATH:-}:" in

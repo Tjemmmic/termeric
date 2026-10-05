@@ -122,6 +122,49 @@ class InstallScriptTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("no Termeric installation is recorded", result.stderr)
 
+    def test_an_install_or_upgrade_that_fails_partway_can_still_be_uninstalled(self):
+        missing = "share/terminfo/x/xterm-termeric"
+        entries = list(manifest())
+        # Files come before and after the one that will be missing.
+        self.assertLess(0, entries.index(missing))
+        self.assertLess(entries.index(missing), len(entries) - 1)
+        for upgrade in [False, True]:
+            with self.subTest(upgrade=upgrade), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                tree = staged_tree(root)
+                home = root / "home"
+                prefix = home / ".local"
+                record = prefix / "lib/termeric/installed-files"
+                if upgrade:
+                    result = run_installer(tree, home)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                source = tree / missing
+                contents = source.read_bytes()
+                source.unlink()
+
+                result = run_installer(tree, home)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"MANIFEST lists {missing}, which is missing", result.stderr)
+                # Less the record and a desktop database the first install's
+                # refresh may have written.
+                written = files_below(prefix) - {
+                    "lib/termeric/installed-files",
+                    "share/applications/mimeinfo.cache",
+                }
+                self.assertIn("bin/termeric", written)
+                self.assertNotIn(entries[-1], written)
+                self.assertFalse(any(path.endswith(".install-tmp") for path in written))
+                recorded = {
+                    line.removeprefix(f"{prefix}/") for line in record.read_text().splitlines()
+                }
+                self.assertLessEqual(written, recorded)
+
+                source.write_bytes(contents)
+                result = run_installer(tree, home, "--uninstall")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertLessEqual(files_below(prefix), {"share/applications/mimeinfo.cache"})
+                self.assertFalse((prefix / "lib/termeric").exists())
+
     def test_finds_its_own_directory_whatever_cdpath_holds(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
