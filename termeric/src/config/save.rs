@@ -54,7 +54,8 @@ pub fn config_table(config: &Config) -> Result<toml::Table> {
 pub fn save(path: &Path, baseline: &toml::Table, live: &Config) -> Result<toml::Table> {
     let target = link_target(path)?;
     let original = read_if_present(&target)?.unwrap_or_default();
-    let mut document = loadable_document(path, &original)?;
+    let (mut document, current) = loadable_document(path, &original)?;
+    let current = config_table(&current)?;
     let live_table = config_table(live)?;
     // What is added is written as a full save would write it, in the
     // settings' own order, with tables under headers.
@@ -66,6 +67,7 @@ pub fn save(path: &Path, baseline: &toml::Table, live: &Config) -> Result<toml::
         document.as_table_mut(),
         false,
         written.as_table(),
+        &current,
         baseline,
         &live_table,
     );
@@ -137,10 +139,11 @@ fn read_if_present(path: &Path) -> Result<Option<String>> {
     }
 }
 
-/// `text`, the file at `path`, as a document to edit, if it loads.
-fn loadable_document(path: &Path, text: &str) -> Result<DocumentMut> {
+/// `text`, the file at `path`, as a document to edit and the configuration
+/// it holds, if it loads.
+fn loadable_document(path: &Path, text: &str) -> Result<(DocumentMut, Config)> {
     Config::from_toml(text, path)
-        .and_then(|_| text.parse::<DocumentMut>().map_err(anyhow::Error::from))
+        .and_then(|config| Ok((text.parse::<DocumentMut>()?, config)))
         .map_err(|error| {
             anyhow!(
                 "{} has an error, so it was left as it is ({error:#}); fix it, or use Reset Configuration to replace it",
@@ -151,14 +154,17 @@ fn loadable_document(path: &Path, text: &str) -> Result<DocumentMut> {
 
 /// Change `table`, a table in the person's document, from `baseline` to
 /// `live`. A changed value replaces the old one and keeps its comment; a
-/// table is changed key by key; an array, including an array of tables, is
-/// replaced whole. What is added comes from `written`, the same table in the
-/// live configuration written out. `inline` says whether `table` is an
-/// inline table, so everything added to it must be inline too.
+/// table is changed key by key; an array is replaced whole, and an array of
+/// tables keeps what it can of its entries (see [`keep_unchanged_entries`]).
+/// What is added comes from `written`, the same table in the live
+/// configuration written out; `file` is what `table` holds, as
+/// [`config_table`] gives it. `inline` says whether `table` is an inline
+/// table, so everything added to it must be inline too.
 fn apply_document_changes(
     table: &mut dyn TableLike,
     inline: bool,
     written: &dyn TableLike,
+    file: &toml::Table,
     baseline: &toml::Table,
     live: &toml::Table,
 ) {
@@ -183,11 +189,15 @@ fn apply_document_changes(
         let written_item = written.get(key);
         match (value, before) {
             (toml::Value::Table(live_child), None | Some(toml::Value::Table(_))) => {
-                let empty_baseline = toml::Table::new();
+                let empty_values = toml::Table::new();
                 let empty_written = Table::new();
+                let file_child = file
+                    .get(key)
+                    .and_then(toml::Value::as_table)
+                    .unwrap_or(&empty_values);
                 let baseline_child = before
                     .and_then(toml::Value::as_table)
-                    .unwrap_or(&empty_baseline);
+                    .unwrap_or(&empty_values);
                 let written_child = written_item
                     .and_then(Item::as_table_like)
                     .unwrap_or(&empty_written);
@@ -202,6 +212,7 @@ fn apply_document_changes(
                     child,
                     child_inline,
                     written_child,
+                    file_child,
                     baseline_child,
                     live_child,
                 );
@@ -218,7 +229,7 @@ fn apply_document_changes(
             // missing, the check after the edit refuses the save.
             _ => {
                 if let Some(written_item) = written_item {
-                    set_value(table, inline, key, written_item, before, value);
+                    set_value(table, inline, key, written_item, file.get(key), value);
                 }
             }
         }
@@ -275,14 +286,14 @@ fn new_table(inline: bool) -> Item {
     }
 }
 
-/// Set `key` in `table` to `written`, whose value is `value` and was `before`
-/// in the baseline.
+/// Set `key` in `table` to `written`, whose value is `value`; `in_file` is
+/// what the key holds in the file now.
 fn set_value(
     table: &mut dyn TableLike,
     inline: bool,
     key: &str,
     written: &Item,
-    before: Option<&toml::Value>,
+    in_file: Option<&toml::Value>,
     value: &toml::Value,
 ) {
     let mut item = fresh_item(written);
@@ -302,7 +313,7 @@ fn set_value(
                 Some(toml::Value::Array(old_values)),
                 toml::Value::Array(new_values),
                 Item::ArrayOfTables(new_tables),
-            ) = (existing.as_array_of_tables(), before, value, &mut item)
+            ) = (existing.as_array_of_tables(), in_file, value, &mut item)
             {
                 keep_unchanged_entries(old_tables, old_values, new_tables, new_values);
             }
@@ -318,30 +329,79 @@ fn set_value(
 }
 
 /// In `new_tables`, the new entries of an array of tables with the values
-/// `new_values`, put back each old entry whose value did not change, as it
-/// was written and with its comments, as long as the entries stay in order.
+/// `new_values`, keep what the file's entries, `old_tables` with the values
+/// `old_values`, already say. An entry whose value is unchanged is put back
+/// as it was written, with its comments, as long as the entries stay in
+/// order. Between two kept entries, as many changed entries as there were
+/// before are the same entries changed: each is edited key by key, so it too
+/// keeps its comments and the keys that did not change. An unchanged entry
+/// is found by its value as loaded, never by its position, so one entry is
+/// never put back in another's place.
 fn keep_unchanged_entries(
     old_tables: &ArrayOfTables,
     old_values: &[toml::Value],
     new_tables: &mut ArrayOfTables,
     new_values: &[toml::Value],
 ) {
-    // The document's entries are the baseline's one for one, unless another
-    // program changed the array meanwhile; then none is kept.
+    // Both describe the same document, entry for entry.
     if old_tables.len() != old_values.len() {
         return;
     }
+    let mut unchanged = Vec::new();
     let mut next_old = 0;
-    for (index, value) in new_values.iter().enumerate() {
-        let Some(old_index) =
+    for (new_index, value) in new_values.iter().enumerate() {
+        if let Some(old_index) =
             (next_old..old_values.len()).find(|&old_index| old_values[old_index] == *value)
-        else {
-            continue;
-        };
-        if let (Some(old), Some(new)) = (old_tables.get(old_index), new_tables.get_mut(index)) {
-            *new = old.clone();
+        {
+            unchanged.push((old_index, new_index));
             next_old = old_index + 1;
         }
+    }
+    let mut old_start = 0;
+    let mut new_start = 0;
+    let end = (old_values.len(), new_values.len());
+    for (old_end, new_end) in unchanged.iter().copied().chain([end]) {
+        if old_end - old_start == new_end - new_start {
+            for offset in 0..new_end - new_start {
+                let (old_index, new_index) = (old_start + offset, new_start + offset);
+                if let Some(old) = old_tables.get(old_index) {
+                    edit_entry(
+                        old,
+                        &old_values[old_index],
+                        new_tables,
+                        new_index,
+                        &new_values[new_index],
+                    );
+                }
+            }
+        }
+        if let (Some(old), Some(new)) = (old_tables.get(old_end), new_tables.get_mut(new_end)) {
+            *new = old.clone();
+        }
+        old_start = old_end + 1;
+        new_start = new_end + 1;
+    }
+}
+
+/// Replace entry `index` of `new_tables`, whose value is `value`, with `old`,
+/// the file's entry that held `old_value`, changed key by key to `value`.
+fn edit_entry(
+    old: &Table,
+    old_value: &toml::Value,
+    new_tables: &mut ArrayOfTables,
+    index: usize,
+    value: &toml::Value,
+) {
+    let (Some(old_value), Some(value)) = (old_value.as_table(), value.as_table()) else {
+        return;
+    };
+    let Some(written) = new_tables.get(index).cloned() else {
+        return;
+    };
+    let mut edited = old.clone();
+    apply_document_changes(&mut edited, false, &written, old_value, old_value, value);
+    if let Some(new) = new_tables.get_mut(index) {
+        *new = edited;
     }
 }
 
@@ -608,6 +668,84 @@ command = \"echo logs\"
             .map(|command| command.name)
             .collect();
         assert_eq!(names, ["web", "logs"]);
+    }
+
+    #[test]
+    fn a_changed_entry_is_edited_in_place_keeping_its_comments() {
+        let original = "\
+[[commands]]
+name = \"db\"
+command = \"ssh db\"
+
+# The front end.
+[[commands]]
+name = \"web\"  # mine
+command = \"ssh web\" # old host
+";
+        let (_directory, path) = config_file(original);
+        save_edit(&path, |config| {
+            config.commands[1].command = "ssh web2".into();
+        })
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            original.replace("\"ssh web\"", "\"ssh web2\"")
+        );
+
+        // Removing a key removes its line alone.
+        save_edit(&path, |config| {
+            config.commands[0].alias = Some("d".into());
+        })
+        .unwrap();
+        save_edit(&path, |config| {
+            config.commands[0].alias = None;
+        })
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            original.replace("\"ssh web\"", "\"ssh web2\"")
+        );
+    }
+
+    #[test]
+    fn an_entry_is_kept_for_what_it_says_never_for_its_place() {
+        use crate::input::keybindings::ShortcutOverride;
+        let original = "\
+[[shortcuts]]
+action = \"toggle_pane_zoom\"
+key = \"z\"
+ctrl = true
+
+# Alt+Left goes to the shell.
+[[shortcuts]]
+action = \"navigate_pane_left\"
+";
+        let (_directory, path) = config_file(original);
+        let loaded = Config::load_from(&path).unwrap();
+        // A baseline whose entries are in another order than the file's
+        // must not put one entry where another was.
+        let mut reordered = loaded.clone();
+        reordered.shortcuts.reverse();
+        let baseline = config_table(&reordered).unwrap();
+        let mut live = reordered;
+        live.shortcuts.push(ShortcutOverride {
+            action: "copy".into(),
+            key: Some("k".into()),
+            ctrl: true,
+            alt: false,
+            shift: false,
+            super_key: false,
+        });
+        save(&path, &baseline, &live).unwrap();
+        let saved = Config::load_from(&path).unwrap();
+        assert_eq!(saved.shortcuts, live.shortcuts);
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(
+            text.trim_start().starts_with(
+                "# Alt+Left goes to the shell.\n[[shortcuts]]\naction = \"navigate_pane_left\"\n"
+            ),
+            "{text}"
+        );
     }
 
     #[test]

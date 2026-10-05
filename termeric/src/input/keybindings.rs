@@ -375,9 +375,9 @@ fn capitalize_key(key: &str) -> String {
 
 // ── ShortcutOverride (config persistence) ───────────────────────────────────
 
-/// A user override persisted in config.toml.
-/// Only bindings that differ from defaults are saved.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// One `[[shortcuts]]` entry in config.toml. Entries apply in order on top
+/// of the defaults, each as if it had been recorded in the shortcuts editor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ShortcutOverride {
     /// The `BindableAction` string id (e.g. "copy", "new_tab").
@@ -395,6 +395,19 @@ pub struct ShortcutOverride {
 }
 
 impl ShortcutOverride {
+    /// The entry that gives `action` the binding `chord`, spelled as the
+    /// registry holds it.
+    fn new(action: BindableAction, chord: Option<&KeyChord>) -> Self {
+        Self {
+            action: action.meta().id.to_string(),
+            key: chord.map(|chord| chord.key.clone()),
+            ctrl: chord.is_some_and(|chord| chord.ctrl),
+            alt: chord.is_some_and(|chord| chord.alt),
+            shift: chord.is_some_and(|chord| chord.shift),
+            super_key: chord.is_some_and(|chord| chord.super_key),
+        }
+    }
+
     /// Convert to a `(BindableAction, Option<KeyChord>)` pair.
     pub fn to_binding(&self) -> Option<(BindableAction, Option<KeyChord>)> {
         let action = BindableAction::from_id(&self.action)?;
@@ -418,8 +431,6 @@ pub struct ShortcutRegistry {
     bindings: HashMap<BindableAction, Option<KeyChord>>,
     /// chord → action (reverse index for O(1) dispatch)
     key_map: HashMap<KeyChord, BindableAction>,
-    /// Only user-changed bindings, for minimal config persistence
-    user_overrides: HashMap<BindableAction, Option<KeyChord>>,
 }
 
 impl ShortcutRegistry {
@@ -438,11 +449,14 @@ impl ShortcutRegistry {
             }
         }
 
-        Self {
-            bindings,
-            key_map,
-            user_overrides: HashMap::new(),
-        }
+        Self { bindings, key_map }
+    }
+
+    /// The defaults with `overrides` applied.
+    pub fn with_overrides(overrides: &[ShortcutOverride]) -> Self {
+        let mut registry = Self::new();
+        registry.apply_overrides(overrides);
+        registry
     }
 
     /// Apply user overrides from config on top of defaults, in order,
@@ -477,14 +491,12 @@ impl ShortcutRegistry {
             if let Some(&conflicting) = self.key_map.get(new_chord) {
                 if conflicting != action {
                     self.bindings.insert(conflicting, None);
-                    self.user_overrides.insert(conflicting, None);
                 }
             }
             self.key_map.insert(new_chord.clone(), action);
         }
 
-        self.bindings.insert(action, chord.clone());
-        self.user_overrides.insert(action, chord);
+        self.bindings.insert(action, chord);
     }
 
     /// Check what action a chord is currently bound to (for conflict detection).
@@ -492,37 +504,62 @@ impl ShortcutRegistry {
         self.key_map.get(chord).copied()
     }
 
-    /// Produce the minimal set of overrides for config persistence.
-    pub fn user_overrides(&self) -> Vec<ShortcutOverride> {
-        let mut out = Vec::new();
-        for (&action, chord_opt) in &self.user_overrides {
-            let meta = action.meta();
-            match chord_opt {
-                Some(chord) => {
-                    out.push(ShortcutOverride {
-                        action: meta.id.to_string(),
-                        key: Some(chord.key.clone()),
-                        ctrl: chord.ctrl,
-                        alt: chord.alt,
-                        shift: chord.shift,
-                        super_key: chord.super_key,
-                    });
-                }
-                None => {
-                    // Explicitly unbound
-                    out.push(ShortcutOverride {
-                        action: meta.id.to_string(),
-                        key: None,
-                        ctrl: false,
-                        alt: false,
-                        shift: false,
-                        super_key: false,
-                    });
-                }
+    /// How many actions are bound differently from their defaults.
+    pub fn changed_count(&self) -> usize {
+        BindableAction::all()
+            .iter()
+            .filter(|action| self.binding_for(**action) != action.meta().default_binding.as_ref())
+            .count()
+    }
+
+    /// Bring `entries`, the configured `[[shortcuts]]`, to the bindings this
+    /// registry holds, touching only the entries of actions bound
+    /// differently: each such action's last entry is changed in place, and
+    /// an action without a fitting entry gets a new one at the end. Every
+    /// other entry keeps its place and spelling, so the file a save writes
+    /// changes only where the bindings did.
+    pub fn record_overrides(&self, entries: &mut Vec<ShortcutOverride>) {
+        let configured = Self::with_overrides(entries);
+        for &action in BindableAction::all() {
+            let binding = self.binding_for(action);
+            if configured.binding_for(action) == binding {
+                continue;
+            }
+            if let Some(entry) = entries
+                .iter_mut()
+                .rev()
+                .find(|entry| BindableAction::from_id(&entry.action) == Some(action))
+            {
+                *entry = ShortcutOverride::new(action, binding);
             }
         }
-        out.sort_by(|a, b| a.action.cmp(&b.action));
-        out
+        // A changed entry can take its new chord from, or give its old one
+        // back to, an action that a later entry or a default binds. Entries
+        // appended last settle every action that still differs. Bound actions
+        // go first: no two hold one chord here, so none takes another's, and
+        // an action that lost its chord to one of them needs no entry.
+        let configured = Self::with_overrides(entries);
+        for &action in BindableAction::all() {
+            let binding = self.binding_for(action);
+            if binding.is_some() && configured.binding_for(action) != binding {
+                entries.push(ShortcutOverride::new(action, binding));
+            }
+        }
+        let configured = Self::with_overrides(entries);
+        for &action in BindableAction::all() {
+            if self.binding_for(action).is_none() && configured.binding_for(action).is_some() {
+                entries.push(ShortcutOverride::new(action, None));
+            }
+        }
+        debug_assert!(
+            {
+                let recorded = Self::with_overrides(entries);
+                BindableAction::all()
+                    .iter()
+                    .all(|action| recorded.binding_for(*action) == self.binding_for(*action))
+            },
+            "the recorded shortcuts must load as the registry's bindings"
+        );
     }
 }
 
@@ -886,24 +923,160 @@ mod tests {
         assert!(reg.check(&key, mods).is_none());
     }
 
+    /// The bindings of every action, to compare two registries.
+    fn all_bindings(registry: &ShortcutRegistry) -> Vec<Option<KeyChord>> {
+        BindableAction::all()
+            .iter()
+            .map(|action| registry.binding_for(*action).cloned())
+            .collect()
+    }
+
+    fn entry(action: &str, key: Option<&str>, ctrl: bool, shift: bool) -> ShortcutOverride {
+        ShortcutOverride {
+            action: action.into(),
+            key: key.map(Into::into),
+            ctrl,
+            alt: false,
+            shift,
+            super_key: false,
+        }
+    }
+
     #[test]
-    fn test_user_overrides_persistence() {
+    fn recorded_shortcuts_load_as_the_bindings_they_record() {
         let mut reg = ShortcutRegistry::new();
         reg.set_binding(
             BindableAction::Copy,
             Some(KeyChord::new("k", true, false, false, false)),
         );
         reg.set_binding(BindableAction::Paste, None);
+        let mut entries = Vec::new();
+        reg.record_overrides(&mut entries);
+        assert_eq!(
+            entries,
+            [
+                entry("copy", Some("k"), true, false),
+                entry("paste", None, false, false)
+            ]
+        );
+        assert_eq!(
+            all_bindings(&ShortcutRegistry::with_overrides(&entries)),
+            all_bindings(&reg)
+        );
+        assert_eq!(reg.changed_count(), 2);
+    }
 
-        let overrides = reg.user_overrides();
-        assert_eq!(overrides.len(), 2); // Copy rebind + Paste cleared
+    #[test]
+    fn recording_a_shortcut_changes_only_the_entries_of_changed_actions() {
+        // Out of order and spelled as a person writes them.
+        let original = vec![
+            entry("toggle_pane_zoom", Some("z"), true, true),
+            entry("navigate_pane_left", None, false, false),
+            entry("scroll_page_up", Some("PageUp"), true, false),
+        ];
+        let mut entries = original.clone();
+        let mut reg = ShortcutRegistry::with_overrides(&entries);
+        reg.record_overrides(&mut entries);
+        assert_eq!(entries, original, "nothing changed, so nothing is recorded");
 
-        let copy_ovr = overrides.iter().find(|o| o.action == "copy").unwrap();
-        assert_eq!(copy_ovr.key.as_deref(), Some("k"));
-        assert!(copy_ovr.ctrl);
+        reg.set_binding(
+            BindableAction::Copy,
+            Some(KeyChord::new("k", true, false, false, false)),
+        );
+        reg.record_overrides(&mut entries);
+        assert_eq!(entries[..3], original[..]);
+        assert_eq!(entries[3..], [entry("copy", Some("k"), true, false)]);
 
-        let paste_ovr = overrides.iter().find(|o| o.action == "paste").unwrap();
-        assert!(paste_ovr.key.is_none());
+        // Rebinding an action with an entry changes that entry in place.
+        reg.set_binding(
+            BindableAction::TogglePaneZoom,
+            Some(KeyChord::new("m", true, false, true, false)),
+        );
+        reg.record_overrides(&mut entries);
+        assert_eq!(entries[0], entry("toggle_pane_zoom", Some("m"), true, true));
+        assert_eq!(entries[1..3], original[1..3]);
+        assert_eq!(entries.len(), 4);
+    }
+
+    #[test]
+    fn recording_keeps_the_bindings_an_entry_took_from_others() {
+        // Copy took Paste's chord, which left Paste unbound.
+        let mut entries = vec![entry("copy", Some("v"), true, true)];
+        let mut reg = ShortcutRegistry::with_overrides(&entries);
+        assert_eq!(reg.binding_for(BindableAction::Paste), None);
+
+        // Moving Copy elsewhere would give Paste its chord back on the next
+        // load, but in the editor Paste stays unbound, so the file says so.
+        reg.set_binding(
+            BindableAction::Copy,
+            Some(KeyChord::new("j", true, false, false, false)),
+        );
+        reg.record_overrides(&mut entries);
+        assert_eq!(
+            entries,
+            [
+                entry("copy", Some("j"), true, false),
+                entry("paste", None, false, false)
+            ]
+        );
+
+        // Taking a chord in the editor needs no entry for the action that
+        // lost it: replaying the entry takes it again.
+        let find = KeyChord::new("f", true, false, true, false);
+        assert_eq!(reg.binding_for(BindableAction::ToggleSearch), Some(&find));
+        reg.set_binding(BindableAction::NewTab, Some(find));
+        reg.record_overrides(&mut entries);
+        assert_eq!(
+            all_bindings(&ShortcutRegistry::with_overrides(&entries)),
+            all_bindings(&reg)
+        );
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[2], entry("new_tab", Some("f"), true, true));
+        assert_eq!(reg.binding_for(BindableAction::ToggleSearch), None);
+    }
+
+    #[test]
+    fn any_sequence_of_edits_records_entries_that_load_as_the_editor_left_them() {
+        let chords: Vec<Option<KeyChord>> = vec![
+            None,
+            Some(KeyChord::new("c", true, false, true, false)),
+            Some(KeyChord::new("v", true, false, true, false)),
+            Some(KeyChord::new("t", true, false, true, false)),
+            Some(KeyChord::new("k", true, false, false, false)),
+            Some(KeyChord::new("pageup", false, false, true, false)),
+        ];
+        let actions = [
+            BindableAction::Copy,
+            BindableAction::Paste,
+            BindableAction::NewTab,
+            BindableAction::ScrollPageUp,
+            BindableAction::TogglePaneZoom,
+        ];
+        // A fixed linear congruential sequence keeps the test deterministic.
+        let mut state: u64 = 0x2545_f491_4f6c_dd1d;
+        let mut next = |bound: usize| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 33) as usize % bound
+        };
+        for _ in 0..200 {
+            let mut entries = vec![
+                entry("scroll_page_up", Some("PageUp"), true, false),
+                entry("new_tab", Some("k"), true, false),
+            ];
+            let mut reg = ShortcutRegistry::with_overrides(&entries);
+            for _ in 0..6 {
+                let action = actions[next(actions.len())];
+                reg.set_binding(action, chords[next(chords.len())].clone());
+                reg.record_overrides(&mut entries);
+                assert_eq!(
+                    all_bindings(&ShortcutRegistry::with_overrides(&entries)),
+                    all_bindings(&reg),
+                    "{entries:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -930,19 +1103,15 @@ mod tests {
             .clone();
         let mut set = ShortcutRegistry::new();
         set.set_binding(BindableAction::Copy, Some(paste.clone()));
-        let mut loaded = ShortcutRegistry::new();
-        loaded.apply_overrides(&set.user_overrides());
+        let mut entries = Vec::new();
+        set.record_overrides(&mut entries);
+        let loaded = ShortcutRegistry::with_overrides(&entries);
 
         assert_eq!(loaded.binding_for(BindableAction::Copy), Some(&paste));
         assert_eq!(loaded.binding_for(BindableAction::Paste), None);
-        let actions = |registry: &ShortcutRegistry| {
-            registry
-                .user_overrides()
-                .into_iter()
-                .map(|ovr| (ovr.action, ovr.key))
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(actions(&loaded), actions(&set));
+        assert_eq!(all_bindings(&loaded), all_bindings(&set));
+        // The entry for Copy alone says so.
+        assert_eq!(entries, [entry("copy", Some("v"), true, true)]);
     }
 
     #[test]

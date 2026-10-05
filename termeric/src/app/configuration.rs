@@ -1,6 +1,7 @@
 //! Live configuration, settings, theme, and shortcut application.
 
 use super::*;
+use crate::input::keybindings::{BindableAction, KeyChord};
 
 const TAB_BAR_HOVER_FADE_SECONDS: f32 = 0.1;
 const CONFIG_RESET_CHOICE: &str = "config-reset";
@@ -990,22 +991,25 @@ impl App {
                     .shortcuts_panel
                     .select_action(action, &self.shortcut_registry)
                 {
-                    self.shortcut_registry.set_binding(action, None);
-                    self.command_palette.replace_core_commands(core_commands(
-                        self.config.harvest.enabled,
-                        &self.shortcut_registry,
-                    ));
+                    self.set_shortcut(action, None);
                 }
             }
-            ShortcutsAction::SetShortcut { action, chord } => {
-                self.shortcut_registry.set_binding(action, chord);
-                self.command_palette.replace_core_commands(core_commands(
-                    self.config.harvest.enabled,
-                    &self.shortcut_registry,
-                ));
-            }
+            ShortcutsAction::SetShortcut { action, chord } => self.set_shortcut(action, chord),
             ShortcutsAction::None => {}
         }
+    }
+
+    /// Bind `action` to `chord` as the shortcuts editor does, and record the
+    /// change in the configured `[[shortcuts]]`, so a save writes the entries
+    /// it touched and leaves every other entry as the file has it.
+    fn set_shortcut(&mut self, action: BindableAction, chord: Option<KeyChord>) {
+        self.shortcut_registry.set_binding(action, chord);
+        self.shortcut_registry
+            .record_overrides(&mut self.config.shortcuts);
+        self.command_palette.replace_core_commands(core_commands(
+            self.config.harvest.enabled,
+            &self.shortcut_registry,
+        ));
     }
 }
 

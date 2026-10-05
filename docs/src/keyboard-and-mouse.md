@@ -115,7 +115,7 @@ Open the editor with **Keyboard Shortcuts** in the command palette, or from **Se
 
 If the combination already belongs to another action, it moves to the one you're editing and the other action is left unbound; the editor tells you which one.
 
-Changes take effect immediately. They're written to your configuration file when you save, with **Save** in Settings or **Save Configuration** in the command palette.
+Changes take effect immediately. They're written to your configuration file when you save, with **Save** in Settings or **Save Configuration** in the command palette. Saving changes only the `[[shortcuts]]` entries of the actions you changed, and of any action it left unbound; it adds an entry at the end for an action that had none, and your other entries keep their order, spelling, and comments.
 
 `Escape`, `Backspace`, and `Delete` can't be recorded as shortcuts, even with modifiers.
 

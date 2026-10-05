@@ -3847,19 +3847,11 @@ impl App {
             .replace_launch_profile_commands(commands);
     }
 
-    /// The configuration Save writes: live settings plus the recorded
-    /// shortcuts, which the shortcut registry holds.
     /// The renderer this window asks for: the process's `--renderer` choice,
     /// else the configured one.
     fn renderer_backend(&self) -> crate::config::RendererBackend {
         self.renderer_backend_override
             .unwrap_or(self.config.renderer.backend)
-    }
-
-    fn persisted_config(&self) -> Config {
-        let mut config = self.config.clone();
-        config.shortcuts = self.shortcut_registry.user_overrides();
-        config
     }
 
     /// Show `message`, a problem with the configuration file, until the file
@@ -3881,7 +3873,7 @@ impl App {
 
     /// The live configuration as `config::save::config_table` gives it.
     fn persisted_config_table(&self) -> Result<toml::Table> {
-        crate::config::save::config_table(&self.persisted_config())
+        crate::config::save::config_table(&self.config)
     }
 
     /// Record the live configuration as matching the file, after it was
@@ -3907,11 +3899,10 @@ impl App {
     /// Write the live settings that differ from the file's to the file,
     /// unless it does not load, and return its path.
     fn save_config(&mut self) -> Result<String> {
-        let live_config = self.persisted_config();
-        live_config.validate()?;
-        let live = crate::config::save::config_table(&live_config)?;
+        self.config.validate()?;
+        let live = self.persisted_config_table()?;
         let baseline = self.saved_config.clone().unwrap_or_default();
-        let file = crate::config::save::save(&self.config_path, &baseline, &live_config)?;
+        let file = crate::config::save::save(&self.config_path, &baseline, &self.config)?;
         // When the file now holds exactly the live settings, the poller need
         // not reload this write. Otherwise another program changed the file
         // too, and the reload brings in its changes.

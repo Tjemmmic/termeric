@@ -547,6 +547,88 @@ fn a_save_that_keeps_an_edit_made_elsewhere_leaves_it_for_the_reload() {
 }
 
 #[test]
+fn a_recorded_shortcut_saves_only_its_entry_and_saves_keep_working() {
+    use crate::input::keybindings::{BindableAction, KeyChord};
+    use crate::ui::shortcuts_panel::ShortcutsAction;
+    // Out of the editor's order, with comments, and spelled by hand.
+    let original = "\
+# Zoom the focused pane with Ctrl+Shift+Z
+[[shortcuts]]
+action = \"toggle_pane_zoom\"
+key = \"z\"
+ctrl = true
+shift = true
+
+# Remove the default Alt+Left binding so the key reaches your shell
+[[shortcuts]]
+action = \"navigate_pane_left\"
+
+[[shortcuts]]
+action = \"scroll_page_up\"
+key = \"PageUp\"
+ctrl = true
+";
+    let (_directory, path, mut app) = app_with_config_file(original);
+    let saved_without_reload = |app: &App| {
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        app.last_config_mtime == Some(modified)
+    };
+    assert!(!app.config_has_unsaved_changes());
+
+    app.apply_shortcuts_action(ShortcutsAction::SetShortcut {
+        action: BindableAction::Copy,
+        chord: Some(KeyChord::new("k", true, false, false, false)),
+    });
+    assert!(app.config_has_unsaved_changes());
+    app.save_config().unwrap();
+    assert!(!app.config_has_unsaved_changes());
+    let saved = std::fs::read_to_string(&path).unwrap();
+    assert!(saved.starts_with(original), "{saved}");
+    assert!(saved_without_reload(&app), "a plain save needs no reload");
+
+    // Rebinding an action with an entry changes that entry alone.
+    app.apply_shortcuts_action(ShortcutsAction::SetShortcut {
+        action: BindableAction::TogglePaneZoom,
+        chord: Some(KeyChord::new("m", true, false, true, false)),
+    });
+    app.save_config().unwrap();
+    let rebound = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        rebound.replacen("key = \"m\"", "key = \"z\"", 1),
+        saved,
+        "{rebound}"
+    );
+    assert!(saved_without_reload(&app));
+
+    // Saves from elsewhere keep working, and the poller sees nothing new.
+    app.apply_settings_action(SettingsAction::SetVisualBell(false));
+    app.apply_settings_action(SettingsAction::SaveConfig);
+    assert!(saved_without_reload(&app));
+    app.last_config_check = Instant::now()
+        .checked_sub(App::CONFIG_POLL_INTERVAL)
+        .expect("the clock is past one poll interval");
+    app.poll_config_for_hot_reload();
+    let messages: Vec<_> = app.toasts.iter().map(|toast| &toast.message).collect();
+    assert!(
+        messages
+            .iter()
+            .all(|message| message.starts_with("Configuration saved")),
+        "{messages:?}"
+    );
+
+    let loaded = Config::load_from(&path).unwrap();
+    let registry = crate::input::ShortcutRegistry::with_overrides(&loaded.shortcuts);
+    for action in BindableAction::all() {
+        assert_eq!(
+            registry.binding_for(*action),
+            app.shortcut_registry.binding_for(*action),
+            "{action:?}"
+        );
+    }
+    assert!(!loaded.bell.visual);
+}
+
+#[test]
 fn zoom_changes_only_the_window_and_is_never_saved() {
     let (_directory, path, mut app) = app_with_config_file("[font]\nsize = 12\n");
     app.zoom_font(2.0);

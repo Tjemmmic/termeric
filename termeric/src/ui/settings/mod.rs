@@ -1475,7 +1475,7 @@ impl SettingsPanel {
 
         // Keyboard: the shortcuts editor is its own dialog.
         {
-            let customized = registry.user_overrides().len();
+            let customized = registry.changed_count();
             result.push((
                 SettingsSection::Keyboard,
                 vec![SettingItem {
