@@ -382,10 +382,22 @@ fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
     typed(&mut app, None);
     assert_eq!(read(16), b"/new\ra\rb\rgo\non\rz");
 
+    // Turning agent features off drops what is waiting, quietly: the typed
+    // message gets no Enter, and the next is never typed.
+    app.submit_to_agent(target.clone(), b"y").unwrap();
+    app.submit_to_agent(target.clone(), b"w").unwrap();
+    assert_eq!(read(17), b"/new\ra\rb\rgo\non\rzy");
+    app.apply_settings_action(SettingsAction::SetAgentFeaturesEnabled(false));
+    let toasts = app.toasts.iter().count();
+    assert_eq!(app.next_agent_submit_deadline(), None);
+    app.submit_due_agent_input(Instant::now() + super::agents::AGENT_SUBMIT_DELAY);
+    assert_eq!(app.toasts.iter().count(), toasts, "nothing is said");
+    app.apply_settings_action(SettingsAction::SetAgentFeaturesEnabled(true));
+
     // An agent that exits before its Enter is due never receives it, nor
     // does the shell or whatever else takes its place.
     app.submit_to_agent(target.clone(), b"x").unwrap();
-    assert_eq!(read(17), b"/new\ra\rb\rgo\non\rzx");
+    assert_eq!(read(18), b"/new\ra\rb\rgo\non\rzyx");
     let child = app
         .tabs
         .as_ref()

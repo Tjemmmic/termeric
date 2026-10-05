@@ -87,6 +87,10 @@ impl App {
             return;
         }
         self.close_agent_surfaces();
+        // Nothing more is typed into an agent Termeric stops recognizing:
+        // messages still waiting, and the Enter after one already typed,
+        // are dropped without a word, as the person asked for this.
+        self.pending_agent_submits.clear();
         self.forget_terminal_agents();
     }
 
