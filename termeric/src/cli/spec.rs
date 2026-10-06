@@ -19,6 +19,31 @@ const LAUNCH_SELECTION: &str = "Launch selection";
 const IDENTITY_AND_SIZE: &str = "Native identity and size";
 const RENDERING: &str = "Rendering";
 
+/// When a launch opens its window in a running Termeric, and when it starts
+/// a process of its own: the rule `cli::LaunchPlan::join_tabs` and
+/// `control::join_running_launch` apply.
+fn joining_a_running_termeric() -> String {
+    format!(
+        "A plain launch opens its window in the Termeric already running on this display, so \
+         tabs can move between its windows; the window uses that process's settings and \
+         environment. A launch starts a process of its own instead when it passes \
+         --separate-process, opens two or more windows, or uses any option besides --new-window, \
+         --tab, --working-directory, --title, --command, and a COMMAND; when [window] \
+         share_process is false; when the termeric executable differs from the running one; or \
+         when any of these variables differs from the running process's: {}.",
+        crate::control::JOIN_ENVIRONMENT_VARIABLES.join(", ")
+    )
+}
+
+/// `termeric mcp`'s closing text: how an agent starts it, and what it may do.
+const MCP_AFTER_HELP: &str = "Register it once with each agent that should use it, for example \
+`claude mcp add termeric -- termeric mcp` or `codex mcp add termeric -- termeric mcp`. Inside a \
+Termeric terminal it serves that terminal's Termeric; elsewhere, the only one running, or the one \
+--process names. Its tools list agents, read terminals and agent view conversations, send \
+messages to agents, and answer their approvals. While agent features are off ([agent_features] \
+enabled = false), every tool but reading a terminal is refused. Sending and answering also need \
+[security] allow_gui_control_input = true.";
+
 /// Everything `termeric` accepts, apart from the internal entry points that
 /// Termeric itself runs (`agent-event` and the serial bridge).
 pub fn command_spec() -> Command {
@@ -32,6 +57,7 @@ pub fn command_spec() -> Command {
              --new-window starts another window. Everything after -- is the command for the \
              current tab.",
         )
+        .after_help(joining_a_running_termeric())
         .override_usage(
             "termeric [WINDOW/TAB OPTIONS] [-- COMMAND ARG...]\n       \
              termeric <SUBCOMMAND>",
@@ -82,7 +108,8 @@ pub fn command_spec() -> Command {
         .subcommand(WorkspaceCli::command().name("workspace"))
         .subcommand(
             Command::new("mcp")
-                .about("Serve MCP tools for Termeric's agents on standard I/O")
+                .about("Serve Termeric's agent tools to a coding agent over MCP (experimental)")
+                .after_help(MCP_AFTER_HELP)
                 .disable_version_flag(true)
                 .arg(
                     Arg::new("process")
@@ -229,12 +256,43 @@ fn identity_and_size() -> [Arg; 2] {
 
 #[cfg(test)]
 mod tests {
-    use super::command_spec;
+    use super::{command_spec, joining_a_running_termeric};
     use crate::cli::{ParseOutcome, parse};
     use std::ffi::OsString;
     use std::path::Path;
 
-    const USER_GUIDE: &str = concat!(env!("CARGO_PKG_REPOSITORY"), "/tree/main/docs/src");
+    /// The variables a person sets to change how Termeric runs, for the
+    /// manual page's ENVIRONMENT section.
+    const ENVIRONMENT: [(&str, &str); 5] = [
+        (
+            "TERMERIC_TERM",
+            "The TERM programs in Termeric see: auto (the default) uses xterm-termeric when its \
+             terminfo entry is installed and xterm-256color otherwise; xterm-256color (or \
+             compatibility) always uses xterm-256color; xterm-termeric insists on Termeric's own \
+             entry and falls back with a logged warning.",
+        ),
+        (
+            "TERMERIC_TERMINFO_DIR",
+            "A directory searched first for the compiled xterm-termeric entry, before TERMINFO, \
+             ~/.terminfo, $XDG_DATA_HOME/terminfo, TERMINFO_DIRS, the install prefix's \
+             share/terminfo, and the system directories.",
+        ),
+        (
+            "WGPU_BACKEND",
+            "The graphics API to render with: vulkan or gl. With --renderer software, gl and \
+             LIBGL_ALWAYS_SOFTWARE=true use Mesa's software OpenGL.",
+        ),
+        (
+            "RUST_LOG",
+            "What Termeric logs to standard error, for example warn,termeric=debug.",
+        ),
+        (
+            "XDG_CONFIG_HOME, XDG_DATA_HOME",
+            "Where Termeric keeps its configuration (termeric/config.toml, custom themes, \
+             plugins) and its data (workspaces, tab snapshots, agent transcripts), by default \
+             ~/.config and ~/.local/share.",
+        ),
+    ];
 
     #[test]
     fn spec_is_internally_consistent() {
@@ -412,8 +470,27 @@ mod tests {
                 roman(" for its commands and options."),
             ]);
         }
+        sections.control("SH", ["JOINING A RUNNING TERMERIC"]);
+        sections.text([roman(joining_a_running_termeric())]);
+        sections.control("SH", ["ENVIRONMENT"]);
+        for (name, description) in ENVIRONMENT {
+            sections.control("TP", []);
+            sections.text([bold(name)]);
+            sections.text([roman(description)]);
+        }
+        sections.control("SH", ["FILES"]);
+        sections.control("TP", []);
+        sections.text([bold("~/.config/termeric/config.toml")]);
+        sections.text([roman(
+            "The configuration, reloaded when it is saved. config.example.toml, in Termeric's \
+             documentation directory (such as /usr/share/doc/termeric), lists every setting with \
+             its default.",
+        )]);
         sections.control("SH", ["SEE ALSO"]);
-        sections.text([roman(format!("The user guide: {USER_GUIDE}"))]);
+        sections.text([roman(format!(
+            "The project, with its README and plugin examples: {}",
+            env!("CARGO_PKG_REPOSITORY")
+        ))]);
         sections.to_writer(&mut page)?;
         man.render_version_section(&mut page)?;
         Ok(page)

@@ -1154,7 +1154,7 @@ mod tests {
         ));
         assert!(matches!(
             parse(["control", "--help"].into_iter().map(OsString::from)).unwrap(),
-            ParseOutcome::Print(text) if text.contains("Text access is explicit")
+            ParseOutcome::Print(text) if text.contains("Typing into panes with send-text stays off")
         ));
 
         use crate::control::ControlCommand;

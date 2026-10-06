@@ -8,16 +8,19 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(
     name = "termeric plugin",
-    about = "Termeric declarative plugin management",
-    after_help = "Manifests declare api_version = 1 and request permissions. Each --allow grants \
-one requested permission; window-acting permissions cover the plugin's own window unless \
-requested and granted with an :all-windows suffix, for example --allow pane-create:all-windows. \
-Enabling requires every requested permission; grant and revoke change an installed plugin's \
-grants.\n\nPermissions: process-spawn, event-subscribe, \
-ui-actions, command-output, window-focus, and (scoped) workspace-query, navigate, terminal-read, \
-terminal-input, tab-create, tab-close, tab-move, pane-create, pane-close, pane-move, \
-pane-layout, window-close. Installation records the plugin's source directory and a manifest \
-fingerprint; it never downloads code.",
+    about = "Install and manage plugins",
+    after_help = "A plugin is a local directory with a termeric-plugin.toml manifest, which \
+lists the permissions it needs. Each --allow grants one of them, and a plugin can be enabled \
+only once all of them are granted. A permission that acts on windows covers only the window \
+an event came from, unless the manifest requests it with an :all-windows suffix and you grant \
+it that way, for example --allow pane-create:all-windows.\n\nPermissions: process-spawn, \
+event-subscribe, ui-actions, command-output, window-focus, and, with an optional :all-windows \
+suffix, workspace-query, navigate, terminal-read, terminal-input, tab-create, tab-close, \
+tab-move, pane-create, pane-close, pane-move, pane-layout, window-close.\n\nInstalling copies \
+the manifest and records its directory and fingerprint; it never downloads code. These commands \
+edit the files directly, and a running Termeric reloads its plugins when they change. Settings, \
+Plugins, offers the same management. examples/plugins in the source repository has example \
+plugins and the manifest and protocol reference.",
     arg_required_else_help = true,
     disable_version_flag = true
 )]
@@ -34,7 +37,7 @@ enum PluginArgs {
         #[arg(long)]
         json: bool,
     },
-    /// Show one installed plugin
+    /// Show one installed plugin's source, permissions, settings, and any error
     Show {
         id: String,
         /// Print the result as JSON
@@ -56,7 +59,7 @@ enum PluginArgs {
         #[arg(long)]
         replace: bool,
     },
-    /// Reinstall a plugin from its recorded source
+    /// Reinstall a plugin from its directory, keeping the grants it still requests
     Update { id: String },
     /// Enable an installed plugin
     Enable {
@@ -65,7 +68,7 @@ enum PluginArgs {
         #[arg(long = "allow", value_name = "PERMISSION", value_parser = permission)]
         grants: Vec<PluginPermission>,
     },
-    /// Disable an installed plugin
+    /// Disable an installed plugin without removing it
     Disable { id: String },
     /// Change one setting of an installed plugin
     Configure {
@@ -97,7 +100,7 @@ enum PluginArgs {
         )]
         permissions: Vec<PluginPermission>,
     },
-    /// Remove an installed plugin
+    /// Remove an installed plugin, leaving its source directory alone
     Remove { id: String },
 }
 

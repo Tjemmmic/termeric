@@ -11,13 +11,17 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(
     name = "termeric domain",
-    about = "Persistent terminal domains (experimental)",
-    after_help = "The daemon socket always remains local and user-private. `--host` starts a \
-non-interactive OpenSSH stdio bridge using an already trusted host key and key/agent \
-authentication. `--host-profile NAME` resolves a validated entry in `[domains.ssh_hosts]`; \
-OpenSSH config remains authoritative for ports, keys, proxies, certificates, and host policy. \
-Remote attachment uses the resolved authority for topology, controls, focus, and every pane \
-relay.",
+    about = "Keep terminals running in a background daemon, here or over SSH (experimental)",
+    after_help = "A live domain's tabs and panes belong to a background daemon, so their \
+programs keep running after every window closes, and `attach` opens a window on them again. The \
+daemon starts with the first command that needs it and listens only to your user. Domains end \
+when the daemon stops or the computer restarts; nothing is saved to disk.\n\nBefore upgrading \
+Termeric, kill your domains and run `termeric domain stop-server`: commands refuse to talk to a \
+daemon that speaks another protocol version.\n\n--host runs ssh to the other computer and \
+`termeric domain proxy-stdio` there, so that computer needs a compatible termeric on its PATH, \
+its host key must already be in your known_hosts, and you must be able to log in without a \
+password. Ports, keys, and jump hosts come from ~/.ssh/config. --host-profile NAME uses the \
+destination saved as [domains.ssh_hosts.NAME] in your configuration.",
     arg_required_else_help = true,
     disable_version_flag = true
 )]
@@ -39,17 +43,17 @@ enum DomainArgs {
         #[command(flatten)]
         output: Output,
     },
-    /// List configured SSH host profiles
+    /// List the SSH hosts saved under [domains.ssh_hosts]
     Hosts {
         #[command(flatten)]
         output: Output,
     },
-    /// List live domains
+    /// List live domains with their tab, pane, and attached-window counts
     List {
         #[command(flatten)]
         output: Output,
     },
-    /// Describe a domain's complete live state
+    /// Summarize a domain; with --json, describe all its tabs, panes, and splits
     Show {
         /// Domain ID, as listed
         #[arg(value_parser = domain_id)]
@@ -57,7 +61,7 @@ enum DomainArgs {
         #[command(flatten)]
         output: Output,
     },
-    /// List a domain's panes
+    /// List a domain's panes, their sizes, and whether their programs still run
     Panes {
         /// Domain ID, as listed
         #[arg(value_parser = domain_id)]
@@ -65,7 +69,7 @@ enum DomainArgs {
         #[command(flatten)]
         output: Output,
     },
-    /// Create a persistent domain
+    /// Create a domain with one tab and print its ID
     Create {
         /// A name for the domain
         #[arg(allow_hyphen_values = true)]
@@ -81,7 +85,7 @@ enum DomainArgs {
         #[command(flatten)]
         spawn: SpawnArgs,
     },
-    /// Split a pane
+    /// Split a pane, adding one below (horizontal) or to the right (vertical)
     Split {
         #[command(flatten)]
         pane: PaneTarget,
@@ -89,12 +93,14 @@ enum DomainArgs {
         #[command(flatten)]
         spawn: SpawnArgs,
     },
-    /// Resize a stable divider (100-900 thousandths)
+    /// Set a split's ratio
     ResizeSplit {
         /// Domain ID, as listed
         #[arg(value_parser = domain_id)]
         domain: String,
+        /// Split ID, as `show --json` lists it
         split: u32,
+        /// The first side's share, in thousandths from 100 to 900
         #[arg(value_parser = clap::value_parser!(u16).range(100..=900))]
         ratio_millis: u16,
     },
@@ -115,18 +121,19 @@ enum DomainArgs {
         #[command(flatten)]
         tab: TabTarget,
     },
-    /// Move a tab within its pin group (counting from 0)
+    /// Move a tab among the domain's tabs, within its pinned or unpinned group
     MoveTab {
         #[command(flatten)]
         tab: TabTarget,
+        /// Its new position, counting from 0
         index: u16,
     },
-    /// Swap a pane with the next one in visual order
+    /// Swap a pane with the next one in its tab, wrapping around to the first
     SwapPane {
         #[command(flatten)]
         pane: PaneTarget,
     },
-    /// Reset every divider in a tab to 50%
+    /// Reset every split in a tab to 50%
     BalanceTab {
         #[command(flatten)]
         tab: TabTarget,
@@ -137,28 +144,29 @@ enum DomainArgs {
         tab: TabTarget,
         preset: Preset,
     },
-    /// Move a pane to another tab
+    /// Move a pane to another tab; a tab's last pane can't move
     MovePane {
         #[command(flatten)]
         pane: PaneTarget,
+        /// The tab to move it to
         tab: u32,
     },
-    /// Set the persisted focus
+    /// Focus a pane
     Focus {
         #[command(flatten)]
         pane: PaneTarget,
     },
-    /// End a pane's program and remove the pane
+    /// End a pane's program and remove the pane; a tab's last pane needs close-tab
     ClosePane {
         #[command(flatten)]
         pane: PaneTarget,
     },
-    /// End every program in a tab and remove it
+    /// End every program in a tab and remove it; a domain's last tab needs kill
     CloseTab {
         #[command(flatten)]
         tab: TabTarget,
     },
-    /// Type bounded UTF-8 text into a pane
+    /// Type text into a pane, at most 64 KiB
     Send {
         #[command(flatten)]
         pane: PaneTarget,
@@ -172,7 +180,7 @@ enum DomainArgs {
     GetText {
         #[command(flatten)]
         pane: PaneTarget,
-        /// Most bytes to print
+        /// Most bytes to print, at most 1 MiB
         #[arg(
             long = "bytes",
             value_name = "N",
@@ -183,7 +191,7 @@ enum DomainArgs {
         #[command(flatten)]
         output: Output,
     },
-    /// Copy a file or directory into a pane's working directory, never overwriting
+    /// Copy a file or directory (at most 64 MiB) into a pane's working directory, never overwriting
     Upload {
         #[command(flatten)]
         pane: PaneTarget,
@@ -194,7 +202,7 @@ enum DomainArgs {
         #[command(flatten)]
         output: Output,
     },
-    /// Open the domain in a GUI window
+    /// Open a window on a domain; closing the window only detaches it
     Attach {
         /// Domain ID, as listed
         #[arg(value_parser = domain_id)]
@@ -206,13 +214,13 @@ enum DomainArgs {
         #[arg(long, alias = "class", value_name = "NAME", value_parser = app_id)]
         app_id: Option<String>,
     },
-    /// End every program in a domain
+    /// End every program in a domain and remove the domain
     Kill {
         /// Domain ID, as listed
         #[arg(value_parser = domain_id)]
         domain: String,
     },
-    /// Stop the daemon once no domain remains
+    /// Stop the daemon; refused while any domain remains
     StopServer,
     /// Run the daemon in the foreground
     #[command(hide = true)]
@@ -273,7 +281,7 @@ struct SpawnArgs {
     /// Title for the pane
     #[arg(long, allow_hyphen_values = true)]
     title: Option<String>,
-    /// Terminal size in cells
+    /// Terminal size in cells, 1x1 to 1000x1000 (80x24 by default)
     #[arg(long, value_name = "COLSxROWS", value_parser = cell_geometry)]
     size: Option<(u16, u16)>,
     #[command(flatten)]

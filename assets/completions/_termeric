@@ -94,7 +94,7 @@ _arguments "${_arguments_options[@]}" : \
 '--working-directory=[Start in this directory on the computer running the domain]:PATH:_default' \
 '--cwd=[Start in this directory on the computer running the domain]:PATH:_default' \
 '--title=[Title for the pane]:TITLE:_default' \
-'--size=[Terminal size in cells]:COLSxROWS:_default' \
+'--size=[Terminal size in cells, 1x1 to 1000x1000 (80x24 by default)]:COLSxROWS:_default' \
 '--json[Print the result as JSON]' \
 ':name -- A name for the domain:_default' \
 '*::command -- The program and its arguments, after `--`; the shell by default:_default' \
@@ -105,7 +105,7 @@ _arguments "${_arguments_options[@]}" : \
 '--working-directory=[Start in this directory on the computer running the domain]:PATH:_default' \
 '--cwd=[Start in this directory on the computer running the domain]:PATH:_default' \
 '--title=[Title for the pane]:TITLE:_default' \
-'--size=[Terminal size in cells]:COLSxROWS:_default' \
+'--size=[Terminal size in cells, 1x1 to 1000x1000 (80x24 by default)]:COLSxROWS:_default' \
 '--json[Print the result as JSON]' \
 ':domain -- Domain ID, as listed:_default' \
 '*::command -- The program and its arguments, after `--`; the shell by default:_default' \
@@ -116,7 +116,7 @@ _arguments "${_arguments_options[@]}" : \
 '--working-directory=[Start in this directory on the computer running the domain]:PATH:_default' \
 '--cwd=[Start in this directory on the computer running the domain]:PATH:_default' \
 '--title=[Title for the pane]:TITLE:_default' \
-'--size=[Terminal size in cells]:COLSxROWS:_default' \
+'--size=[Terminal size in cells, 1x1 to 1000x1000 (80x24 by default)]:COLSxROWS:_default' \
 '--json[Print the result as JSON]' \
 ':domain -- Domain ID, as `list` shows it:_default' \
 ':pane -- Pane ID within the domain:_default' \
@@ -127,8 +127,8 @@ _arguments "${_arguments_options[@]}" : \
 (resize-split)
 _arguments "${_arguments_options[@]}" : \
 ':domain -- Domain ID, as listed:_default' \
-':split:_default' \
-':ratio_millis:_default' \
+':split -- Split ID, as `show --json` lists it:_default' \
+':ratio_millis -- The first side'\''s share, in thousandths from 100 to 900:_default' \
 && ret=0
 ;;
 (rename-tab)
@@ -154,7 +154,7 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 ':domain -- Domain ID, as `list` shows it:_default' \
 ':tab -- Tab ID within the domain:_default' \
-':index:_default' \
+':index -- Its new position, counting from 0:_default' \
 && ret=0
 ;;
 (swap-pane)
@@ -180,7 +180,7 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 ':domain -- Domain ID, as `list` shows it:_default' \
 ':pane -- Pane ID within the domain:_default' \
-':tab:_default' \
+':tab -- The tab to move it to:_default' \
 && ret=0
 ;;
 (focus)
@@ -211,7 +211,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (get-text)
 _arguments "${_arguments_options[@]}" : \
-'--bytes=[Most bytes to print]:N:_default' \
+'--bytes=[Most bytes to print, at most 1 MiB]:N:_default' \
 '--json[Print the result as JSON]' \
 ':domain -- Domain ID, as `list` shows it:_default' \
 ':pane -- Pane ID within the domain:_default' \
@@ -281,7 +281,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (wait-launch)
 _arguments "${_arguments_options[@]}" : \
-'--timeout=[Give up after SECONDS (1-86400)]:SECONDS:_default' \
+'--timeout=[Stop waiting after SECONDS (1-86400); the program keeps running]:SECONDS:_default' \
 '--json[Print the result as JSON]' \
 ':process -- Termeric process ID, as `list` shows it:_default' \
 ':request_id -- The request ID the launch printed:_default' \
@@ -296,8 +296,8 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (get-text)
 _arguments "${_arguments_options[@]}" : \
-'--history-lines=[Scrollback lines to include above the screen]:N:_default' \
-'--bytes=[Most bytes of text to return]:N:_default' \
+'--history-lines=[Lines of scrollback to include above the screen, at most 256]:N:_default' \
+'--bytes=[Most bytes of text to print, at most 65536; the oldest text is dropped first]:N:_default' \
 '--json[Print the result as JSON]' \
 ':process -- Termeric process ID, as `list` shows it:_default' \
 ':window -- Window ID within that process:_default' \
@@ -307,20 +307,20 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (send-text)
 _arguments "${_arguments_options[@]}" : \
-'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
-'--paste[Send it as a bracketed paste]' \
+'--request-id=[Use this ID (32 lowercase hex digits), so a retry with it never acts twice]:ID:_default' \
+'--paste[Send it as a bracketed paste, so a shell doesn'\''t run each line as it arrives]' \
 '--enter[Press Enter after it]' \
 '--json[Print the result as JSON]' \
 ':process -- Termeric process ID, as `list` shows it:_default' \
 ':window -- Window ID within that process:_default' \
 ':tab -- Tab ID within that window:_default' \
 ':pane -- Pane ID within that tab:_default' \
-':text:_default' \
+':text -- Printable characters, tabs, and newlines, at most 64 KiB:_default' \
 && ret=0
 ;;
 (new-window)
 _arguments "${_arguments_options[@]}" : \
-'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--request-id=[Use this ID (32 lowercase hex digits), so a retry with it never acts twice]:ID:_default' \
 '--json[Print the result as JSON]' \
 ':process -- Termeric process ID, as `list` shows it:_default' \
 ':source_window -- The window whose configuration and directory to copy:_default' \
@@ -330,13 +330,13 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '--cwd=[Start in this absolute directory]:ABSOLUTE_DIRECTORY:_default' \
 '--title=[Title for the tab]:TITLE:_default' \
-'*--env=[Set an environment variable; repeat for more]:NAME=VALUE:_default' \
+'*--env=[Set an environment variable; repeat for more. Process listings show it, so pass secrets with --env-stdin]:NAME=VALUE:_default' \
 '*--unset-env=[Remove an inherited variable; repeat for more]:NAME:_default' \
-'--timeout=[With --wait, give up after SECONDS (1-86400)]:SECONDS:_default' \
-'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
-'--env-stdin[Read more variables from standard input, as one JSON object]' \
-'--clear-env[Start from an empty environment]' \
-'--wait[Wait for the program to exit and return its exit code]' \
+'--timeout=[With --wait, stop waiting after SECONDS (1-86400); the program keeps running]:SECONDS:_default' \
+'--request-id=[Use this ID (32 lowercase hex digits), so a retry with it never acts twice]:ID:_default' \
+'--env-stdin[Read more variables from standard input, as one JSON object of names to strings]' \
+'--clear-env[Start from a minimal environment instead of Termeric'\''s]' \
+'--wait[Wait for the program to exit, then exit with its code]' \
 '--json[Print the result as JSON]' \
 ':process -- Termeric process ID, as `list` shows it:_default' \
 ':source_window -- The window whose configuration and directory to copy:_default' \
@@ -345,7 +345,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (new-tab)
 _arguments "${_arguments_options[@]}" : \
-'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--request-id=[Use this ID (32 lowercase hex digits), so a retry with it never acts twice]:ID:_default' \
 '--json[Print the result as JSON]' \
 ':process -- Termeric process ID, as `list` shows it:_default' \
 ':window -- Window ID within that process:_default' \
@@ -355,14 +355,14 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '--cwd=[Start in this absolute directory]:ABSOLUTE_DIRECTORY:_default' \
 '--title=[Title for the tab]:TITLE:_default' \
-'*--env=[Set an environment variable; repeat for more]:NAME=VALUE:_default' \
+'*--env=[Set an environment variable; repeat for more. Process listings show it, so pass secrets with --env-stdin]:NAME=VALUE:_default' \
 '*--unset-env=[Remove an inherited variable; repeat for more]:NAME:_default' \
-'--timeout=[With --wait, give up after SECONDS (1-86400)]:SECONDS:_default' \
-'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--timeout=[With --wait, stop waiting after SECONDS (1-86400); the program keeps running]:SECONDS:_default' \
+'--request-id=[Use this ID (32 lowercase hex digits), so a retry with it never acts twice]:ID:_default' \
 '--background[Open the tab without selecting it]' \
-'--env-stdin[Read more variables from standard input, as one JSON object]' \
-'--clear-env[Start from an empty environment]' \
-'--wait[Wait for the program to exit and return its exit code]' \
+'--env-stdin[Read more variables from standard input, as one JSON object of names to strings]' \
+'--clear-env[Start from a minimal environment instead of Termeric'\''s]' \
+'--wait[Wait for the program to exit, then exit with its code]' \
 '--json[Print the result as JSON]' \
 ':process -- Termeric process ID, as `list` shows it:_default' \
 ':window -- Window ID within that process:_default' \
@@ -371,7 +371,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (split-pane)
 _arguments "${_arguments_options[@]}" : \
-'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--request-id=[Use this ID (32 lowercase hex digits), so a retry with it never acts twice]:ID:_default' \
 '--json[Print the result as JSON]' \
 ':process -- Termeric process ID, as `list` shows it:_default' \
 ':window -- Window ID within that process:_default' \
@@ -382,7 +382,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (focus-window)
 _arguments "${_arguments_options[@]}" : \
-'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--request-id=[Use this ID (32 lowercase hex digits), so a retry with it never acts twice]:ID:_default' \
 '--json[Print the result as JSON]' \
 ':process -- Termeric process ID, as `list` shows it:_default' \
 ':window -- Window ID within that process:_default' \
@@ -390,7 +390,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (select-tab)
 _arguments "${_arguments_options[@]}" : \
-'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--request-id=[Use this ID (32 lowercase hex digits), so a retry with it never acts twice]:ID:_default' \
 '--json[Print the result as JSON]' \
 ':process -- Termeric process ID, as `list` shows it:_default' \
 ':window -- Window ID within that process:_default' \
@@ -399,7 +399,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (focus-pane)
 _arguments "${_arguments_options[@]}" : \
-'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--request-id=[Use this ID (32 lowercase hex digits), so a retry with it never acts twice]:ID:_default' \
 '--json[Print the result as JSON]' \
 ':process -- Termeric process ID, as `list` shows it:_default' \
 ':window -- Window ID within that process:_default' \
@@ -409,7 +409,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (close-window)
 _arguments "${_arguments_options[@]}" : \
-'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--request-id=[Use this ID (32 lowercase hex digits), so a retry with it never acts twice]:ID:_default' \
 '--json[Print the result as JSON]' \
 ':process -- Termeric process ID, as `list` shows it:_default' \
 ':window -- Window ID within that process:_default' \
@@ -417,7 +417,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (close-tab)
 _arguments "${_arguments_options[@]}" : \
-'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--request-id=[Use this ID (32 lowercase hex digits), so a retry with it never acts twice]:ID:_default' \
 '--json[Print the result as JSON]' \
 ':process -- Termeric process ID, as `list` shows it:_default' \
 ':window -- Window ID within that process:_default' \
@@ -426,7 +426,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (close-pane)
 _arguments "${_arguments_options[@]}" : \
-'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--request-id=[Use this ID (32 lowercase hex digits), so a retry with it never acts twice]:ID:_default' \
 '--json[Print the result as JSON]' \
 ':process -- Termeric process ID, as `list` shows it:_default' \
 ':window -- Window ID within that process:_default' \
@@ -436,48 +436,48 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (move-tab)
 _arguments "${_arguments_options[@]}" : \
-'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--request-id=[Use this ID (32 lowercase hex digits), so a retry with it never acts twice]:ID:_default' \
 '--json[Print the result as JSON]' \
 ':process -- Termeric process ID, as `list` shows it:_default' \
 ':window -- Window ID within that process:_default' \
 ':tab -- Tab ID within that window:_default' \
-':destination_window:_default' \
-':destination_index:_default' \
+':destination_window -- The window to move it to:_default' \
+':destination_index -- Its position in that window'\''s tab bar, counting from 0:_default' \
 && ret=0
 ;;
 (move-pane)
 _arguments "${_arguments_options[@]}" : \
-'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--request-id=[Use this ID (32 lowercase hex digits), so a retry with it never acts twice]:ID:_default' \
 '--json[Print the result as JSON]' \
 ':process -- Termeric process ID, as `list` shows it:_default' \
 ':window -- Window ID within that process:_default' \
 ':tab -- Tab ID within that window:_default' \
 ':pane -- Pane ID within that tab:_default' \
-':destination_window:_default' \
-':destination_tab:_default' \
-':target_pane:_default' \
-':direction:(horizontal vertical)' \
+':destination_window -- The window to move it to:_default' \
+':destination_tab -- The tab to move it to:_default' \
+':target_pane -- The pane to put it next to:_default' \
+':direction -- Below (horizontal) or to the right of (vertical) that pane:(horizontal vertical)' \
 && ret=0
 ;;
 (resize-window)
 _arguments "${_arguments_options[@]}" : \
-'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--request-id=[Use this ID (32 lowercase hex digits), so a retry with it never acts twice]:ID:_default' \
 '--json[Print the result as JSON]' \
 ':process -- Termeric process ID, as `list` shows it:_default' \
 ':window -- Window ID within that process:_default' \
-':width:_default' \
-':height:_default' \
+':width -- Width in physical pixels:_default' \
+':height -- Height in physical pixels:_default' \
 && ret=0
 ;;
 (resize-divider)
 _arguments "${_arguments_options[@]}" : \
-'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--request-id=[Use this ID (32 lowercase hex digits), so a retry with it never acts twice]:ID:_default' \
 '--json[Print the result as JSON]' \
 ':process -- Termeric process ID, as `list` shows it:_default' \
 ':window -- Window ID within that process:_default' \
 ':tab -- Tab ID within that window:_default' \
-':divider:_default' \
-':ratio:_default' \
+':divider -- Divider ID, as `list` shows it:_default' \
+':ratio -- The first side'\''s share, in thousandths from 100 to 900:_default' \
 && ret=0
 ;;
         esac
@@ -601,37 +601,37 @@ esac
 (( $+functions[_termeric_commands] )) ||
 _termeric_commands() {
     local commands; commands=(
-'domain:Persistent terminal domains (experimental)' \
-'control:Commands for already-running local Termeric GUI processes' \
-'plugin:Termeric declarative plugin management' \
-'workspace:Termeric saved workspaces' \
-'mcp:Serve MCP tools for Termeric'\''s agents on standard I/O' \
+'domain:Keep terminals running in a background daemon, here or over SSH (experimental)' \
+'control:Script the windows, tabs, and panes of a running Termeric (experimental)' \
+'plugin:Install and manage plugins' \
+'workspace:List saved workspaces' \
+'mcp:Serve Termeric'\''s agent tools to a coding agent over MCP (experimental)' \
     )
     _describe -t commands 'termeric commands' commands "$@"
 }
 (( $+functions[_termeric__subcmd__control_commands] )) ||
 _termeric__subcmd__control_commands() {
     local commands; commands=(
-'list:List bounded window, tab, and pane metadata' \
-'wait-launch:Wait for a retained child and return its exit code; timeout does not cancel it' \
-'launch-status:Observe the initial child of a retained command launch' \
-'get-text:Read bounded presented UTF-8 text from one exact pane' \
-'send-text:Send opt-in bounded UTF-8 text to one exact pane' \
-'new-window:Create a window using the exact source window'\''s configuration and cwd' \
-'launch-window:Launch exact argv and non-secret environment overrides in a new window' \
-'new-tab:Create a local tab in one exact stable window' \
-'launch-tab:Launch exact argv and non-secret environment overrides in a local tab' \
-'split-pane:Split one exact stable local pane and return the new pane ID' \
-'focus-window:Request native focus for one exact stable window' \
-'select-tab:Select one exact stable tab without focusing its native window' \
-'focus-pane:Select the tab and focus one exact stable pane' \
-'close-window:Schedule one exact stable native window to close' \
-'close-tab:Schedule one exact stable local tab to close' \
-'close-pane:Close one exact stable local pane immediately' \
-'move-tab:Move one exact local tab to a zero-based visual index' \
-'move-pane:Move one exact local pane beside an exact destination pane' \
-'resize-window:Request an exact native window inner size in physical pixels' \
-'resize-divider:Set one exact local divider to 100-900 thousandths' \
+'list:List windows, tabs, panes, and dividers with their IDs' \
+'wait-launch:Wait for a launched program to exit, then exit with its code' \
+'launch-status:Show whether a launched program is still running, or how it exited' \
+'get-text:Print the text on a pane'\''s screen, and optionally some scrollback' \
+'send-text:Type text into a pane; needs \[security\] allow_gui_control_input = true' \
+'new-window:Open a window like the source window, in its focused tab'\''s directory' \
+'launch-window:Run a program in a new window, without a shell' \
+'new-tab:Open a shell tab and print its ID' \
+'launch-tab:Run a program in a new tab, without a shell' \
+'split-pane:Split a pane and print the new pane'\''s ID' \
+'focus-window:Ask the desktop to focus a window; refused on Wayland, where the compositor decides' \
+'select-tab:Select a tab without raising its window' \
+'focus-pane:Select a tab and focus one of its panes' \
+'close-window:Close a window' \
+'close-tab:Close a tab and end its programs' \
+'close-pane:Close a pane and end its program; a tab'\''s last pane closes only with the tab' \
+'move-tab:Move a tab to a position in the same or another window and print its new ID' \
+'move-pane:Move a pane next to a pane in another tab, keeping its program running' \
+'resize-window:Ask for a window size in physical pixels; the window manager may adjust it' \
+'resize-divider:Set the ratio of the split at one divider' \
     )
     _describe -t commands 'termeric control commands' commands "$@"
 }
@@ -739,31 +739,31 @@ _termeric__subcmd__control__subcmd__wait-launch_commands() {
 _termeric__subcmd__domain_commands() {
     local commands; commands=(
 'protocol-version:Print the domain protocol version this termeric speaks' \
-'hosts:List configured SSH host profiles' \
-'list:List live domains' \
-'show:Describe a domain'\''s complete live state' \
-'panes:List a domain'\''s panes' \
-'create:Create a persistent domain' \
+'hosts:List the SSH hosts saved under \[domains.ssh_hosts\]' \
+'list:List live domains with their tab, pane, and attached-window counts' \
+'show:Summarize a domain; with --json, describe all its tabs, panes, and splits' \
+'panes:List a domain'\''s panes, their sizes, and whether their programs still run' \
+'create:Create a domain with one tab and print its ID' \
 'spawn:Add a tab' \
-'split:Split a pane' \
-'resize-split:Resize a stable divider (100-900 thousandths)' \
+'split:Split a pane, adding one below (horizontal) or to the right (vertical)' \
+'resize-split:Set a split'\''s ratio' \
 'rename-tab:Set a tab'\''s title; an empty title clears it' \
 'pin-tab:Pin a tab' \
 'unpin-tab:Unpin a tab' \
-'move-tab:Move a tab within its pin group (counting from 0)' \
-'swap-pane:Swap a pane with the next one in visual order' \
-'balance-tab:Reset every divider in a tab to 50%' \
+'move-tab:Move a tab among the domain'\''s tabs, within its pinned or unpinned group' \
+'swap-pane:Swap a pane with the next one in its tab, wrapping around to the first' \
+'balance-tab:Reset every split in a tab to 50%' \
 'layout-tab:Arrange a tab'\''s panes in a preset layout' \
-'move-pane:Move a pane to another tab' \
-'focus:Set the persisted focus' \
-'close-pane:End a pane'\''s program and remove the pane' \
-'close-tab:End every program in a tab and remove it' \
-'send:Type bounded UTF-8 text into a pane' \
+'move-pane:Move a pane to another tab; a tab'\''s last pane can'\''t move' \
+'focus:Focus a pane' \
+'close-pane:End a pane'\''s program and remove the pane; a tab'\''s last pane needs close-tab' \
+'close-tab:End every program in a tab and remove it; a domain'\''s last tab needs kill' \
+'send:Type text into a pane, at most 64 KiB' \
 'get-text:Print a pane'\''s newest text' \
-'upload:Copy a file or directory into a pane'\''s working directory, never overwriting' \
-'attach:Open the domain in a GUI window' \
-'kill:End every program in a domain' \
-'stop-server:Stop the daemon once no domain remains' \
+'upload:Copy a file or directory (at most 64 MiB) into a pane'\''s working directory, never overwriting' \
+'attach:Open a window on a domain; closing the window only detaches it' \
+'kill:End every program in a domain and remove the domain' \
+'stop-server:Stop the daemon; refused while any domain remains' \
 'server:Run the daemon in the foreground' \
 'proxy-stdio:The SSH stdio bridge \`--host\` runs on the other computer' \
 'relay:Relay one pane to this terminal (the GUI'\''s pane process)' \
@@ -924,16 +924,16 @@ _termeric__subcmd__mcp_commands() {
 _termeric__subcmd__plugin_commands() {
     local commands; commands=(
 'list:List installed plugins' \
-'show:Show one installed plugin' \
+'show:Show one installed plugin'\''s source, permissions, settings, and any error' \
 'validate:Check a plugin directory'\''s manifest without installing it' \
 'install:Install a plugin from a local directory' \
-'update:Reinstall a plugin from its recorded source' \
+'update:Reinstall a plugin from its directory, keeping the grants it still requests' \
 'enable:Enable an installed plugin' \
-'disable:Disable an installed plugin' \
+'disable:Disable an installed plugin without removing it' \
 'configure:Change one setting of an installed plugin' \
 'grant:Grant permissions an installed plugin requests' \
 'revoke:Withdraw grants from an installed plugin, disabling it if it was enabled' \
-'remove:Remove an installed plugin' \
+'remove:Remove an installed plugin, leaving its source directory alone' \
     )
     _describe -t commands 'termeric plugin commands' commands "$@"
 }

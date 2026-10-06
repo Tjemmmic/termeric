@@ -6,8 +6,9 @@ use clap::{Parser, Subcommand};
 #[derive(Parser)]
 #[command(
     name = "termeric workspace",
-    about = "Termeric saved workspaces",
-    after_help = "Open a listed workspace with termeric --workspace ID.",
+    about = "List saved workspaces",
+    after_help = "Open a listed workspace with termeric --workspace ID. The list comes from the \
+saved files, so it works whether or not Termeric is running.",
     arg_required_else_help = true,
     disable_version_flag = true
 )]

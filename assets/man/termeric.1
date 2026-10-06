@@ -100,21 +100,43 @@ software: Insist on software rendering
 .SH SUBCOMMANDS
 .TP
 \fBtermeric domain\fR
-Persistent terminal domains (experimental). Run \fBtermeric domain \-\-help\fR for its commands and options.
+Keep terminals running in a background daemon, here or over SSH (experimental). Run \fBtermeric domain \-\-help\fR for its commands and options.
 .TP
 \fBtermeric control\fR
-Commands for already\-running local Termeric GUI processes. Run \fBtermeric control \-\-help\fR for its commands and options.
+Script the windows, tabs, and panes of a running Termeric (experimental). Run \fBtermeric control \-\-help\fR for its commands and options.
 .TP
 \fBtermeric plugin\fR
-Termeric declarative plugin management. Run \fBtermeric plugin \-\-help\fR for its commands and options.
+Install and manage plugins. Run \fBtermeric plugin \-\-help\fR for its commands and options.
 .TP
 \fBtermeric workspace\fR
-Termeric saved workspaces. Run \fBtermeric workspace \-\-help\fR for its commands and options.
+List saved workspaces. Run \fBtermeric workspace \-\-help\fR for its commands and options.
 .TP
 \fBtermeric mcp\fR
-Serve MCP tools for Termeric\*(Aqs agents on standard I/O. Run \fBtermeric mcp \-\-help\fR for its commands and options.
+Serve Termeric\*(Aqs agent tools to a coding agent over MCP (experimental). Run \fBtermeric mcp \-\-help\fR for its commands and options.
+.SH "JOINING A RUNNING TERMERIC"
+A plain launch opens its window in the Termeric already running on this display, so tabs can move between its windows; the window uses that process\*(Aqs settings and environment. A launch starts a process of its own instead when it passes \-\-separate\-process, opens two or more windows, or uses any option besides \-\-new\-window, \-\-tab, \-\-working\-directory, \-\-title, \-\-command, and a COMMAND; when [window] share_process is false; when the termeric executable differs from the running one; or when any of these variables differs from the running process\*(Aqs: RUST_LOG, WGPU_BACKEND, WGPU_ADAPTER_NAME, WGPU_POWER_PREF, LIBGL_ALWAYS_SOFTWARE, TERMERIC_TERM, TERMERIC_TERMINFO_DIR, TERMINFO, TERMINFO_DIRS, HOME, XDG_CONFIG_HOME, XDG_DATA_HOME.
+.SH ENVIRONMENT
+.TP
+\fBTERMERIC_TERM\fR
+The TERM programs in Termeric see: auto (the default) uses xterm\-termeric when its terminfo entry is installed and xterm\-256color otherwise; xterm\-256color (or compatibility) always uses xterm\-256color; xterm\-termeric insists on Termeric\*(Aqs own entry and falls back with a logged warning.
+.TP
+\fBTERMERIC_TERMINFO_DIR\fR
+A directory searched first for the compiled xterm\-termeric entry, before TERMINFO, ~/.terminfo, $XDG_DATA_HOME/terminfo, TERMINFO_DIRS, the install prefix\*(Aqs share/terminfo, and the system directories.
+.TP
+\fBWGPU_BACKEND\fR
+The graphics API to render with: vulkan or gl. With \-\-renderer software, gl and LIBGL_ALWAYS_SOFTWARE=true use Mesa\*(Aqs software OpenGL.
+.TP
+\fBRUST_LOG\fR
+What Termeric logs to standard error, for example warn,termeric=debug.
+.TP
+\fBXDG_CONFIG_HOME, XDG_DATA_HOME\fR
+Where Termeric keeps its configuration (termeric/config.toml, custom themes, plugins) and its data (workspaces, tab snapshots, agent transcripts), by default ~/.config and ~/.local/share.
+.SH FILES
+.TP
+\fB~/.config/termeric/config.toml\fR
+The configuration, reloaded when it is saved. config.example.toml, in Termeric\*(Aqs documentation directory (such as /usr/share/doc/termeric), lists every setting with its default.
 .SH "SEE ALSO"
-The user guide: https://github.com/Tjemmmic/termeric/tree/main/docs/src
+The project, with its README and plugin examples: https://github.com/Tjemmmic/termeric
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .SH VERSION
