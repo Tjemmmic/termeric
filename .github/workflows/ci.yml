@@ -54,10 +54,5 @@ jobs:
           sudo apt-get install -y appstream desktop-file-utils
           appstreamcli validate --no-net assets/org.termeric.Termeric.metainfo.xml
           desktop-file-validate assets/*.desktop
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: mdbook
-      - name: Build the user guide
-        run: mdbook build docs
       - name: Check the terminfo entry with Vim, less, and tmux
         run: python3 scripts/check_terminfo.py --require-apps

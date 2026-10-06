@@ -13,17 +13,17 @@ Nothing takes effect until you install the plugin and grant the permissions it a
 
 ## Example plugins
 
-The repository has five example plugins in `examples/plugins/`. Each manifest starts with a comment explaining what it does and the exact command that installs it.
+This directory has five example plugins. Each manifest starts with a comment explaining what it does and the exact command that installs it.
 
 | Plugin | What it does | Shows how to |
 | --- | --- | --- |
-| `task-runner` | Profiles that run your project's test command or dev server in the active terminal's directory, and a clean shell. | Launch profiles, settings, launch context |
-| `command-notifier` | Shows a notice with the end of the output when a shell command fails, ignoring exit codes you list. | Reacting to `command-completed` |
-| `pane-layouts` | Commands that split, tile, and balance the panes of the active tab. | Querying the workspace, then acting |
-| `window-switcher` | Commands that focus the next window, or select a tab by title in any window. | `:all-windows` permissions |
-| `rerun-in-sibling` | Types the focused pane's last command into the next pane of the tab and runs it. | Remembering state, typing into a terminal |
+| [`task-runner`](task-runner) | Profiles that run your project's test command or dev server in the active terminal's directory, and a clean shell. | Launch profiles, settings, launch context |
+| [`command-notifier`](command-notifier) | Shows a notice with the end of the output when a shell command fails, ignoring exit codes you list. | Reacting to `command-completed` |
+| [`pane-layouts`](pane-layouts) | Commands that split, tile, and balance the panes of the active tab. | Querying the workspace, then acting |
+| [`window-switcher`](window-switcher) | Commands that focus the next window, or select a tab by title in any window. | `:all-windows` permissions |
+| [`rerun-in-sibling`](rerun-in-sibling) | Types the focused pane's last command into the next pane of the tab and runs it. | Remembering state, typing into a terminal |
 
-To try one, clone the repository and install it from its folder, for example:
+To try one, clone the repository and install it from the repository root, for example:
 
 ```bash
 termeric plugin install examples/plugins/pane-layouts \
@@ -105,7 +105,7 @@ An enabled plugin adds these commands to the command palette:
 - **Split Right with PLUGIN NAME** and **Split Down with PLUGIN NAME**, with and without a named profile, which open a profile in a pane beside the focused one;
 - each of its commands.
 
-A command's ID is `PLUGIN-ID.COMMAND-ID`, and a profile's palette command is `PLUGIN-ID.open-PROFILE-ID`. Bind either to a key with a `plugin_command` key binding (see [Keyboard and mouse](keyboard-and-mouse.md#keys-that-type-text-or-run-commands)):
+A command's ID is `PLUGIN-ID.COMMAND-ID`, and a profile's palette command is `PLUGIN-ID.open-PROFILE-ID`. Bind either to a key with a `plugin_command` entry in `[[keybindings]]` (see [`config.example.toml`](../../assets/config.example.toml)):
 
 ```toml
 [[keybindings]]
@@ -114,7 +114,7 @@ modifiers = { ctrl = true, alt = true }
 action = { type = "plugin_command", command_id = "pane-layouts.dev-layout" }
 ```
 
-`termeric --profile PLUGIN-ID:PROFILE-ID` opens a profile from the command line. Plugin tabs show as kind `plugin` in `termeric control list`, and [workspaces](workspaces-and-sessions.md) relaunch them from the same plugin and profile.
+`termeric --profile PLUGIN-ID:PROFILE-ID` opens a profile from the command line. Plugin tabs show as kind `plugin` in `termeric control list`, and saved workspaces relaunch them from the same plugin and profile.
 
 ## Writing a plugin
 
@@ -125,7 +125,7 @@ A plugin is a directory with a `termeric-plugin.toml`. Check it with `termeric p
 | Key | Required | Description |
 | --- | --- | --- |
 | `api_version` | yes | Must be `1`. |
-| `id` | yes | The plugin's ID. Built-in agent IDs (`claude-code`, `codex`, `gemini`, `opencode`) are reserved, and a plugin isn't loaded while a [custom agent](agents.md#configuration) uses its ID. |
+| `id` | yes | The plugin's ID. Built-in agent IDs (`claude-code`, `codex`, `gemini`, `opencode`) are reserved, and a plugin isn't loaded while a custom agent (`[agents.ID]` in the configuration) uses its ID. |
 | `name` | yes | Display name, one line, at most 80 bytes. |
 | `version` | yes | Any one-line text, at most 64 bytes. |
 | `description` | no | At most 1024 bytes. |
@@ -248,7 +248,7 @@ Result events (below) carry no `context`; a handler that needs it later keeps it
 | `tab-created` | `tab_id` | A tab opened. |
 | `tab-closed` | `tab_id` | A tab closed. |
 | `tab-switched` | `from`, `to` | The active tab changed, however it happened: selecting a tab, opening, closing, or moving one, or opening a workspace. `from` is `null` for a window's first active tab. |
-| `command-completed` | `region_id`, `tab_id`, `pane_id`, `exit_code`, `content_available`, `command`, `output` | A shell command finished. Needs [shell integration](shell-integration.md). |
+| `command-completed` | `region_id`, `tab_id`, `pane_id`, `exit_code`, `content_available`, `command`, `output` | A shell command finished. Needs shell integration. |
 | `command-invoked` | `command_id` | One of the plugin's commands ran. `command_id` is `PLUGIN-ID.COMMAND-ID`. |
 
 Tab IDs (`tab_id`, `from`, `to`) are unique within their window, so pair them with `origin_window_id`. One change of the active tab raises one `tab-switched`, after the action that caused it.
@@ -296,11 +296,11 @@ Every action has a `type`. All but the two message actions and the two queries a
 What the actions do, and their rules:
 
 - `select-tab` and `focus-pane` change the selection inside a window without raising it; `focus-window` asks the desktop to raise a window. On Wayland the compositor controls focus, so Termeric refuses `focus-window` unless the window is already focused.
-- `send-text` types `text` (at most 8 KiB of printable characters, tabs, and newlines), as a bracketed paste when `paste` is `true`, then presses Enter when `enter` is `true`. It needs `security.allow_gui_control_input = true` in your [configuration](configuration.md) and is refused for a read-only pane. Text that looks like a destructive command, such as `rm -rf ~`, opens a confirmation dialog instead of being typed: `disposition` is `pending_confirmation` and `confirmation_id` identifies the dialog. Otherwise `disposition` is `sent`. While a confirmation is open in that window, further `send-text` actions are refused.
-- `create-tab` opens a shell tab. It is refused while the window's active tab belongs to a [live domain](live-domains.md).
+- `send-text` types `text` (at most 8 KiB of printable characters, tabs, and newlines), as a bracketed paste when `paste` is `true`, then presses Enter when `enter` is `true`. It needs `allow_gui_control_input = true` under `[security]` in your configuration and is refused for a read-only pane. Text that looks like a destructive command, such as `rm -rf ~`, opens a confirmation dialog instead of being typed: `disposition` is `pending_confirmation` and `confirmation_id` identifies the dialog. Otherwise `disposition` is `sent`. While a confirmation is open in that window, further `send-text` actions are refused.
+- `create-tab` opens a shell tab. It is refused while the window's active tab belongs to a live domain (`termeric domain`).
 - `close-tab` can't close a window's last tab, and `close-pane` can't close a tab's last pane.
 - `move-tab` reorders a tab within a window (`destination_index` counts from 0) or moves it to another, but can't take a window's last tab. `move-pane` moves a pane next to `target_pane_id` in another tab.
-- `direction` is `vertical` (to the right) or `horizontal` (below). `preset` is `columns`, `rows`, `grid`, `tall`, or `fat`, as in the **Layout** commands (see [Tabs, panes, and windows](tabs-panes-windows.md)).
+- `direction` is `vertical` (to the right) or `horizontal` (below). `preset` is `columns`, `rows`, `grid`, `tall`, or `fat`, as in the **Layout** commands in the command palette.
 - `close-window` with `window-close:all-windows` closes any window but the last one left. Plain `window-close` closes only the origin window, only when the conversation began with one of the plugin's commands, and may close the last window. The origin window closes after the handler has answered the result, or, if plugins are reloaded before the result reaches the handler, once the reload drops it.
 
 ### Results
@@ -429,5 +429,5 @@ termeric plugin install ~/plugins/split-here \
 - Plugins run as programs under your user account. Permissions limit what a plugin can ask Termeric to do, not what its own programs can do: a profile or handler can read and write your files and use the network like anything else you run.
 - Install only plugins you trust, and read the manifest first, including its `program` and `args` and any script they run. Termeric installs only from a local directory and never downloads code.
 - The fingerprint shows whether a manifest changed since you reviewed it. It is not a signature and says nothing about who wrote the plugin, or about scripts outside the manifest.
-- Typing into terminals needs both the `terminal-input` permission and `security.allow_gui_control_input = true`, which also allows [`termeric control send-text`](control.md#typing-into-a-pane). Destructive-looking text always asks for confirmation.
+- Typing into terminals needs both the `terminal-input` permission and `security.allow_gui_control_input = true`, which also allows `termeric control send-text`. Destructive-looking text always asks for confirmation.
 - Grant `:all-windows` only when a plugin needs to reach other windows; window-scoped permissions can't see or change any window but the one you're working in.

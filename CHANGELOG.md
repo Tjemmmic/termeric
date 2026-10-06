@@ -4,7 +4,7 @@ Notable changes to Termeric, by release. The project follows [Keep a Changelog](
 
 ## [0.1.0] - Unreleased
 
-The first release: a developer preview for Linux, on Wayland and X11. Features still taking shape are marked experimental. [Feature status](docs/src/status.md) lists what works fully, what works in part, and what isn't there yet.
+The first release: a developer preview for Linux, on Wayland and X11. Features still taking shape are marked experimental; the README's [Status](README.md#status) section lists them.
 
 ### Added
 

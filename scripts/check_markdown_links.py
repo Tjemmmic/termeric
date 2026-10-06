@@ -20,7 +20,7 @@ FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 def markdown_files() -> list[Path]:
     # CLAUDE.md is a personal, untracked file; only the shared guides are checked.
     root_files = [path for path in sorted(ROOT.glob("*.md")) if path.name != "CLAUDE.md"]
-    return root_files + sorted((ROOT / "docs").rglob("*.md"))
+    return root_files + sorted((ROOT / "examples").rglob("*.md"))
 
 
 def link_destination(raw_target: str) -> str:

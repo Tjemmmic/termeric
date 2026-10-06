@@ -4480,9 +4480,12 @@ default = "local"
     #[test]
     fn every_checked_in_example_validates_installs_and_enables() {
         let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins");
+        // Each example is a directory; the plugin reference sits beside them.
         let mut names = fs::read_dir(&examples)
             .unwrap()
-            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .map(Result::unwrap)
+            .filter(|entry| entry.file_type().unwrap().is_dir())
+            .map(|entry| entry.file_name().into_string().unwrap())
             .collect::<Vec<_>>();
         names.sort();
         assert_eq!(

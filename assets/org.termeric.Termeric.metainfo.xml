@@ -32,7 +32,7 @@
   <url type="homepage">https://github.com/Tjemmmic/termeric</url>
   <url type="bugtracker">https://github.com/Tjemmmic/termeric/issues</url>
   <url type="vcs-browser">https://github.com/Tjemmmic/termeric</url>
-  <url type="help">https://github.com/Tjemmmic/termeric/blob/main/docs/src/introduction.md</url>
+  <url type="help">https://github.com/Tjemmmic/termeric#readme</url>
   <categories>
     <category>System</category>
     <category>TerminalEmulator</category>

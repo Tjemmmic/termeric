@@ -18,7 +18,7 @@ Desktops match a window to the desktop entry and icon of the same name as its ap
 
 ## Building
 
-Termeric needs Rust 1.89 or newer, a C compiler (for the bundled libgit2), `pkg-config`, and the development files for fontconfig, Wayland, xkbcommon, XCB, and Vulkan. [Build from source](docs/src/installation.md#build-from-source) lists the Debian and Arch package names.
+Termeric needs Rust 1.89 or newer, a C compiler (for the bundled libgit2), `pkg-config`, and the development files for fontconfig, Wayland, xkbcommon, XCB, and Vulkan. [Build from source](README.md#build-from-source) lists the Debian and Arch package names.
 
 ```bash
 cargo build --release --locked
@@ -34,7 +34,7 @@ Don't let your build system inject cross-language LTO flags (`-flto` in `CFLAGS`
 cargo test --workspace --locked
 ```
 
-The suite needs no display, GPU, network, session bus, or installed fonts, so it runs in a clean build chroot. The GPU render smoke and the resource soak are ignored by default. The Bash, Zsh, and Fish integration tests skip when a shell is missing unless `TERMERIC_REQUIRE_SHELL_ACCEPTANCE=1` is set. [Testing](docs/dev/testing.md) covers the rest.
+The suite needs no display, GPU, network, session bus, or installed fonts, so it runs in a clean build chroot. The GPU render smoke and the resource soak are ignored by default. The Bash, Zsh, and Fish integration tests skip when a shell is missing unless `TERMERIC_REQUIRE_SHELL_ACCEPTANCE=1` is set. [Testing](CONTRIBUTING.md#testing) covers the rest.
 
 ## The install tree
 
@@ -104,7 +104,7 @@ python3 scripts/check_debian_package.py target/debian/termeric_*.deb
 python3 scripts/check_arch_package.py target/arch/termeric-git-*.pkg.tar.zst
 ```
 
-Both compare the package with the staged tree's file list and modes (with the manual page gzipped, as cargo-deb and makepkg's default `zipman` option ship it), validate the desktop entries and icons, check the terminfo entry with `infocmp`, and check the declared dependencies. `--system-lifecycle` also installs and removes the package; it needs root, so use a disposable container. [Testing](docs/dev/testing.md#packages) has the build commands.
+Both compare the package with the staged tree's file list and modes (with the manual page gzipped, as cargo-deb and makepkg's default `zipman` option ship it), validate the desktop entries and icons, check the terminfo entry with `infocmp`, and check the declared dependencies. `--system-lifecycle` also installs and removes the package; it needs root, so use a disposable container. [Packages](CONTRIBUTING.md#packages) has the build commands.
 
 The AppStream metadata validates with `appstreamcli validate --no-net assets/org.termeric.Termeric.metainfo.xml`, and the desktop entries with `desktop-file-validate`; CI runs both. The metadata has no screenshots yet: they need stable URLs, which come once screenshots are committed to the repository and can be linked at a release tag.
 

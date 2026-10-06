@@ -39,7 +39,7 @@ panic = "abort"
 strip = true
 
 # Release optimization with symbols, for profilers such as perf and heaptrack.
-# See "Profiling and debugging builds" in docs/dev/testing.md.
+# See "Profiling and debugging builds" in CONTRIBUTING.md.
 [profile.profiling]
 inherits = "release"
 debug = 1
@@ -53,7 +53,7 @@ debug = "line-tables-only"
 opt-level = 3
 
 # Ordinary dev builds keep only line tables. This profile adds full debug
-# information for GDB or LLDB; see docs/dev/testing.md.
+# information for GDB or LLDB; see CONTRIBUTING.md.
 [profile.debugging]
 inherits = "dev"
 debug = 2

@@ -2,7 +2,7 @@
 
 Termeric is a GPU-accelerated terminal emulator for Linux, written in Rust and themed around roots and rhizomes. It uses wgpu for rendering, winit for windowing, cosmic-text for font shaping, and vte for escape-sequence parsing.
 
-This file guides coding agents and contributors working in this repository. Read [`docs/dev/style-guide.md`](docs/dev/style-guide.md) before writing any UI, theme, or user-facing code.
+This file guides coding agents and contributors working in this repository. Read the [Style Guide](#style-guide) at the end before writing any UI, theme, or user-facing code.
 
 ## Build & Test
 
@@ -17,7 +17,9 @@ python3 scripts/check_markdown_links.py
 
 In Markdown, write each paragraph and list item on one line; don't hard-wrap prose.
 
-[`docs/dev/testing.md`](docs/dev/testing.md) covers the slower suites (native GUI, soaks, benchmarks, fuzzing, packages) and CI. The user guide is an mdBook in `docs/` (`mdbook build docs`); update the affected page when user-visible behavior changes, and [`docs/src/status.md`](docs/src/status.md) when a feature's support level changes. Parser recognition or unit coverage alone does not make a feature supported.
+[CONTRIBUTING.md](CONTRIBUTING.md#testing) covers the slower suites (the GPU smoke, the soak, benchmarks, fuzzing, packages) and CI.
+
+There is no separate user guide. What people read lives in four places: the [README](README.md) (installing, getting started, troubleshooting, and the experimental features under Status), [`assets/config.example.toml`](assets/config.example.toml) (every setting with its default and range, every shortcut action ID, and the built-in themes), the command-line help in `termeric/src/cli/` (which also generates the manual page and completions), and [`examples/plugins/README.md`](examples/plugins/README.md) (the plugin API). When user-visible behavior changes, update whichever of these describes it; a new setting, shortcut action, or built-in theme always goes into the example configuration, and a change in a feature's support level goes into the README's Status section. Parser recognition or unit coverage alone does not make a feature supported.
 
 ## Workspace Structure
 
@@ -45,15 +47,15 @@ A background task that returns a result to one window (an `AppEvent` with a `win
 
 Every tab owns exactly one `PaneManager` (`Tab::panes`); a tab with one terminal is a one-leaf tree. Splitting and closing panes only change the tree: no terminal is ever handed between the tab and its panes, no replacement PTY is spawned, and pane IDs are never reused within a tab (a fresh tab's terminal is pane 0). Every terminal event names its pane (`TerminalEventOrigin { tab_id, pane_id }`). A tab's only pane is focused, unzoomed, and primary, and shows the tab's title rather than its own. Features that exist only between panes (broadcast, dividers, zoom, pane focus, outlines) check `Tab::split_panes()`. User-facing reads and writes must use `Tab::focused_pane()`, `Tab::focused_terminal()`, `focused_terminal_mut()`, or `Tab::write()`; focus changes must refresh search/URL/Git/cursor surfaces.
 
-Closed tabs are kept as one-tab workspaces (`Tab::save_closed_tab()`, marked `closed_tab`, newest 100 kept). Pane-local last-command state must move with terminal ownership. Complete startup/exit persistence uses the same versioned workspace archive and reconstructs tabs/panes by relaunching fresh processes. See [`docs/src/workspaces-and-sessions.md`](docs/src/workspaces-and-sessions.md).
+Closed tabs are kept as one-tab workspaces (`Tab::save_closed_tab()`, marked `closed_tab`, newest 100 kept). Pane-local last-command state must move with terminal ownership. Complete startup/exit persistence uses the same versioned workspace archive and reconstructs tabs/panes by relaunching fresh processes.
 
-Everything agent-related is behind one switch, `[agent_features] enabled`, off by default. Every agent entry point (recognition, palette commands, shortcuts, panels, the agent view, the supervisor, Harvest's Explain, agent launch integration, and agent control requests) asks `App::agent_features_enabled()` (`app/agent_features.rs`), never the config field. Turning it off closes every agent surface; while an agent view conversation or the supervisor runs, the window keeps agent features on (`agent_features_held`, with a notice) and `release_agent_features` turns them off once the last one ends. Every configuration change (Settings, reload, reset) goes through this one path in `apply_config`. See [`docs/src/agents.md`](docs/src/agents.md#turning-agent-features-on).
+Everything agent-related is behind one switch, `[agent_features] enabled`, off by default. Every agent entry point (recognition, palette commands, shortcuts, panels, the agent view, the supervisor, Harvest's Explain, agent launch integration, and agent control requests) asks `App::agent_features_enabled()` (`app/agent_features.rs`), never the config field. Turning it off closes every agent surface; while an agent view conversation or the supervisor runs, the window keeps agent features on (`agent_features_held`, with a notice) and `release_agent_features` turns them off once the last one ends. Every configuration change (Settings, reload, reset) goes through this one path in `apply_config`.
 
-Agent hooks report through `termeric agent-event` over the control socket. Each report names its terminal by the `TERMERIC_TERMINAL_ID` its processes inherited from `PtyHandle`, never by focus. Status lives on the terminal's `TerminalIntegration` and moves with it. See [`docs/src/agents.md`](docs/src/agents.md).
+Agent hooks report through `termeric agent-event` over the control socket. Each report names its terminal by the `TERMERIC_TERMINAL_ID` its processes inherited from `PtyHandle`, never by focus. Status lives on the terminal's `TerminalIntegration` and moves with it.
 
-The experimental agent view is a docked, non-modal panel right of the terminals that drives Claude Code (stream-json), Codex (app-server), and OpenCode (Agent Client Protocol) headlessly, each through an `agent_view::protocol::Protocol` that translates to agent-neutral events (`agent_view/`). It owns its agent processes, not PTYs, and never routes through focused terminal input. The terminal area ends at `Renderer::content_right()`. A dock width change resizes only the active tab (`sync_agent_dock` → `sync_active_terminal_geometry`); every other geometry change resizes all tabs through `sync_terminal_geometry`. Each tab owns one agent view: the panel state is bound to the active tab in `refresh_focused_terminal_surfaces`, moves with a tab between windows, and ends with it (`app/agent_view_tabs.rs`). Its scene (`ui/agent_view/scene.rs`) is the single source for drawing, hit targets, focus order, and accessibility. See [`docs/src/agent-view.md`](docs/src/agent-view.md).
+The experimental agent view is a docked, non-modal panel right of the terminals that drives Claude Code (stream-json), Codex (app-server), and OpenCode (Agent Client Protocol) headlessly, each through an `agent_view::protocol::Protocol` that translates to agent-neutral events (`agent_view/`). It owns its agent processes, not PTYs, and never routes through focused terminal input. The terminal area ends at `Renderer::content_right()`. A dock width change resizes only the active tab (`sync_agent_dock` → `sync_active_terminal_geometry`); every other geometry change resizes all tabs through `sync_terminal_geometry`. Each tab owns one agent view: the panel state is bound to the active tab in `refresh_focused_terminal_surfaces`, moves with a tab between windows, and ends with it (`app/agent_view_tabs.rs`). Its scene (`ui/agent_view/scene.rs`) is the single source for drawing, hit targets, focus order, and accessibility.
 
-Experimental live domains are a third, intentionally separate lifecycle. The `domain/` daemon owns real PTYs and parser state; GUI tabs own only relay PTYs. Never save a relay as a workspace shell or mutate its layout locally. Protocol I/O is versioned, authenticated, length-bounded, and kept off PTY reader locks. See [`docs/src/live-domains.md`](docs/src/live-domains.md).
+Experimental live domains are a third, intentionally separate lifecycle. The `domain/` daemon owns real PTYs and parser state; GUI tabs own only relay PTYs. Never save a relay as a workspace shell or mutate its layout locally. Protocol I/O is versioned, authenticated, length-bounded, and kept off PTY reader locks.
 
 ### Key Modules (termeric/)
 
@@ -246,3 +248,111 @@ self.progress += dt * speed;
 ```
 
 Easing: ease-out cubic `1.0 - (1.0 - t).powi(3)` (`ease_out_cubic`). Default durations: 150ms overlays (`DEFAULT_OVERLAY_DURATION`), 200ms panels (`DEFAULT_PANEL_DURATION`); the Commands and Agents panels and the guardrail overlay use 250ms; the tab-bar hover fade-in takes 100ms.
+
+Never bounce or overshoot, and keep every transition at 250ms or less. The cursor glides to its new position over 150ms, including across tab switches. Honor reduced motion: `OverlayAnimation` and `PanelAnimation` snap when it is on, and any new animation must do the same.
+
+## Style Guide
+
+Termeric is named after turmeric, the root, and its house themes are named after roots too. Read this before adding a theme or changing anything a person sees: chrome, dialogs, panels, menus, or text.
+
+### Themes
+
+#### Naming
+
+- **Root themes** are Termeric's own palettes. They must be named after a real root, rhizome, or tuber, and set `author = "Termeric"`. The current twelve: turmeric (the default), ginger, daikon, malanga, beet, turnip, yuca, taro, wasabi, galangal, horseradish, parsnip.
+- **Guest themes** are community palettes (Solarized, Catppuccin, Dracula, Nord, and others). They keep their original names and authors. The theme picker lists them under "Guest", apart from the roots.
+
+The file name and lookup key are the lowercase name (`turmeric.toml`); the display name in `meta.name` is capitalized (`"Turmeric"`).
+
+#### Deriving a root palette
+
+A root theme takes its colors from the actual plant: its skin, flesh, leaves, and flowers. Programs rely on what ANSI colors mean, though — red for errors, green for success, yellow for warnings, blue for directories, dim bright-black for hints — so every slot stays in its own hue family and only leans toward the plant. Turnip's red is a rose-tinted red rather than its purple top, and a leaf becomes a leaf-tinted teal for `cyan` rather than another green.
+
+| Slot | Hue family | Tinted toward |
+|---|---|---|
+| `background` | — | The root's deepest skin or bark tone (dark) |
+| `foreground` | — | The root's lightest flesh |
+| `cursor` | — | The most vibrant part of the flesh |
+| `black` | neutral | Dried skin, a step above the background |
+| `white` | neutral | Lightest interior or pith |
+| `red` | red | Skin blush or red/purple flesh streaks |
+| `green` | green | The plant's leaves |
+| `yellow` | yellow | Flowers or golden flesh |
+| `blue` | blue | Stems or cool shadows |
+| `magenta` | magenta | Flowers or purple flesh |
+| `cyan` | cyan | Young leaves or shoots |
+| `selection` | — | Semi-transparent flesh tone |
+| `url` | — | Bright leaf or shoot color |
+
+Not every root is warm: daikon, wasabi, and horseradish use cool or neutral charcoal backgrounds because the plants do.
+
+#### Palette contract
+
+The test `root_theme_palettes_keep_ansi_meaning_and_contrast` in `termeric/src/config/theme.rs` enforces these rules for every theme authored `"Termeric"`:
+
+- Each chromatic slot stays in its hue family (HSL degrees): red below 20 or from 345, yellow 35–70, green 75–155, cyan 160–200, blue 200–255, magenta 275–345.
+- Saturation is at least 0.25, so tinted colors still read as colors. Keep it near or below 0.6 so nothing turns neon (advice, not enforced).
+- Contrast against the background is at least 3:1 for primary slots and 4.5:1 for bright slots, and every bright slot is lighter than its primary.
+- Neighbouring families (red/yellow, yellow/green, green/cyan, cyan/blue, blue/magenta, magenta/red) stay at least 25° apart.
+- `black` is visibly lighter than the background (at least 1.15:1), bright black is readable dim text (at least 3:1), and whites reach 4.5:1 and 7:1.
+- Foreground text reaches at least 7:1.
+
+#### Theme files
+
+Built-in themes are TOML files in `termeric/themes/roots/` and `termeric/themes/community/`, embedded into the binary. `themes/roots/turmeric.toml` is the reference. A file has four tables:
+
+- `[meta]`: `name`, `author`, `description`
+- `[primary]` and `[bright]`: the eight ANSI colors each
+- `[ui]`: `background`, `foreground`, `cursor`, `cursor_text`, `selection`, `border`, `tab_active` (the active-tab accent), `tab_inactive` (the tab strip), `search_match`, `url`, and optionally `selection_text`
+
+Colors are `#RRGGBB` or `#RRGGBBAA`. In a root theme, give every color a short comment naming the part of the plant it came from.
+
+To add a root theme:
+
+1. Add `termeric/themes/roots/<name>.toml`.
+2. Add the name to `BUILTIN_THEME_NAMES` and an `include_str!` arm to `Theme::load_builtin`, both in `termeric/src/config/theme.rs`.
+3. Bump the root count in `root_theme_palettes_keep_ansi_meaning_and_contrast`.
+4. Add it to the theme list under `[theme]` in `assets/config.example.toml`.
+5. Run `cargo test -p termeric config::theme`.
+
+People can add their own themes as `.toml` files in `~/.config/termeric/themes/`; the **Change Theme…** picker previews each theme as it is highlighted.
+
+### Chrome
+
+The terminal content comes first; the chrome around it stays quiet.
+
+- **Color:** every chrome color comes from the active theme through `UiPalette` (`termeric/src/renderer/colors.rs`), so light themes and custom themes work. Don't hardcode colors. Shadows are black at low alpha.
+- **Tab bar:** compact and "quiet native". The strip uses the theme's `tab_inactive` color; the active tab is a slightly raised surface with a 2px `tab_active` accent line (a left bar in the vertical rail); inactive titles are dimmed; × appears on the active or hovered tab, and background activity shows as a small dot in its place. Never fill a whole tab with a saturated color.
+- **Settings:** one centered dialog with a sidebar of pages and one search across every page. Values sit in one column with steppers, dropdown chevrons, or a trailing chevron for actions. The footer only says whether changes are saved (with a Save button when they aren't); no key-hint strips.
+- **Dialogs and menus:** start from the shared pieces — `build_modal_frame` (`renderer/palette.rs`) for centered dialogs, `build_side_panel_frame` (`renderer/panels.rs`) for side panels, and `build_popup_menu` (`renderer/popup_menu.rs`) for anchored menus; a menu with its own rows, such as the Settings dropdown, still sits on the shared `push_menu_surface`.
+- **Icons:** use the vector icons (`ui::icon::Icon`, drawn with `push_icon`/`draw_icon` from `renderer/icons.rs`) rather than text glyphs such as ◀ ▶ ×.
+- **Hover and feedback:** a gentle background tint, not a color change. Prefer status text and toasts over modal dialogs.
+
+#### Corners
+
+Draw rounded rectangles with `RectPipeline::push_rounded_rect`; a radius of half the height makes a pill or circle. The radii in use:
+
+| Radius | Used for |
+|---|---|
+| 12px (`CARD_CORNER_RADIUS`) | Cards: toasts, the info overlay, the guardrail confirmation, Harvest panels |
+| 10px | The shared modal frame (Settings, command palette) |
+| 8px | Popup menus, dropdowns, the find box |
+| 6px (`BUTTON_CORNER_RADIUS`) | Buttons, tabs, Settings sidebar rows |
+| 2px | Block cursor |
+
+Shared constants live in `termeric/src/ui/constants.rs`; add a constant there rather than a new literal when a radius is reused.
+
+#### Geometry
+
+Chrome geometry lands on whole physical pixels. Rendering, hit testing, keyboard focus, and accessibility bounds come from one shared function per component (see `TabChrome` in `renderer/tab_bar.rs`), so what a person clicks is always what they see.
+
+### Typography
+
+- **Terminal text** uses the configured monospace font (default `monospace`, 12pt). `font.size` is in points at 96/72 logical pixels per point, from 8pt to 72pt. The Settings stepper moves 1pt; the zoom shortcuts move 2pt. Terminal text keeps the monospace grid: no custom letter-spacing or squeezed advances.
+- **UI text** (tabs, Settings, the palette, panels, menus, dialogs, toasts, the find box) uses the desktop's sans-serif face at 10pt, resolved through fontconfig, so chrome reads like the rest of the desktop. Draw it with `Renderer::push_ui_label`, which measures proportionally, centres on the face's own metrics, and shortens with an ellipsis.
+- **Emoji** render inline when a font supports them and fall back gracefully.
+
+### Accessibility
+
+- High-contrast mode raises built-in chrome text to at least 4.5:1 (`enforce_high_contrast` in `renderer/colors.rs`); new chrome colors must go through `UiPalette` so they get the same treatment.
+- Every interactive control needs keyboard access and an AccessKit node whose bounds come from the same geometry used to draw it.
