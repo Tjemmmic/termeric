@@ -20,8 +20,8 @@ use super::Config;
 /// its default.
 pub const RESET_TEXT: &str = "\
 # Termeric configuration. Every setting is at its default.
-# Add only the settings you want to change; the Configuration page of the
-# user guide lists them all.
+# Add only the settings you want to change. config.example.toml, in Termeric's
+# documentation directory (such as /usr/share/doc/termeric), lists them all.
 ";
 
 /// How many names a reset tries for its copy of the old file within one

@@ -1,120 +1,177 @@
 # Termeric configuration example.
-# Copy to ~/.config/termeric/config.toml. Every key is optional; a key you leave
-# out keeps its default. The Configuration page of the user guide lists them all.
+#
+# Copy this file to ~/.config/termeric/config.toml (or
+# $XDG_CONFIG_HOME/termeric/config.toml) and change what you like. It lists
+# every setting: the values that aren't commented out are the defaults, and
+# the commented entries show settings that have none. Every key is optional; a
+# key you leave out keeps its default, and Termeric runs fine with no file.
+#
+# Termeric reloads the file within a second of a save. A key it doesn't know,
+# or a value outside its range, is an error that names the key and its line:
+# Termeric keeps the settings it had (or starts with the defaults), shows a
+# notice until the file loads, and never saves over it. Settings (Ctrl+,)
+# changes most of these too, and keeps your comments and layout when it saves.
+# Reset Configuration to Defaults in the command palette (Ctrl+Shift+P) keeps
+# the old file beside the new one as config.toml.<seconds>.bak.
 
 [shell]
-# Shell to run in new tabs (leave unset for your login shell).
+# The program new tabs and panes run. Unset, it is $SHELL, or your account's
+# login shell. Changes here apply to tabs and panes opened afterwards.
 # program = "/bin/zsh"
 # args = ["-l"]
+# Extra environment variables for new shells. TERM, COLORTERM, TERMINFO,
+# TERMINFO_DIRS, TERM_PROGRAM, TERM_PROGRAM_VERSION, TERMERIC_TERMINAL_ID, and
+# PWD are Termeric's own and can't be set here.
 # env = { EDITOR = "nvim" }
+#
+# Bash, Zsh, Fish, and Nushell get shell integration on their own: prompt
+# jumping (Ctrl+Shift+Up and Down), failed-command navigation, and new panes in
+# the current directory. Elvish needs `use termeric-integration` in rc.elv.
 
-# A reusable launch: appears in the command palette and works with
-# `termeric --terminal-profile development`. The program runs directly, and
-# cwd must be an absolute path.
+# A terminal profile: a reusable launch, shown in the command palette as
+# "New Tab: NAME" and opened with `termeric --terminal-profile NAME`. Names use
+# letters, digits, "-", "_", and ".", up to 64 characters. The program runs
+# directly, never through a shell; for a pipeline, run program = "/bin/sh"
+# with args = ["-c", "..."]. Without cwd, the tab starts in your home
+# directory. Splitting a profile tab runs the same profile in the new pane.
 # [profiles.development]
-# description = "Rust workspace"
+# description = "Rust workspace"   # shown in the command palette
 # program = "/bin/zsh"
 # args = ["-l"]
-# cwd = "/home/user/src/project"
+# cwd = "/home/user/src/project"   # an absolute path
 # title = "Project shell"
-# env = { RUST_BACKTRACE = "1" }
+# env = { RUST_BACKTRACE = "1" }   # the same reserved names as [shell] env
 
-# A serial console profile.
+# A serial console profile: its [profiles.NAME.serial] table takes the place of
+# program, args, cwd, and env. Opening the device needs permission, usually
+# membership in its group (often dialout or uucp). Serial tabs can't be split.
 # [profiles.board]
 # description = "Embedded development board"
 # [profiles.board.serial]
-# device = "/dev/serial/by-id/usb-example"
-# baud = 115200
-# data_bits = 8
+# device = "/dev/serial/by-id/usb-example"   # an absolute path
+# baud = 115200           # a standard rate from 50 to 4000000
+# data_bits = 8           # 5 to 8
 # parity = "none"         # none, even, odd
 # stop_bits = 1           # 1 or 2
-# flow_control = "none"   # none, software, hardware
+# flow_control = "none"   # none, software (XON/XOFF), hardware (RTS/CTS)
 
 [font]
+# The main font family, as fontconfig names it; `fc-list :spacing=mono family`
+# lists them. "monospace" is the system's default monospace font. The main font
+# sets the cell size, so choose a true monospace font.
 family = "monospace"
-size = 12.0               # points
+size = 12.0               # points, 8 to 72; Ctrl+= and Ctrl+- zoom one window
 weight = 400              # 1 to 1000
-bold_weight = 700         # at least `weight`
-line_height = 1.2         # 0.8 to 3.0
-ligatures = true
+bold_weight = 700         # 1 to 1000, at least `weight`
+line_height = 1.2         # a multiple of the font size, 0.8 to 3.0
+ligatures = true          # liga, clig, calt, and dlig together
 bold_is_bright = false    # bold also brightens ANSI colors 0 to 7
-# Families tried, in order, for characters the main font lacks.
-# fallback = ["Noto Sans Mono", "DejaVu Sans Mono"]
+# Up to 16 families tried, in order, for characters the main font lacks,
+# before the system's own fallback.
+# fallback = ["Noto Sans Mono", "Noto Color Emoji"]
 
-# OpenType features; these override the ligatures setting.
+# Up to 32 OpenType features by their four-letter tags: 1 turns one on and 0
+# off. A feature set here overrides `ligatures` for its tag. "kern" isn't
+# allowed, because it would move characters off the grid.
 # [font.features]
 # ss01 = 1
 # calt = 0
 
-# Prefer a font for a range of code points, such as Nerd Font icons.
+# Prefer a font for a range of code points, such as Nerd Font icons: up to 64
+# ranges, which may not overlap. Range Overrides on the Font page of Settings
+# shows which font draws each character.
 # [[font.range_overrides]]
 # start = 0xE000
 # end = 0xF8FF
 # family = "Symbols Nerd Font Mono"
 
 [scrollback]
-lines = 10000
-max_memory_mib = 128      # per terminal
-scroll_speed = 6.0        # lines per wheel step
+lines = 10000             # per terminal, 100 to 1000000
+max_memory_mib = 128      # per terminal, 8 to 4096; the oldest lines go first
+scroll_speed = 6.0        # lines per wheel step, 0.1 to 100
 
 [panes]
-cwd = "focused"           # new splits start in: focused, tab, or process
+# Where a new split starts: the focused pane's directory (focused), the tab's
+# first pane's (tab), or the directory Termeric started in (process).
+cwd = "focused"
 
 [keyboard]
-xterm_type = "normal"     # normal, legacy, vt220
+xterm_type = "normal"     # normal, legacy, vt220; programs can switch it
 
 [copy_mode]
-bindings = "vi"           # vi or emacs
+bindings = "vi"           # keys in keyboard copy mode (Ctrl+Shift+X): vi, emacs
 
-# Extra quick-select patterns (replace the built-in URL, path, and hash list).
+# What quick select (Ctrl+Shift+U) labels: up to 32 Rust regular expressions.
+# Setting any replaces the built-in URL, path, and commit-hash patterns, so
+# list the ones you want to keep. OSC 8 links are always included.
 # [[copy_mode.patterns]]
 # name = "ticket"
 # regex = "PROJ-[0-9]+"
 
 [selection]
-copy_on_select = false    # also copy a finished mouse selection to the clipboard
+# A finished mouse selection always fills the primary selection, which
+# middle-click pastes; this also copies it to the clipboard.
+copy_on_select = false
 
 [theme]
-# A built-in theme (turmeric, ginger, daikon, dracula, nord, ... 26 in all) or
-# the name of a file in ~/.config/termeric/themes/ without ".toml".
+# A built-in theme, or the name of a file in ~/.config/termeric/themes/
+# without ".toml" (a file with a built-in name replaces that theme). Change
+# Theme… in the command palette previews each one as you move through them.
+#   Root themes: turmeric, ginger, daikon, malanga, beet, turnip, yuca, taro,
+#   wasabi, galangal, horseradish, parsnip.
+#   Guest themes: catppuccin-latte, catppuccin-mocha, dracula, everforest,
+#   gruvbox-dark, gruvbox-light, kanagawa, nord, one-dark, one-light,
+#   rose-pine, solarized-dark, solarized-light, tokyo-night.
+# To write a theme, start from assets/themes/custom-example.toml in the source
+# repository. Termeric reloads a custom theme file when you save it.
 name = "turmeric"
+# An absolute path to a theme file, used instead of `name`.
 # path = "/path/to/custom-theme.toml"
 
 [renderer]
-backend = "auto"          # auto, gpu, software
+# auto tries the GPU, then software rendering; gpu and software insist on one.
+# Applies the next time Termeric starts; `termeric --renderer` overrides it.
+backend = "auto"
 
 [accessibility]
+# "system" follows the desktop's setting through the XDG desktop portal, and
+# is off when the desktop publishes none. High contrast changes Termeric's own
+# interface, not the terminal's colors.
 reduce_motion = "system"  # system, on, off
 high_contrast = "system"  # system, on, off
 
 [window]
-width = 800
-height = 600
-opacity = 1.0             # 0.1 to 1.0
-padding = 8
-decorations = true
-level = "normal"          # normal, always_on_top, always_on_bottom
-tab_bar_position = "top"  # top or left
-share_process = true      # new windows join a running Termeric
+width = 800               # pixels, 320 to 16384; windows opened later
+height = 600              # pixels, 200 to 16384; windows opened later
+opacity = 1.0             # 0.1 to 1.0; needs a compositor with transparency
+padding = 8               # pixels around the terminal, 0 to 256
+decorations = true        # the desktop's title bar and borders
+level = "normal"          # normal, always_on_top, always_on_bottom (a request)
+tab_bar_position = "top"  # top, or left for a vertical rail
+# New windows open in the Termeric already running on this display, so tabs
+# can move between them. Applies to windows opened later.
+share_process = true
 
-# A PNG or JPEG behind the terminal; a relative path is resolved beside this file.
+# A static PNG or JPEG behind the terminal text, at most 16 MiB and 8192
+# pixels a side. A relative path is resolved beside this file. Termeric
+# reloads the image when the file changes.
 [window.background_image]
 # path = "/path/to/background.png"
-opacity = 0.20
+opacity = 0.20            # 0.0 to 1.0, independent of window.opacity
 fit = "cover"             # cover, contain, stretch, center
 
 [cursor]
-style = "block"           # block, underline, beam
+style = "block"           # block, underline, beam; programs can change it
 blink = true
-blink_rate = 530          # milliseconds
+blink_rate = 530          # milliseconds on, then off, 100 to 5000
 
 [bell]
-visual = true
-audio = false
-visual_duration_ms = 100
+visual = true             # flash the terminal
+audio = false             # play a sound through paplay
+visual_duration_ms = 100  # 10 to 5000
 
 [splash]
-mode = "firstboot"        # never, firstboot, newwindow, newtab
+mode = "firstboot"        # never, firstboot (the first launch ever), newwindow, newtab
 
 [security]
 # Let programs read your screen one cell at a time (DECRQCRA). Keep off.
@@ -122,57 +179,162 @@ allow_screen_checksum_reports = false
 # Let programs load Kitty images from files on disk. Keep off unless you trust
 # every program you run.
 allow_kitty_file_transfers = false
-# Let `termeric control` send text to panes. Reading does not need this.
+# Let `termeric control send-text`, `termeric mcp`, and plugins granted
+# terminal-input type into terminals. Reading pane text through the control
+# socket needs no setting: any program running as your user can do it.
 allow_gui_control_input = false
 
-# Clipboard access from programs (OSC 52).
+# Clipboard access from programs (OSC 52), including ones on remote hosts.
 [security.osc52]
-allow_read = false
+allow_read = false        # a denied read gets an empty reply
 allow_write = true
-max_bytes = 1048576
+max_bytes = 1048576       # 1 to 1048576
 
 [session]
+# false turns off all automatic saving and restoring; Save Workspace and
+# opening a workspace by hand still work.
 enabled = true
-auto_restore = false      # restore your last workspace at startup
-auto_save = true          # save your workspace when Termeric exits
+# Reopen the windows of your last session when Termeric starts without window
+# or tab options.
+auto_restore = false
+# Save a window's workspace when it closes, if it is the last window open or
+# belongs to a saved workspace, and keep a snapshot of each closing tab that
+# had output (Manage Workspaces…, then Tab snapshots).
+auto_save = true
+# Include terminal text in workspaces and tab snapshots. It is stored as plain
+# text under ~/.local/share/termeric/workspaces/.
 save_scrollback = true
 
-# Saved commands for the Commands panel and the command palette.
+# Saved commands for the Commands panel and the command palette. Typing a name
+# or alias as the first word at a prompt and pressing Enter expands it.
 # [[commands]]
 # name = "SSH Production"
 # command = "ssh admin@prod.example.com"
 # alias = "prod"
 
-# Change a built-in shortcut (the Settings shortcut editor writes these for you).
+# A change to a built-in shortcut; the shortcut editor (Settings, Keyboard)
+# writes these for you. Only shortcuts that differ from the defaults need an
+# entry, and an entry without `key` unbinds its action. ctrl, alt, shift, and
+# super default to false. A key is a character ("t", "5", "/") or one of enter,
+# tab, space, backspace, escape, delete, insert, home, end, pageup, pagedown,
+# up, down, left, right, f1 to f12. On digit and symbol keys Shift is part of
+# the character, so write the character you type ("?") and leave shift out.
+# Two entries can't give one combination to different actions.
 # [[shortcuts]]
 # action = "new_tab"
 # key = "t"
 # ctrl = true
+#
+# Action IDs, with their default keys:
+#   General: copy (Ctrl+Shift+C), paste (Ctrl+Shift+V), toggle_search
+#     (Ctrl+Shift+F), toggle_command_palette (Ctrl+Shift+P), toggle_settings
+#     (Ctrl+,), toggle_fullscreen (F11), clear_selection (Escape),
+#     open_unicode_picker, new_agent (Ctrl+Shift+I), toggle_agent_view
+#     (Ctrl+Shift+A)
+#   Font: increase_font_size (Ctrl+=), decrease_font_size (Ctrl+-),
+#     reset_font_size (Ctrl+0)
+#   Tabs: new_tab (Ctrl+Shift+T), close_tab (Ctrl+Shift+W), next_tab
+#     (Ctrl+Tab), prev_tab (Ctrl+Shift+Tab), switch_to_tab_1 to
+#     switch_to_tab_9 (Ctrl+1 to Ctrl+9), rename_tab (Ctrl+Alt+Shift+T),
+#     move_tab_left, move_tab_right, move_tab_to_next_window, toggle_pin_tab
+#   Panes: split_vertical (Alt+Shift+Right), split_horizontal
+#     (Alt+Shift+Down), close_pane (Alt+Shift+W), navigate_pane_up,
+#     navigate_pane_down, navigate_pane_left, navigate_pane_right (Alt+arrow),
+#     toggle_pane_zoom, toggle_pane_read_only, swap_pane_next, balance_panes,
+#     move_pane_to_next_tab, move_pane_to_next_window, layout_columns,
+#     layout_rows, layout_grid, layout_tall, layout_fat, cycle_pane_cwd_mode,
+#     toggle_broadcast
+#   Scrolling: scroll_page_up (Shift+PageUp), scroll_page_down
+#     (Shift+PageDown), scroll_to_top (Ctrl+Shift+Home), scroll_to_bottom
+#     (Ctrl+Shift+End)
+#   Navigation: toggle_copy_mode (Ctrl+Shift+X), quick_select (Ctrl+Shift+U),
+#     previous_prompt (Ctrl+Shift+Up), next_prompt (Ctrl+Shift+Down),
+#     previous_failed_command, next_failed_command
+#   Terminal: clear_scrollback, reset_terminal
+# F6 and Shift+F6, which move keyboard focus to the tab bar, can't be changed.
 
-# A friendly name for a remote host used by experimental live domains.
+# Extra keys that type text, run a command, or run a plugin command. The
+# modifiers must match exactly, and a built-in shortcut on the same keys wins.
+# A key is a character, or Enter, Tab, Space, Backspace, Escape, Delete,
+# Insert, Home, End, PageUp, PageDown, Up, Down, Left, Right, F1 to F12.
+# send_text types the text exactly as written (add \r for Enter); run_command
+# clears the input line, types the command, and presses Enter; plugin_command
+# runs a plugin's command by its ID, PLUGIN-ID.COMMAND-ID.
+# [[keybindings]]
+# key = "F5"
+# modifiers = { ctrl = true }
+# action = { type = "send_text", text = "make\r" }
+
+# A name for a remote host used by experimental live domains, at most 64, for
+# `termeric domain --host-profile NAME`. OpenSSH settings stay in ~/.ssh/config.
 # [domains.ssh_hosts.build]
-# destination = "developer@build.example"
+# destination = "developer@build.example"   # an OpenSSH alias or user@host
 # description = "Build farm"
 
-# Coding agents (experimental). Built-in IDs: claude-code, codex, gemini, opencode.
-# [agents.gemini]
-# enabled = false
-# [agents.my-agent]
-# name = "My Agent"
-# program = "my-agent"
+# Harvest (experimental): a visual history of your commands. It needs shell
+# integration, and its history isn't kept when you quit.
+[harvest]
+enabled = false
+show_indicators = true    # the growth indicators beside running commands
+max_history = 100         # commands kept, 1 to 10000
 
+# Coding agents (experimental). One switch turns on everything agent-related:
+# recognizing agents in terminals, the agent commands and shortcuts, the agent
+# view, the supervisor, agent status, and `termeric mcp`. While it is off,
+# Termeric offers no agent, whatever is installed. The tables below apply only
+# while it is on.
+[agent_features]
+enabled = false
+
+# A built-in agent's settings, or a new agent under any other ID (1 to 64
+# letters, digits, "-", and "_"). For a built-in agent every key is an
+# override. The built-in agents, with their program, resume arguments, and
+# new-conversation command:
+#   claude-code: claude, --continue, /clear
+#   codex: codex, resume --last, /new
+#   gemini: gemini, --resume latest, /clear
+#   opencode: opencode, --continue, /new
+# [agents.claude-code]
+# enabled = true                 # false hides it from pickers and detection
+# name = "Claude Code"
+# program = "claude"             # its file name also identifies the agent
+# detect = []                    # more program names that identify it
+# args = []                      # added to every launch in a terminal
+# resume_args = ["--continue"]   # continue the latest conversation
+# new_conversation = "/clear"    # "" removes the command
+# inherit_cwd = true             # start in the focused pane's directory
+# env = {}
+# default_profile = "review"     # one of its profiles
+#
+# Named launch variants, offered by New Agent… and opened with
+# `termeric --profile AGENT:PROFILE`. A profile's args follow `args`, and the
+# resume arguments come last.
+# [agents.claude-code.profiles.review]
+# description = "Read-only review"
+# args = ["--permission-mode", "plan"]
+#
+# An agent Termeric doesn't ship. When its program is a launcher such as npx,
+# node, docker, or sh, add the agent's own name to `detect`.
+# [agents.aider]
+# name = "Aider"
+# resume_args = ["--restore-chat-history"]
+# new_conversation = "/clear"
+
+# A desktop notification when an agent you aren't looking at needs you,
+# finishes, or fails. Status comes from Claude Code and Codex after Set Up
+# Agent Status… in the command palette.
 # [agent_status]
 # notify = true
 
 # [agent_view]
-# open_agents_in = "terminal"   # terminal, split, full
+# Where New Agent… opens Claude Code, Codex, and OpenCode: their own interface
+# in a terminal tab (terminal), or a new tab with the agent view beside the
+# terminal (split) or filling it (full).
+# open_agents_in = "terminal"
+# Offer each agent's mode that runs every action without asking.
+# allow_bypass_permissions = false
 
 # [supervisor]
-# agent = "claude-code"
-# mode = "assist"               # watch, assist, auto
-
-# Harvest (experimental): a visual history of your commands.
-[harvest]
-enabled = false
-show_indicators = true
-max_history = 100
+# agent = "claude-code"          # claude-code or codex
+# mode = "assist"                # watch, assist (asks before each send), auto
+# max_sends_per_minute = 6       # 1 to 60, across all agents

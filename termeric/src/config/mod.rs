@@ -383,7 +383,7 @@ impl Config {
         for (index, shortcut) in self.shortcuts.iter().enumerate() {
             if BindableAction::from_id(&shortcut.action).is_none() {
                 bail!(
-                    "shortcuts[{index}] names the unknown action {:?}; the Keyboard and Mouse page of the user guide lists the action IDs",
+                    "shortcuts[{index}] names the unknown action {:?}; config.example.toml, in Termeric's documentation directory, lists the action IDs",
                     shortcut.action
                 );
             }
