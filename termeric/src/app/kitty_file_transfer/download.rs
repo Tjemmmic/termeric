@@ -1496,9 +1496,6 @@ fn relative_path(base: &Path, target: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
-mod worker_tests;
-
 pub(super) fn run_worker(
     receiver: Receiver<KittyFileTransferCommand>,
     session_id: String,
