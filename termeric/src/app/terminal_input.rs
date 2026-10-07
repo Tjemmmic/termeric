@@ -142,13 +142,8 @@ impl App {
             if let Some(rewrite) = rewrite {
                 // Clear the typed alias from the terminal line (Ctrl+U)
                 // then send the real command + Enter
-                if let Some(tabs) = &mut self.tabs {
-                    if let Some(tab) = tabs.active_tab_mut() {
-                        if let Some(terminal) = tab.focused_terminal_mut() {
-                            terminal.grid_mut().set_scroll_offset(0);
-                        }
-                        let _ = tab.write(&rewrite);
-                    }
+                if !self.write_typed_to_focused_pane(&rewrite) {
+                    return;
                 }
                 self.note_person_typed(data);
                 return;
@@ -193,19 +188,30 @@ impl App {
             self.dismiss_git_completion_popup();
         }
 
-        // The tab routes to its focused pane's terminal and PTY.
-        if let Some(tabs) = &mut self.tabs {
-            if let Some(tab) = tabs.active_tab_mut() {
-                if let Some(terminal) = tab.focused_terminal_mut() {
-                    terminal.grid_mut().set_scroll_offset(0);
-                }
-                if let Err(error) = tab.write(data) {
-                    log::error!("Failed to write to focused PTY: {}", error);
-                    return;
-                }
-            }
+        if !self.write_typed_to_focused_pane(data) {
+            return;
         }
         self.note_person_typed(data);
+    }
+
+    /// Write typed bytes to the focused pane's PTY, scrolled back to its live
+    /// screen. Returns whether the PTY took them; a failed write is logged, and
+    /// the caller must not record input the shell never received.
+    fn write_typed_to_focused_pane(&mut self, data: &[u8]) -> bool {
+        // The tab routes to its focused pane's terminal and PTY.
+        let Some(tab) = self.tabs.as_mut().and_then(TabManager::active_tab_mut) else {
+            return false;
+        };
+        if let Some(terminal) = tab.focused_terminal_mut() {
+            terminal.grid_mut().set_scroll_offset(0);
+        }
+        match tab.write(data) {
+            Ok(()) => true,
+            Err(error) => {
+                log::error!("Failed to write to focused PTY: {error}");
+                false
+            }
+        }
     }
 
     /// Clear state derived from a user's editable terminal line. This must run
@@ -725,6 +731,24 @@ mod tests {
             app.write_to_pty(b"Z");
             assert_command_bytes(&mut app, expected);
         }
+    }
+
+    #[test]
+    fn a_failed_alias_write_is_not_recorded_as_typed_input() {
+        let mut app = raw_command_app(2);
+        app.write_to_pty(b"alias");
+        let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
+        let pane_id = tab.focused_terminal_identity().pane_id;
+        tab.pane_integration_mut(pane_id).unwrap().last_person_input = None;
+        // The PTY stops taking writes, so the alias's rewrite fails.
+        drop(tab.focused_pane_mut().unwrap().pty.take_writer());
+
+        app.write_to_pty(b"\r");
+        let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
+        assert_eq!(
+            tab.pane_integration_mut(pane_id).unwrap().last_person_input,
+            None
+        );
     }
 
     #[test]
