@@ -3,6 +3,7 @@
 
 use super::redraw_scheduler::RedrawReason;
 use super::*;
+use anyhow::Context;
 
 impl App {
     pub(super) fn request_move_active_tab_by(&mut self, delta: isize) {
@@ -292,8 +293,9 @@ impl App {
         });
         self.request_redraw(RedrawReason::Action);
     }
-    /// Split the current tab into panes
-    pub(super) fn split_pane(&mut self, direction: SplitDirection) {
+    /// Split the focused pane of the current tab. A live-domain pane's
+    /// split is only queued here; the daemon reports the result later.
+    pub(super) fn split_pane(&mut self, direction: SplitDirection) -> anyhow::Result<()> {
         let live_route = self
             .tabs
             .as_ref()
@@ -308,30 +310,32 @@ impl App {
                 direction,
                 spawn,
             });
-            return;
+            return Ok(());
         }
-        let Some(tabs) = &mut self.tabs else { return };
-        let Some(tab) = tabs.active_tab_mut() else {
-            return;
-        };
+        let tab = self
+            .tabs
+            .as_mut()
+            .and_then(TabManager::active_tab_mut)
+            .context("no tab is open")?;
         if !tab.allows_pane_splits() {
-            self.toasts
-                .warning("Serial terminal tabs cannot be split into panes");
-            self.request_redraw(RedrawReason::Action);
-            return;
+            anyhow::bail!("serial terminal tabs cannot be split into panes");
         }
         tab.panes.set_cwd_mode(self.config.panes.cwd);
-        match tab.panes.split(direction) {
-            Ok(new_id) => {
-                log::info!("Split pane {:?}, created pane {:?}", direction, new_id);
-            }
-            Err(e) => log::error!("Failed to split pane: {}", e),
-        }
-
+        let new_id = tab.panes.split(direction)?;
+        log::info!("Split pane {direction:?}, created pane {new_id:?}");
         self.refresh_focused_terminal_surfaces();
-
-        // Request redraw to show new pane layout
         self.request_redraw(RedrawReason::Action);
+        Ok(())
+    }
+
+    /// Split the focused pane for a shortcut, menu, or palette command,
+    /// telling the person when it cannot be split.
+    pub(super) fn split_pane_or_report(&mut self, direction: SplitDirection) {
+        if let Err(error) = self.split_pane(direction) {
+            self.toasts
+                .error(format!("Could not split the pane: {error:#}"));
+            self.request_redraw(RedrawReason::Action);
+        }
     }
 
     /// Split one exact local pane for the private running-GUI control plane.
@@ -483,7 +487,8 @@ impl App {
             return;
         }
         if let Err(error) = self.create_tab_for(Requester::Control) {
-            log::error!("Failed to create new tab: {error}");
+            self.toasts.error(error);
+            self.request_redraw(RedrawReason::Action);
         }
     }
 

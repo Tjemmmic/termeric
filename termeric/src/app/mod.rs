@@ -3260,10 +3260,10 @@ impl App {
                 self.request_redraw(RedrawReason::Action);
             }
             Action::SplitVertical => {
-                self.split_pane(SplitDirection::Vertical);
+                self.split_pane_or_report(SplitDirection::Vertical);
             }
             Action::SplitHorizontal => {
-                self.split_pane(SplitDirection::Horizontal);
+                self.split_pane_or_report(SplitDirection::Horizontal);
             }
             Action::NavigatePane(direction) => {
                 self.navigate_focused_pane(direction);

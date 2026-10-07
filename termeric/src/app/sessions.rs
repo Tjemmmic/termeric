@@ -302,20 +302,9 @@ impl App {
                 }
             }
             for &direction in &spec.splits {
-                let before = self
-                    .tabs
-                    .as_ref()
-                    .and_then(|tabs| tabs.active_tab())
-                    .map_or(1, |tab| tab.panes.pane_count());
-                self.split_pane(direction);
-                let after = self
-                    .tabs
-                    .as_ref()
-                    .and_then(|tabs| tabs.active_tab())
-                    .map_or(1, |tab| tab.panes.pane_count());
-                if after != before + 1 {
-                    anyhow::bail!("could not create requested {} pane", direction.name());
-                }
+                self.split_pane(direction).with_context(|| {
+                    format!("could not create requested {} pane", direction.name())
+                })?;
             }
         }
         Ok(())

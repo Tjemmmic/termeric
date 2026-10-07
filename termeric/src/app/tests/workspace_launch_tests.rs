@@ -911,3 +911,75 @@ fn detected_url_cache_joins_soft_wrapped_visible_rows() {
     assert!(cache.url_at(0, 2).is_none());
     assert!(cache.url_at(3, 1).is_none());
 }
+
+fn missing_shell() -> ShellConfig {
+    ShellConfig {
+        program: Some("/definitely/missing/termeric-shell".into()),
+        args: Vec::new(),
+        env: Default::default(),
+    }
+}
+
+#[test]
+fn a_cli_split_that_fails_reports_why() {
+    let config = Config {
+        shell: missing_shell(),
+        ..Config::default()
+    };
+    let mut app = App::new_headless(config).unwrap();
+    app.allow_auto_restore = false;
+    app.launch = crate::cli::WindowLaunch {
+        domain: None,
+        domain_snapshot: None,
+        adopts_tab: false,
+        force_new: true,
+        workspace: None,
+        tabs: vec![crate::cli::TabLaunch {
+            target: crate::cli::LaunchTarget::Command {
+                program: "/bin/sh".into(),
+                args: crate::test_support::sleeping_args(),
+            },
+            splits: vec![SplitDirection::Vertical],
+            ..crate::cli::TabLaunch::default()
+        }],
+        app_id: None,
+        pixel_size: None,
+        quick_access: false,
+    };
+
+    let error = app.init_tabs().unwrap_err();
+    // The split's own failure travels under the CLI's context instead of
+    // being guessed from a pane count.
+    let chain: Vec<String> = error.chain().map(ToString::to_string).collect();
+    assert_eq!(chain[0], "could not create requested vertical pane");
+    assert!(chain.len() > 1, "{chain:?}");
+}
+
+#[test]
+fn split_and_new_tab_failures_from_the_keyboard_are_shown() {
+    let config = Config {
+        shell: crate::test_support::sleeping_shell(),
+        ..Config::default()
+    };
+    let mut app = App::new_headless_with_tabs(config);
+    let tabs = app.tabs.as_mut().unwrap();
+    tabs.active_tab_mut()
+        .unwrap()
+        .set_split_shell_config(missing_shell());
+    tabs.set_shell_config(missing_shell());
+
+    app.handle_action(crate::input::Action::SplitVertical);
+    let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
+    assert_eq!(tab.panes.pane_count(), 1);
+    assert_eq!(app.toasts.iter().count(), 1);
+    assert!(
+        latest_toast(&app).is_some_and(|toast| toast.starts_with("Could not split the pane: "))
+    );
+
+    app.handle_action(crate::input::Action::NewTab);
+    assert_eq!(app.tabs.as_ref().unwrap().count(), 1);
+    assert_eq!(app.toasts.iter().count(), 2);
+    assert!(
+        latest_toast(&app).is_some_and(|toast| toast.starts_with("Could not create a new tab: "))
+    );
+}
