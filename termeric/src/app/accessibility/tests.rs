@@ -978,7 +978,12 @@ fn sprout_semantics_are_request_scoped_and_never_invoke_explain_in_tests() {
     assert_eq!(node(ROOT).children(), &[SPROUT_DIALOG]);
     assert!(node(SPROUT_DIALOG).is_modal());
     assert_eq!(node(SPROUT_MENU).role(), Role::Menu);
-    assert!(node(explain).description().unwrap().contains("AI plugin"));
+    assert!(
+        node(explain)
+            .description()
+            .unwrap()
+            .contains("into the focused agent terminal, or the only one open")
+    );
     assert!(node(old_copy).supports_action(Action::Click));
     assert!(node(search).is_disabled());
     assert!(!node(search).supports_action(Action::Click));

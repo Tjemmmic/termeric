@@ -4,7 +4,7 @@
 //! - Copy output
 //! - Re-run command
 //! - Search in output
-//! - Explain (future AI integration)
+//! - Explain, by asking a running coding agent
 
 use super::cellar::CommandEntry;
 use crate::ui::geometry::Bounds;
@@ -23,7 +23,7 @@ pub enum SproutAction {
     SearchOutput,
     /// Scroll to this command
     ScrollTo,
-    /// Explain the command through an open AI plugin tab
+    /// Ask a running coding agent to explain the command and its output
     Explain,
 }
 
@@ -138,7 +138,7 @@ impl SproutAvailability {
                 Some("Copies only a partial command snapshot, limited to 4 KiB")
             }
             SproutAction::Explain if self.command_truncated => Some(
-                "Sends partial command text with an explicit truncation warning to the chosen open AI plugin tab",
+                "Pastes the partial command text, marked as truncated, into the focused agent terminal, or the only one open",
             ),
             SproutAction::CopyOutput if !self.output_available => {
                 Some("No live or retained command output is available")
@@ -165,12 +165,12 @@ impl SproutAvailability {
                 if self.retained_output_truncated && !self.live_content_available =>
             {
                 Some(
-                    "Sends the command and the last 64 KiB of its retained output to the chosen open AI plugin tab",
+                    "Pastes the command and the last 64 KiB of its retained output into the focused agent terminal, or the only one open",
                 )
             }
-            SproutAction::Explain => {
-                Some("Sends the selected command and output to the chosen open AI plugin tab")
-            }
+            SproutAction::Explain => Some(
+                "Pastes the command and its output into the focused agent terminal, or the only one open",
+            ),
             _ => None,
         }
     }
