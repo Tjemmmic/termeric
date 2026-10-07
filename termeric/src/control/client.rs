@@ -1,6 +1,6 @@
 //! Discovery client and safe command-line formatting for GUI inventory.
 
-use super::paths::ControlPaths;
+use super::paths::ControlEndpoint;
 use super::protocol::{self, ClientFrame, ProcessInventory, Request, Response, ServerFrame};
 use anyhow::Context;
 use serde::Serialize;
@@ -17,7 +17,7 @@ struct InventoryCollection {
 
 pub fn list(json: bool) -> anyhow::Result<String> {
     let mut processes = Vec::new();
-    for endpoint in ControlPaths::discover_all()? {
+    for endpoint in ControlEndpoint::discover_all()? {
         match request_inventory(&endpoint) {
             Ok(inventory) => {
                 if inventory.process_id != endpoint.process_id {
@@ -40,7 +40,7 @@ pub fn list(json: bool) -> anyhow::Result<String> {
                     format!(
                         "query running GUI process {} through {}",
                         endpoint.process_id,
-                        endpoint.socket.display()
+                        endpoint.paths.socket.display()
                     )
                 });
             }
@@ -60,10 +60,12 @@ pub fn list(json: bool) -> anyhow::Result<String> {
 /// Toggle the one discoverable quick-access window. `None` means no running
 /// process owns one and the caller may safely attempt a guarded launch.
 pub fn toggle_existing_quick_access() -> anyhow::Result<Option<String>> {
-    toggle_existing_quick_access_at(ControlPaths::discover_all()?)
+    toggle_existing_quick_access_at(ControlEndpoint::discover_all()?)
 }
 
-fn toggle_existing_quick_access_at(endpoints: Vec<ControlPaths>) -> anyhow::Result<Option<String>> {
+fn toggle_existing_quick_access_at(
+    endpoints: Vec<ControlEndpoint>,
+) -> anyhow::Result<Option<String>> {
     let mut targets = Vec::new();
     let mut incomplete_inventory = false;
     for endpoint in endpoints {
@@ -148,7 +150,7 @@ fn endpoint_is_stale(error: &anyhow::Error, process_id: u32) -> bool {
     }) || !process_is_alive(process_id)
 }
 
-fn request_inventory(endpoint: &ControlPaths) -> anyhow::Result<ProcessInventory> {
+fn request_inventory(endpoint: &ControlEndpoint) -> anyhow::Result<ProcessInventory> {
     match request(endpoint, &Request::Inventory)? {
         Response::Inventory(inventory) => Ok(inventory),
         Response::Error { message } => anyhow::bail!(message),
@@ -809,14 +811,14 @@ pub fn launch_status(
 
 /// Every running GUI process, by process ID.
 pub fn running_processes() -> anyhow::Result<Vec<u32>> {
-    Ok(ControlPaths::discover_all()?
+    Ok(ControlEndpoint::discover_all()?
         .into_iter()
         .map(|endpoint| endpoint.process_id)
         .collect())
 }
 
-fn endpoint_for(process_id: u32) -> anyhow::Result<ControlPaths> {
-    ControlPaths::discover_all()?
+fn endpoint_for(process_id: u32) -> anyhow::Result<ControlEndpoint> {
+    ControlEndpoint::discover_all()?
         .into_iter()
         .find(|endpoint| endpoint.process_id == process_id)
         .ok_or_else(|| anyhow::anyhow!("running GUI process {process_id} was not found"))
@@ -944,10 +946,8 @@ const AGENT_EVENT_TIMEOUT: Duration = Duration::from_secs(2);
 /// Deliver one agent hook report to the GUI process that owns its terminal.
 pub fn report_agent_event(process_id: u32, report: Request) -> anyhow::Result<()> {
     report.validate().map_err(anyhow::Error::msg)?;
-    let endpoint = ControlPaths::from_directory(
-        crate::domain::paths::discover_runtime_directory(),
-        process_id,
-    )?;
+    let endpoint =
+        ControlEndpoint::from_directory(crate::local_socket::runtime_directory(), process_id)?;
     let response = request_within(&endpoint, &report, AGENT_EVENT_TIMEOUT)?;
     answer(process_id, &report, response).map(drop)
 }
@@ -963,7 +963,7 @@ pub fn join_running(
     activation_token: Option<String>,
     tabs: Vec<protocol::JoinTab>,
 ) -> anyhow::Result<Option<(u32, u64)>> {
-    let mut endpoints = ControlPaths::discover_all()?;
+    let mut endpoints = ControlEndpoint::discover_all()?;
     endpoints.sort_by_key(|endpoint| endpoint.process_id);
     for endpoint in endpoints {
         if !process_is_alive(endpoint.process_id) {
@@ -993,20 +993,20 @@ pub fn join_running(
     Ok(None)
 }
 
-fn request(endpoint: &ControlPaths, request: &Request) -> anyhow::Result<Response> {
+fn request(endpoint: &ControlEndpoint, request: &Request) -> anyhow::Result<Response> {
     request_within(endpoint, request, IO_TIMEOUT)
 }
 
 /// One exchange on `endpoint`: the GUI's reply, checked to be of this
 /// protocol version and consistent, though it may be a refusal.
 fn request_within(
-    endpoint: &ControlPaths,
+    endpoint: &ControlEndpoint,
     request: &Request,
     timeout: Duration,
 ) -> anyhow::Result<Response> {
-    let token = endpoint.read_token()?;
-    let mut stream = UnixStream::connect(&endpoint.socket)
-        .with_context(|| format!("connect to {}", endpoint.socket.display()))?;
+    let token = endpoint.paths.read_token()?;
+    let mut stream = UnixStream::connect(&endpoint.paths.socket)
+        .with_context(|| format!("connect to {}", endpoint.paths.socket.display()))?;
     stream.set_read_timeout(Some(timeout))?;
     stream.set_write_timeout(Some(timeout))?;
     validate_peer(&stream)?;
@@ -1039,31 +1039,9 @@ pub(super) fn generate_request_id() -> anyhow::Result<String> {
     termeric_core::hex::random(16).context("generate GUI control request ID")
 }
 
+/// Refuses a GUI control server of another user.
 pub(super) fn validate_peer(stream: &UnixStream) -> anyhow::Result<()> {
-    let mut credentials = libc::ucred {
-        pid: 0,
-        uid: 0,
-        gid: 0,
-    };
-    let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-    // SAFETY: the connected descriptor and initialized output storage remain
-    // valid for the duration of getsockopt.
-    let result = unsafe {
-        libc::getsockopt(
-            std::os::fd::AsRawFd::as_raw_fd(stream),
-            libc::SOL_SOCKET,
-            libc::SO_PEERCRED,
-            (&mut credentials as *mut libc::ucred).cast(),
-            &mut length,
-        )
-    };
-    if result != 0 {
-        return Err(std::io::Error::last_os_error()).context("authenticate GUI control server");
-    }
-    if credentials.uid != crate::domain::paths::effective_uid() {
-        anyhow::bail!("GUI control server belongs to a different user");
-    }
-    Ok(())
+    crate::local_socket::same_user_peer(stream, "GUI control server").map(drop)
 }
 
 fn process_is_alive(process_id: u32) -> bool {
@@ -1236,9 +1214,10 @@ mod tests {
     fn quick_access_discovery_and_toggle_cross_authenticated_socket() {
         let temp = tempfile::tempdir().unwrap();
         let endpoint =
-            ControlPaths::from_directory(temp.path().join("runtime"), std::process::id()).unwrap();
-        let token = endpoint.load_or_create_token().unwrap();
-        let listener = match UnixListener::bind(&endpoint.socket) {
+            ControlEndpoint::from_directory(temp.path().join("runtime"), std::process::id())
+                .unwrap();
+        let token = endpoint.paths.load_or_create_token().unwrap();
+        let listener = match UnixListener::bind(&endpoint.paths.socket) {
             Ok(listener) => listener,
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
                 eprintln!("skip quick-access socket round trip: sandbox denies AF_UNIX");
@@ -1246,7 +1225,7 @@ mod tests {
             }
             Err(error) => panic!("could not bind quick-access test socket: {error}"),
         };
-        fs::set_permissions(&endpoint.socket, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::set_permissions(&endpoint.paths.socket, fs::Permissions::from_mode(0o600)).unwrap();
         let expected_token = token.clone();
         let server = thread::spawn(move || {
             for request_index in 0..2 {
@@ -1313,9 +1292,10 @@ mod tests {
     fn quick_access_visibility_retry_reuses_the_idempotent_request() {
         let temp = tempfile::tempdir().unwrap();
         let endpoint =
-            ControlPaths::from_directory(temp.path().join("runtime"), std::process::id()).unwrap();
-        let token = endpoint.load_or_create_token().unwrap();
-        let listener = match UnixListener::bind(&endpoint.socket) {
+            ControlEndpoint::from_directory(temp.path().join("runtime"), std::process::id())
+                .unwrap();
+        let token = endpoint.paths.load_or_create_token().unwrap();
+        let listener = match UnixListener::bind(&endpoint.paths.socket) {
             Ok(listener) => listener,
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
                 eprintln!("skip quick-access retry round trip: sandbox denies AF_UNIX");
@@ -1323,7 +1303,7 @@ mod tests {
             }
             Err(error) => panic!("could not bind quick-access retry test socket: {error}"),
         };
-        fs::set_permissions(&endpoint.socket, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::set_permissions(&endpoint.paths.socket, fs::Permissions::from_mode(0o600)).unwrap();
         let server = thread::spawn(move || {
             let mut first_visibility_request = None;
             for request_index in 0..3 {

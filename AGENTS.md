@@ -92,6 +92,7 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `paths.rs` | Configuration and data directories; test builds resolve them under a per-process temporary directory |
 | `safe_fs.rs` | Hardened reads (no symlinks, FIFOs, or unbounded reads) and atomic private-staging writes for Termeric's own files |
 | `line_reader.rs` | Reading newline-delimited input from other processes with bounded memory; callers decide what an oversized or unterminated line means |
+| `local_socket.rs` | What the domain daemon and the control socket share: the private runtime directory, socket and token paths, same-user peer checks, version-and-token authentication, the bounded accept loop, and stale-socket removal |
 | `safe_text.rs` | Bounding untrusted text shown in chrome or sent over protocols (character classes come from termeric-core) |
 | `process_group.rs` | Starting, reaping, and signalling a child that leads its own process group with piped stdio (agent view agents, plugin handlers): its group is signalled only while it is unreaped |
 | `stderr_capture.rs` | Keeping the start or the end of a child's stderr on a thread of its own, waiting a bounded time for it to close (agent view agents, plugin handlers) |

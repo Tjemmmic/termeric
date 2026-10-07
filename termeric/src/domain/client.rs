@@ -1,8 +1,8 @@
 //! Authenticated local-domain client and transparent GUI relay.
 
-use super::paths::RuntimePaths;
 use super::protocol::{self, ClientFrame, Request, Response, ServerFrame, UploadKind};
 use super::{DomainTopologyEvent, io_util, validate_ssh_destination};
+use crate::local_socket::SocketPaths;
 use anyhow::Context;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, RawFd};
@@ -70,7 +70,7 @@ impl UploadOptions<'static, fn(u64, u64)> {
 }
 
 enum DomainEndpoint {
-    Local(RuntimePaths),
+    Local(SocketPaths),
     Ssh {
         destination: String,
         start_server: bool,
@@ -361,7 +361,7 @@ pub fn request_focus_background(authority: super::DomainAuthority, domain: Strin
 
 impl DomainClient {
     pub fn connect_or_start() -> anyhow::Result<Self> {
-        let paths = RuntimePaths::discover()?;
+        let paths = super::paths::discover()?;
         // Create authentication material before spawning so concurrent clients
         // and the daemon converge on the same private token.
         paths.load_or_create_token()?;
@@ -387,7 +387,7 @@ impl DomainClient {
     /// The local daemon if one is running; never starts one.
     pub fn connect_running() -> anyhow::Result<Option<Self>> {
         let client = Self {
-            endpoint: DomainEndpoint::Local(RuntimePaths::discover()?),
+            endpoint: DomainEndpoint::Local(super::paths::discover()?),
         };
         Ok(client.connect_if_running()?.then_some(client))
     }
@@ -416,7 +416,7 @@ impl DomainClient {
     }
 
     #[cfg(test)]
-    pub fn for_paths(paths: RuntimePaths) -> Self {
+    pub fn for_paths(paths: SocketPaths) -> Self {
         Self {
             endpoint: DomainEndpoint::Local(paths),
         }
@@ -943,7 +943,7 @@ fn generate_upload_id() -> anyhow::Result<String> {
     termeric_core::hex::random(16).context("generate upload retry identity")
 }
 
-fn connect_local(paths: &RuntimePaths) -> anyhow::Result<DomainStream> {
+fn connect_local(paths: &SocketPaths) -> anyhow::Result<DomainStream> {
     let token = paths.read_token()?;
     let mut stream = UnixStream::connect(&paths.socket)
         .with_context(|| format!("connect to local domain server {}", paths.socket.display()))?;
@@ -1324,7 +1324,6 @@ mod tests {
         UploadOptions, copy_with_flush, generate_upload_id, protocol, read_frame_with_timeout,
         validate_ssh_destination,
     };
-    use crate::domain::RuntimePaths;
     use sha2::{Digest, Sha256};
     use std::collections::HashSet;
     use std::fs;
@@ -1337,7 +1336,7 @@ mod tests {
     #[test]
     fn a_file_replaced_after_it_was_chosen_is_refused_before_connecting() {
         let temporary = tempfile::tempdir().unwrap();
-        let paths = RuntimePaths::from_directory(temporary.path().join("runtime")).unwrap();
+        let paths = crate::domain::paths::in_directory(temporary.path().join("runtime")).unwrap();
         let source = temporary.path().join("chosen.bin");
         fs::write(&source, b"chosen").unwrap();
         let cancelled = AtomicBool::new(false);
@@ -1360,7 +1359,7 @@ mod tests {
     #[test]
     fn a_missing_or_stale_daemon_socket_is_not_a_running_daemon() {
         let temporary = tempfile::tempdir().unwrap();
-        let paths = RuntimePaths::from_directory(temporary.path().join("runtime")).unwrap();
+        let paths = crate::domain::paths::in_directory(temporary.path().join("runtime")).unwrap();
         let client = DomainClient::for_paths(paths.clone());
         assert!(!client.connect_if_running().unwrap());
         // A stale socket with nobody listening is not a running daemon either.
@@ -1471,7 +1470,7 @@ mod tests {
     #[test]
     fn upload_reconnects_with_one_identity_and_daemon_offset() {
         let temporary = tempfile::tempdir().unwrap();
-        let paths = RuntimePaths::from_directory(temporary.path().join("runtime")).unwrap();
+        let paths = crate::domain::paths::in_directory(temporary.path().join("runtime")).unwrap();
         let token = paths.load_or_create_token().unwrap();
         let listener = match UnixListener::bind(&paths.socket) {
             Ok(listener) => listener,

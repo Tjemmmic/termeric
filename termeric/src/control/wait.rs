@@ -2,7 +2,7 @@
 
 use super::{
     ControlOutput, client,
-    paths::ControlPaths,
+    paths::ControlEndpoint,
     protocol::{self, ClientFrame, LaunchState, Request, Response},
 };
 use anyhow::Context;
@@ -32,8 +32,8 @@ pub(super) fn launch_and_wait(
     request.validate().map_err(anyhow::Error::msg)?;
     let result = (|| {
         let endpoint = discover(process_id)?;
-        let token = endpoint.read_token()?;
-        let identity = socket_identity(&endpoint.socket)?;
+        let token = endpoint.paths.read_token()?;
+        let identity = socket_identity(&endpoint.paths.socket)?;
         launch_at(&endpoint, &token, identity, request, deadline, json)
     })();
     result.with_context(|| format!(
@@ -42,7 +42,7 @@ pub(super) fn launch_and_wait(
 }
 
 fn launch_at(
-    endpoint: &ControlPaths,
+    endpoint: &ControlEndpoint,
     token: &str,
     identity: (u64, u64),
     request: Request,
@@ -76,8 +76,8 @@ fn overall_deadline(
     Ok(timeout_seconds.map(|seconds| Instant::now() + Duration::from_secs(seconds.into())))
 }
 
-fn discover(process_id: u32) -> anyhow::Result<ControlPaths> {
-    ControlPaths::discover_all()?
+fn discover(process_id: u32) -> anyhow::Result<ControlEndpoint> {
+    ControlEndpoint::discover_all()?
         .into_iter()
         .find(|endpoint| endpoint.process_id == process_id)
         .ok_or_else(|| anyhow::anyhow!("GUI process {process_id} was not found"))
@@ -101,8 +101,8 @@ pub(super) fn launch(
     .validate()
     .map_err(anyhow::Error::msg)?;
     let endpoint = discover(process_id)?;
-    let token = endpoint.read_token()?;
-    let identity = socket_identity(&endpoint.socket)?;
+    let token = endpoint.paths.read_token()?;
+    let identity = socket_identity(&endpoint.paths.socket)?;
     poll_launch(
         &endpoint,
         &token,
@@ -114,7 +114,7 @@ pub(super) fn launch(
 }
 
 fn poll_launch(
-    endpoint: &ControlPaths,
+    endpoint: &ControlEndpoint,
     token: &str,
     identity: (u64, u64),
     launch_request_id: &str,
@@ -167,7 +167,7 @@ fn socket_identity(path: &Path) -> anyhow::Result<(u64, u64)> {
     use std::os::unix::fs::FileTypeExt;
     let metadata = std::fs::symlink_metadata(path)?;
     if !metadata.file_type().is_socket()
-        || metadata.uid() != crate::domain::paths::effective_uid()
+        || metadata.uid() != crate::local_socket::effective_uid()
         || metadata.mode() & 0o077 != 0
     {
         anyhow::bail!("unsafe GUI wait endpoint");
@@ -178,20 +178,22 @@ fn socket_identity(path: &Path) -> anyhow::Result<(u64, u64)> {
 /// One exchange on the endpoint first found, refused if it has since been
 /// replaced; the reply may still be a refusal.
 fn exchange(
-    endpoint: &ControlPaths,
+    endpoint: &ControlEndpoint,
     token: &str,
     identity: (u64, u64),
     request: &Request,
     deadline: Instant,
 ) -> anyhow::Result<Response> {
     let check_endpoint = || -> anyhow::Result<()> {
-        if socket_identity(&endpoint.socket)? != identity || endpoint.read_token()? != token {
+        if socket_identity(&endpoint.paths.socket)? != identity
+            || endpoint.paths.read_token()? != token
+        {
             anyhow::bail!("GUI wait endpoint changed; start a new query explicitly");
         }
         Ok(())
     };
     check_endpoint()?;
-    let mut stream = DeadlineStream::connect(&endpoint.socket, deadline)?;
+    let mut stream = DeadlineStream::connect(&endpoint.paths.socket, deadline)?;
     client::validate_peer(&stream.stream)?;
     check_endpoint()?;
     protocol::write_frame(
@@ -330,11 +332,15 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let directory = tempfile::tempdir().unwrap();
         let endpoint =
-            ControlPaths::from_directory(directory.path().into(), std::process::id()).unwrap();
-        let _listener = std::os::unix::net::UnixListener::bind(&endpoint.socket).unwrap();
-        std::fs::set_permissions(&endpoint.socket, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let identity = socket_identity(&endpoint.socket).unwrap();
-        let token = endpoint.load_or_create_token().unwrap();
+            ControlEndpoint::from_directory(directory.path().into(), std::process::id()).unwrap();
+        let _listener = std::os::unix::net::UnixListener::bind(&endpoint.paths.socket).unwrap();
+        std::fs::set_permissions(
+            &endpoint.paths.socket,
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        let identity = socket_identity(&endpoint.paths.socket).unwrap();
+        let token = endpoint.paths.load_or_create_token().unwrap();
         let different = if token.starts_with('a') {
             "b".repeat(token.len())
         } else {
@@ -360,13 +366,13 @@ mod tests {
         use std::os::unix::ffi::OsStrExt;
         let directory = tempfile::tempdir().unwrap();
         let endpoint =
-            ControlPaths::from_directory(directory.path().into(), std::process::id()).unwrap();
-        let path = std::ffi::CString::new(endpoint.token.as_os_str().as_bytes()).unwrap();
+            ControlEndpoint::from_directory(directory.path().into(), std::process::id()).unwrap();
+        let path = std::ffi::CString::new(endpoint.paths.token.as_os_str().as_bytes()).unwrap();
         // SAFETY: mkfifo receives a live NUL-terminated pathname in the fixture.
         assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
         // If regular-file validation regresses, cap the test by letting a writer
         // release a blocking open. The nonblocking implementation returns at once.
-        let token_path = endpoint.token.clone();
+        let token_path = endpoint.paths.token.clone();
         let (finished, cancel) = std::sync::mpsc::channel();
         let unblock = std::thread::spawn(move || {
             if cancel.recv_timeout(Duration::from_secs(1)).is_err() {
@@ -378,7 +384,7 @@ mod tests {
             }
         });
         let started = Instant::now();
-        let result = endpoint.read_token();
+        let result = endpoint.paths.read_token();
         let _ = finished.send(());
         unblock.join().unwrap();
         assert!(result.is_err());

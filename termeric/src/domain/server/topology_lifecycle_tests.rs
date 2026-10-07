@@ -6,15 +6,15 @@ use super::test_support::{DOMAIN, state};
 #[test]
 fn authenticated_client_must_send_a_complete_initial_request_before_setup_deadline() {
     let state = state();
-    let clients = Arc::new(AtomicUsize::new(1));
-    let guard = ClientGuard(Arc::clone(&clients));
+    let clients = local_socket::ClientSlots::new(1);
+    let slot = clients.claim().unwrap();
     let (server, mut client) = UnixStream::pair().unwrap();
     client
         .set_read_timeout(Some(Duration::from_secs(2)))
         .unwrap();
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     let worker = thread::spawn(move || {
-        let _guard = guard;
+        let _slot = slot;
         let result = handle_client_with_setup_timeout(
             server,
             "fixture-token",
@@ -39,7 +39,7 @@ fn authenticated_client_must_send_a_complete_initial_request_before_setup_deadli
     // Even a regressed server must be released/joined before the assertion.
     client.shutdown(std::net::Shutdown::Both).unwrap();
     worker.join().unwrap();
-    assert_eq!(clients.load(Ordering::Acquire), 0);
+    assert_eq!(clients.taken(), 0);
     let error = completed
         .expect("authenticated client retained its slot without a request")
         .expect_err("missing initial request must fail");

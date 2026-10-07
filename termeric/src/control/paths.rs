@@ -1,15 +1,14 @@
 //! Private, process-scoped GUI control endpoints.
 
-use crate::domain::paths::{
-    discover_runtime_directory, effective_uid, ensure_private_directory, load_or_create_token,
-    read_token,
+use crate::local_socket::{
+    SocketPaths, effective_uid, ensure_private_directory, runtime_directory,
 };
 use anyhow::Context;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::{Seek, SeekFrom, Write};
 use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 const PREFIX: &str = "gui-v1-";
 const SOCKET_SUFFIX: &str = ".sock";
@@ -24,7 +23,7 @@ pub(crate) struct QuickAccessGuard {
 
 impl QuickAccessGuard {
     pub(crate) fn acquire() -> anyhow::Result<Self> {
-        Self::acquire_in(discover_runtime_directory())
+        Self::acquire_in(runtime_directory())
     }
 
     fn acquire_in(directory: PathBuf) -> anyhow::Result<Self> {
@@ -77,17 +76,16 @@ impl Drop for QuickAccessGuard {
     }
 }
 
+/// One GUI process's control socket and token, named by its process ID.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ControlPaths {
-    pub directory: PathBuf,
-    pub socket: PathBuf,
-    pub token: PathBuf,
+pub struct ControlEndpoint {
+    pub paths: SocketPaths,
     pub process_id: u32,
 }
 
-impl ControlPaths {
+impl ControlEndpoint {
     pub fn discover_current() -> anyhow::Result<Self> {
-        Self::from_directory(discover_runtime_directory(), std::process::id())
+        Self::from_directory(runtime_directory(), std::process::id())
     }
 
     pub fn from_directory(directory: PathBuf, process_id: u32) -> anyhow::Result<Self> {
@@ -96,25 +94,14 @@ impl ControlPaths {
     }
 
     fn without_validation(directory: PathBuf, process_id: u32) -> Self {
-        let stem = format!("{PREFIX}{process_id}");
         Self {
-            socket: directory.join(format!("{stem}{SOCKET_SUFFIX}")),
-            token: directory.join(format!("{stem}.token")),
-            directory,
+            paths: SocketPaths::in_directory(directory, &format!("{PREFIX}{process_id}")),
             process_id,
         }
     }
 
-    pub fn load_or_create_token(&self) -> anyhow::Result<String> {
-        load_or_create_token(&self.token)
-    }
-
-    pub fn read_token(&self) -> anyhow::Result<String> {
-        read_token(&self.token)
-    }
-
     pub fn discover_all() -> anyhow::Result<Vec<Self>> {
-        Self::discover_all_in(discover_runtime_directory())
+        Self::discover_all_in(runtime_directory())
     }
 
     pub fn discover_all_in(directory: PathBuf) -> anyhow::Result<Vec<Self>> {
@@ -161,27 +148,6 @@ fn process_id_from_socket_name(name: &std::ffi::OsStr) -> Option<u32> {
         .filter(|process_id| *process_id != 0 && *process_id <= i32::MAX as u32)
 }
 
-pub fn remove_safe_file(path: &Path, socket: bool) -> anyhow::Result<()> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error).with_context(|| format!("inspect {}", path.display())),
-    };
-    let expected_type = if socket {
-        metadata.file_type().is_socket()
-    } else {
-        metadata.file_type().is_file() && !metadata.file_type().is_symlink()
-    };
-    if !expected_type || metadata.uid() != effective_uid() {
-        anyhow::bail!(
-            "refusing to remove unsafe GUI control path {}",
-            path.display()
-        );
-    }
-    fs::remove_file(path)
-        .with_context(|| format!("remove stale GUI control path {}", path.display()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,9 +158,9 @@ mod tests {
     fn process_endpoints_coexist_and_discover_in_pid_order() {
         let temp = tempfile::tempdir().unwrap();
         let directory = temp.path().join("runtime");
-        let second = ControlPaths::from_directory(directory.clone(), 22).unwrap();
-        let first = ControlPaths::from_directory(directory.clone(), 7).unwrap();
-        let _first_listener = match UnixListener::bind(&first.socket) {
+        let second = ControlEndpoint::from_directory(directory.clone(), 22).unwrap();
+        let first = ControlEndpoint::from_directory(directory.clone(), 7).unwrap();
+        let _first_listener = match UnixListener::bind(&first.paths.socket) {
             Ok(listener) => listener,
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
                 eprintln!("skip GUI control socket discovery: sandbox denies AF_UNIX");
@@ -202,11 +168,11 @@ mod tests {
             }
             Err(error) => panic!("could not bind GUI control test socket: {error}"),
         };
-        let _second_listener = UnixListener::bind(&second.socket).unwrap();
-        fs::set_permissions(&first.socket, fs::Permissions::from_mode(0o600)).unwrap();
-        fs::set_permissions(&second.socket, fs::Permissions::from_mode(0o600)).unwrap();
+        let _second_listener = UnixListener::bind(&second.paths.socket).unwrap();
+        fs::set_permissions(&first.paths.socket, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::set_permissions(&second.paths.socket, fs::Permissions::from_mode(0o600)).unwrap();
         assert_eq!(
-            ControlPaths::discover_all_in(directory)
+            ControlEndpoint::discover_all_in(directory)
                 .unwrap()
                 .iter()
                 .map(|endpoint| endpoint.process_id)
@@ -216,32 +182,32 @@ mod tests {
     }
 
     #[test]
-    fn credentials_are_private_and_unsafe_stale_paths_are_rejected() {
+    fn endpoints_are_named_by_process_and_their_credentials_are_private() {
         let temp = tempfile::tempdir().unwrap();
-        let endpoint = ControlPaths::from_directory(temp.path().join("runtime"), 42).unwrap();
-        let token = endpoint.load_or_create_token().unwrap();
+        let endpoint = ControlEndpoint::from_directory(temp.path().join("runtime"), 42).unwrap();
+        assert_eq!(endpoint.paths.socket.file_name().unwrap(), "gui-v1-42.sock");
+        assert_eq!(endpoint.paths.token.file_name().unwrap(), "gui-v1-42.token");
+        let token = endpoint.paths.load_or_create_token().unwrap();
         assert_eq!(token.len(), 64);
         assert_eq!(
-            fs::metadata(&endpoint.token).unwrap().permissions().mode() & 0o777,
+            fs::metadata(&endpoint.paths.token)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
             0o600
         );
-
-        let target = temp.path().join("target");
-        fs::write(&target, "leave me").unwrap();
-        symlink(&target, &endpoint.socket).unwrap();
-        assert!(remove_safe_file(&endpoint.socket, true).is_err());
-        assert!(target.exists());
     }
 
     #[test]
     fn discovery_work_is_bounded_even_by_unrelated_runtime_entries() {
         let temp = tempfile::tempdir().unwrap();
         let directory = temp.path().join("runtime");
-        let _endpoint = ControlPaths::from_directory(directory.clone(), 42).unwrap();
+        let _endpoint = ControlEndpoint::from_directory(directory.clone(), 42).unwrap();
         for index in 0..=MAX_DISCOVERED_ENDPOINTS {
             fs::write(directory.join(format!("unrelated-{index}")), b"x").unwrap();
         }
-        assert!(ControlPaths::discover_all_in(directory).is_err());
+        assert!(ControlEndpoint::discover_all_in(directory).is_err());
     }
 
     #[test]

@@ -17,7 +17,6 @@ mod server;
 pub use client::request_focus_background;
 use client::run_ssh_stdio_bridge;
 pub use client::{DomainClient, UploadOptions};
-pub use paths::RuntimePaths;
 use protocol::{Request, Response};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -271,7 +270,7 @@ fn run_server_foreground() -> anyhow::Result<()> {
         log::warn!("Domain server config fallback: {warning}");
     }
     server::run_foreground(
-        RuntimePaths::discover()?,
+        paths::discover()?,
         config.security.allow_screen_checksum_reports,
         config.keyboard.xterm_type.terminal_type(),
     )

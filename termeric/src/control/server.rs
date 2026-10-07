@@ -1,14 +1,15 @@
 //! Same-user Unix-socket server for GUI inventory requests.
 
-use super::paths::{ControlPaths, remove_safe_file};
+use super::paths::ControlEndpoint;
 use super::protocol::{self, ClientFrame, Request, Response, ServerFrame};
 use crate::app::AppEvent;
+use crate::local_socket::{self, OwnedFile};
 use anyhow::Context;
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -19,36 +20,35 @@ const IO_TIMEOUT: Duration = Duration::from_secs(12);
 const EVENT_LOOP_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct ControlServer {
-    paths: ControlPaths,
+    endpoint: ControlEndpoint,
     shutdown: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>,
 }
 
 impl ControlServer {
     pub fn start(proxy: EventLoopProxy<AppEvent>) -> anyhow::Result<Self> {
-        let paths = ControlPaths::discover_current()?;
-        prepare_endpoint(&paths)?;
-        match Self::start_prepared(paths.clone(), proxy) {
+        let endpoint = ControlEndpoint::discover_current()?;
+        prepare_endpoint(&endpoint)?;
+        match Self::start_prepared(endpoint.clone(), proxy) {
             Ok(server) => Ok(server),
             Err(error) => {
-                for (path, socket) in [(&paths.socket, true), (&paths.token, false)] {
-                    let _ = remove_safe_file(path, socket);
-                }
+                let _ = remove_endpoint(&endpoint);
                 Err(error)
             }
         }
     }
 
     fn start_prepared(
-        paths: ControlPaths,
+        endpoint: ControlEndpoint,
         proxy: EventLoopProxy<AppEvent>,
     ) -> anyhow::Result<Self> {
+        let paths = &endpoint.paths;
         let token = paths.load_or_create_token()?;
         let listener = UnixListener::bind(&paths.socket)
             .with_context(|| format!("bind GUI control socket {}", paths.socket.display()))?;
         fs::set_permissions(&paths.socket, fs::Permissions::from_mode(0o600))?;
         let metadata = fs::symlink_metadata(&paths.socket)?;
-        if metadata.uid() != crate::domain::paths::effective_uid()
+        if metadata.uid() != local_socket::effective_uid()
             || metadata.permissions().mode() & 0o777 != 0o600
         {
             anyhow::bail!("GUI control socket could not be secured to mode 0600");
@@ -56,16 +56,15 @@ impl ControlServer {
 
         let shutdown = Arc::new(AtomicBool::new(false));
         let server_shutdown = Arc::clone(&shutdown);
-        let clients = Arc::new(AtomicUsize::new(0));
         let thread = thread::Builder::new()
             .name("termeric-gui-control".into())
-            .spawn(move || run(listener, token, proxy, server_shutdown, clients))?;
+            .spawn(move || run(listener, token, proxy, server_shutdown))?;
         log::info!(
             "GUI control endpoint listening at {}",
             paths.socket.display()
         );
         Ok(Self {
-            paths,
+            endpoint,
             shutdown,
             thread: Some(thread),
         })
@@ -75,26 +74,26 @@ impl ControlServer {
 impl Drop for ControlServer {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::Release);
-        // A local connection wakes the blocking accept without relying on a
-        // polling loop. The server notices shutdown before spawning a client.
-        let _ = UnixStream::connect(&self.paths.socket);
+        // The server notices shutdown before spawning a client.
+        local_socket::wake(&self.endpoint.paths.socket);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
-        for (path, socket) in [(&self.paths.socket, true), (&self.paths.token, false)] {
-            if let Err(error) = remove_safe_file(path, socket) {
+        for removed in remove_endpoint(&self.endpoint) {
+            if let Err(error) = removed {
                 log::warn!("Could not remove GUI control endpoint: {error:#}");
             }
         }
     }
 }
 
-struct ClientGuard(Arc<AtomicUsize>);
-
-impl Drop for ClientGuard {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::AcqRel);
-    }
+/// Removes the endpoint's socket and its token, each whatever became of the
+/// other.
+fn remove_endpoint(endpoint: &ControlEndpoint) -> [anyhow::Result<()>; 2] {
+    [
+        local_socket::remove_owned(&endpoint.paths.socket, OwnedFile::Socket),
+        local_socket::remove_owned(&endpoint.paths.token, OwnedFile::Regular),
+    ]
 }
 
 fn run(
@@ -102,45 +101,39 @@ fn run(
     token: String,
     proxy: EventLoopProxy<AppEvent>,
     shutdown: Arc<AtomicBool>,
-    clients: Arc<AtomicUsize>,
 ) {
-    while !shutdown.load(Ordering::Acquire) {
-        let (stream, _) = match listener.accept() {
-            Ok(accepted) => accepted,
-            Err(error) => {
-                if !shutdown.load(Ordering::Acquire) {
-                    log::warn!("GUI control listener stopped: {error}");
-                }
-                break;
-            }
-        };
-        if shutdown.load(Ordering::Acquire) {
-            break;
-        }
-        if clients.fetch_add(1, Ordering::AcqRel) >= MAX_CLIENTS {
-            clients.fetch_sub(1, Ordering::AcqRel);
-            let mut stream = stream;
+    let served = local_socket::accept_clients(
+        &listener,
+        &shutdown,
+        &local_socket::ClientSlots::new(MAX_CLIENTS),
+        |mut stream| {
             let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
             let _ = protocol::write_frame(
                 &mut stream,
                 &ServerFrame::error("GUI control client limit reached"),
             );
-            continue;
-        }
-        let token = token.clone();
-        let proxy = proxy.clone();
-        let guard = ClientGuard(Arc::clone(&clients));
-        if let Err(error) = thread::Builder::new()
-            .name("termeric-gui-control-client".into())
-            .spawn(move || {
-                let _guard = guard;
-                if let Err(error) = handle_client(stream, &token, &proxy) {
-                    log::debug!("GUI control client disconnected: {error:#}");
-                }
-            })
-        {
-            log::warn!("Could not start GUI control client worker: {error}");
-        }
+        },
+        |stream, slot| {
+            let token = token.clone();
+            let proxy = proxy.clone();
+            if let Err(error) = thread::Builder::new()
+                .name("termeric-gui-control-client".into())
+                .spawn(move || {
+                    let _slot = slot;
+                    if let Err(error) = handle_client(stream, &token, &proxy) {
+                        log::debug!("GUI control client disconnected: {error:#}");
+                    }
+                })
+            {
+                log::warn!("Could not start GUI control client worker: {error}");
+            }
+            Ok(())
+        },
+    );
+    if let Err(error) = served
+        && !shutdown.load(Ordering::Acquire)
+    {
+        log::warn!("GUI control listener stopped: {error:#}");
     }
 }
 
@@ -172,7 +165,7 @@ fn serve_client(
 ) -> anyhow::Result<()> {
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
-    let peer_process = validate_peer(&stream)?;
+    let peer_process = local_socket::same_user_peer(&stream, "GUI control peer")?;
     let request = protocol::read_frame::<ClientFrame>(&mut stream)?;
     if let Err(message) = validate_request(&request, expected_token) {
         return protocol::write_frame(&mut stream, &ServerFrame::error(bounded_error(&message)));
@@ -204,57 +197,25 @@ fn bounded_error(error: &str) -> String {
 }
 
 fn validate_request(frame: &ClientFrame, expected_token: &str) -> Result<(), String> {
-    if frame.version != protocol::PROTOCOL_VERSION {
-        return Err(format!(
-            "protocol version {} is incompatible with server version {}",
-            frame.version,
-            protocol::PROTOCOL_VERSION
-        ));
-    }
-    if frame.token != expected_token {
-        return Err("GUI control authentication failed".into());
-    }
+    local_socket::authenticate(
+        "GUI control",
+        protocol::PROTOCOL_VERSION,
+        frame.version,
+        &frame.token,
+        expected_token,
+    )?;
     frame.request.validate()
 }
 
-fn prepare_endpoint(paths: &ControlPaths) -> anyhow::Result<()> {
-    if paths.socket.exists() && UnixStream::connect(&paths.socket).is_ok() {
+fn prepare_endpoint(endpoint: &ControlEndpoint) -> anyhow::Result<()> {
+    if local_socket::clear_stale_socket(&endpoint.paths.socket)? == local_socket::SocketPath::InUse
+    {
         anyhow::bail!(
             "GUI control endpoint for process {} is already active",
-            paths.process_id
+            endpoint.process_id
         );
     }
-    remove_safe_file(&paths.socket, true)?;
-    remove_safe_file(&paths.token, false)
-}
-
-/// Refuses a peer of another user, and returns the peer's process ID when
-/// the kernel reports one (a peer in another PID namespace reads as 0).
-fn validate_peer(stream: &UnixStream) -> anyhow::Result<Option<u32>> {
-    let mut credentials = libc::ucred {
-        pid: 0,
-        uid: 0,
-        gid: 0,
-    };
-    let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-    // SAFETY: the connected descriptor and initialized output storage remain
-    // valid for the duration of getsockopt.
-    let result = unsafe {
-        libc::getsockopt(
-            std::os::fd::AsRawFd::as_raw_fd(stream),
-            libc::SOL_SOCKET,
-            libc::SO_PEERCRED,
-            (&mut credentials as *mut libc::ucred).cast(),
-            &mut length,
-        )
-    };
-    if result != 0 {
-        return Err(std::io::Error::last_os_error()).context("authenticate GUI control peer");
-    }
-    if credentials.uid != crate::domain::paths::effective_uid() {
-        anyhow::bail!("GUI control peer belongs to a different user");
-    }
-    Ok(u32::try_from(credentials.pid).ok().filter(|pid| *pid > 0))
+    local_socket::remove_owned(&endpoint.paths.token, OwnedFile::Regular)
 }
 
 #[cfg(test)]

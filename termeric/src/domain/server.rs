@@ -1,16 +1,16 @@
 //! Local daemon that owns live PTYs independently of GUI processes.
 
 use super::model::*;
-use super::paths::{RuntimePaths, effective_uid};
 use super::protocol::{self, ClientFrame, Request, Response, ServerFrame, UploadKind};
+use crate::local_socket::{self, SocketPaths, effective_uid};
 use crate::panes::{PaneLayoutPreset, SplitDirection};
 use anyhow::Context;
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -210,8 +210,6 @@ impl Drop for TopologySubscriptionGuard {
     }
 }
 
-struct ClientGuard(Arc<AtomicUsize>);
-
 struct UploadSessionGuard {
     state: SharedState,
     upload_id: String,
@@ -233,12 +231,6 @@ struct TemporaryUpload {
 struct StagedDirectory {
     path: std::path::PathBuf,
     remove_on_drop: bool,
-}
-
-impl Drop for ClientGuard {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::AcqRel);
-    }
 }
 
 impl UploadSessionGuard {
@@ -445,7 +437,7 @@ impl TemporaryUpload {
 }
 
 pub fn run_foreground(
-    paths: RuntimePaths,
+    paths: SocketPaths,
     allow_screen_checksum_reports: bool,
     xterm_keyboard_type: XtermKeyboardType,
 ) -> anyhow::Result<()> {
@@ -470,41 +462,37 @@ pub fn run_foreground(
         upload_records: HashMap::new(),
         upload_janitor_running: false,
     }));
-    let clients = Arc::new(AtomicUsize::new(0));
     log::info!(
         "Local terminal domain server listening at {}",
         paths.socket.display()
     );
 
-    while !shutdown.load(Ordering::Acquire) {
-        match listener.accept() {
-            Ok((stream, _)) => {
-                if clients.fetch_add(1, Ordering::AcqRel) >= MAX_CLIENTS {
-                    clients.fetch_sub(1, Ordering::AcqRel);
-                    let mut stream = stream;
-                    let _ = write_server_frame(
-                        &mut stream,
-                        &ServerFrame::Error {
-                            message: "domain client limit reached".into(),
-                        },
-                    );
-                    continue;
-                }
-                let state = Arc::clone(&state);
-                let token = token.clone();
-                let guard = ClientGuard(Arc::clone(&clients));
-                thread::Builder::new()
-                    .name("termeric-domain-client".into())
-                    .spawn(move || {
-                        let _guard = guard;
-                        if let Err(error) = handle_client(stream, &token, state) {
-                            log::debug!("Domain client disconnected: {error:#}");
-                        }
-                    })?;
-            }
-            Err(error) => return Err(error).context("accept local domain client"),
-        }
-    }
+    local_socket::accept_clients(
+        &listener,
+        &shutdown,
+        &local_socket::ClientSlots::new(MAX_CLIENTS),
+        |mut stream| {
+            let _ = write_server_frame(
+                &mut stream,
+                &ServerFrame::Error {
+                    message: "domain client limit reached".into(),
+                },
+            );
+        },
+        |stream, slot| {
+            let state = Arc::clone(&state);
+            let token = token.clone();
+            thread::Builder::new()
+                .name("termeric-domain-client".into())
+                .spawn(move || {
+                    let _slot = slot;
+                    if let Err(error) = handle_client(stream, &token, state) {
+                        log::debug!("Domain client disconnected: {error:#}");
+                    }
+                })?;
+            Ok(())
+        },
+    )?;
 
     drop(listener);
     prune_expired_upload_records(&state, true);
@@ -516,20 +504,10 @@ pub fn run_foreground(
     Ok(())
 }
 
-fn prepare_socket_path(paths: &RuntimePaths) -> anyhow::Result<()> {
-    let Ok(metadata) = fs::symlink_metadata(&paths.socket) else {
-        return Ok(());
-    };
-    if !metadata.file_type().is_socket() || metadata.uid() != effective_uid() {
-        anyhow::bail!(
-            "refusing to replace unsafe domain socket {}",
-            paths.socket.display()
-        );
-    }
-    if UnixStream::connect(&paths.socket).is_ok() {
+fn prepare_socket_path(paths: &SocketPaths) -> anyhow::Result<()> {
+    if local_socket::clear_stale_socket(&paths.socket)? == local_socket::SocketPath::InUse {
         anyhow::bail!("a local domain server is already running");
     }
-    fs::remove_file(&paths.socket).context("remove stale local domain socket")?;
     Ok(())
 }
 
@@ -582,7 +560,7 @@ fn handle_client_with_setup_timeout(
     setup_timeout: Duration,
 ) -> anyhow::Result<()> {
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
-    validate_peer(&stream)?;
+    local_socket::same_user_peer(&stream, "domain peer")?;
     if let Err(message) = validate_hello(
         read_client_frame_with_timeout(&mut stream, setup_timeout)?,
         expected_token,
@@ -679,7 +657,7 @@ fn serve_shutdown(mut stream: UnixStream, state: SharedState) -> anyhow::Result<
     // The accept loop sleeps in the kernel while idle. One private connection
     // wakes it so it can observe the already-published shutdown immediately.
     if let Some(socket) = wake_socket {
-        let _ = UnixStream::connect(socket);
+        local_socket::wake(&socket);
     }
     Ok(())
 }
@@ -1119,45 +1097,15 @@ fn publish_staged_directory(
 
 fn validate_hello(frame: ClientFrame, expected_token: &str) -> Result<(), String> {
     match frame {
-        ClientFrame::Hello { version, .. } if version != protocol::PROTOCOL_VERSION => {
-            Err(format!(
-                "protocol version {version} is incompatible with server version {}",
-                protocol::PROTOCOL_VERSION
-            ))
-        }
-        ClientFrame::Hello { token, .. } if token != expected_token => {
-            Err("domain authentication failed".into())
-        }
-        ClientFrame::Hello { .. } => Ok(()),
+        ClientFrame::Hello { version, token } => local_socket::authenticate(
+            "domain",
+            protocol::PROTOCOL_VERSION,
+            version,
+            &token,
+            expected_token,
+        ),
         _ => Err("domain client did not negotiate before requesting access".into()),
     }
-}
-
-fn validate_peer(stream: &UnixStream) -> anyhow::Result<()> {
-    let mut credentials = libc::ucred {
-        pid: 0,
-        uid: 0,
-        gid: 0,
-    };
-    let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-    // SAFETY: the socket descriptor is valid for this call and the output
-    // buffer and length point to initialized, correctly sized storage.
-    let result = unsafe {
-        libc::getsockopt(
-            std::os::fd::AsRawFd::as_raw_fd(stream),
-            libc::SOL_SOCKET,
-            libc::SO_PEERCRED,
-            (&mut credentials as *mut libc::ucred).cast(),
-            &mut length,
-        )
-    };
-    if result != 0 {
-        return Err(std::io::Error::last_os_error()).context("authenticate domain peer owner");
-    }
-    if credentials.uid != effective_uid() {
-        anyhow::bail!("domain peer belongs to a different user");
-    }
-    Ok(())
 }
 
 fn process_request(state: &SharedState, request: Request) -> anyhow::Result<Response> {
@@ -3845,7 +3793,7 @@ mod tests {
     /// `root-ready`.
     struct DaemonFixture {
         temporary: tempfile::TempDir,
-        paths: RuntimePaths,
+        paths: SocketPaths,
         reported_cwd: std::path::PathBuf,
         client: crate::domain::DomainClient,
         domain_id: String,
@@ -3859,7 +3807,8 @@ mod tests {
             let temporary = tempfile::tempdir().unwrap();
             let reported_cwd = temporary.path().join("reported-cwd");
             std::fs::create_dir(&reported_cwd).unwrap();
-            let paths = RuntimePaths::from_directory(temporary.path().join("runtime")).unwrap();
+            let paths =
+                crate::domain::paths::in_directory(temporary.path().join("runtime")).unwrap();
             let probe = paths.directory.join("socket-probe");
             match UnixListener::bind(&probe) {
                 Ok(listener) => {

@@ -18,6 +18,7 @@ mod git;
 mod harvest;
 mod input;
 mod line_reader;
+mod local_socket;
 mod mcp;
 mod notifications;
 mod panes;

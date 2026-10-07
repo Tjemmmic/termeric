@@ -10,9 +10,7 @@ impl App {
     /// upload unless one runs.
     pub(super) fn unavailable_domain_commands(&self) -> Vec<String> {
         let mut hidden = Vec::new();
-        let daemon_running = crate::domain::paths::discover_runtime_directory()
-            .join(crate::domain::paths::SOCKET_NAME)
-            .exists();
+        let daemon_running = crate::domain::paths::daemon_socket_exists();
         if !daemon_running && self.config.domains.ssh_hosts.is_empty() {
             hidden.push("core.attach-domain".to_owned());
         }

@@ -164,7 +164,7 @@ fn remove_stale_staging(base: &Path) {
         };
         use std::os::unix::fs::MetadataExt;
         let stale = metadata.file_type().is_dir()
-            && metadata.uid() == crate::domain::paths::effective_uid()
+            && metadata.uid() == crate::local_socket::effective_uid()
             && metadata
                 .modified()
                 .ok()
