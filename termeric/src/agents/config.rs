@@ -173,23 +173,10 @@ impl AgentConfig {
     }
 
     pub(super) fn to_custom(&self, id: &str) -> AgentDefinition {
-        let program = self.program.clone().unwrap_or_else(|| id.to_string());
-        let mut agent = AgentDefinition {
-            id: id.to_string(),
-            name: self.name.clone().unwrap_or_else(|| id.to_string()),
-            detect: Vec::new(),
-            packages: Vec::new(),
-            program: program.clone(),
-            args: Vec::new(),
-            resume_args: None,
-            new_conversation: None,
-            inherit_cwd: true,
-            env: BTreeMap::new(),
-            profiles: BTreeMap::new(),
-            default_profile: None,
-            enabled: true,
-        };
-        push_unique(&mut agent.detect, program_file_name(&program));
+        let program = self.program.as_deref().unwrap_or(id);
+        let name = self.name.as_deref().unwrap_or(id);
+        let mut agent = AgentDefinition::new(id, name, program);
+        push_unique(&mut agent.detect, program_file_name(program));
         self.apply_to(&mut agent);
         agent
     }

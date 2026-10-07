@@ -118,23 +118,36 @@ pub fn builtin_agent_names() -> impl Iterator<Item = (&'static str, &'static str
 }
 
 impl AgentDefinition {
-    fn builtin(builtin: &Builtin) -> Self {
+    /// An enabled agent that runs `program` in the focused pane's folder
+    /// with nothing else set: no way to recognize it, resume it, or start
+    /// over.
+    fn new(id: &str, name: &str, program: &str) -> Self {
         Self {
-            id: builtin.id.into(),
-            name: builtin.name.into(),
-            detect: vec![builtin.program.into()],
-            packages: builtin.package.into_iter().map(Into::into).collect(),
-            program: builtin.program.into(),
+            id: id.to_owned(),
+            name: name.to_owned(),
+            detect: Vec::new(),
+            packages: Vec::new(),
+            program: program.to_owned(),
             args: Vec::new(),
-            resume_args: builtin
-                .resume_args
-                .map(|args| args.iter().map(|arg| (*arg).into()).collect()),
-            new_conversation: builtin.new_conversation.map(Into::into),
+            resume_args: None,
+            new_conversation: None,
             inherit_cwd: true,
             env: BTreeMap::new(),
             profiles: BTreeMap::new(),
             default_profile: None,
             enabled: true,
+        }
+    }
+
+    fn builtin(builtin: &Builtin) -> Self {
+        Self {
+            detect: vec![builtin.program.into()],
+            packages: builtin.package.into_iter().map(Into::into).collect(),
+            resume_args: builtin
+                .resume_args
+                .map(|args| args.iter().map(|arg| (*arg).into()).collect()),
+            new_conversation: builtin.new_conversation.map(Into::into),
+            ..Self::new(builtin.id, builtin.name, builtin.program)
         }
     }
 
