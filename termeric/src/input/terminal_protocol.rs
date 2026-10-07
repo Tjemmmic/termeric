@@ -128,15 +128,20 @@ pub(crate) fn encode_focus_report(mode: TerminalMode, focused: bool) -> Option<&
         .then_some(if focused { b"\x1b[I" } else { b"\x1b[O" })
 }
 
+const PASTE_START: &[u8] = b"\x1b[200~";
+const PASTE_END: &[u8] = b"\x1b[201~";
+/// The bytes bracketed paste adds around a payload.
+pub(crate) const BRACKETED_PASTE_OVERHEAD: usize = PASTE_START.len() + PASTE_END.len();
+
 /// Frame a clipboard payload as one ordered PTY write when bracketed paste is active.
 pub(crate) fn encode_paste(mode: TerminalMode, text: &str) -> Vec<u8> {
     if !mode.contains(TerminalMode::BRACKETED_PASTE) {
         return text.as_bytes().to_vec();
     }
-    let mut bytes = Vec::with_capacity(text.len() + 12);
-    bytes.extend_from_slice(b"\x1b[200~");
+    let mut bytes = Vec::with_capacity(text.len() + BRACKETED_PASTE_OVERHEAD);
+    bytes.extend_from_slice(PASTE_START);
     bytes.extend_from_slice(text.as_bytes());
-    bytes.extend_from_slice(b"\x1b[201~");
+    bytes.extend_from_slice(PASTE_END);
     bytes
 }
 
@@ -337,6 +342,10 @@ mod tests {
         assert_eq!(
             encode_paste(TerminalMode::BRACKETED_PASTE, "a\nb"),
             b"\x1b[200~a\nb\x1b[201~"
+        );
+        assert_eq!(
+            encode_paste(TerminalMode::BRACKETED_PASTE, "a\nb").len(),
+            "a\nb".len() + BRACKETED_PASTE_OVERHEAD
         );
         let alt_scroll = TerminalMode::ALT_SCREEN | TerminalMode::ALTERNATE_SCROLL;
         assert_eq!(

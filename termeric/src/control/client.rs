@@ -327,8 +327,10 @@ fn answers(request: &Request, process_id: u32, response: &Response) -> bool {
             (returned_window, returned_tab, returned_pane) == (window_id, tab_id, pane_id)
                 && *input_bytes as usize == text.len() + usize::from(*enter)
                 && (returned_paste, returned_enter) == (paste, enter)
-                // A bracketed paste adds its 12 delimiter bytes.
-                && (wire_bytes == input_bytes || (*paste && *wire_bytes == input_bytes + 12))
+                && (wire_bytes == input_bytes
+                    || (*paste
+                        && *wire_bytes as usize
+                            == *input_bytes as usize + crate::input::BRACKETED_PASTE_OVERHEAD))
         }
         (
             Request::CreateTab { window_id, .. } | Request::LaunchTab { window_id, .. },

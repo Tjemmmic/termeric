@@ -42,6 +42,10 @@ const ATTACH_QUEUE_CAPACITY: usize = 64;
 // reconnects and receives a new atomic snapshot.
 const TOPOLOGY_QUEUE_CAPACITY: usize = 1;
 const ATTACH_SNAPSHOT_BYTES: usize = 512 * 1024;
+/// The longest text one paste request takes: once bracketed, it still fits
+/// the one pane input write every request is bounded to.
+const MAX_PASTE_TEXT_BYTES: usize =
+    protocol::MAX_STREAM_CHUNK_BYTES - crate::input::BRACKETED_PASTE_OVERHEAD;
 // Each item is already bounded by MAX_STREAM_CHUNK_BYTES. Four pending writes
 // cap pane-local input backlog at 256 KiB while keeping ordinary paste bursts
 // responsive. A stalled child can block only its writer worker, never the
@@ -1168,7 +1172,7 @@ fn process_request(state: &SharedState, request: Request) -> anyhow::Result<Resp
             })
         }
         Request::SendPaste { domain, pane, text } => {
-            if text.len() > protocol::MAX_STREAM_CHUNK_BYTES - 16 {
+            if text.len() > MAX_PASTE_TEXT_BYTES {
                 anyhow::bail!("paste exceeds the per-request limit");
             }
             let state = state.lock().unwrap();
@@ -3297,6 +3301,42 @@ mod tests {
         protocol::write_frame(&mut client, &ClientFrame::Detach).unwrap();
         worker.join().unwrap().unwrap();
         assert_eq!(attachments(), 0);
+        process_request(&state, Request::KillDomain { domain: domain.id }).unwrap();
+    }
+
+    #[test]
+    fn a_paste_may_fill_one_pane_write_once_bracketed() {
+        let state = empty_state();
+        let Response::Domain { domain } = create_domain(
+            &state,
+            "paste-limit".into(),
+            SpawnSpec {
+                program: Some("/bin/sh".into()),
+                args: crate::test_support::sleeping_args(),
+                ..SpawnSpec::default()
+            },
+        )
+        .unwrap() else {
+            panic!("expected created domain");
+        };
+        let mode = TerminalMode::BRACKETED_PASTE;
+        let longest = "x".repeat(MAX_PASTE_TEXT_BYTES);
+        assert_eq!(
+            crate::input::encode_paste(mode, &longest).len(),
+            protocol::MAX_STREAM_CHUNK_BYTES
+        );
+        let paste = |text: String| {
+            process_request(
+                &state,
+                Request::SendPaste {
+                    domain: domain.id.clone(),
+                    pane: 0,
+                    text,
+                },
+            )
+        };
+        assert!(matches!(paste(longest), Ok(Response::Ok { .. })));
+        assert!(paste("x".repeat(MAX_PASTE_TEXT_BYTES + 1)).is_err());
         process_request(&state, Request::KillDomain { domain: domain.id }).unwrap();
     }
 

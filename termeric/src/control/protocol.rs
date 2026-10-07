@@ -795,11 +795,14 @@ impl Response {
                     (InputDisposition::PendingConfirmation, Some(id)) => *id != 0,
                     _ => false,
                 };
+                // Enter adds one carriage return to the text, and a
+                // bracketed paste its delimiters on the wire.
+                let max_input = MAX_CONTROL_INPUT_BYTES + 1;
                 *window_id != 0
                     && *input_bytes != 0
-                    && *input_bytes as usize <= MAX_CONTROL_INPUT_BYTES + 1
+                    && *input_bytes as usize <= max_input
                     && *wire_bytes >= *input_bytes
-                    && *wire_bytes as usize <= MAX_CONTROL_INPUT_BYTES + 13
+                    && *wire_bytes as usize <= max_input + crate::input::BRACKETED_PASTE_OVERHEAD
                     && valid_disposition
             }
             Self::PaneCreated {
