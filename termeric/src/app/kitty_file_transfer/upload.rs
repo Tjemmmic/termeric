@@ -74,7 +74,7 @@ pub(super) fn reopen_upload_regular_file(pinned: &std::fs::File) -> std::io::Res
 }
 
 pub(super) fn run_upload_worker(
-    receiver: Receiver<UploadWorkerCommand>,
+    receiver: Receiver<KittyFileTransferCommand>,
     session_id: String,
     paths: Vec<UploadPath>,
     reply_uses_8bit_controls: bool,
@@ -122,7 +122,7 @@ pub(super) fn run_upload_worker(
             bytes,
             error,
             reply_uses_8bit_controls,
-            acknowledge: Some(sender),
+            acknowledge: sender,
         }) {
             return false;
         }
@@ -378,7 +378,7 @@ pub(super) fn run_upload_worker(
     let mut bytes_sent = 0u64;
     loop {
         let command = match receiver.recv_timeout(WORKER_IDLE_TIMEOUT) {
-            Ok(command) => command.command,
+            Ok(command) => command,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 let message = "host file read expired after ten minutes of inactivity".to_string();
                 let _ = emit_with_ack(

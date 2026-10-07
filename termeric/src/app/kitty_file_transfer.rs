@@ -86,7 +86,7 @@ impl std::fmt::Debug for UploadPath {
 #[derive(Debug)]
 pub(super) struct ActiveDownload {
     key: TransferKey,
-    sender: SyncSender<WorkerCommand>,
+    sender: SyncSender<KittyFileTransferCommand>,
     cancellation: Arc<AtomicBool>,
     progress_toast_id: u64,
 }
@@ -94,7 +94,7 @@ pub(super) struct ActiveDownload {
 #[derive(Debug)]
 pub(super) struct ActiveUpload {
     key: TransferKey,
-    sender: SyncSender<UploadWorkerCommand>,
+    sender: SyncSender<KittyFileTransferCommand>,
     cancellation: Arc<AtomicBool>,
     progress_toast_id: u64,
     files_sent: usize,
@@ -113,16 +113,6 @@ pub(super) struct KittyFileTransferManager {
     upload_tokens: HashMap<TransferKey, u64>,
 }
 
-#[derive(Debug)]
-struct WorkerCommand {
-    command: KittyFileTransferCommand,
-}
-
-#[derive(Debug)]
-struct UploadWorkerCommand {
-    command: KittyFileTransferCommand,
-}
-
 pub(crate) struct UploadWorkerCompletion {
     frames: Vec<Vec<u8>>,
     terminal: bool,
@@ -131,7 +121,7 @@ pub(crate) struct UploadWorkerCompletion {
     bytes: u64,
     error: Option<String>,
     reply_uses_8bit_controls: bool,
-    acknowledge: Option<SyncSender<bool>>,
+    acknowledge: SyncSender<bool>,
 }
 
 impl std::fmt::Debug for UploadWorkerCompletion {
@@ -149,7 +139,6 @@ impl std::fmt::Debug for UploadWorkerCompletion {
             .field("bytes", &self.bytes)
             .field("error", &self.error)
             .field("reply_uses_8bit_controls", &self.reply_uses_8bit_controls)
-            .field("acknowledge_present", &self.acknowledge.is_some())
             .finish()
     }
 }
@@ -278,7 +267,7 @@ impl App {
             .get(&token)
             .expect("token map and active transfer stay synchronized")
             .sender
-            .try_send(WorkerCommand { command })
+            .try_send(command)
         {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Err("transfer worker queue is full"),
@@ -995,7 +984,7 @@ impl App {
             .get(&token)
             .expect("upload token and active transfer stay synchronized")
             .sender
-            .try_send(UploadWorkerCommand { command });
+            .try_send(command);
         if let Err(error) = send_result {
             let message = match error {
                 TrySendError::Full(_) => "host-read worker queue is full",
@@ -1227,12 +1216,10 @@ impl App {
     pub(super) fn handle_kitty_file_upload_completed(
         &mut self,
         token: u64,
-        mut completion: UploadWorkerCompletion,
+        completion: UploadWorkerCompletion,
     ) {
         let Some(active) = self.kitty_file_transfers.active_uploads.get(&token) else {
-            if let Some(acknowledge) = completion.acknowledge.take() {
-                let _ = acknowledge.try_send(false);
-            }
+            let _ = completion.acknowledge.try_send(false);
             return;
         };
         let origin = active.key.origin;
@@ -1249,9 +1236,7 @@ impl App {
                 resolved_origin.is_some_and(|route| tabs.write_to_origin(route, &reply).is_ok())
             });
         }
-        if let Some(acknowledge) = completion.acknowledge.take() {
-            let _ = acknowledge.try_send(written);
-        }
+        let _ = completion.acknowledge.try_send(written);
         if !written || completion.terminal {
             self.remove_active_kitty_upload(token);
             if let Some(error) = completion.error {
@@ -1485,8 +1470,8 @@ fn start_upload_worker(
     reply_uses_8bit_controls: bool,
     cancellation: Arc<AtomicBool>,
     proxy: winit::event_loop::EventLoopProxy<AppEvent>,
-) -> Result<SyncSender<UploadWorkerCommand>, String> {
-    let (sender, receiver) = sync_channel::<UploadWorkerCommand>(MAX_KITTY_UPLOAD_PATHS + 2);
+) -> Result<SyncSender<KittyFileTransferCommand>, String> {
+    let (sender, receiver) = sync_channel(MAX_KITTY_UPLOAD_PATHS + 2);
     std::thread::Builder::new()
         .name("termeric-kitty-upload".into())
         .spawn(move || {
@@ -1518,8 +1503,8 @@ fn start_worker(
     reply_uses_8bit_controls: bool,
     cancellation: Arc<AtomicBool>,
     proxy: winit::event_loop::EventLoopProxy<AppEvent>,
-) -> Result<SyncSender<WorkerCommand>, String> {
-    let (sender, receiver) = sync_channel::<WorkerCommand>(WORKER_QUEUE_CAPACITY);
+) -> Result<SyncSender<KittyFileTransferCommand>, String> {
+    let (sender, receiver) = sync_channel(WORKER_QUEUE_CAPACITY);
     std::thread::Builder::new()
         .name("termeric-kitty-download".into())
         .spawn(move || {

@@ -1540,7 +1540,7 @@ mod tests;
 mod worker_tests;
 
 pub(super) fn run_worker(
-    receiver: Receiver<WorkerCommand>,
+    receiver: Receiver<KittyFileTransferCommand>,
     session_id: String,
     reply_uses_8bit_controls: bool,
     cancellation: Arc<AtomicBool>,
@@ -1550,7 +1550,7 @@ pub(super) fn run_worker(
     let mut transaction = DownloadTransaction::new(session_id);
     loop {
         let command = match receiver.recv_timeout(idle_timeout) {
-            Ok(command) => command.command,
+            Ok(command) => command,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 let status = transaction.status(
                     "",

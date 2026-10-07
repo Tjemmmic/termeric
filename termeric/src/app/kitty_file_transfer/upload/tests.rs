@@ -102,10 +102,8 @@ fn upload_worker_rejects_nonregular_and_multiply_linked_sources_before_metadata(
             }],
             true,
             Arc::new(AtomicBool::new(false)),
-            |mut completion| {
-                if let Some(acknowledge) = completion.acknowledge.take() {
-                    acknowledge.send(true).unwrap();
-                }
+            |completion| {
+                completion.acknowledge.send(true).unwrap();
                 completions.push(completion);
                 true
             },
@@ -156,10 +154,8 @@ fn upload_worker_rejects_fifo_without_waiting_for_a_writer() {
             }],
             true,
             Arc::new(AtomicBool::new(false)),
-            |mut completion| {
-                if let Some(acknowledge) = completion.acknowledge.take() {
-                    acknowledge.send(true).unwrap();
-                }
+            |completion| {
+                completion.acknowledge.send(true).unwrap();
                 completions.push(completion);
                 true
             },
@@ -213,9 +209,7 @@ fn upload_worker_opens_after_consent_and_streams_bounded_canonical_frames() {
     let path_name = path.to_str().unwrap().to_string();
     let (sender, receiver) = sync_channel(2);
     sender
-        .send(UploadWorkerCommand {
-            command: request("upload-test", "f1", &path_name),
-        })
+        .send(request("upload-test", "f1", &path_name))
         .unwrap();
     drop(sender);
     let mut completions = Vec::new();
@@ -229,10 +223,8 @@ fn upload_worker_opens_after_consent_and_streams_bounded_canonical_frames() {
         }],
         true,
         Arc::new(AtomicBool::new(false)),
-        |mut completion| {
-            if let Some(acknowledge) = completion.acknowledge.take() {
-                acknowledge.send(true).unwrap();
-            }
+        |completion| {
+            completion.acknowledge.send(true).unwrap();
             completions.push(completion);
             true
         },
@@ -277,10 +269,8 @@ fn upload_worker_refuses_symlinks_without_reading_their_targets() {
         }],
         false,
         Arc::new(AtomicBool::new(false)),
-        |mut completion| {
-            if let Some(acknowledge) = completion.acknowledge.take() {
-                acknowledge.send(true).unwrap();
-            }
+        |completion| {
+            completion.acknowledge.send(true).unwrap();
             completions.push(completion);
             true
         },
@@ -312,10 +302,8 @@ fn upload_worker_refuses_symlinks_without_reading_their_targets() {
         }],
         false,
         Arc::new(AtomicBool::new(false)),
-        |mut completion| {
-            if let Some(acknowledge) = completion.acknowledge.take() {
-                acknowledge.send(true).unwrap();
-            }
+        |completion| {
+            completion.acknowledge.send(true).unwrap();
             ancestor_completions.push(completion);
             true
         },
@@ -347,10 +335,8 @@ fn upload_worker_rejects_aggregate_size_before_emitting_metadata() {
         }],
         false,
         Arc::new(AtomicBool::new(false)),
-        |mut completion| {
-            if let Some(acknowledge) = completion.acknowledge.take() {
-                acknowledge.send(true).unwrap();
-            }
+        |completion| {
+            completion.acknowledge.send(true).unwrap();
             completions.push(completion);
             true
         },
@@ -375,11 +361,7 @@ fn upload_worker_completes_empty_files_in_mixed_batches() {
         let path = root.path().join(&file_id);
         std::fs::write(&path, payload).unwrap();
         let name = path.to_str().unwrap().to_string();
-        sender
-            .send(UploadWorkerCommand {
-                command: request("empty-test", &file_id, &name),
-            })
-            .unwrap();
+        sender.send(request("empty-test", &file_id, &name)).unwrap();
         paths.push(UploadPath {
             file_id,
             requested_name: name,
@@ -394,8 +376,8 @@ fn upload_worker_completes_empty_files_in_mixed_batches() {
         paths,
         true,
         Arc::new(AtomicBool::new(false)),
-        |mut completion| {
-            completion.acknowledge.take().unwrap().send(true).unwrap();
+        |completion| {
+            completion.acknowledge.send(true).unwrap();
             completions.push(completion);
             true
         },
@@ -444,11 +426,7 @@ fn upload_worker_stops_after_unacknowledged_or_canceled_empty_completion() {
             let path = root.path().join(file_id);
             std::fs::write(&path, payload).unwrap();
             let name = path.to_str().unwrap().to_string();
-            sender
-                .send(UploadWorkerCommand {
-                    command: request("empty-stop", file_id, &name),
-                })
-                .unwrap();
+            sender.send(request("empty-stop", file_id, &name)).unwrap();
             paths.push(UploadPath {
                 file_id: file_id.into(),
                 requested_name: name,
@@ -464,15 +442,13 @@ fn upload_worker_stops_after_unacknowledged_or_canceled_empty_completion() {
             paths,
             false,
             cancellation.clone(),
-            |mut completion| {
+            |completion| {
                 let empty_completion = completion.files == 1;
                 if empty_completion && cancel_on_empty {
                     cancellation.store(true, Ordering::Release);
                 }
                 completion
                     .acknowledge
-                    .take()
-                    .unwrap()
                     .send(!empty_completion || cancel_on_empty)
                     .unwrap();
                 completions.push(completion);
@@ -505,11 +481,7 @@ fn upload_worker_emits_empty_completion_once_before_rejecting_duplicate() {
     let name = path.to_str().unwrap().to_string();
     let (sender, receiver) = sync_channel(2);
     for _ in 0..2 {
-        sender
-            .send(UploadWorkerCommand {
-                command: request("empty-once", "f", &name),
-            })
-            .unwrap();
+        sender.send(request("empty-once", "f", &name)).unwrap();
     }
     drop(sender);
     let mut completions = Vec::new();
@@ -523,8 +495,8 @@ fn upload_worker_emits_empty_completion_once_before_rejecting_duplicate() {
         }],
         false,
         Arc::new(AtomicBool::new(false)),
-        |mut completion| {
-            completion.acknowledge.take().unwrap().send(true).unwrap();
+        |completion| {
+            completion.acknowledge.send(true).unwrap();
             completions.push(completion);
             true
         },
@@ -568,9 +540,7 @@ fn upload_worker_batches_large_files_behind_acknowledgements() {
     let path_name = path.to_str().unwrap().to_string();
     let (sender, receiver) = sync_channel(1);
     sender
-        .send(UploadWorkerCommand {
-            command: request("batch-test", "f1", &path_name),
-        })
+        .send(request("batch-test", "f1", &path_name))
         .unwrap();
     drop(sender);
     let mut completions = Vec::new();
@@ -584,9 +554,8 @@ fn upload_worker_batches_large_files_behind_acknowledgements() {
         }],
         false,
         Arc::new(AtomicBool::new(false)),
-        |mut completion| {
-            assert!(completion.acknowledge.is_some());
-            completion.acknowledge.take().unwrap().send(true).unwrap();
+        |completion| {
+            completion.acknowledge.send(true).unwrap();
             completions.push(completion);
             true
         },
@@ -622,11 +591,7 @@ fn upload_worker_truncation_retains_only_acknowledged_progress() {
                 let mut paths = Vec::new();
                 for (file_id, source) in [("prior", &prior), ("current", &path)] {
                     let name = source.to_str().unwrap().to_string();
-                    sender
-                        .send(UploadWorkerCommand {
-                            command: request("truncate", file_id, &name),
-                        })
-                        .unwrap();
+                    sender.send(request("truncate", file_id, &name)).unwrap();
                     paths.push(UploadPath {
                         file_id: file_id.into(),
                         requested_name: name,
@@ -641,7 +606,7 @@ fn upload_worker_truncation_retains_only_acknowledged_progress() {
                     paths,
                     true,
                     Arc::new(AtomicBool::new(false)),
-                    |mut completion| {
+                    |completion| {
                         // Mutate the same inode at an exact delivery boundary,
                         // with no timing race or dependence on worker speed.
                         if completions.len() == 1 + acknowledged_batches {
@@ -654,7 +619,7 @@ fn upload_worker_truncation_retains_only_acknowledged_progress() {
                                 )
                                 .unwrap();
                         }
-                        completion.acknowledge.take().unwrap().send(true).unwrap();
+                        completion.acknowledge.send(true).unwrap();
                         completions.push(completion);
                         true
                     },

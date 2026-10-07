@@ -144,7 +144,10 @@ fn consent_and_pruning_follow_only_the_same_terminal_owner() {
     }
 }
 
-fn install_download(app: &mut App, key: TransferKey) -> (Receiver<WorkerCommand>, Arc<AtomicBool>) {
+fn install_download(
+    app: &mut App,
+    key: TransferKey,
+) -> (Receiver<KittyFileTransferCommand>, Arc<AtomicBool>) {
     let (sender, receiver) = sync_channel(4);
     let cancellation = Arc::new(AtomicBool::new(false));
     let progress_toast_id = app.toasts.persistent_info("synthetic download");
@@ -164,7 +167,7 @@ fn install_download(app: &mut App, key: TransferKey) -> (Receiver<WorkerCommand>
 fn install_upload(
     app: &mut App,
     key: TransferKey,
-) -> (Receiver<UploadWorkerCommand>, Arc<AtomicBool>) {
+) -> (Receiver<KittyFileTransferCommand>, Arc<AtomicBool>) {
     let (sender, receiver) = sync_channel(4);
     let cancellation = Arc::new(AtomicBool::new(false));
     let progress_toast_id = app.toasts.persistent_info("synthetic upload");
@@ -234,7 +237,7 @@ fn asynchronous_status_and_file_data_never_follow_a_replacement_owner() {
                                 bytes: 7,
                                 error: None,
                                 reply_uses_8bit_controls: eight_bit,
-                                acknowledge: Some(acknowledge),
+                                acknowledge,
                             },
                         );
                         assert_eq!(
@@ -352,7 +355,7 @@ fn path_collection_and_active_commands_match_across_split_and_collapse() {
         kitty_capture_command(KittyFileTransferAction::Data),
     );
     assert_eq!(
-        download.try_recv().unwrap().command.action,
+        download.try_recv().unwrap().action,
         KittyFileTransferAction::Data
     );
     // A sibling using the identical session ID cannot cancel the owner's transfer.
@@ -380,7 +383,7 @@ fn path_collection_and_active_commands_match_across_split_and_collapse() {
     path.file_id = "fixture".into();
     path.name = Some(directory.path().join("fixture").display().to_string());
     app.handle_kitty_file_transfer(app.kitty_transfer_origin(owner).unwrap(), path);
-    assert_eq!(upload.try_recv().unwrap().command.file_id, "fixture");
+    assert_eq!(upload.try_recv().unwrap().file_id, "fixture");
     app.close_pane_for(Requester::Control, owner.tab_id as u64, sibling.0)
         .unwrap();
     app.handle_kitty_file_transfer(

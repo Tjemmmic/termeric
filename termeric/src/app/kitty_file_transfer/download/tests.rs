@@ -36,42 +36,36 @@ fn worker_shutdown_cleans_staging_and_does_not_process_queued_finish() {
                 &[],
             );
             metadata.size = Some(payload.len() as i64);
-            sender.send(WorkerCommand { command: metadata }).unwrap();
+            sender.send(metadata).unwrap();
             sender
-                .send(WorkerCommand {
-                    command: command(
-                        KittyFileTransferAction::EndData,
-                        "f",
-                        None,
-                        KittyFileTransferType::Regular,
-                        payload,
-                    ),
-                })
+                .send(command(
+                    KittyFileTransferAction::EndData,
+                    "f",
+                    None,
+                    KittyFileTransferType::Regular,
+                    payload,
+                ))
                 .unwrap();
             if exit == Exit::InvalidData {
                 sender
-                    .send(WorkerCommand {
-                        command: command(
-                            KittyFileTransferAction::Data,
-                            "f",
-                            None,
-                            KittyFileTransferType::Regular,
-                            b"unexpected",
-                        ),
-                    })
+                    .send(command(
+                        KittyFileTransferAction::Data,
+                        "f",
+                        None,
+                        KittyFileTransferType::Regular,
+                        b"unexpected",
+                    ))
                     .unwrap();
             }
             if !matches!(exit, Exit::Disconnect | Exit::Timeout) {
                 sender
-                    .send(WorkerCommand {
-                        command: command(
-                            KittyFileTransferAction::Finish,
-                            "",
-                            None,
-                            KittyFileTransferType::Regular,
-                            &[],
-                        ),
-                    })
+                    .send(command(
+                        KittyFileTransferAction::Finish,
+                        "",
+                        None,
+                        KittyFileTransferType::Regular,
+                        &[],
+                    ))
                     .unwrap();
             }
             // Keep a sender only for the actual inactivity-expiry case.
