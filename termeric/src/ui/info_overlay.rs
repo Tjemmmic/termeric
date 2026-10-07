@@ -955,6 +955,17 @@ mod tests {
             layout.content_row_at(layout.content.x - 1.0, layout.content.y, 5, lines.len()),
             None
         );
+        // The pixel between two rows belongs to the lower one only; hover
+        // reads the same answer, so one row lights at a time.
+        let boundary = layout.content.y + layout.line_height;
+        assert_eq!(
+            layout.content_row_at(layout.content.x + 1.0, boundary, 5, lines.len()),
+            Some(6)
+        );
+        assert_eq!(
+            layout.content_row_at(layout.content.x + 1.0, boundary - 0.01, 5, lines.len()),
+            Some(5)
+        );
     }
 
     #[test]

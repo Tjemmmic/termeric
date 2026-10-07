@@ -93,6 +93,10 @@ impl Renderer {
         let dim_color = with_alpha(self.ui.palette_text_dim, 0.7 * anim);
         let content_x = layout.content.x;
         let (mouse_x, mouse_y) = info.mouse_pos.unwrap_or((-1.0, -1.0));
+        // The row a click there would choose: hover and clicks share one
+        // half-open geometry, so a boundary pixel lights one row.
+        let hovered_row =
+            layout.content_row_at(mouse_x, mouse_y, info.scroll_offset, info.total_lines);
 
         for (visible_row, (source_row, line)) in info.visible_lines.iter().enumerate() {
             let line_y = content_start_y + visible_row as f32 * line_height;
@@ -104,11 +108,8 @@ impl Renderer {
                 .choices
                 .iter()
                 .find(|choice| choice.source_line == *source_row);
-            let choice_hovered = info.awaiting
-                && choice.is_some()
-                && layout.content.contains(mouse_x, mouse_y)
-                && mouse_y >= line_y
-                && mouse_y <= line_y + line_height;
+            let choice_hovered =
+                info.awaiting && choice.is_some() && hovered_row == Some(*source_row);
             if input.is_some() {
                 self.rect_pipeline.push_rounded_rect(
                     layout.content.x,
@@ -732,7 +733,7 @@ impl Renderer {
         draw_icon(
             &mut self.rect_pipeline,
             Icon::Close,
-            [card.right() - padding, card.y + padding],
+            layout.close_button.center(),
             cell_height * 0.4 * 16.0 / 9.0,
             with_alpha(self.ui.palette_text_dim, 0.4 * anim),
         );
