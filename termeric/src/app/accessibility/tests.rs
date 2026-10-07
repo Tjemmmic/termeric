@@ -601,7 +601,7 @@ fn terminal_search_exposes_editable_status_controls_and_shared_geometry() {
     assert!(app.search.set_query("needle", terminal.grid()));
     app.search_cursor_pos = "needle".len();
     let info = app.search.build_info(app.search_cursor_pos);
-    let layout = app.search_accessibility_layout(&info, 1.0);
+    let layout = app.search_accessibility_layout(&info);
     let snapshot = app.accessibility_snapshot();
     let node = |id| {
         &snapshot
@@ -4414,4 +4414,29 @@ fn current_guardrail_confirm_with_missing_origin_never_falls_back() {
     });
     assert!(!app.guardrail.is_awaiting(request));
     assert!(app.tabs.is_none(), "no fallback terminal was created");
+}
+
+#[test]
+fn a_headless_tree_spans_the_window_its_dialogs_are_laid_out_in() {
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.info_overlay.set_reduced_motion(true);
+    let metrics = app.ui_metrics();
+    let window = Rect::new(0.0, 0.0, metrics.width as f64, metrics.height as f64);
+    let bounds = |snapshot: &SemanticSnapshot, id: NodeId| {
+        snapshot
+            .nodes
+            .iter()
+            .find(|(node_id, _)| *node_id == id)
+            .and_then(|(_, node)| node.bounds())
+            .unwrap()
+    };
+    assert_eq!(bounds(&app.accessibility_snapshot(), ROOT), window);
+
+    show_info_fixture(&mut app);
+    let snapshot = app.accessibility_snapshot();
+    assert_eq!(bounds(&snapshot, ROOT), window);
+    let dialog = bounds(&snapshot, INFO_DIALOG);
+    assert_eq!(dialog, bounds_rect(app.info_overlay_layout().card));
+    assert!(dialog.x0 >= window.x0 && dialog.x1 <= window.x1);
+    assert!(dialog.y0 >= window.y0 && dialog.y1 <= window.y1);
 }

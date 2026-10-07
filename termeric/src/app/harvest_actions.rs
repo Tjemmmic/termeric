@@ -49,28 +49,17 @@ impl App {
     pub(super) fn sprout_menu_layout(&self) -> Option<crate::harvest::SproutMenuLayout> {
         let menu = self.harvest.as_ref()?.sprout_menu.as_ref()?;
         let metrics = self.ui_metrics();
-        // A headless window has no tab rail or dock.
-        let (padding, content_left, content_top, content_right) = self.renderer.as_ref().map_or(
-            (self.config.window.padding as f32, 0.0, 0.0, metrics.width),
-            |renderer| {
-                (
-                    renderer.padding(),
-                    renderer.tab_bar_width(),
-                    renderer.content_top(),
-                    renderer.content_right(),
-                )
-            },
-        );
+        let area = self.pane_placement();
         Some(crate::harvest::SproutMenuLayout::calculate(
             menu.row,
             menu.col,
             menu.actions.len(),
             menu.width(),
-            content_right,
+            area.right,
             metrics.height,
-            content_left,
-            content_top,
-            padding,
+            area.left,
+            area.top,
+            area.padding,
             metrics.cell_width,
             metrics.cell_height,
         ))

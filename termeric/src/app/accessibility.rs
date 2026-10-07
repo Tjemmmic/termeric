@@ -2053,20 +2053,21 @@ impl App {
     fn search_accessibility_layout(
         &self,
         info: &crate::ui::search_bar::SearchBarInfo,
-        window_width: f32,
     ) -> crate::ui::search_bar::SearchBarLayout {
+        let metrics = self.ui_metrics();
         self.renderer.as_ref().map_or_else(
             || {
+                let area = self.pane_placement();
                 crate::ui::search_bar::SearchBarLayout::calculate(
                     info,
-                    0.0,
-                    window_width,
-                    1.0,
-                    8.0,
-                    16.0,
+                    area.left,
+                    area.right - area.left,
+                    area.top,
+                    metrics.cell_width,
+                    metrics.cell_height,
                 )
             },
-            |renderer| renderer.search_bar_layout(info, window_width),
+            |renderer| renderer.search_bar_layout(info, metrics.width),
         )
     }
 
@@ -2246,16 +2247,12 @@ impl App {
         }
         // Toasts sit in the terminal area's corner, clear of the dock.
         let UiMetrics {
-            width,
             height: window_height,
             cell_width,
             cell_height,
             ..
         } = self.ui_metrics();
-        let window_width = self
-            .renderer
-            .as_ref()
-            .map_or(width, crate::renderer::Renderer::content_right);
+        let window_width = self.pane_placement().right;
         let placements = crate::ui::toast::toast_layout(
             &toasts,
             window_width,
@@ -2301,34 +2298,13 @@ impl App {
     }
 
     fn accessibility_snapshot(&mut self) -> SemanticSnapshot {
-        let (
+        let UiMetrics {
             width,
             height,
-            tab_height,
+            tab_bar_height: tab_height,
             cell_width,
             cell_height,
-            padding,
-            content_left,
-            content_top,
-            content_right,
-        ) = self
-            .renderer
-            .as_ref()
-            .map(|renderer| {
-                let (width, height) = renderer.window_size();
-                (
-                    width as f32,
-                    height as f32,
-                    renderer.tab_bar_height(),
-                    renderer.cell_width(),
-                    renderer.cell_height(),
-                    renderer.padding(),
-                    renderer.tab_bar_width(),
-                    renderer.content_top(),
-                    renderer.content_right(),
-                )
-            })
-            .unwrap_or((1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0));
+        } = self.ui_metrics();
 
         // Search focus is stale whenever search is hidden, whatever is open.
         if !self.search_is_visible()
@@ -2509,7 +2485,7 @@ impl App {
 
         if self.search_is_visible() {
             let info = self.search.build_info(self.search_cursor_pos);
-            let layout = self.search_accessibility_layout(&info, width);
+            let layout = self.search_accessibility_layout(&info);
             let mut search_children = vec![
                 SEARCH_INPUT,
                 SEARCH_STATUS,
@@ -2632,13 +2608,7 @@ impl App {
         if let Some(tab) = self.tabs.as_ref().and_then(TabManager::active_tab) {
             let panes = &tab.panes;
             let lone = panes.pane_count() == 1;
-            let placement = crate::renderer::PanePlacement {
-                left: content_left,
-                top: content_top,
-                right: content_right,
-                bottom: height,
-                padding,
-            };
+            let placement = self.pane_placement();
             let focused = panes.focused_id();
             let mut ordered: Vec<_> = panes.iter_with_layout().collect();
             ordered.sort_by_key(|(pane, _)| pane.id.0);

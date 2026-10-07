@@ -2231,6 +2231,24 @@ impl App {
         )
     }
 
+    /// Where the terminal area sits in the window. A headless window, like
+    /// [`App::ui_metrics`]'s, has no tab rail or dock.
+    pub(super) fn pane_placement(&self) -> crate::renderer::PanePlacement {
+        self.renderer.as_ref().map_or_else(
+            || {
+                let metrics = self.ui_metrics();
+                crate::renderer::PanePlacement {
+                    left: 0.0,
+                    top: metrics.tab_bar_height,
+                    right: metrics.width,
+                    bottom: metrics.height,
+                    padding: self.config.window.padding as f32,
+                }
+            },
+            crate::renderer::Renderer::pane_placement,
+        )
+    }
+
     /// Record why this window must be redrawn and ask for a frame.
     fn request_redraw(&mut self, reason: RedrawReason) {
         self.redraw_scheduler.request(reason);
