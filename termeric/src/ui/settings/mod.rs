@@ -1177,9 +1177,17 @@ impl SettingsPanel {
         // Theme
         {
             let options = self.theme_names.clone();
+            // A custom theme loads by its exact file name and a built-in one
+            // whatever its case, so a configured "Nord" selects "nord" unless
+            // a custom "Nord" is offered too.
             let selected = options
                 .iter()
-                .position(|n| n == &config.theme.name)
+                .position(|name| name == &config.theme.name)
+                .or_else(|| {
+                    options
+                        .iter()
+                        .position(|name| name.eq_ignore_ascii_case(&config.theme.name))
+                })
                 .unwrap_or(0);
             let mut items = vec![SettingItem {
                 label: "Theme",
@@ -3193,6 +3201,31 @@ mod tests {
             theme_options(&panel),
             (vec!["dune".to_string(), config.theme.name.clone()], 1)
         );
+    }
+
+    #[test]
+    fn the_theme_dropdown_selects_the_configured_theme_whatever_its_case() {
+        let mut panel = SettingsPanel::new();
+        let mut config = Config::default();
+        config.theme.name = "Nord".into();
+        let selected = |panel: &SettingsPanel| {
+            panel
+                .build_entries(&config, &default_registry())
+                .iter()
+                .find_map(|entry| match &entry.kind {
+                    SettingKind::Dropdown {
+                        options, selected, ..
+                    } if entry.label == "Theme" => Some(options[*selected].clone()),
+                    _ => None,
+                })
+                .expect("theme dropdown")
+        };
+        // Built-in themes load whatever the configured case.
+        assert_eq!(selected(&panel), "nord");
+        // A custom theme loads only by its exact name, so it wins over the
+        // built-in one that differs in case.
+        panel.set_theme_names(vec!["nord".into(), "Nord".into()]);
+        assert_eq!(selected(&panel), "Nord");
     }
 
     #[test]
