@@ -894,11 +894,16 @@ impl Request {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if self
+            .request_id()
+            .is_some_and(|request_id| !valid_request_id(request_id))
+        {
+            return Err("GUI control request ID must be exactly 32 lowercase hex digits".into());
+        }
         match self {
             Self::Inventory => Ok(()),
             Self::ListAgents { supervisor } => validate_supervisor(supervisor.as_deref()),
             Self::SubmitToAgent {
-                request_id,
                 window_id,
                 agent_id,
                 text,
@@ -906,14 +911,7 @@ impl Request {
                 ..
             } => {
                 validate_supervisor(supervisor.as_deref())?;
-                if !valid_request_id(request_id) {
-                    return Err(
-                        "GUI control request ID must be exactly 32 lowercase hex digits".into(),
-                    );
-                }
-                if *window_id == 0 {
-                    return Err("GUI control target window ID must be nonzero".into());
-                }
+                require_target_window(*window_id)?;
                 if !valid_agent_id(agent_id) {
                     return Err("Agent ID must be 1-64 letters, digits, '-' or '_'".into());
                 }
@@ -937,7 +935,6 @@ impl Request {
                 Ok(())
             }
             Self::AnswerApproval {
-                request_id,
                 window_id,
                 session_id,
                 approval_id,
@@ -946,11 +943,6 @@ impl Request {
                 ..
             } => {
                 validate_supervisor(supervisor.as_deref())?;
-                if !valid_request_id(request_id) {
-                    return Err(
-                        "GUI control request ID must be exactly 32 lowercase hex digits".into(),
-                    );
-                }
                 if *window_id == 0 || *session_id == 0 {
                     return Err("Approval answers need a nonzero window and session".into());
                 }
@@ -968,18 +960,13 @@ impl Request {
                 Ok(())
             }
             Self::SubmitToSession {
-                request_id,
                 window_id,
                 session_id,
                 text,
                 supervisor,
+                ..
             } => {
                 validate_supervisor(supervisor.as_deref())?;
-                if !valid_request_id(request_id) {
-                    return Err(
-                        "GUI control request ID must be exactly 32 lowercase hex digits".into(),
-                    );
-                }
                 if *window_id == 0 || *session_id == 0 {
                     return Err("Session input needs a nonzero window and session".into());
                 }
@@ -1019,9 +1006,7 @@ impl Request {
                 max_bytes,
                 ..
             } => {
-                if *window_id == 0 {
-                    return Err("GUI control target window ID must be nonzero".into());
-                }
+                require_target_window(*window_id)?;
                 if *history_lines > MAX_TEXT_HISTORY_LINES {
                     return Err(format!(
                         "GUI terminal-text history is limited to {MAX_TEXT_HISTORY_LINES} lines"
@@ -1035,20 +1020,12 @@ impl Request {
                 Ok(())
             }
             Self::SendText {
-                request_id,
                 window_id,
                 text,
                 enter,
                 ..
             } => {
-                if !valid_request_id(request_id) {
-                    return Err(
-                        "GUI control request ID must be exactly 32 lowercase hex digits".into(),
-                    );
-                }
-                if *window_id == 0 {
-                    return Err("GUI control target window ID must be nonzero".into());
-                }
+                require_target_window(*window_id)?;
                 if text.len() > MAX_CONTROL_INPUT_BYTES {
                     return Err(format!(
                         "GUI control input is limited to {MAX_CONTROL_INPUT_BYTES} UTF-8 bytes"
@@ -1064,37 +1041,24 @@ impl Request {
                 }
                 Ok(())
             }
-            Self::CreateWindow {
-                request_id,
-                source_window,
-            } => {
-                if !valid_request_id(request_id) {
-                    return Err(
-                        "GUI control request ID must be exactly 32 lowercase hex digits".into(),
-                    );
-                }
+            Self::CreateWindow { source_window, .. } => {
                 if *source_window == 0 {
                     return Err("GUI control source window ID must be nonzero".into());
                 }
                 Ok(())
             }
             Self::JoinLaunch {
-                request_id,
                 display,
                 activation_token,
                 build,
                 environment,
                 tabs,
+                ..
             } => {
-                if !valid_request_id(request_id) {
-                    return Err(
-                        "GUI control request ID must be exactly 32 lowercase hex digits".into(),
-                    );
-                }
                 let identity = |value: &str| {
                     !value.is_empty()
                         && value.len() <= MAX_JOIN_IDENTITY_BYTES
-                        && !value.chars().any(unsafe_control_metadata_character)
+                        && !value.chars().any(crate::safe_text::is_unsafe_display_char)
                 };
                 if !identity(display)
                     || !identity(build)
@@ -1141,23 +1105,12 @@ impl Request {
                 }
                 Ok(())
             }
-            Self::CreateTab {
-                request_id,
-                window_id,
-            } => {
-                if !valid_request_id(request_id) {
-                    return Err(
-                        "GUI control request ID must be exactly 32 lowercase hex digits".into(),
-                    );
-                }
-                if *window_id == 0 {
-                    return Err("GUI control target window ID must be nonzero".into());
-                }
+            Self::CreateTab { window_id, .. } => {
+                require_target_window(*window_id)?;
                 Ok(())
             }
             Self::LaunchTab {
                 background: _,
-                request_id,
                 window_id,
                 program,
                 args,
@@ -1165,15 +1118,9 @@ impl Request {
                 title,
                 environment,
                 environment_policy,
+                ..
             } => {
-                if !valid_request_id(request_id) {
-                    return Err(
-                        "GUI control request ID must be exactly 32 lowercase hex digits".into(),
-                    );
-                }
-                if *window_id == 0 {
-                    return Err("GUI control target window ID must be nonzero".into());
-                }
+                require_target_window(*window_id)?;
                 validate_control_launch(
                     program,
                     args,
@@ -1184,7 +1131,6 @@ impl Request {
                 )
             }
             Self::LaunchWindow {
-                request_id,
                 source_window,
                 program,
                 args,
@@ -1192,12 +1138,8 @@ impl Request {
                 title,
                 environment,
                 environment_policy,
+                ..
             } => {
-                if !valid_request_id(request_id) {
-                    return Err(
-                        "GUI control request ID must be exactly 32 lowercase hex digits".into(),
-                    );
-                }
                 if *source_window == 0 {
                     return Err("GUI control source window ID must be nonzero".into());
                 }
@@ -1210,76 +1152,26 @@ impl Request {
                     environment_policy,
                 )
             }
-            Self::SplitPane {
-                request_id,
-                window_id,
-                ..
-            } => {
-                if !valid_request_id(request_id) {
-                    return Err(
-                        "GUI control request ID must be exactly 32 lowercase hex digits".into(),
-                    );
-                }
-                if *window_id == 0 {
-                    return Err("GUI control target window ID must be nonzero".into());
-                }
+            Self::SplitPane { window_id, .. } => {
+                require_target_window(*window_id)?;
                 Ok(())
             }
-            Self::FocusWindow {
-                request_id,
-                window_id,
-            }
-            | Self::SetQuickAccessVisibility {
-                request_id,
-                window_id,
-                ..
-            }
-            | Self::SelectTab {
-                request_id,
-                window_id,
-                ..
-            }
-            | Self::FocusPane {
-                request_id,
-                window_id,
-                ..
-            }
-            | Self::CloseWindow {
-                request_id,
-                window_id,
-            }
-            | Self::CloseTab {
-                request_id,
-                window_id,
-                ..
-            }
-            | Self::ClosePane {
-                request_id,
-                window_id,
-                ..
-            } => {
-                if !valid_request_id(request_id) {
-                    return Err(
-                        "GUI control request ID must be exactly 32 lowercase hex digits".into(),
-                    );
-                }
-                if *window_id == 0 {
-                    return Err("GUI control target window ID must be nonzero".into());
-                }
+            Self::FocusWindow { window_id, .. }
+            | Self::SetQuickAccessVisibility { window_id, .. }
+            | Self::SelectTab { window_id, .. }
+            | Self::FocusPane { window_id, .. }
+            | Self::CloseWindow { window_id, .. }
+            | Self::CloseTab { window_id, .. }
+            | Self::ClosePane { window_id, .. } => {
+                require_target_window(*window_id)?;
                 Ok(())
             }
             Self::MoveTab {
-                request_id,
                 source_window_id,
                 destination_window_id,
                 destination_index,
                 ..
             } => {
-                if !valid_request_id(request_id) {
-                    return Err(
-                        "GUI control request ID must be exactly 32 lowercase hex digits".into(),
-                    );
-                }
                 if *source_window_id == 0 || *destination_window_id == 0 {
                     return Err(
                         "GUI control source and destination window IDs must be nonzero".into(),
@@ -1293,16 +1185,10 @@ impl Request {
                 Ok(())
             }
             Self::MovePane {
-                request_id,
                 source_window_id,
                 destination_window_id,
                 ..
             } => {
-                if !valid_request_id(request_id) {
-                    return Err(
-                        "GUI control request ID must be exactly 32 lowercase hex digits".into(),
-                    );
-                }
                 if *source_window_id == 0 || *destination_window_id == 0 {
                     return Err(
                         "GUI control source and destination window IDs must be nonzero".into(),
@@ -1311,19 +1197,12 @@ impl Request {
                 Ok(())
             }
             Self::ResizeWindow {
-                request_id,
                 window_id,
                 width,
                 height,
+                ..
             } => {
-                if !valid_request_id(request_id) {
-                    return Err(
-                        "GUI control request ID must be exactly 32 lowercase hex digits".into(),
-                    );
-                }
-                if *window_id == 0 {
-                    return Err("GUI control target window ID must be nonzero".into());
-                }
+                require_target_window(*window_id)?;
                 if !(MIN_WINDOW_WIDTH..=MAX_WINDOW_DIMENSION).contains(width)
                     || !(MIN_WINDOW_HEIGHT..=MAX_WINDOW_DIMENSION).contains(height)
                 {
@@ -1334,19 +1213,11 @@ impl Request {
                 Ok(())
             }
             Self::ResizeDivider {
-                request_id,
                 window_id,
                 ratio_millis,
                 ..
             } => {
-                if !valid_request_id(request_id) {
-                    return Err(
-                        "GUI control request ID must be exactly 32 lowercase hex digits".into(),
-                    );
-                }
-                if *window_id == 0 {
-                    return Err("GUI control target window ID must be nonzero".into());
-                }
+                require_target_window(*window_id)?;
                 if !(100..=900).contains(ratio_millis) {
                     return Err("GUI divider ratio must be between 100 and 900 thousandths".into());
                 }
@@ -1425,6 +1296,13 @@ impl Request {
 }
 
 /// Supervisor tokens are 32 lowercase hex digits, like request IDs.
+fn require_target_window(window_id: u64) -> Result<(), String> {
+    if window_id == 0 {
+        return Err("GUI control target window ID must be nonzero".into());
+    }
+    Ok(())
+}
+
 fn validate_supervisor(token: Option<&str>) -> Result<(), String> {
     if token.is_some_and(|token| !valid_request_id(token)) {
         return Err("Supervisor token must be exactly 32 lowercase hex digits".into());
@@ -1480,7 +1358,11 @@ fn validate_control_launch(
     environment: &[EnvironmentVariable],
     environment_policy: &termeric_core::pty::EnvironmentPolicy,
 ) -> Result<(), String> {
-    if program.is_empty() || program.chars().any(unsafe_control_metadata_character) {
+    if program.is_empty()
+        || program
+            .chars()
+            .any(crate::safe_text::is_unsafe_display_char)
+    {
         return Err(
             "GUI control launch program must be nonempty UTF-8 without control or bidirectional formatting text"
                 .into(),
@@ -1517,7 +1399,9 @@ fn validate_launch_place(
         && (directory.is_empty()
             || directory.len() > MAX_CONTROL_LAUNCH_CWD_BYTES
             || !std::path::Path::new(directory).is_absolute()
-            || directory.chars().any(unsafe_control_metadata_character))
+            || directory
+                .chars()
+                .any(crate::safe_text::is_unsafe_display_char))
     {
         return Err(format!(
             "GUI control launch working directory must be an absolute UTF-8 path of at most {MAX_CONTROL_LAUNCH_CWD_BYTES} bytes without control or bidirectional formatting text"
@@ -1526,7 +1410,7 @@ fn validate_launch_place(
     if let Some(title) = title
         && (title.trim().is_empty()
             || title.len() > MAX_CONTROL_LAUNCH_TITLE_BYTES
-            || title.chars().any(unsafe_control_metadata_character))
+            || title.chars().any(crate::safe_text::is_unsafe_display_char))
     {
         return Err(format!(
             "GUI control launch title must be nonempty UTF-8 of at most {MAX_CONTROL_LAUNCH_TITLE_BYTES} bytes without control or bidirectional formatting text"
@@ -1595,10 +1479,6 @@ pub fn valid_control_input_text(value: &str) -> bool {
     value
         .chars()
         .all(|character| !character.is_control() || matches!(character, '\n' | '\t'))
-}
-
-fn unsafe_control_metadata_character(character: char) -> bool {
-    crate::safe_text::is_unsafe_display_char(character)
 }
 
 /// An agent's own identifier for one approval request.
@@ -1779,7 +1659,8 @@ fn validate_metadata(value: Option<&str>, total: &mut usize) -> anyhow::Result<(
     let Some(value) = value else {
         return Ok(());
     };
-    if value.len() > MAX_FIELD_BYTES || value.chars().any(unsafe_control_metadata_character) {
+    if value.len() > MAX_FIELD_BYTES || value.chars().any(crate::safe_text::is_unsafe_display_char)
+    {
         anyhow::bail!("GUI inventory contains unsafe or oversized metadata");
     }
     *total = total
