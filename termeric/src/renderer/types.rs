@@ -233,6 +233,7 @@ pub struct GuardrailInfo {
     pub target: String,
     /// As which user (e.g., "root", "deploy")
     pub user: String,
+    pub layout: crate::ui::guardrail::GuardrailLayout,
 }
 
 /// Whether a pane is a broadcast target, and whether broadcasting is live.

@@ -591,20 +591,12 @@ impl App {
                 && button == winit::event::MouseButton::Left
             {
                 let request_id = self.guardrail.request_id();
-                let action =
-                    if let (Some(pos), Some(renderer)) = (self.last_cursor_pos, &self.renderer) {
-                        let (width, height) = renderer.window_size();
-                        let layout = crate::ui::guardrail::GuardrailLayout::calculate(
-                            width as f32,
-                            height as f32,
-                            renderer.cell_width(),
-                            renderer.cell_height(),
-                            self.guardrail.animation(),
-                        );
-                        layout.hit_test(pos.0 as f32, pos.1 as f32, request_id)
-                    } else {
-                        crate::terminal::guardrails::GuardrailAction::Cancel { request_id }
-                    };
+                let action = if let Some(pos) = self.last_cursor_pos {
+                    self.guardrail_layout()
+                        .hit_test(pos.0 as f32, pos.1 as f32, request_id)
+                } else {
+                    crate::terminal::guardrails::GuardrailAction::Cancel { request_id }
+                };
                 self.apply_guardrail_action(action);
                 self.request_redraw(RedrawReason::PointerInput);
             }
@@ -619,20 +611,8 @@ impl App {
                     winit::event::MouseButton::Left | winit::event::MouseButton::Middle
                 )
             {
-                if let (Some(pos), Some(renderer)) = (self.last_cursor_pos, &self.renderer) {
-                    use crate::ui::info_overlay::InfoOverlayLayout;
-                    let (sw, sh) = renderer.window_size();
-                    let layout = InfoOverlayLayout::calculate(
-                        sw as f32,
-                        sh as f32,
-                        renderer.cell_width(),
-                        renderer.cell_height(),
-                        self.info_overlay.animation(),
-                        self.info_overlay.title(),
-                        self.info_overlay.lines().len(),
-                        self.info_overlay.max_line_chars(),
-                    );
-
+                if let Some(pos) = self.last_cursor_pos {
+                    let layout = self.info_overlay_layout();
                     let (mx, my) = (pos.0 as f32, pos.1 as f32);
                     let press = if layout.copy_button.contains(mx, my) {
                         super::info_overlay::InfoOverlayPress::CopyButton
@@ -662,22 +642,13 @@ impl App {
         if self.modal_layer_on_top(ModalLayer::DiffReview) {
             if state == winit::event::ElementState::Pressed
                 && button == winit::event::MouseButton::Left
-                && let (Some(pos), Some(renderer)) = (self.last_cursor_pos, &self.renderer)
+                && let Some(pos) = self.last_cursor_pos
             {
-                let (width, height) = renderer.window_size();
-                let layout = crate::ui::diff_review::DiffReviewLayout::calculate(
-                    width as f32,
-                    height as f32,
-                    renderer.cell_width(),
-                    renderer.cell_height(),
-                    self.diff_review.animation(),
-                    self.diff_review.filename(),
-                    self.diff_review.rows().len(),
-                    self.diff_review.max_line_chars(),
-                    self.diff_review.has_change_actions(),
+                let action = self.diff_review_layout().hit_test(
+                    pos.0 as f32,
+                    pos.1 as f32,
+                    self.diff_review.request_id(),
                 );
-                let action =
-                    layout.hit_test(pos.0 as f32, pos.1 as f32, self.diff_review.request_id());
                 self.apply_diff_review_action(action);
                 self.request_redraw(RedrawReason::PointerInput);
             }
@@ -686,20 +657,12 @@ impl App {
         if self.modal_layer_on_top(ModalLayer::ContextPicker) {
             if state == winit::event::ElementState::Pressed
                 && button == winit::event::MouseButton::Left
-                && let (Some(pos), Some(renderer)) = (self.last_cursor_pos, &self.renderer)
+                && let Some(pos) = self.last_cursor_pos
             {
-                let (width, height) = renderer.window_size();
                 let snapshot = self.context_picker.snapshot();
-                let layout = crate::ui::context_picker::ContextPickerLayout::calculate(
-                    width as f32,
-                    height as f32,
-                    renderer.cell_width(),
-                    renderer.cell_height(),
-                    snapshot.animation,
-                    snapshot.phase,
-                    snapshot.sources.len(),
-                );
-                let action = layout.hit_test(pos.0 as f32, pos.1 as f32, &snapshot);
+                let action =
+                    self.context_picker_layout()
+                        .hit_test(pos.0 as f32, pos.1 as f32, &snapshot);
                 self.apply_context_picker_action(action);
                 self.request_redraw(RedrawReason::PointerInput);
             }

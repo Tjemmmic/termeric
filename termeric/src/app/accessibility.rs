@@ -1365,83 +1365,6 @@ impl App {
         self.apply_context_picker_action(action);
     }
 
-    fn info_accessibility_layout(&self) -> crate::ui::info_overlay::InfoOverlayLayout {
-        let UiMetrics {
-            width,
-            height,
-            cell_width,
-            cell_height,
-            ..
-        } = self.ui_metrics();
-        crate::ui::info_overlay::InfoOverlayLayout::calculate(
-            width,
-            height,
-            cell_width,
-            cell_height,
-            self.info_overlay.animation(),
-            self.info_overlay.title(),
-            self.info_overlay.lines().len(),
-            self.info_overlay.max_line_chars(),
-        )
-    }
-
-    fn diff_accessibility_layout(&self) -> crate::ui::diff_review::DiffReviewLayout {
-        let UiMetrics {
-            width,
-            height,
-            cell_width,
-            cell_height,
-            ..
-        } = self.ui_metrics();
-        crate::ui::diff_review::DiffReviewLayout::calculate(
-            width,
-            height,
-            cell_width,
-            cell_height,
-            self.diff_review.animation(),
-            self.diff_review.filename(),
-            self.diff_review.rows().len(),
-            self.diff_review.max_line_chars(),
-            self.diff_review.has_change_actions(),
-        )
-    }
-
-    fn context_accessibility_layout(&self) -> crate::ui::context_picker::ContextPickerLayout {
-        let UiMetrics {
-            width,
-            height,
-            cell_width,
-            cell_height,
-            ..
-        } = self.ui_metrics();
-        crate::ui::context_picker::ContextPickerLayout::calculate(
-            width,
-            height,
-            cell_width,
-            cell_height,
-            self.context_picker.animation(),
-            self.context_picker.phase(),
-            self.context_picker.sources().len(),
-        )
-    }
-
-    fn guardrail_accessibility_layout(&self) -> crate::ui::guardrail::GuardrailLayout {
-        let UiMetrics {
-            width,
-            height,
-            cell_width,
-            cell_height,
-            ..
-        } = self.ui_metrics();
-        crate::ui::guardrail::GuardrailLayout::calculate(
-            width,
-            height,
-            cell_width,
-            cell_height,
-            self.guardrail.animation(),
-        )
-    }
-
     fn handle_settings_accessibility_action(&mut self, request: ActionRequest) {
         if request.target_node == SETTINGS_INPUT {
             // A retained node must not edit or take focus from a live dropdown.
@@ -3499,7 +3422,7 @@ impl App {
         window_width: f32,
         window_height: f32,
     ) -> SemanticSnapshot {
-        let layout = self.info_accessibility_layout();
+        let layout = self.info_overlay_layout();
         self.info_overlay
             .set_viewport(layout.rows_that_fit, layout.columns_that_fit);
         let request_id = self.info_overlay.request_id();
@@ -3756,7 +3679,7 @@ impl App {
     ) -> SemanticSnapshot {
         use crate::ui::context_picker::{ContextPickerPhase, ContextSourceId};
 
-        let layout = self.context_accessibility_layout();
+        let layout = self.context_picker_layout();
         self.context_picker.set_viewport(layout.visible_count);
         let snapshot = self.context_picker.snapshot();
         let request_id = snapshot.request_id;
@@ -4014,7 +3937,7 @@ impl App {
         window_width: f32,
         window_height: f32,
     ) -> SemanticSnapshot {
-        let layout = self.diff_accessibility_layout();
+        let layout = self.diff_review_layout();
         self.diff_review
             .set_viewport(layout.rows_that_fit, layout.columns_that_fit);
         let request_id = self.diff_review.request_id();
@@ -4197,7 +4120,7 @@ impl App {
         window_width: f32,
         window_height: f32,
     ) -> SemanticSnapshot {
-        let layout = self.guardrail_accessibility_layout();
+        let layout = self.guardrail_layout();
         let request_id = self.guardrail.request_id();
         let awaiting = self.guardrail.is_awaiting_current();
         let matched = self.guardrail.matched.clone();

@@ -66,14 +66,14 @@ impl App {
             .shortcuts_panel
             .tick_recording_timeout(std::time::Duration::from_secs(15));
         let shortcuts = self.shortcuts_frame_info(metrics);
-        let info_overlay = self.info_overlay_frame_info(metrics);
+        let info_overlay = self.info_overlay_frame_info();
         animating |= self.info_overlay.update_animation();
         // Toast lifecycle: prune expired, then snapshot.
         animating |= self.toasts.update();
         let toasts = self.toasts.build_info();
-        let diff_review = self.diff_review_frame_info(metrics);
+        let diff_review = self.diff_review_frame_info();
         animating |= self.diff_review.update_animation();
-        let context_picker = self.context_picker_frame_info(metrics);
+        let context_picker = self.context_picker_frame_info();
         animating |= self.context_picker.update_animation();
         let guardrail = self.guardrail_frame_info();
         animating |= self.guardrail.update_animation();
@@ -182,20 +182,11 @@ impl App {
         Some(self.shortcuts_panel.build_info(&self.shortcut_registry))
     }
 
-    fn info_overlay_frame_info(&mut self, metrics: &UiMetrics) -> Option<InfoOverlayInfo> {
+    fn info_overlay_frame_info(&mut self) -> Option<InfoOverlayInfo> {
         if !self.info_overlay.is_visible() {
             return None;
         }
-        let layout = crate::ui::info_overlay::InfoOverlayLayout::calculate(
-            metrics.width,
-            metrics.height,
-            metrics.cell_width,
-            metrics.cell_height,
-            self.info_overlay.animation(),
-            self.info_overlay.title(),
-            self.info_overlay.lines().len(),
-            self.info_overlay.max_line_chars(),
-        );
+        let layout = self.info_overlay_layout();
         self.info_overlay
             .set_viewport(layout.rows_that_fit, layout.columns_that_fit);
         let scroll_offset = self.info_overlay.scroll_offset();
@@ -240,21 +231,11 @@ impl App {
         })
     }
 
-    fn diff_review_frame_info(&mut self, metrics: &UiMetrics) -> Option<DiffReviewInfo> {
+    fn diff_review_frame_info(&mut self) -> Option<DiffReviewInfo> {
         if !self.diff_review.is_visible() {
             return None;
         }
-        let layout = crate::ui::diff_review::DiffReviewLayout::calculate(
-            metrics.width,
-            metrics.height,
-            metrics.cell_width,
-            metrics.cell_height,
-            self.diff_review.animation(),
-            self.diff_review.filename(),
-            self.diff_review.rows().len(),
-            self.diff_review.max_line_chars(),
-            self.diff_review.has_change_actions(),
-        );
+        let layout = self.diff_review_layout();
         self.diff_review
             .set_viewport(layout.rows_that_fit, layout.columns_that_fit);
         Some(DiffReviewInfo {
@@ -275,19 +256,11 @@ impl App {
         })
     }
 
-    fn context_picker_frame_info(&mut self, metrics: &UiMetrics) -> Option<ContextPickerInfo> {
+    fn context_picker_frame_info(&mut self) -> Option<ContextPickerInfo> {
         if !self.context_picker.is_visible() {
             return None;
         }
-        let layout = crate::ui::context_picker::ContextPickerLayout::calculate(
-            metrics.width,
-            metrics.height,
-            metrics.cell_width,
-            metrics.cell_height,
-            self.context_picker.animation(),
-            self.context_picker.phase(),
-            self.context_picker.sources().len(),
-        );
+        let layout = self.context_picker_layout();
         self.context_picker.set_viewport(layout.visible_count);
         Some(ContextPickerInfo {
             snapshot: self.context_picker.snapshot(),
@@ -308,6 +281,7 @@ impl App {
             animation: self.guardrail.animation(),
             target: m.target.clone(),
             user: m.user.clone(),
+            layout: self.guardrail_layout(),
         })
     }
 

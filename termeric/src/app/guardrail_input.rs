@@ -4,6 +4,19 @@
 use super::*;
 
 impl App {
+    /// The guardrail card's geometry, shared by drawing, pointer hits, and
+    /// accessibility.
+    pub(super) fn guardrail_layout(&self) -> crate::ui::guardrail::GuardrailLayout {
+        let metrics = self.ui_metrics();
+        crate::ui::guardrail::GuardrailLayout::calculate(
+            metrics.width,
+            metrics.height,
+            metrics.cell_width,
+            metrics.cell_height,
+            self.guardrail.animation(),
+        )
+    }
+
     /// Ctrl+Enter confirms the guarded write; Enter or Escape cancels it.
     pub(super) fn handle_guardrail_key(&mut self, key: &winit::keyboard::Key) {
         use winit::keyboard::{Key, NamedKey};

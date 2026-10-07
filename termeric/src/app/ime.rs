@@ -220,17 +220,7 @@ impl App {
         if target == TextTarget::InfoOverlayInput {
             let request_id = self.info_overlay.request_id();
             let input = self.info_overlay.input_info(request_id)?;
-            let (window_width, window_height) = renderer.window_size();
-            let layout = crate::ui::info_overlay::InfoOverlayLayout::calculate(
-                window_width as f32,
-                window_height as f32,
-                renderer.cell_width(),
-                renderer.cell_height(),
-                self.info_overlay.animation(),
-                self.info_overlay.title(),
-                self.info_overlay.lines().len(),
-                self.info_overlay.max_line_chars(),
-            );
+            let layout = self.info_overlay_layout();
             let row = layout.source_line_rect(
                 input.source_line,
                 self.info_overlay.scroll_offset(),

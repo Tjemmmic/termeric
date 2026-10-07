@@ -10,7 +10,6 @@ use super::icons::draw_icon;
 use super::types::*;
 use crate::ui::color::{mix, scale_alpha, with_alpha};
 use crate::ui::constants::*;
-use crate::ui::guardrail::GuardrailLayout;
 use crate::ui::icon::Icon;
 
 impl Renderer {
@@ -682,8 +681,7 @@ impl Renderer {
         );
 
         // Card geometry — shared with pointer and accessibility hit targets.
-        let layout =
-            GuardrailLayout::calculate(window_width, window_height, cell_width, cell_height, anim);
+        let layout = &info.layout;
         let padding = layout.padding;
         let card = layout.card;
         let text_width = card.width - padding * 2.0;

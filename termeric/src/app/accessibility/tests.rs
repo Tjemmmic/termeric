@@ -3658,7 +3658,7 @@ fn info_overlay_keyboard_and_assistive_focus_share_the_same_owner_and_bounds() {
         id: "safe-choice".into(),
     }];
     assert_eq!(snapshot.focus, choice);
-    let layout = app.info_accessibility_layout();
+    let layout = app.info_overlay_layout();
     let bounds = snapshot
         .nodes
         .iter()
@@ -3718,7 +3718,7 @@ fn info_overlay_is_one_scrollable_modal_tree_with_shared_geometry() {
     let mut app = App::new_headless(Config::default()).unwrap();
     app.info_overlay.set_reduced_motion(true);
     let request = show_info_fixture(&mut app);
-    let layout = app.info_accessibility_layout();
+    let layout = app.info_overlay_layout();
     let snapshot = app.accessibility_snapshot();
     let node = |id| {
         &snapshot
@@ -3870,7 +3870,7 @@ fn info_overlay_input_is_editable_focused_and_uses_shared_row_geometry() {
         32,
         Vec::new(),
     );
-    let layout = app.info_accessibility_layout();
+    let layout = app.info_overlay_layout();
     let snapshot = app.accessibility_snapshot();
     let input_id = *app
         .accessibility
@@ -3939,7 +3939,7 @@ fn diff_review_is_one_scrollable_modal_tree_with_shared_geometry() {
     let mut app = App::new_headless(Config::default()).unwrap();
     app.diff_review.set_reduced_motion(true);
     let request = show_diff_fixture(&mut app, 41);
-    let layout = app.diff_accessibility_layout();
+    let layout = app.diff_review_layout();
     let snapshot = app.accessibility_snapshot();
     let node = |id| {
         &snapshot
@@ -4070,7 +4070,7 @@ fn context_picker_is_one_modal_checkbox_tree_with_shared_geometry() {
     let mut app = App::new_headless(Config::default()).unwrap();
     app.context_picker.set_reduced_motion(true);
     let request = show_context_fixture(&mut app, 70, None);
-    let layout = app.context_accessibility_layout();
+    let layout = app.context_picker_layout();
     let snapshot = app.accessibility_snapshot();
     let node = |id| {
         &snapshot
@@ -4301,7 +4301,7 @@ fn show_guardrail_fixture(app: &mut App) -> u64 {
 fn guardrail_is_assertive_modal_with_safe_default_and_shared_geometry() {
     let mut app = App::new_headless(Config::default()).unwrap();
     let request = show_guardrail_fixture(&mut app);
-    let layout = app.guardrail_accessibility_layout();
+    let layout = app.guardrail_layout();
     let snapshot = app.accessibility_snapshot();
     let node = |id| {
         &snapshot

@@ -4,6 +4,21 @@
 use super::*;
 
 impl App {
+    /// The context picker's geometry, shared by drawing, pointer hits, and
+    /// accessibility.
+    pub(super) fn context_picker_layout(&self) -> crate::ui::context_picker::ContextPickerLayout {
+        let metrics = self.ui_metrics();
+        crate::ui::context_picker::ContextPickerLayout::calculate(
+            metrics.width,
+            metrics.height,
+            metrics.cell_width,
+            metrics.cell_height,
+            self.context_picker.animation(),
+            self.context_picker.phase(),
+            self.context_picker.sources().len(),
+        )
+    }
+
     /// Keys for the context picker: choosing sources, then typing file paths.
     pub(super) fn handle_context_picker_key(&mut self, key: &winit::keyboard::Key) {
         use crate::ui::context_picker::{ContextPickerAction, ContextPickerPhase};

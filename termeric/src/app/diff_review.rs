@@ -4,6 +4,23 @@
 use super::*;
 
 impl App {
+    /// Diff review's geometry, shared by drawing, pointer hits, and
+    /// accessibility.
+    pub(super) fn diff_review_layout(&self) -> crate::ui::diff_review::DiffReviewLayout {
+        let metrics = self.ui_metrics();
+        crate::ui::diff_review::DiffReviewLayout::calculate(
+            metrics.width,
+            metrics.height,
+            metrics.cell_width,
+            metrics.cell_height,
+            self.diff_review.animation(),
+            self.diff_review.filename(),
+            self.diff_review.rows().len(),
+            self.diff_review.max_line_chars(),
+            self.diff_review.has_change_actions(),
+        )
+    }
+
     /// Keys for diff review: scrolling, copy, and staging or reverting an agent change.
     pub(super) fn handle_diff_review_key(&mut self, key: &winit::keyboard::Key) {
         use super::overlay_scroll::{OverlayScroll, overlay_scroll_for_key};

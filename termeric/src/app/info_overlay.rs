@@ -20,6 +20,22 @@ pub(super) enum InfoOverlayPress {
 }
 
 impl App {
+    /// The info overlay's geometry, shared by drawing, pointer hits, the IME
+    /// caret, and accessibility.
+    pub(super) fn info_overlay_layout(&self) -> crate::ui::info_overlay::InfoOverlayLayout {
+        let metrics = self.ui_metrics();
+        crate::ui::info_overlay::InfoOverlayLayout::calculate(
+            metrics.width,
+            metrics.height,
+            metrics.cell_width,
+            metrics.cell_height,
+            self.info_overlay.animation(),
+            self.info_overlay.title(),
+            self.info_overlay.lines().len(),
+            self.info_overlay.max_line_chars(),
+        )
+    }
+
     /// Keys for the info overlay: focus, its text field, scrolling, copy, and choice shortcuts.
     pub(super) fn handle_info_overlay_key(&mut self, key: &winit::keyboard::Key, repeat: bool) {
         use super::overlay_scroll::{OverlayScroll, overlay_scroll_for_key};
