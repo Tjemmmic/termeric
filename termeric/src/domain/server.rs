@@ -18,7 +18,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use termeric_core::pty::{PtyCommand, PtyHandle, PtySize, default_pty_size};
-use termeric_core::split::LayoutShape;
 use termeric_core::term::{TerminalMode, XtermKeyboardType};
 use termeric_core::{Pty, Terminal, TerminalEvent};
 
@@ -1415,7 +1414,7 @@ fn split_pane(
         let tab_id = tab.id;
         let old_layout = tab.layout.clone();
         let old_focus = tab.focused_pane;
-        if !split_layout(&mut tab.layout, pane_id, new_id, split_id, direction) {
+        if !tab.layout.split_leaf(pane_id, new_id, split_id, direction) {
             anyhow::bail!("pane layout no longer contains pane {pane_id}");
         }
         tab.panes.insert(new_id, new_pane);
@@ -1453,32 +1452,6 @@ fn split_pane(
     Ok(Response::Domain { domain: snapshot })
 }
 
-fn split_layout(
-    layout: &mut LivePaneLayout,
-    target: u32,
-    new_pane: u32,
-    split_id: u32,
-    direction: SplitDirection,
-) -> bool {
-    match layout {
-        LivePaneLayout::Pane { pane } if *pane == target => {
-            *layout = LivePaneLayout::Split {
-                split_id,
-                direction,
-                ratio_millis: 500,
-                first: Box::new(LivePaneLayout::Pane { pane: target }),
-                second: Box::new(LivePaneLayout::Pane { pane: new_pane }),
-            };
-            true
-        }
-        LivePaneLayout::Pane { .. } => false,
-        LivePaneLayout::Split { first, second, .. } => {
-            split_layout(first, target, new_pane, split_id, direction)
-                || split_layout(second, target, new_pane, split_id, direction)
-        }
-    }
-}
-
 fn resize_domain_split(
     state: &SharedState,
     domain_id: &str,
@@ -1497,7 +1470,7 @@ fn resize_domain_split(
     let changed = domain
         .tabs
         .iter_mut()
-        .find_map(|tab| resize_layout_split(&mut tab.layout, split_id, ratio_millis))
+        .find_map(|tab| tab.layout.resize_split(split_id, ratio_millis))
         .context("split not found")?;
     if changed {
         domain.publish_topology();
@@ -1505,32 +1478,6 @@ fn resize_domain_split(
     Ok(Response::Domain {
         domain: domain.snapshot(),
     })
-}
-
-fn resize_layout_split(
-    layout: &mut LivePaneLayout,
-    target: u32,
-    ratio_millis: u16,
-) -> Option<bool> {
-    match layout {
-        LivePaneLayout::Pane { .. } => None,
-        LivePaneLayout::Split {
-            split_id,
-            ratio_millis: ratio,
-            first,
-            second,
-            ..
-        } => {
-            if *split_id == target {
-                let changed = *ratio != ratio_millis;
-                *ratio = ratio_millis;
-                Some(changed)
-            } else {
-                resize_layout_split(first, target, ratio_millis)
-                    .or_else(|| resize_layout_split(second, target, ratio_millis))
-            }
-        }
-    }
 }
 
 fn rename_domain_tab(
@@ -1643,8 +1590,7 @@ fn swap_domain_pane_next(
         .iter_mut()
         .find(|tab| tab.panes.contains_key(&pane_id))
         .context("pane not found")?;
-    let mut panes = Vec::new();
-    collect_layout_panes(&tab.layout, &mut panes);
+    let panes = tab.layout.panes();
     if panes.len() <= 1 {
         anyhow::bail!("swap requires at least two panes");
     }
@@ -1653,7 +1599,7 @@ fn swap_domain_pane_next(
         .position(|pane| *pane == pane_id)
         .context("pane layout does not contain the requested pane")?;
     let other = panes[(index + 1) % panes.len()];
-    swap_layout_panes(&mut tab.layout, pane_id, other);
+    tab.layout.swap_panes(pane_id, other);
     domain.publish_topology();
     Ok(Response::Domain {
         domain: domain.snapshot(),
@@ -1679,7 +1625,7 @@ fn balance_domain_tab(
     if tab.panes.len() <= 1 {
         anyhow::bail!("balance requires at least two panes");
     }
-    if balance_layout(&mut tab.layout) {
+    if tab.layout.balance() {
         domain.publish_topology();
     }
     Ok(Response::Domain {
@@ -1704,8 +1650,7 @@ fn apply_domain_pane_layout(
         .iter()
         .position(|tab| tab.id == tab_id)
         .context("tab not found")?;
-    let mut panes = Vec::new();
-    collect_layout_panes(&domain.tabs[tab_index].layout, &mut panes);
+    let panes = domain.tabs[tab_index].layout.panes();
     if panes.len() <= 1 {
         anyhow::bail!("layout preset requires at least two panes");
     }
@@ -1714,7 +1659,7 @@ fn apply_domain_pane_layout(
     let shape = preset
         .shape(&panes, focused_pane)
         .context("master-detail layout requires its focused pane in the layout")?;
-    let layout = layout_from_shape(shape, &mut next_split)?;
+    let layout = LivePaneLayout::from_shape(shape, &mut next_split)?;
     domain.tabs[tab_index].layout = layout;
     domain.next_split = next_split;
     domain.publish_topology();
@@ -1754,10 +1699,15 @@ fn move_domain_pane(
         anyhow::bail!("the last pane in a tab cannot be moved");
     }
 
-    let source_layout = remove_layout_pane(domain.tabs[source_index].layout.clone(), pane_id)
+    let source_layout = domain.tabs[source_index]
+        .layout
+        .clone()
+        .without_pane(pane_id)
         .context("source pane layout does not contain the requested pane")?;
     let source_focus = if domain.tabs[source_index].focused_pane == pane_id {
-        sibling_layout_pane(&domain.tabs[source_index].layout, pane_id)
+        domain.tabs[source_index]
+            .layout
+            .sibling_of(pane_id)
             .context("source pane has no surviving sibling")?
     } else {
         domain.tabs[source_index].focused_pane
@@ -1774,13 +1724,7 @@ fn move_domain_pane(
         .checked_add(1)
         .context("domain split identity space exhausted")?;
     let mut destination_layout = domain.tabs[destination_index].layout.clone();
-    if !split_layout(
-        &mut destination_layout,
-        destination_focus,
-        pane_id,
-        split_id,
-        direction,
-    ) {
+    if !destination_layout.split_leaf(destination_focus, pane_id, split_id, direction) {
         anyhow::bail!("destination layout does not contain its focused pane");
     }
 
@@ -1800,72 +1744,6 @@ fn move_domain_pane(
     domain.publish_topology();
     Ok(Response::Domain {
         domain: domain.snapshot(),
-    })
-}
-
-fn collect_layout_panes(layout: &LivePaneLayout, panes: &mut Vec<u32>) {
-    match layout {
-        LivePaneLayout::Pane { pane } => panes.push(*pane),
-        LivePaneLayout::Split { first, second, .. } => {
-            collect_layout_panes(first, panes);
-            collect_layout_panes(second, panes);
-        }
-    }
-}
-
-fn swap_layout_panes(layout: &mut LivePaneLayout, first_id: u32, second_id: u32) {
-    match layout {
-        LivePaneLayout::Pane { pane } if *pane == first_id => *pane = second_id,
-        LivePaneLayout::Pane { pane } if *pane == second_id => *pane = first_id,
-        LivePaneLayout::Pane { .. } => {}
-        LivePaneLayout::Split { first, second, .. } => {
-            swap_layout_panes(first, first_id, second_id);
-            swap_layout_panes(second, first_id, second_id);
-        }
-    }
-}
-
-fn balance_layout(layout: &mut LivePaneLayout) -> bool {
-    match layout {
-        LivePaneLayout::Pane { .. } => false,
-        LivePaneLayout::Split {
-            ratio_millis,
-            first,
-            second,
-            ..
-        } => {
-            let changed = *ratio_millis != 500;
-            *ratio_millis = 500;
-            balance_layout(first) | balance_layout(second) | changed
-        }
-    }
-}
-
-/// The layout for a preset's shape, numbering its splits from `next_split`.
-fn layout_from_shape(
-    shape: LayoutShape<u32>,
-    next_split: &mut u32,
-) -> anyhow::Result<LivePaneLayout> {
-    Ok(match shape {
-        LayoutShape::Pane(pane) => LivePaneLayout::Pane { pane },
-        LayoutShape::Split {
-            direction,
-            ratio_millis,
-            first,
-            second,
-        } => {
-            let split_id = *next_split;
-            *next_split = next_split
-                .checked_add(1)
-                .context("domain split identity space exhausted")?;
-            LivePaneLayout::Split {
-                split_id,
-                direction,
-                ratio_millis,
-                first: Box::new(layout_from_shape(*first, next_split)?),
-                second: Box::new(layout_from_shape(*second, next_split)?),
-            }
-        }
     })
 }
 
@@ -1892,7 +1770,10 @@ fn remove_domain_pane(
                 tab.id
             );
         }
-        let layout = remove_layout_pane(tab.layout.clone(), pane_id)
+        let layout = tab
+            .layout
+            .clone()
+            .without_pane(pane_id)
             .context("pane layout did not contain the requested pane")?;
         let removed = tab
             .panes
@@ -1900,7 +1781,7 @@ fn remove_domain_pane(
             .context("pane disappeared while closing")?;
         tab.layout = layout;
         if tab.focused_pane == pane_id {
-            tab.focused_pane = first_layout_pane(&tab.layout);
+            tab.focused_pane = tab.layout.first_pane();
             tab.refresh_title();
         }
         domain.publish_topology();
@@ -1946,55 +1827,6 @@ fn remove_domain_tab(
     removed.close_attachments("tab was closed by a domain control request");
     drop(removed);
     Ok(Response::Domain { domain: snapshot })
-}
-
-fn remove_layout_pane(layout: LivePaneLayout, target: u32) -> Option<LivePaneLayout> {
-    match layout {
-        LivePaneLayout::Pane { pane } if pane == target => None,
-        pane @ LivePaneLayout::Pane { .. } => Some(pane),
-        LivePaneLayout::Split {
-            split_id,
-            direction,
-            ratio_millis,
-            first,
-            second,
-        } => match (
-            remove_layout_pane(*first, target),
-            remove_layout_pane(*second, target),
-        ) {
-            (Some(first), Some(second)) => Some(LivePaneLayout::Split {
-                split_id,
-                direction,
-                ratio_millis,
-                first: Box::new(first),
-                second: Box::new(second),
-            }),
-            (Some(remaining), None) | (None, Some(remaining)) => Some(remaining),
-            (None, None) => None,
-        },
-    }
-}
-
-fn first_layout_pane(layout: &LivePaneLayout) -> u32 {
-    match layout {
-        LivePaneLayout::Pane { pane } => *pane,
-        LivePaneLayout::Split { first, .. } => first_layout_pane(first),
-    }
-}
-
-fn sibling_layout_pane(layout: &LivePaneLayout, target: u32) -> Option<u32> {
-    match layout {
-        LivePaneLayout::Pane { .. } => None,
-        LivePaneLayout::Split { first, second, .. } => {
-            if matches!(first.as_ref(), LivePaneLayout::Pane { pane } if *pane == target) {
-                return Some(first_layout_pane(second));
-            }
-            if matches!(second.as_ref(), LivePaneLayout::Pane { pane } if *pane == target) {
-                return Some(first_layout_pane(first));
-            }
-            sibling_layout_pane(first, target).or_else(|| sibling_layout_pane(second, target))
-        }
-    }
 }
 
 fn spawn_reader_monitor(
@@ -2134,11 +1966,11 @@ fn close_pane(state: &SharedState, domain_id: &str, pane_id: u32, message: &str)
 
     if domain.tabs[tab_index].panes.len() > 1 {
         let tab = &mut domain.tabs[tab_index];
-        if let Some(layout) = remove_layout_pane(tab.layout.clone(), pane_id) {
+        if let Some(layout) = tab.layout.clone().without_pane(pane_id) {
             tab.layout = layout;
             tab.panes.remove(&pane_id);
             if tab.focused_pane == pane_id {
-                tab.focused_pane = first_layout_pane(&tab.layout);
+                tab.focused_pane = tab.layout.first_pane();
                 tab.refresh_title();
             }
         }
@@ -3165,198 +2997,6 @@ mod tests {
         drop(receiver);
         let disconnected = queue_pane_input(&sender, vec![0xfe]).unwrap_err();
         assert!(format!("{disconnected:#}").contains("writer is unavailable"));
-    }
-
-    #[test]
-    fn split_layout_preserves_existing_branches_and_exact_direction() {
-        let mut layout = LivePaneLayout::Pane { pane: 0 };
-        assert!(split_layout(
-            &mut layout,
-            0,
-            1,
-            10,
-            SplitDirection::Vertical
-        ));
-        assert!(split_layout(
-            &mut layout,
-            1,
-            2,
-            11,
-            SplitDirection::Horizontal
-        ));
-        assert!(!split_layout(
-            &mut layout,
-            99,
-            3,
-            12,
-            SplitDirection::Vertical
-        ));
-        assert_eq!(resize_layout_split(&mut layout, 11, 350), Some(true));
-        assert_eq!(resize_layout_split(&mut layout, 11, 350), Some(false));
-        assert_eq!(resize_layout_split(&mut layout, 999, 500), None);
-        assert!(matches!(
-            &layout,
-            LivePaneLayout::Split {
-                split_id: 10,
-                ratio_millis: 500,
-                second,
-                ..
-            } if matches!(
-                second.as_ref(),
-                LivePaneLayout::Split {
-                    split_id: 11,
-                    ratio_millis: 350,
-                    ..
-                }
-            )
-        ));
-        let encoded = serde_json::to_string(&layout).unwrap();
-        assert!(encoded.contains("vertical"));
-        assert!(encoded.contains("horizontal"));
-    }
-
-    #[test]
-    fn closing_a_layout_leaf_collapses_only_its_parent_and_preserves_order() {
-        let mut layout = LivePaneLayout::Pane { pane: 0 };
-        assert!(split_layout(
-            &mut layout,
-            0,
-            1,
-            10,
-            SplitDirection::Vertical
-        ));
-        assert!(split_layout(
-            &mut layout,
-            1,
-            2,
-            11,
-            SplitDirection::Horizontal
-        ));
-
-        let mut layout = remove_layout_pane(layout, 1).unwrap();
-        assert_eq!(
-            layout,
-            LivePaneLayout::Split {
-                split_id: 10,
-                direction: SplitDirection::Vertical,
-                ratio_millis: 500,
-                first: Box::new(LivePaneLayout::Pane { pane: 0 }),
-                second: Box::new(LivePaneLayout::Pane { pane: 2 }),
-            }
-        );
-        assert_eq!(
-            resize_layout_split(&mut layout, 11, 350),
-            None,
-            "the collapsed child split ID must become stale"
-        );
-        assert_eq!(resize_layout_split(&mut layout, 10, 650), Some(true));
-        assert_eq!(first_layout_pane(&layout), 0);
-        assert_eq!(
-            remove_layout_pane(layout, 0),
-            Some(LivePaneLayout::Pane { pane: 2 })
-        );
-        assert_eq!(
-            remove_layout_pane(LivePaneLayout::Pane { pane: 2 }, 2),
-            None
-        );
-    }
-
-    #[test]
-    fn pane_layout_operations_preserve_leaf_identity_and_allocate_stable_splits() {
-        let mut next_split = 20;
-        let shape = PaneLayoutPreset::Grid.shape(&[3, 4, 5], 3).unwrap();
-        let mut layout = layout_from_shape(shape, &mut next_split).unwrap();
-        assert_eq!(next_split, 22);
-        assert!(matches!(
-            &layout,
-            LivePaneLayout::Split {
-                split_id: 20,
-                direction: SplitDirection::Vertical,
-                ratio_millis: 667,
-                first,
-                second,
-            } if matches!(
-                first.as_ref(),
-                LivePaneLayout::Split {
-                    split_id: 21,
-                    direction: SplitDirection::Horizontal,
-                    ratio_millis: 500,
-                    ..
-                }
-            ) && matches!(second.as_ref(), LivePaneLayout::Pane { pane: 5 })
-        ));
-        let mut panes = Vec::new();
-        collect_layout_panes(&layout, &mut panes);
-        assert_eq!(panes, vec![3, 4, 5]);
-
-        swap_layout_panes(&mut layout, 4, 5);
-        panes.clear();
-        collect_layout_panes(&layout, &mut panes);
-        assert_eq!(panes, vec![3, 5, 4]);
-        assert!(balance_layout(&mut layout));
-        assert!(!balance_layout(&mut layout));
-        assert!(matches!(
-            layout,
-            LivePaneLayout::Split {
-                ratio_millis: 500,
-                ..
-            }
-        ));
-
-        let mut next_split = 30;
-        let shape = PaneLayoutPreset::Tall.shape(&[3, 4, 5, 6], 5).unwrap();
-        let tall = layout_from_shape(shape, &mut next_split).unwrap();
-        assert_eq!(next_split, 33);
-        assert!(matches!(
-            &tall,
-            LivePaneLayout::Split {
-                split_id: 30,
-                direction: SplitDirection::Vertical,
-                ratio_millis: 500,
-                first,
-                second,
-            } if matches!(first.as_ref(), LivePaneLayout::Pane { pane: 5 })
-                && matches!(second.as_ref(), LivePaneLayout::Split {
-                    split_id: 31,
-                    direction: SplitDirection::Horizontal,
-                    ratio_millis: 667,
-                    ..
-                })
-        ));
-        let mut panes = Vec::new();
-        collect_layout_panes(&tall, &mut panes);
-        assert_eq!(panes, vec![5, 3, 4, 6]);
-
-        let mut next_split = 40;
-        let shape = PaneLayoutPreset::Fat.shape(&[3, 4, 5, 6], 4).unwrap();
-        let fat = layout_from_shape(shape, &mut next_split).unwrap();
-        assert!(matches!(
-            &fat,
-            LivePaneLayout::Split {
-                direction: SplitDirection::Horizontal,
-                ratio_millis: 500,
-                first,
-                second,
-                ..
-            } if matches!(first.as_ref(), LivePaneLayout::Pane { pane: 4 })
-                && matches!(second.as_ref(), LivePaneLayout::Split {
-                    direction: SplitDirection::Vertical,
-                    ..
-                })
-        ));
-        panes.clear();
-        collect_layout_panes(&fat, &mut panes);
-        assert_eq!(panes, vec![4, 3, 5, 6]);
-        let mut next_split = u32::MAX;
-        assert!(
-            layout_from_shape(
-                PaneLayoutPreset::Rows.shape(&[3, 4], 3).unwrap(),
-                &mut next_split
-            )
-            .unwrap_err()
-            .to_string()
-            .contains("exhausted")
-        );
     }
 
     #[test]

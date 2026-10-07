@@ -230,8 +230,7 @@ impl DomainSnapshot {
 impl LiveTab {
     /// A tab with a pane for every leaf of `layout`, focused on its last.
     pub(crate) fn fixture(id: u32, layout: LivePaneLayout) -> Self {
-        let mut panes = Vec::new();
-        layout.for_each_pane(&mut |pane| panes.push(LivePane::fixture(pane)));
+        let panes: Vec<_> = layout.panes().into_iter().map(LivePane::fixture).collect();
         Self {
             id,
             title: format!("tab-{id}"),
@@ -280,16 +279,6 @@ impl LivePaneLayout {
             ratio_millis,
             first: Box::new(first),
             second: Box::new(second),
-        }
-    }
-
-    fn for_each_pane(&self, visit: &mut impl FnMut(u32)) {
-        match self {
-            Self::Pane { pane } => visit(*pane),
-            Self::Split { first, second, .. } => {
-                first.for_each_pane(visit);
-                second.for_each_pane(visit);
-            }
         }
     }
 }

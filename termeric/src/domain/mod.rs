@@ -9,6 +9,7 @@
 mod archive;
 mod client;
 mod io_util;
+mod layout;
 pub mod model;
 pub(crate) mod paths;
 pub mod protocol;
