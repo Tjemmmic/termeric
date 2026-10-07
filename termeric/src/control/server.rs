@@ -6,6 +6,7 @@ use super::paths::ControlEndpoint;
 use super::protocol::{self, ClientFrame, Request, Response, ServerFrame};
 use super::{EVENT_LOOP_TIMEOUT, IO_TIMEOUT};
 use crate::app::AppEvent;
+use crate::deadline_io::{Deadline, PollReader, SocketWriter};
 use crate::local_socket::{self, OwnedFile};
 use anyhow::Context;
 use std::fs;
@@ -15,6 +16,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
+use std::time::{Duration, Instant};
 use winit::event_loop::EventLoopProxy;
 
 const MAX_CLIENTS: usize = 16;
@@ -142,33 +144,54 @@ fn handle_client(
     expected_token: &str,
     proxy: &EventLoopProxy<AppEvent>,
 ) -> anyhow::Result<()> {
-    serve_client(stream, expected_token, |request, peer_process| {
-        let (sender, receiver) = mpsc::sync_channel(1);
-        proxy
-            .send_event(AppEvent::ControlRequest {
-                request,
-                peer_process,
-                respond_to: sender,
-            })
-            .map_err(|_| anyhow::anyhow!("GUI event loop is no longer available"))?;
-        receiver
-            .recv_timeout(EVENT_LOOP_TIMEOUT)
-            .context("GUI event loop did not answer control request")
-            .and_then(|result| result.map_err(anyhow::Error::msg))
-    })
+    serve_client(
+        stream,
+        expected_token,
+        IO_TIMEOUT,
+        |request, peer_process| {
+            let (sender, receiver) = mpsc::sync_channel(1);
+            proxy
+                .send_event(AppEvent::ControlRequest {
+                    request,
+                    peer_process,
+                    respond_to: sender,
+                })
+                .map_err(|_| anyhow::anyhow!("GUI event loop is no longer available"))?;
+            receiver
+                .recv_timeout(EVENT_LOOP_TIMEOUT)
+                .context("GUI event loop did not answer control request")
+                .and_then(|result| result.map_err(anyhow::Error::msg))
+        },
+    )
 }
 
+/// Serves one request on `stream`. The whole request must arrive within
+/// `budget`, and the whole reply be taken within `budget` of starting it, so
+/// a peer trickling bytes cannot hold one of the server's client slots.
 fn serve_client(
     mut stream: UnixStream,
     expected_token: &str,
+    budget: Duration,
     respond: impl FnOnce(Request, Option<u32>) -> anyhow::Result<Response>,
 ) -> anyhow::Result<()> {
-    stream.set_read_timeout(Some(IO_TIMEOUT))?;
-    stream.set_write_timeout(Some(IO_TIMEOUT))?;
     let peer_process = local_socket::same_user_peer(&stream, "GUI control peer")?;
-    let request = protocol::read_frame::<ClientFrame>(&mut stream)?;
+    let request = protocol::read_frame::<ClientFrame>(&mut PollReader::new(
+        &mut stream,
+        Deadline::within(budget),
+        "GUI control request read deadline exceeded",
+    ))?;
+    let reply = |frame: &ServerFrame| {
+        protocol::write_frame(
+            &mut SocketWriter::new(
+                &stream,
+                Instant::now() + budget,
+                "GUI control reply write deadline exceeded",
+            ),
+            frame,
+        )
+    };
     if let Err(message) = validate_request(&request, expected_token) {
-        return protocol::write_frame(&mut stream, &ServerFrame::error(bounded_error(&message)));
+        return reply(&ServerFrame::error(bounded_error(&message)));
     }
 
     let frame = match respond(request.request, peer_process) {
@@ -184,7 +207,7 @@ fn serve_client(
         },
         Err(error) => ServerFrame::error(bounded_error(&format!("{error:#}"))),
     };
-    protocol::write_frame(&mut stream, &frame)
+    reply(&frame)
 }
 
 fn bounded_error(error: &str) -> String {
@@ -227,7 +250,7 @@ mod tests {
         let expected_id = id.clone();
         let (mut client, server) = UnixStream::pair().unwrap();
         let worker = thread::spawn(move || {
-            serve_client(server, "fixture-token", |request, _| {
+            serve_client(server, "fixture-token", IO_TIMEOUT, |request, _| {
                 assert!(request.request_id().is_none());
                 assert_eq!(
                     request,
@@ -286,7 +309,7 @@ mod tests {
         let expected = event.clone();
         let (mut client, server) = UnixStream::pair().unwrap();
         let worker = thread::spawn(move || {
-            serve_client(server, "fixture-token", |request, _| {
+            serve_client(server, "fixture-token", IO_TIMEOUT, |request, _| {
                 assert!(request.request_id().is_none(), "no replay identity");
                 assert_eq!(request, expected);
                 Ok(Response::AgentEventRecorded { process_id: 4242 })
@@ -373,7 +396,7 @@ mod tests {
         let (mut client, server) = UnixStream::pair().unwrap();
         let expected = request.clone();
         let worker = thread::spawn(move || {
-            serve_client(server, "secret", |received, _| {
+            serve_client(server, "secret", IO_TIMEOUT, |received, _| {
                 assert_eq!(received, expected);
                 answer(received)
             })
@@ -490,6 +513,44 @@ mod tests {
             exchange(Request::Inventory, |_| anyhow::bail!("missing\nwindow")),
             ServerFrame::error("missingwindow")
         );
+    }
+
+    #[test]
+    fn a_trickled_request_cannot_hold_a_client_slot_past_its_deadline() {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let mut wire = Vec::new();
+        protocol::write_frame(
+            &mut wire,
+            &ClientFrame {
+                version: protocol::PROTOCOL_VERSION,
+                token: "secret".into(),
+                request: Request::Inventory,
+            },
+        )
+        .unwrap();
+        // Each byte arrives well within any per-read timeout.
+        let sender = thread::spawn(move || {
+            for byte in wire {
+                thread::sleep(Duration::from_millis(20));
+                if std::io::Write::write_all(&mut client, &[byte]).is_err() {
+                    return;
+                }
+            }
+        });
+        let started = Instant::now();
+        let error = serve_client(server, "secret", Duration::from_millis(100), |_, _| {
+            panic!("a trickled request was answered")
+        })
+        .unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(
+            error
+                .downcast_ref::<std::io::Error>()
+                .map(std::io::Error::kind),
+            Some(std::io::ErrorKind::TimedOut),
+            "{error:#}"
+        );
+        sender.join().unwrap();
     }
 
     #[test]
