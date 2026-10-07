@@ -310,6 +310,9 @@ impl App {
     /// that does not load leaves the one on screen, with a notice that stays
     /// until a configured theme loads. Returns whether it loaded.
     pub(super) fn load_configured_theme(&mut self) -> bool {
+        // Themes are reloading, so a custom theme file may have appeared or
+        // gone away.
+        self.sync_settings_theme_names();
         let name = self.config.theme.name.clone();
         let path = self.config.theme.path.clone();
         // Noted before reading, so a change made during the read is seen by
@@ -703,6 +706,13 @@ impl App {
         }
         self.sync_accessibility_preferences();
         self.request_redraw(RedrawReason::ConfigReload);
+    }
+
+    /// Hand Settings every selectable theme. Listing the themes directory
+    /// touches the file system, so Settings is told here, when it opens and
+    /// when themes reload, rather than reading it each time it builds rows.
+    pub(super) fn sync_settings_theme_names(&mut self) {
+        self.settings_panel.set_theme_names(Theme::list_all());
     }
 
     /// Show `theme`, which may be a preview rather than the configured one.

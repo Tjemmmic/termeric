@@ -3325,8 +3325,7 @@ impl App {
             Action::SaveWorkspace => self.force_save_workspace(workspaces::WorkspaceSave::Update),
             Action::SaveWorkspaceAs => self.force_save_workspace(workspaces::WorkspaceSave::New),
             Action::ConfigurePlugins => {
-                self.settings_panel
-                    .open_to_section(crate::ui::settings::SettingsSection::Plugins);
+                self.open_settings_section(crate::ui::settings::SettingsSection::Plugins);
                 self.request_redraw(RedrawReason::Action);
             }
             Action::ShowAbout => {
@@ -3367,7 +3366,14 @@ impl App {
         self.agents_panel.close();
         self.session_panel.close();
         self.close_workspace_menu();
+        self.sync_settings_theme_names();
         self.settings_panel.toggle();
+    }
+
+    /// Open Settings on `section`'s page.
+    pub(super) fn open_settings_section(&mut self, section: crate::ui::settings::SettingsSection) {
+        self.sync_settings_theme_names();
+        self.settings_panel.open_to_section(section);
     }
 
     /// Toggle borderless fullscreen for only this native window.

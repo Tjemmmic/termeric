@@ -815,6 +815,10 @@ pub struct SettingsPanel {
     dropdown_highlight: usize,
     /// Available monospace fonts (discovered from system)
     available_fonts: Vec<String>,
+    /// Every selectable theme, supplied by the application because custom
+    /// themes are files in the themes directory and rows are rebuilt every
+    /// frame Settings is open.
+    theme_names: Vec<String>,
     /// Mouse-hovered entry index (None if not hovering any item)
     hovered_item: Option<usize>,
     /// Mouse-hovered dropdown option index (None if not hovering any dropdown option)
@@ -859,6 +863,10 @@ impl SettingsPanel {
             dropdown_open: false,
             dropdown_highlight: 0,
             available_fonts: vec![DEFAULT_FONT.to_string()],
+            theme_names: Theme::list_available()
+                .iter()
+                .map(|name| (*name).to_string())
+                .collect(),
             hovered_item: None,
             dropdown_hovered: None,
             theme_meta: None,
@@ -877,6 +885,11 @@ impl SettingsPanel {
         } else {
             fonts
         };
+    }
+
+    /// Set the themes the Theme dropdown offers.
+    pub fn set_theme_names(&mut self, names: Vec<String>) {
+        self.theme_names = names;
     }
 
     /// Update the stored theme metadata (call when the theme changes)
@@ -1163,7 +1176,7 @@ impl SettingsPanel {
 
         // Theme
         {
-            let options = Theme::list_all();
+            let options = self.theme_names.clone();
             let selected = options
                 .iter()
                 .position(|n| n == &config.theme.name)
@@ -3150,6 +3163,36 @@ mod tests {
             panel.handle_key(SettingsKey::Enter, &config, &registry),
             SettingsAction::SetScrollback(500_000)
         ));
+    }
+
+    #[test]
+    fn the_theme_dropdown_offers_the_names_it_was_given() {
+        let mut panel = SettingsPanel::new();
+        let config = Config::default();
+        let theme_options = |panel: &SettingsPanel| {
+            let entries = panel.build_entries(&config, &default_registry());
+            entries
+                .iter()
+                .find_map(|entry| match &entry.kind {
+                    SettingKind::Dropdown {
+                        options, selected, ..
+                    } if entry.label == "Theme" => Some((options.clone(), *selected)),
+                    _ => None,
+                })
+                .expect("theme dropdown")
+        };
+        // Until the application lists the themes directory, the built-in
+        // themes are offered.
+        let (builtin, selected) = theme_options(&panel);
+        assert_eq!(builtin, Theme::list_available());
+        assert_eq!(builtin[selected], config.theme.name);
+        // Rows are built from the names handed in, never from the themes
+        // directory, which holds no theme by these names.
+        panel.set_theme_names(vec!["dune".into(), config.theme.name.clone()]);
+        assert_eq!(
+            theme_options(&panel),
+            (vec!["dune".to_string(), config.theme.name.clone()], 1)
+        );
     }
 
     #[test]

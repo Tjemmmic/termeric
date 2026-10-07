@@ -249,9 +249,7 @@ impl App {
                 }
                 "previous-page" => self.show_font_feature_list(page.saturating_sub(1)),
                 "next-page" => self.show_font_feature_list(page.saturating_add(1)),
-                "back" => self
-                    .settings_panel
-                    .open_to_section(crate::ui::settings::SettingsSection::Font),
+                "back" => self.open_settings_section(crate::ui::settings::SettingsSection::Font),
                 choice if choice.starts_with("feature:") => {
                     let entry = choice[8..]
                         .parse::<usize>()

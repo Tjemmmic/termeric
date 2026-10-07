@@ -1247,3 +1247,33 @@ fn a_displaced_agent_shortcut_is_noted_only_while_agent_features_are_on() {
     app.apply_settings_action(SettingsAction::SetAgentFeaturesEnabled(false));
     assert!(notices(&app).is_empty());
 }
+
+#[test]
+fn settings_lists_the_themes_directory_when_it_opens_not_as_it_draws() {
+    let mut app = App::new_headless(Config::default()).unwrap();
+    let themes_dir = Config::themes_dir();
+    std::fs::create_dir_all(&themes_dir).unwrap();
+    let theme_path = themes_dir.join("settings-opening-probe.toml");
+    std::fs::write(&theme_path, custom_theme("Settings Opening Probe")).unwrap();
+    let offers_probe = |app: &App| {
+        app.settings_panel
+            .build_entries(&app.config, &app.shortcut_registry)
+            .iter()
+            .any(|entry| {
+                matches!(
+                    &entry.kind,
+                    crate::ui::settings::SettingKind::Dropdown { options, .. }
+                        if options.iter().any(|name| name == "settings-opening-probe")
+                )
+            })
+    };
+
+    // Building rows, which happens every frame Settings is open, does not
+    // read the themes directory; opening Settings does.
+    let before_opening = offers_probe(&app);
+    app.toggle_settings_surface();
+    let after_opening = offers_probe(&app);
+    std::fs::remove_file(&theme_path).unwrap();
+    assert!(!before_opening);
+    assert!(after_opening);
+}
