@@ -1,6 +1,7 @@
 //! Bounded modal notices used for application information, errors, and choices.
 
 use super::animation::OverlayAnimation;
+use super::request_scope::RequestScope;
 use super::text_card::{OverlayScroll, TextCard, TextViewport};
 use super::text_input::{TextInput, TextInputEdit, TextLimit, grapheme_boundary};
 use crate::ui::geometry::Bounds;
@@ -219,8 +220,7 @@ pub struct InfoOverlay {
     title: String,
     lines: Vec<String>,
     choices: Vec<InfoOverlayChoice>,
-    request_id: u64,
-    accepting: bool,
+    request: RequestScope,
     viewport: TextViewport,
     input: Option<InfoOverlayInput>,
     focus: Option<InfoOverlayFocus>,
@@ -233,8 +233,7 @@ impl InfoOverlay {
             title: String::new(),
             lines: Vec::new(),
             choices: Vec::new(),
-            request_id: 0,
-            accepting: false,
+            request: RequestScope::default(),
             viewport: TextViewport::default(),
             input: None,
             focus: None,
@@ -266,7 +265,7 @@ impl InfoOverlay {
         lines: Vec<String>,
         choices: Vec<InfoOverlayChoice>,
     ) -> u64 {
-        self.request_id = self.request_id.wrapping_add(1).max(1);
+        let request_id = self.request.begin();
         self.title = crate::safe_text::display_line(&title.into(), MAX_INFO_TITLE_CHARS, 1);
         if self.title.is_empty() {
             self.title = "Notice".into();
@@ -279,9 +278,8 @@ impl InfoOverlay {
         // Continue is the safe default, never the first (possibly consenting)
         // choice. A new request cannot inherit a previous choice's focus.
         self.focus = Some(InfoOverlayFocus::Continue);
-        self.accepting = true;
         self.animation.open();
-        self.request_id
+        request_id
     }
 
     pub fn show_input(
@@ -319,22 +317,22 @@ impl InfoOverlay {
         if !self.is_awaiting(request_id) {
             return false;
         }
-        self.accepting = false;
+        self.request.revoke();
         self.focus = None;
         self.animation.close();
         true
     }
 
     pub fn request_id(&self) -> u64 {
-        self.request_id
+        self.request.id()
     }
 
     pub fn is_awaiting(&self, request_id: u64) -> bool {
-        self.accepting && self.request_id == request_id
+        self.request.is_awaiting(request_id)
     }
 
     pub fn is_awaiting_current(&self) -> bool {
-        self.is_awaiting(self.request_id)
+        self.request.is_awaiting_current()
     }
 
     pub fn title(&self) -> &str {
@@ -421,7 +419,7 @@ impl InfoOverlay {
         match self.focus() {
             Some(InfoOverlayFocus::Input) => self.ensure_input_visible(),
             Some(InfoOverlayFocus::Choice(id)) => {
-                let line = self.choice(self.request_id, id).unwrap().source_line;
+                let line = self.choice(self.request.id(), id).unwrap().source_line;
                 self.viewport.reveal_row(line);
             }
             _ => {}
@@ -429,7 +427,7 @@ impl InfoOverlay {
     }
 
     pub fn input_info(&self, request_id: u64) -> Option<InfoOverlayInputInfo> {
-        let input = (self.request_id == request_id).then_some(self.input.as_ref())??;
+        let input = (self.request.id() == request_id).then_some(self.input.as_ref())??;
         Some(InfoOverlayInputInfo {
             label: input.label.clone(),
             value: input.value.text().to_string(),
@@ -554,7 +552,7 @@ impl InfoOverlay {
     }
 
     fn ensure_input_cursor_visible(&mut self) {
-        let Some(column) = self.input_cursor_source_column(self.request_id) else {
+        let Some(column) = self.input_cursor_source_column(self.request.id()) else {
             return;
         };
         self.viewport.reveal_column(column);

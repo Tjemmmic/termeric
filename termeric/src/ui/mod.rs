@@ -21,6 +21,7 @@ pub mod icon;
 pub mod info_overlay;
 pub mod modal;
 pub mod popup_menu;
+pub mod request_scope;
 pub mod scroll;
 pub mod search_bar;
 pub mod session_panel;

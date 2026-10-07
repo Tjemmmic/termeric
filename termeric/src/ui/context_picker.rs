@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use super::animation::OverlayAnimation;
 use super::constants::CONTENT_CHAR_SCALE;
+use super::request_scope::RequestScope;
 use super::text_input::{TextInput, TextInputEdit, TextLimit};
 use crate::agents::context::{
     ContextGatherRequest, MAX_CONTEXT_FILES, MAX_CONTEXT_PATH_CHARS, MAX_CONTEXT_SOURCE_CHARS,
@@ -283,8 +284,7 @@ pub struct ContextPicker {
     file_input: TextInput,
     specific_files: Vec<PathBuf>,
     status: Option<String>,
-    request_id: u64,
-    accepting: bool,
+    request: RequestScope,
 }
 
 impl ContextPicker {
@@ -301,8 +301,7 @@ impl ContextPicker {
             file_input: TextInput::new(TextLimit::Chars(MAX_FILE_INPUT_CHARS)),
             specific_files: Vec::new(),
             status: None,
-            request_id: 0,
-            accepting: false,
+            request: RequestScope::default(),
         }
     }
 
@@ -312,7 +311,7 @@ impl ContextPicker {
     }
 
     pub fn open(&mut self, cwd: Option<String>, target: ContextTarget) -> u64 {
-        self.request_id = self.request_id.wrapping_add(1).max(1);
+        let request_id = self.request.begin();
         self.cwd = cwd.map(PathBuf::from);
         let in_git = is_git_repo(self.cwd.as_deref());
         self.sources = vec![
@@ -356,21 +355,20 @@ impl ContextPicker {
         self.file_input.clear();
         self.specific_files.clear();
         self.status = None;
-        self.accepting = true;
         self.animation.open();
-        self.request_id
+        request_id
     }
 
     pub fn request_id(&self) -> u64 {
-        self.request_id
+        self.request.id()
     }
 
     pub fn is_awaiting(&self, request_id: u64) -> bool {
-        self.accepting && self.request_id == request_id
+        self.request.is_awaiting(request_id)
     }
 
     pub fn is_awaiting_current(&self) -> bool {
-        self.is_awaiting(self.request_id)
+        self.request.is_awaiting_current()
     }
 
     pub fn phase(&self) -> ContextPickerPhase {
@@ -405,7 +403,7 @@ impl ContextPicker {
 
     pub fn snapshot(&self) -> ContextPickerSnapshot {
         ContextPickerSnapshot {
-            request_id: self.request_id,
+            request_id: self.request.id(),
             sources: self.sources.clone(),
             selected_index: self.selected_index,
             scroll_offset: self.scroll_offset,
@@ -444,7 +442,7 @@ impl ContextPicker {
                     self.phase = ContextPickerPhase::Sources;
                     self.status = None;
                 } else {
-                    self.accepting = false;
+                    self.request.revoke();
                     self.status = None;
                     self.target = None;
                     self.animation.close();
@@ -558,7 +556,7 @@ impl ContextPicker {
                     self.status = Some("The context destination is no longer available".into());
                     return ContextPickerCompletion::Failed;
                 };
-                self.accepting = false;
+                self.request.revoke();
                 self.status = None;
                 self.animation.close();
                 ContextPickerCompletion::Ready { target, text }

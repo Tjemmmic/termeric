@@ -68,6 +68,7 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `ui/text_input.rs` | Shared single-line text input buffer with cursor management |
 | `ui/text_layout.rs`, `ui/text_area.rs` | Measured, wrapped UI text (`TextMeasure`) and the multi-line editor buffer |
 | `ui/constants.rs` | Shared UI constants (corner radii, border width, filter-field insets) |
+| `ui/request_scope.rs` | `RequestScope`, the request a modal card (info overlay, diff review, context picker) answers, so an action aimed at an earlier or dismissed showing does nothing |
 | `ui/geometry.rs`, `ui/color.rs`, `ui/icon.rs` | `Bounds`, the one rectangle type (half-open `contains`) for layout, hit tests, drawing, and accessibility; color alpha/mix/brightness helpers; the icon set drawn from `renderer/icons.rs` |
 | `config/` | TOML config loading, theme definitions |
 | `input/` | Shortcut registry, focused mode-aware keyboard encoder, mouse state |

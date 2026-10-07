@@ -3,6 +3,7 @@
 //! staged or reverted from here.
 
 use super::animation::OverlayAnimation;
+use super::request_scope::RequestScope;
 use super::text_card::{OverlayScroll, TextCard, TextViewport};
 use crate::terminal::diff_detector::{DetectedDiff, DiffLine};
 use crate::ui::geometry::Bounds;
@@ -211,8 +212,7 @@ pub struct DiffReviewOverlay {
     change: Option<ChangeReviewTarget>,
     /// The complete unified diff of that change, for Copy.
     change_text: String,
-    request_id: u64,
-    accepting: bool,
+    request: RequestScope,
     viewport: TextViewport,
 }
 
@@ -225,8 +225,7 @@ impl DiffReviewOverlay {
             target: None,
             change: None,
             change_text: String::new(),
-            request_id: 0,
-            accepting: false,
+            request: RequestScope::default(),
             viewport: TextViewport::default(),
         }
     }
@@ -237,7 +236,7 @@ impl DiffReviewOverlay {
         tab_id: usize,
         pane_id: crate::panes::PaneId,
     ) -> u64 {
-        self.request_id = self.request_id.wrapping_add(1).max(1);
+        self.request.begin();
         self.filename = crate::safe_text::display_line(&diff.filename, MAX_DIFF_FILENAME_CHARS, 4);
         self.rows = bounded_rows(diff);
         self.target = Some(DiffReviewTarget {
@@ -252,7 +251,7 @@ impl DiffReviewOverlay {
 
     /// Review one file an agent changed, given its unified diff.
     pub fn show_change(&mut self, unified: &str, change: ChangeReviewTarget) -> u64 {
-        self.request_id = self.request_id.wrapping_add(1).max(1);
+        self.request.begin();
         self.filename = crate::safe_text::display_line(
             &change.path.to_string_lossy(),
             MAX_DIFF_FILENAME_CHARS,
@@ -273,30 +272,29 @@ impl DiffReviewOverlay {
             .max()
             .unwrap_or(0);
         self.viewport.reset(self.rows.len(), widest);
-        self.accepting = true;
         self.animation.open();
-        self.request_id
+        self.request.id()
     }
 
     pub fn dismiss(&mut self, request_id: u64) -> bool {
         if !self.is_awaiting(request_id) {
             return false;
         }
-        self.accepting = false;
+        self.request.revoke();
         self.animation.close();
         true
     }
 
     pub fn request_id(&self) -> u64 {
-        self.request_id
+        self.request.id()
     }
 
     pub fn is_awaiting(&self, request_id: u64) -> bool {
-        self.accepting && self.request_id == request_id
+        self.request.is_awaiting(request_id)
     }
 
     pub fn is_awaiting_current(&self) -> bool {
-        self.is_awaiting(self.request_id)
+        self.request.is_awaiting_current()
     }
 
     pub fn target(&self, request_id: u64) -> Option<DiffReviewTarget> {
