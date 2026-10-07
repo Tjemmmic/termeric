@@ -375,6 +375,14 @@ struct SemanticSnapshot {
     focus: NodeId,
 }
 
+/// A modal layer's nodes: its dialog, which the window root holds, and the
+/// nodes under it.
+struct ModalSnapshot {
+    dialog: NodeId,
+    nodes: Vec<(NodeId, Node)>,
+    focus: NodeId,
+}
+
 impl AccessibilityState {
     fn activate(&mut self) {
         self.active = true;
@@ -2240,6 +2248,15 @@ impl App {
         }
     }
 
+    /// The window's root node, without its children.
+    fn window_root_node(&self) -> Node {
+        let metrics = self.ui_metrics();
+        let mut root = Node::new(Role::Window);
+        root.set_label("Termeric terminal emulator");
+        root.set_bounds(rect(0.0, 0.0, metrics.width, metrics.height));
+        root
+    }
+
     fn with_toast_accessibility(&self, mut snapshot: SemanticSnapshot) -> SemanticSnapshot {
         let toasts = self.toasts.build_accessibility_info();
         if toasts.is_empty() {
@@ -2323,16 +2340,14 @@ impl App {
         let top = self.top_modal_layer();
         for layer in ModalLayer::INPUT_PRIORITY {
             if Some(layer) == top {
-                return self.modal_layer_accessibility_snapshot(layer, width, height);
+                return self.modal_layer_accessibility_snapshot(layer);
             }
             self.forget_modal_layer_focus(layer);
         }
 
         let mut nodes = Vec::new();
         let mut root_children = vec![TAB_LIST, NEW_TAB, WORKSPACES, COMMANDS, SETTINGS];
-        let mut root = Node::new(Role::Window);
-        root.set_label("Termeric terminal emulator");
-        root.set_bounds(rect(0.0, 0.0, width, height));
+        let mut root = self.window_root_node();
 
         let tab_info = self
             .tabs
@@ -2658,11 +2673,7 @@ impl App {
         }
     }
 
-    fn cellar_accessibility_snapshot(
-        &mut self,
-        window_width: f32,
-        window_height: f32,
-    ) -> SemanticSnapshot {
+    fn cellar_accessibility_snapshot(&mut self) -> ModalSnapshot {
         let layout = self
             .cellar_layout()
             .expect("the Cellar layer is open only while Harvest is on");
@@ -2704,10 +2715,6 @@ impl App {
             .collect::<Vec<_>>();
 
         let mut nodes = Vec::with_capacity(entries.len() + 7);
-        let mut root = Node::new(Role::Window);
-        root.set_label("Termeric terminal emulator");
-        root.set_bounds(rect(0.0, 0.0, window_width, window_height));
-        root.set_children([CELLAR_DIALOG]);
 
         let mut title = Node::new(Role::Heading);
         title.set_label("Root Cellar");
@@ -2789,7 +2796,6 @@ impl App {
         dialog.set_bounds(bounds_rect(layout.panel));
         dialog.set_children([CELLAR_TITLE, CELLAR_STATUS, CELLAR_LIST, CELLAR_CLOSE]);
         nodes.push((CELLAR_DIALOG, dialog));
-        nodes.push((ROOT, root));
 
         let default_focus = selected
             .and_then(|selected| {
@@ -2805,16 +2811,15 @@ impl App {
             .filter(|focus| *focus == CELLAR_CLOSE || *focus == default_focus)
             .unwrap_or(default_focus);
         self.accessibility.focus_override = Some(focus);
-        SemanticSnapshot { nodes, focus }
+        ModalSnapshot {
+            dialog: CELLAR_DIALOG,
+            nodes,
+            focus,
+        }
     }
 
-    /// The sprout menu's nodes, placed where the menu is drawn, while the
-    /// window root covers the whole window.
-    fn sprout_accessibility_snapshot(
-        &mut self,
-        window_width: f32,
-        window_height: f32,
-    ) -> SemanticSnapshot {
+    /// The sprout menu's nodes, placed where the menu is drawn.
+    fn sprout_accessibility_snapshot(&mut self) -> ModalSnapshot {
         let layout = self
             .sprout_menu_layout()
             .expect("the sprout menu layer is open only while its menu is");
@@ -2867,10 +2872,6 @@ impl App {
             .collect::<Vec<_>>();
 
         let mut nodes = Vec::with_capacity(actions.len() + 4);
-        let mut root = Node::new(Role::Window);
-        root.set_label("Termeric terminal emulator");
-        root.set_bounds(rect(0.0, 0.0, window_width, window_height));
-        root.set_children([SPROUT_DIALOG]);
 
         for (index, (((_action, label, enabled, description), node_id), row)) in actions
             .iter()
@@ -2908,7 +2909,6 @@ impl App {
         dialog.set_bounds(bounds_rect(layout.panel));
         dialog.set_children([SPROUT_MENU]);
         nodes.push((SPROUT_DIALOG, dialog));
-        nodes.push((ROOT, root));
 
         let default_focus = action_nodes
             .get(selected.min(action_nodes.len().saturating_sub(1)))
@@ -2920,22 +2920,20 @@ impl App {
             .filter(|focus| *focus == default_focus)
             .unwrap_or(default_focus);
         self.accessibility.focus_override = Some(focus);
-        SemanticSnapshot { nodes, focus }
+        ModalSnapshot {
+            dialog: SPROUT_DIALOG,
+            nodes,
+            focus,
+        }
     }
 
     /// The open Workspaces menu as a menu of items sharing the drawn geometry.
-    fn workspace_menu_accessibility_snapshot(
-        &mut self,
-        window_width: f32,
-        window_height: f32,
-    ) -> SemanticSnapshot {
+    fn workspace_menu_accessibility_snapshot(&mut self) -> ModalSnapshot {
         let layout = self.workspace_menu_layout();
-        let Some(menu) = self.workspace_menu.as_ref() else {
-            return SemanticSnapshot {
-                nodes: Vec::new(),
-                focus: ROOT,
-            };
-        };
+        let menu = self
+            .workspace_menu
+            .as_ref()
+            .expect("the Workspaces menu layer is open only while its menu is");
         let mut nodes = Vec::new();
         let mut items = Vec::new();
         for (row, entry) in menu.rows().iter().enumerate() {
@@ -2976,17 +2974,15 @@ impl App {
         menu_node.set_children(items);
         nodes.push((WORKSPACE_MENU, menu_node));
 
-        let mut root = Node::new(Role::Window);
-        root.set_label("Termeric terminal emulator");
-        root.set_bounds(rect(0.0, 0.0, window_width, window_height));
-        root.set_children([WORKSPACE_MENU]);
-        nodes.push((ROOT, root));
-
         let focus = menu
             .highlighted()
             .map_or(WORKSPACE_MENU, workspace_menu_node);
         self.accessibility.focus_override = Some(focus);
-        SemanticSnapshot { nodes, focus }
+        ModalSnapshot {
+            dialog: WORKSPACE_MENU,
+            nodes,
+            focus,
+        }
     }
 
     fn handle_workspace_menu_accessibility_action(&mut self, request: ActionRequest) {
@@ -3014,35 +3010,39 @@ impl App {
         }
     }
 
-    fn modal_layer_accessibility_snapshot(
-        &mut self,
-        layer: ModalLayer,
-        width: f32,
-        height: f32,
-    ) -> SemanticSnapshot {
-        match layer {
-            ModalLayer::Guardrail => self.guardrail_accessibility_snapshot(width, height),
-            ModalLayer::InfoOverlay => self.info_accessibility_snapshot(width, height),
-            ModalLayer::DiffReview => self.diff_accessibility_snapshot(width, height),
-            ModalLayer::ContextPicker => self.context_accessibility_snapshot(width, height),
-            ModalLayer::SproutMenu => self.sprout_accessibility_snapshot(width, height),
-            ModalLayer::Cellar => self.cellar_accessibility_snapshot(width, height),
+    /// The top modal layer's tree: its dialog alone under the window root.
+    fn modal_layer_accessibility_snapshot(&mut self, layer: ModalLayer) -> SemanticSnapshot {
+        let ModalSnapshot {
+            dialog,
+            mut nodes,
+            focus,
+        } = match layer {
+            ModalLayer::Guardrail => self.guardrail_accessibility_snapshot(),
+            ModalLayer::InfoOverlay => self.info_accessibility_snapshot(),
+            ModalLayer::DiffReview => self.diff_accessibility_snapshot(),
+            ModalLayer::ContextPicker => self.context_accessibility_snapshot(),
+            ModalLayer::SproutMenu => self.sprout_accessibility_snapshot(),
+            ModalLayer::Cellar => self.cellar_accessibility_snapshot(),
             ModalLayer::DomainPicker => {
-                self.palette_modal_accessibility_snapshot(PaletteModal::Domains, width, height)
+                self.palette_modal_accessibility_snapshot(PaletteModal::Domains)
             }
             ModalLayer::UnicodePicker => {
-                self.palette_modal_accessibility_snapshot(PaletteModal::Unicode, width, height)
+                self.palette_modal_accessibility_snapshot(PaletteModal::Unicode)
             }
             ModalLayer::CommandPalette => {
-                self.palette_modal_accessibility_snapshot(PaletteModal::Commands, width, height)
+                self.palette_modal_accessibility_snapshot(PaletteModal::Commands)
             }
-            ModalLayer::ShortcutsPanel => self.shortcuts_accessibility_snapshot(width, height),
-            ModalLayer::Settings => self.settings_accessibility_snapshot(width, height),
-            ModalLayer::SessionPanel => self.session_accessibility_snapshot(width, height),
-            ModalLayer::WorkspaceMenu => self.workspace_menu_accessibility_snapshot(width, height),
-            ModalLayer::CommandsPanel => self.commands_accessibility_snapshot(width, height),
-            ModalLayer::AgentsPanel => self.agents_accessibility_snapshot(width, height),
-        }
+            ModalLayer::ShortcutsPanel => self.shortcuts_accessibility_snapshot(),
+            ModalLayer::Settings => self.settings_accessibility_snapshot(),
+            ModalLayer::SessionPanel => self.session_accessibility_snapshot(),
+            ModalLayer::WorkspaceMenu => self.workspace_menu_accessibility_snapshot(),
+            ModalLayer::CommandsPanel => self.commands_accessibility_snapshot(),
+            ModalLayer::AgentsPanel => self.agents_accessibility_snapshot(),
+        };
+        let mut root = self.window_root_node();
+        root.set_children([dialog]);
+        nodes.push((ROOT, root));
+        SemanticSnapshot { nodes, focus }
     }
 
     /// Drop focus left on one of `layer`'s nodes; the layer is not on top.
@@ -3080,12 +3080,7 @@ impl App {
         }
     }
 
-    fn palette_modal_accessibility_snapshot(
-        &mut self,
-        modal: PaletteModal,
-        window_width: f32,
-        window_height: f32,
-    ) -> SemanticSnapshot {
+    fn palette_modal_accessibility_snapshot(&mut self, modal: PaletteModal) -> ModalSnapshot {
         let ids = palette_modal_node_ids(modal);
         let mut info = self.palette_owner(modal).build_info();
         let mut layout = self.command_palette_accessibility_layout(&info);
@@ -3126,10 +3121,6 @@ impl App {
             .copied();
 
         let mut nodes = Vec::with_capacity(entry_nodes.len() + 5);
-        let mut root = Node::new(Role::Window);
-        root.set_label("Termeric terminal emulator");
-        root.set_bounds(rect(0.0, 0.0, window_width, window_height));
-        root.set_children([ids.dialog]);
 
         let mut input = Node::new(Role::SearchInput);
         input.set_label(words.input);
@@ -3254,10 +3245,10 @@ impl App {
         ));
         dialog.set_children(dialog_children);
         nodes.push((ids.dialog, dialog));
-        nodes.push((ROOT, root));
 
         self.accessibility.focus_override = Some(ids.input);
-        SemanticSnapshot {
+        ModalSnapshot {
+            dialog: ids.dialog,
             nodes,
             focus: ids.input,
         }
@@ -3310,11 +3301,7 @@ impl App {
         }
     }
 
-    fn info_accessibility_snapshot(
-        &mut self,
-        window_width: f32,
-        window_height: f32,
-    ) -> SemanticSnapshot {
+    fn info_accessibility_snapshot(&mut self) -> ModalSnapshot {
         let layout = self.info_overlay_layout();
         self.info_overlay
             .set_viewport(layout.rows_that_fit, layout.columns_that_fit);
@@ -3401,10 +3388,6 @@ impl App {
         );
 
         let mut nodes = Vec::with_capacity(7 + choice_nodes.len());
-        let mut root = Node::new(Role::Window);
-        root.set_label("Termeric terminal emulator");
-        root.set_bounds(rect(0.0, 0.0, window_width, window_height));
-        root.set_children([INFO_DIALOG]);
 
         let mut title = Node::new(Role::Heading);
         title.set_label(self.info_overlay.title());
@@ -3546,7 +3529,6 @@ impl App {
         children.extend([INFO_STATUS, copy_id, dismiss_id]);
         dialog.set_children(children);
         nodes.push((INFO_DIALOG, dialog));
-        nodes.push((ROOT, root));
 
         let model_focus = self.info_overlay.focus().and_then(|focus| {
             use crate::ui::info_overlay::InfoOverlayFocus;
@@ -3562,14 +3544,14 @@ impl App {
         });
         let focus = model_focus.unwrap_or(if awaiting { content_id } else { INFO_DIALOG });
         self.accessibility.focus_override = Some(focus);
-        SemanticSnapshot { nodes, focus }
+        ModalSnapshot {
+            dialog: INFO_DIALOG,
+            nodes,
+            focus,
+        }
     }
 
-    fn context_accessibility_snapshot(
-        &mut self,
-        window_width: f32,
-        window_height: f32,
-    ) -> SemanticSnapshot {
+    fn context_accessibility_snapshot(&mut self) -> ModalSnapshot {
         use crate::ui::context_picker::{ContextPickerPhase, ContextSourceId};
 
         let layout = self.context_picker_layout();
@@ -3632,10 +3614,6 @@ impl App {
         };
 
         let mut nodes = Vec::with_capacity(8 + source_nodes.len());
-        let mut root = Node::new(Role::Window);
-        root.set_label("Termeric terminal emulator");
-        root.set_bounds(rect(0.0, 0.0, window_width, window_height));
-        root.set_children([CONTEXT_DIALOG]);
 
         let title_text = match snapshot.phase {
             ContextPickerPhase::Sources => "Insert Context",
@@ -3787,7 +3765,6 @@ impl App {
         children.extend([CONTEXT_STATUS, cancel_id, primary_id]);
         dialog.set_children(children);
         nodes.push((CONTEXT_DIALOG, dialog));
-        nodes.push((ROOT, root));
 
         let default_focus = match snapshot.phase {
             ContextPickerPhase::Sources => source_nodes
@@ -3822,14 +3799,14 @@ impl App {
             self.accessibility.focus_override = None;
         }
         self.accessibility.focus_override = Some(focus);
-        SemanticSnapshot { nodes, focus }
+        ModalSnapshot {
+            dialog: CONTEXT_DIALOG,
+            nodes,
+            focus,
+        }
     }
 
-    fn diff_accessibility_snapshot(
-        &mut self,
-        window_width: f32,
-        window_height: f32,
-    ) -> SemanticSnapshot {
+    fn diff_accessibility_snapshot(&mut self) -> ModalSnapshot {
         let layout = self.diff_review_layout();
         self.diff_review
             .set_viewport(layout.rows_that_fit, layout.columns_that_fit);
@@ -3881,10 +3858,6 @@ impl App {
         );
 
         let mut nodes = Vec::with_capacity(7);
-        let mut root = Node::new(Role::Window);
-        root.set_label("Termeric terminal emulator");
-        root.set_bounds(rect(0.0, 0.0, window_width, window_height));
-        root.set_children([DIFF_DIALOG]);
 
         let title_text = format!("Diff: {}", self.diff_review.filename());
         let mut title = Node::new(Role::Heading);
@@ -3993,7 +3966,6 @@ impl App {
         children.extend([copy_id, dismiss_id]);
         dialog.set_children(children);
         nodes.push((DIFF_DIALOG, dialog));
-        nodes.push((ROOT, root));
 
         let requested_focus = self.accessibility.focus_override.filter(|node| {
             self.accessibility.is_diff_node(*node)
@@ -4005,14 +3977,14 @@ impl App {
             self.accessibility.focus_override = None;
         }
         self.accessibility.focus_override = Some(focus);
-        SemanticSnapshot { nodes, focus }
+        ModalSnapshot {
+            dialog: DIFF_DIALOG,
+            nodes,
+            focus,
+        }
     }
 
-    fn guardrail_accessibility_snapshot(
-        &mut self,
-        window_width: f32,
-        window_height: f32,
-    ) -> SemanticSnapshot {
+    fn guardrail_accessibility_snapshot(&mut self) -> ModalSnapshot {
         let layout = self.guardrail_layout();
         let request_id = self.guardrail.request_id();
         let awaiting = self.guardrail.is_awaiting_current();
@@ -4026,10 +3998,6 @@ impl App {
         let cancel_id = self.accessibility.guardrail.node(&cancel_target);
 
         let mut nodes = Vec::with_capacity(7);
-        let mut root = Node::new(Role::Window);
-        root.set_label("Termeric terminal emulator");
-        root.set_bounds(rect(0.0, 0.0, window_width, window_height));
-        root.set_children([GUARDRAIL_DIALOG]);
 
         let (command_value, reason_value, context_value, critical) = matched.as_ref().map_or_else(
             || {
@@ -4152,7 +4120,6 @@ impl App {
             confirm_id,
         ]);
         nodes.push((GUARDRAIL_DIALOG, dialog));
-        nodes.push((ROOT, root));
 
         let requested_focus = self.accessibility.focus_override.filter(|node| {
             self.accessibility.is_guardrail_node(*node)
@@ -4168,14 +4135,14 @@ impl App {
         if self.accessibility.focus_override.is_some() && requested_focus.is_none() {
             self.accessibility.focus_override = Some(default_focus);
         }
-        SemanticSnapshot { nodes, focus }
+        ModalSnapshot {
+            dialog: GUARDRAIL_DIALOG,
+            nodes,
+            focus,
+        }
     }
 
-    fn shortcuts_accessibility_snapshot(
-        &mut self,
-        window_width: f32,
-        window_height: f32,
-    ) -> SemanticSnapshot {
+    fn shortcuts_accessibility_snapshot(&mut self) -> ModalSnapshot {
         let mut info = self.shortcuts_panel.build_info(&self.shortcut_registry);
         let mut layout = self.shortcuts_accessibility_layout(&info);
         self.shortcuts_panel.set_max_visible(layout.rows_that_fit);
@@ -4183,10 +4150,6 @@ impl App {
         layout = self.shortcuts_accessibility_layout(&info);
 
         let mut nodes = Vec::with_capacity(info.entries.len() + 8);
-        let mut root = Node::new(Role::Window);
-        root.set_label("Termeric terminal emulator");
-        root.set_bounds(rect(0.0, 0.0, window_width, window_height));
-        root.set_children([SHORTCUTS_DIALOG]);
 
         let mut input = Node::new(Role::SearchInput);
         input.set_label("Filter keyboard shortcuts");
@@ -4315,7 +4278,6 @@ impl App {
         ));
         dialog.set_children(dialog_children);
         nodes.push((SHORTCUTS_DIALOG, dialog));
-        nodes.push((ROOT, root));
 
         let default_focus = selected_node.unwrap_or(if info.recording {
             SHORTCUTS_DIALOG
@@ -4331,14 +4293,14 @@ impl App {
         if self.accessibility.focus_override.is_some() && requested_focus.is_none() {
             self.accessibility.focus_override = Some(default_focus);
         }
-        SemanticSnapshot { nodes, focus }
+        ModalSnapshot {
+            dialog: SHORTCUTS_DIALOG,
+            nodes,
+            focus,
+        }
     }
 
-    fn settings_accessibility_snapshot(
-        &mut self,
-        window_width: f32,
-        window_height: f32,
-    ) -> SemanticSnapshot {
+    fn settings_accessibility_snapshot(&mut self) -> ModalSnapshot {
         use crate::ui::settings::SettingKind;
 
         let mut info = self
@@ -4355,10 +4317,6 @@ impl App {
         let visible_entries = &info.entries[info.scroll_offset..end];
 
         let mut nodes = Vec::with_capacity(visible_entries.len() + 16);
-        let mut root = Node::new(Role::Window);
-        root.set_label("Termeric terminal emulator");
-        root.set_bounds(rect(0.0, 0.0, window_width, window_height));
-        root.set_children([SETTINGS_DIALOG]);
 
         let mut input = Node::new(Role::SearchInput);
         input.set_label("Search settings");
@@ -4652,7 +4610,6 @@ impl App {
         ));
         dialog.set_children(dialog_children);
         nodes.push((SETTINGS_DIALOG, dialog));
-        nodes.push((ROOT, root));
 
         let default_focus = if info.dropdown_open {
             selected_setting.unwrap_or(SETTINGS_DIALOG)
@@ -4668,14 +4625,14 @@ impl App {
         if self.accessibility.focus_override.is_some() && requested_focus.is_none() {
             self.accessibility.focus_override = Some(default_focus);
         }
-        SemanticSnapshot { nodes, focus }
+        ModalSnapshot {
+            dialog: SETTINGS_DIALOG,
+            nodes,
+            focus,
+        }
     }
 
-    fn commands_accessibility_snapshot(
-        &mut self,
-        window_width: f32,
-        window_height: f32,
-    ) -> SemanticSnapshot {
+    fn commands_accessibility_snapshot(&mut self) -> ModalSnapshot {
         use crate::ui::commands::panel::EditMode;
 
         let info = self.commands_panel.build_info(&self.config.commands);
@@ -4696,10 +4653,6 @@ impl App {
             .retain(|target| retained.contains(target));
 
         let mut nodes = Vec::with_capacity(info.commands.len() * 3 + 12);
-        let mut root = Node::new(Role::Window);
-        root.set_label("Termeric terminal emulator");
-        root.set_bounds(rect(0.0, 0.0, window_width, window_height));
-        root.set_children([COMMANDS_DIALOG]);
 
         let mut close = Node::new(Role::Button);
         close.set_label("Close custom commands");
@@ -4844,7 +4797,6 @@ impl App {
         dialog.set_bounds(bounds_rect(layout.panel));
         dialog.set_children(dialog_children);
         nodes.push((COMMANDS_DIALOG, dialog));
-        nodes.push((ROOT, root));
 
         let default_focus = match info.edit_mode {
             EditMode::EditingName => COMMANDS_NAME,
@@ -4870,14 +4822,14 @@ impl App {
         if self.accessibility.focus_override.is_some() && requested_focus.is_none() {
             self.accessibility.focus_override = Some(default_focus);
         }
-        SemanticSnapshot { nodes, focus }
+        ModalSnapshot {
+            dialog: COMMANDS_DIALOG,
+            nodes,
+            focus,
+        }
     }
 
-    fn agents_accessibility_snapshot(
-        &mut self,
-        window_width: f32,
-        window_height: f32,
-    ) -> SemanticSnapshot {
+    fn agents_accessibility_snapshot(&mut self) -> ModalSnapshot {
         use crate::ui::agents_panel::AgentsControl;
 
         let info = self.agents_panel_info();
@@ -4888,10 +4840,6 @@ impl App {
             .retain(|target| shown.contains(target));
 
         let mut nodes = Vec::with_capacity(info.rows.len() + 12);
-        let mut root = Node::new(Role::Window);
-        root.set_label("Termeric terminal emulator");
-        root.set_bounds(rect(0.0, 0.0, window_width, window_height));
-        root.set_children([AGENTS_DIALOG]);
 
         let mut close = Node::new(Role::Button);
         close.set_label("Close agents");
@@ -4987,7 +4935,6 @@ impl App {
         dialog.set_bounds(bounds_rect(layout.panel));
         dialog.set_children(dialog_children);
         nodes.push((AGENTS_DIALOG, dialog));
-        nodes.push((ROOT, root));
 
         let default_focus = match info.focus {
             Some(AgentsControl::Agent(index)) => {
@@ -5006,14 +4953,14 @@ impl App {
         if self.accessibility.focus_override.is_some() && requested_focus.is_none() {
             self.accessibility.focus_override = Some(default_focus);
         }
-        SemanticSnapshot { nodes, focus }
+        ModalSnapshot {
+            dialog: AGENTS_DIALOG,
+            nodes,
+            focus,
+        }
     }
 
-    fn session_accessibility_snapshot(
-        &mut self,
-        window_width: f32,
-        window_height: f32,
-    ) -> SemanticSnapshot {
+    fn session_accessibility_snapshot(&mut self) -> ModalSnapshot {
         let mut info = self.session_panel.build_info();
         let mut layout = self.session_accessibility_layout(&info);
         self.session_panel.set_max_visible(layout.rows_that_fit);
@@ -5047,10 +4994,6 @@ impl App {
             .retain(|target| retained.contains(target));
 
         let mut nodes = Vec::with_capacity(layout.visible_count * 4 + 10);
-        let mut root = Node::new(Role::Window);
-        root.set_label("Termeric terminal emulator");
-        root.set_bounds(rect(0.0, 0.0, window_width, window_height));
-        root.set_children([SESSION_DIALOG]);
 
         let mut close = Node::new(Role::Button);
         close.set_label(if info.workspaces {
@@ -5275,7 +5218,6 @@ impl App {
         dialog.set_bounds(bounds_rect(layout.panel));
         dialog.set_children(dialog_children);
         nodes.push((SESSION_DIALOG, dialog));
-        nodes.push((ROOT, root));
 
         let default_focus = if info.rename_text.is_some() {
             SESSION_RENAME_INPUT
@@ -5290,7 +5232,11 @@ impl App {
         if self.accessibility.focus_override.is_some() && requested_focus.is_none() {
             self.accessibility.focus_override = Some(default_focus);
         }
-        SemanticSnapshot { nodes, focus }
+        ModalSnapshot {
+            dialog: SESSION_DIALOG,
+            nodes,
+            focus,
+        }
     }
 }
 

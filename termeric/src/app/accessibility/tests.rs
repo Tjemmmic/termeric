@@ -973,7 +973,8 @@ fn the_sprout_menu_nodes_sit_where_the_menu_is_drawn_inside_the_window() {
         .unwrap()
         .show_sprout_menu(0, 1_000, Some(entry), availability);
     let layout = app.sprout_menu_layout().unwrap();
-    let snapshot = app.sprout_accessibility_snapshot(1_000.0, 600.0);
+    let snapshot = app.accessibility_snapshot();
+    let metrics = app.ui_metrics();
     let bounds = |id: NodeId| {
         snapshot
             .nodes
@@ -982,10 +983,13 @@ fn the_sprout_menu_nodes_sit_where_the_menu_is_drawn_inside_the_window() {
             .and_then(|(_, node)| node.bounds())
             .unwrap()
     };
-    assert_eq!(bounds(ROOT), Rect::new(0.0, 0.0, 1_000.0, 600.0));
+    assert_eq!(
+        bounds(ROOT),
+        Rect::new(0.0, 0.0, metrics.width as f64, metrics.height as f64)
+    );
     assert_eq!(bounds(SPROUT_DIALOG), bounds_rect(layout.panel));
     // A menu opened far right is pulled back inside the terminal area.
-    assert!(layout.panel.right() <= app.ui_metrics().width);
+    assert!(layout.panel.right() <= metrics.width);
 }
 
 #[test]
