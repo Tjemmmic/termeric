@@ -193,7 +193,7 @@ fn topology_queue_failure_disconnects_without_waiting_for_queued_frames() {
         {
             let mut guard = state.lock().unwrap();
             let domain = guard.domains.get_mut(DOMAIN).unwrap();
-            domain.topology_subscribers.push(TopologySubscriber {
+            domain.topology_subscribers.push(Subscriber {
                 id: 1,
                 sender,
                 transport,

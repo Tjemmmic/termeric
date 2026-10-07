@@ -123,7 +123,7 @@ struct DomainRuntime {
     next_pane: u32,
     next_split: u32,
     topology_revision: u64,
-    topology_subscribers: Vec<TopologySubscriber>,
+    topology_subscribers: Vec<Subscriber>,
     tabs: Vec<TabRuntime>,
 }
 
@@ -151,10 +151,12 @@ struct PaneRuntime {
     pixel_height: u16,
     closed: bool,
     sequence: u64,
-    attachments: Vec<Attachment>,
+    attachments: Vec<Subscriber>,
 }
 
-struct Attachment {
+/// One client the daemon streams frames to: an attachment to a pane, or a
+/// subscription to a domain's topology.
+struct Subscriber {
     id: u64,
     sender: SyncSender<ServerFrame>,
     // A cloned descriptor lets queue eviction interrupt both socket workers
@@ -162,7 +164,7 @@ struct Attachment {
     transport: UnixStream,
 }
 
-impl Attachment {
+impl Subscriber {
     fn disconnect(&self) {
         let _ = self.transport.shutdown(std::net::Shutdown::Both);
     }
@@ -178,37 +180,61 @@ impl Attachment {
     }
 }
 
-struct TopologySubscriber {
-    id: u64,
-    sender: SyncSender<ServerFrame>,
-    transport: UnixStream,
+/// Where a [`Subscriber`] is registered.
+#[derive(Debug, Clone, Copy)]
+enum Subscription {
+    /// Among a pane's attachments.
+    Pane(u32),
+    /// Among a domain's topology subscribers.
+    Topology,
 }
 
-impl TopologySubscriber {
-    fn disconnect(&self) {
-        let _ = self.transport.shutdown(std::net::Shutdown::Both);
-    }
-
-    fn send_or_disconnect(&self, frame: ServerFrame) -> bool {
-        match self.sender.try_send(frame) {
-            Ok(()) => true,
-            Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
-                self.disconnect();
-                false
-            }
-        }
-    }
-}
-
-struct TopologySubscriptionGuard {
+/// Unregisters and disconnects one subscriber when dropped, so a serving
+/// thread releases its slot however it ends, rather than leaving a dead one
+/// until the next publication.
+struct SubscriptionGuard {
     state: SharedState,
     domain_id: String,
-    subscription_id: u64,
+    subscription: Subscription,
+    id: u64,
 }
 
-impl Drop for TopologySubscriptionGuard {
+impl SubscriptionGuard {
+    fn new(state: &SharedState, domain_id: &str, subscription: Subscription, id: u64) -> Self {
+        Self {
+            state: Arc::clone(state),
+            domain_id: domain_id.to_owned(),
+            subscription,
+            id,
+        }
+    }
+}
+
+impl Drop for SubscriptionGuard {
     fn drop(&mut self) {
-        remove_topology_subscription(&self.state, &self.domain_id, self.subscription_id);
+        let mut state = self.state.lock().unwrap();
+        let Some(domain) = state.domains.get_mut(&self.domain_id) else {
+            return;
+        };
+        let subscribers = match self.subscription {
+            Subscription::Topology => &mut domain.topology_subscribers,
+            Subscription::Pane(pane_id) => match domain
+                .tabs
+                .iter_mut()
+                .find_map(|tab| tab.panes.get_mut(&pane_id))
+            {
+                Some(pane) => &mut pane.attachments,
+                None => return,
+            },
+        };
+        subscribers.retain(|subscriber| {
+            if subscriber.id == self.id {
+                subscriber.disconnect();
+                false
+            } else {
+                true
+            }
+        });
     }
 }
 
@@ -1873,7 +1899,7 @@ fn serve_attachment(
                 exit_message: "terminal process already exited".into(),
             });
         } else {
-            pane.attachments.push(Attachment {
+            pane.attachments.push(Subscriber {
                 id: attachment_id,
                 sender,
                 transport,
@@ -1887,6 +1913,8 @@ fn serve_attachment(
             sequence,
         )
     };
+    let subscription = Subscription::Pane(pane_id);
+    let _registration = SubscriptionGuard::new(&state, &domain_id, subscription, attachment_id);
     let initial_write = (|| -> anyhow::Result<()> {
         write_server_frame(
             &mut stream,
@@ -1915,23 +1943,18 @@ fn serve_attachment(
         }
         write_server_frame(&mut stream, &ServerFrame::SnapshotComplete)
     })();
-    if let Err(error) = initial_write {
-        remove_attachment(&state, &domain_id, pane_id, attachment_id);
-        return Err(error);
-    }
+    initial_write?;
 
-    let reader_stream = match stream.try_clone() {
-        Ok(stream) => stream,
-        Err(error) => {
-            remove_attachment(&state, &domain_id, pane_id, attachment_id);
-            return Err(error.into());
-        }
-    };
+    let reader_stream = stream.try_clone()?;
     let reader_state = Arc::clone(&state);
     let reader_domain = domain_id.clone();
-    let reader = match thread::Builder::new()
+    // The input side's own registration: a detach ends the output loop too.
+    let reader_registration =
+        SubscriptionGuard::new(&state, &domain_id, subscription, attachment_id);
+    let reader = thread::Builder::new()
         .name("termeric-domain-attach-input".into())
         .spawn(move || {
+            let _registration = reader_registration;
             attachment_input_loop(
                 reader_stream,
                 &reader_state,
@@ -1939,14 +1962,7 @@ fn serve_attachment(
                 pane_id,
                 attachment_id,
             );
-            remove_attachment(&reader_state, &reader_domain, pane_id, attachment_id);
-        }) {
-        Ok(reader) => reader,
-        Err(error) => {
-            remove_attachment(&state, &domain_id, pane_id, attachment_id);
-            return Err(error.into());
-        }
-    };
+        })?;
 
     for frame in receiver {
         let closed = matches!(frame, ServerFrame::Closed { .. });
@@ -1956,7 +1972,6 @@ fn serve_attachment(
     }
     let _ = stream.shutdown(std::net::Shutdown::Both);
     let _ = reader.join();
-    remove_attachment(&state, &domain_id, pane_id, attachment_id);
     Ok(())
 }
 
@@ -1981,20 +1996,15 @@ fn serve_topology_subscription(
         let (sender, receiver) = std::sync::mpsc::sync_channel(TOPOLOGY_QUEUE_CAPACITY);
         let revision = domain.topology_revision;
         let snapshot = domain.topology_snapshot();
-        domain.topology_subscribers.push(TopologySubscriber {
+        domain.topology_subscribers.push(Subscriber {
             id: subscription_id,
             sender,
             transport,
         });
         (subscription_id, receiver, revision, snapshot)
     };
-    // Cover snapshot write, descriptor clone, and reader-spawn failures as
-    // well as normal completion. Never retain a dead slot until a later edit.
-    let _registration = TopologySubscriptionGuard {
-        state: Arc::clone(&state),
-        domain_id: domain_id.clone(),
-        subscription_id,
-    };
+    let subscription = Subscription::Topology;
+    let _registration = SubscriptionGuard::new(&state, &domain_id, subscription, subscription_id);
     write_server_frame(
         &mut stream,
         &ServerFrame::Response {
@@ -2006,13 +2016,13 @@ fn serve_topology_subscription(
     )?;
 
     let reader_stream = stream.try_clone()?;
-    let reader_state = Arc::clone(&state);
-    let reader_domain = domain_id.clone();
+    let reader_registration =
+        SubscriptionGuard::new(&state, &domain_id, subscription, subscription_id);
     let reader = thread::Builder::new()
         .name("termeric-domain-topology-input".into())
         .spawn(move || {
+            let _registration = reader_registration;
             topology_subscription_input_loop(reader_stream);
-            remove_topology_subscription(&reader_state, &reader_domain, subscription_id);
         })?;
 
     for frame in receiver {
@@ -2031,20 +2041,6 @@ fn topology_subscription_input_loop(mut stream: UnixStream) {
         if matches!(frame, ClientFrame::Detach) {
             return;
         }
-    }
-}
-
-fn remove_topology_subscription(state: &SharedState, domain_id: &str, subscription_id: u64) {
-    let mut state = state.lock().unwrap();
-    if let Some(domain) = state.domains.get_mut(domain_id) {
-        domain.topology_subscribers.retain(|subscriber| {
-            if subscriber.id == subscription_id {
-                subscriber.disconnect();
-                false
-            } else {
-                true
-            }
-        });
     }
 }
 
@@ -2092,20 +2088,6 @@ fn attachment_input_loop(
             ClientFrame::Detach => return,
             _ => return,
         }
-    }
-}
-
-fn remove_attachment(state: &SharedState, domain_id: &str, pane_id: u32, attachment_id: u64) {
-    let mut state = state.lock().unwrap();
-    if let Ok(pane) = find_pane_mut(&mut state, domain_id, pane_id) {
-        pane.attachments.retain(|attachment| {
-            if attachment.id == attachment_id {
-                attachment.disconnect();
-                false
-            } else {
-                true
-            }
-        });
     }
 }
 
@@ -3263,6 +3245,56 @@ mod tests {
             assert_eq!(unchanged.next_pane, 1);
             assert_eq!(unchanged.tabs[0].layout, LivePaneLayout::Pane { pane: 0 });
         }
+        process_request(&state, Request::KillDomain { domain: domain.id }).unwrap();
+    }
+
+    #[test]
+    fn attachment_slots_are_released_however_the_attachment_ends() {
+        let state = empty_state();
+        let Response::Domain { domain } = create_domain(
+            &state,
+            "attachment-slots".into(),
+            SpawnSpec {
+                program: Some("/bin/sh".into()),
+                args: crate::test_support::sleeping_args(),
+                ..SpawnSpec::default()
+            },
+        )
+        .unwrap() else {
+            panic!("expected created domain");
+        };
+        let attachments = || {
+            let state = state.lock().unwrap();
+            find_pane(&state, &domain.id, 0).unwrap().attachments.len()
+        };
+
+        // A client gone before its snapshot could be written.
+        let (server, client) = UnixStream::pair().unwrap();
+        drop(client);
+        assert!(serve_attachment(server, Arc::clone(&state), domain.id.clone(), 0).is_err());
+        assert_eq!(attachments(), 0);
+
+        // A client that detaches once attached.
+        let (server, mut client) = UnixStream::pair().unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let worker = {
+            let state = Arc::clone(&state);
+            let domain_id = domain.id.clone();
+            thread::spawn(move || serve_attachment(server, state, domain_id, 0))
+        };
+        assert!(matches!(
+            protocol::read_frame::<ServerFrame>(&mut client).unwrap(),
+            ServerFrame::Response {
+                response: Response::Attached { .. }
+            }
+        ));
+        read_graphics_attachment_snapshot(&mut client);
+        assert_eq!(attachments(), 1);
+        protocol::write_frame(&mut client, &ClientFrame::Detach).unwrap();
+        worker.join().unwrap().unwrap();
+        assert_eq!(attachments(), 0);
         process_request(&state, Request::KillDomain { domain: domain.id }).unwrap();
     }
 
@@ -4637,7 +4669,7 @@ mod tests {
             client
                 .set_read_timeout(Some(Duration::from_secs(1)))
                 .unwrap();
-            let attachment = Attachment {
+            let attachment = Subscriber {
                 id: 1,
                 sender,
                 transport,
@@ -4695,13 +4727,13 @@ mod tests {
             find_pane_mut(&mut guard, &domain.id, 0)
                 .unwrap()
                 .attachments
-                .push(Attachment {
+                .push(Subscriber {
                     id: 1,
                     sender,
                     transport,
                 });
             let runtime = guard.domains.get_mut(&domain.id).unwrap();
-            runtime.topology_subscribers.push(TopologySubscriber {
+            runtime.topology_subscribers.push(Subscriber {
                 id: 1,
                 sender: topology_sender,
                 transport: topology_transport,
@@ -4783,7 +4815,7 @@ mod tests {
         find_pane_mut(&mut state.lock().unwrap(), &domain.id, 0)
             .unwrap()
             .attachments
-            .push(Attachment {
+            .push(Subscriber {
                 id: 2,
                 sender,
                 transport,
@@ -4889,7 +4921,7 @@ mod tests {
                 .get_mut(&domain.id)
                 .unwrap()
                 .topology_subscribers
-                .push(TopologySubscriber {
+                .push(Subscriber {
                     id: 1,
                     sender,
                     transport,
