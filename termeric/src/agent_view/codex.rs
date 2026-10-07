@@ -22,15 +22,15 @@ use std::time::Duration;
 use serde_json::{Map, Value, json};
 
 use super::event::{
-    AgentCommand, AgentEvent, ApprovalDecision, ApprovalRequest, BlockStart, ContentBlock,
-    ContextUsage, DECLINED_MESSAGE, EarlierConversation, Handshake, ModeChoice, ModelChoice,
-    RememberOption, Retry, SessionInfo, SlashCommand, StreamDelta, Thread, TurnOutcome,
-    earlier_title, invoked_name,
+    AgentCommand, AgentEvent, ApprovalDecision, ApprovalRequest, ContentBlock, ContextUsage,
+    DECLINED_MESSAGE, EarlierConversation, Handshake, ModeChoice, ModelChoice, RememberOption,
+    Retry, SessionInfo, SlashCommand, TurnOutcome, earlier_title, invoked_name,
 };
 use super::present::PATCH_TOOL;
 use super::protocol::{
     Exchange, Incoming, Protocol, client_info, failed_turn, finished_turn, incoming, line,
-    method_not_found, request_key, text, tool_result, tool_use,
+    method_not_found, request_key, settled, stream_piece, stream_started, text, tool_result,
+    tool_use,
 };
 
 /// The mode Codex asks in: it reads freely and asks before changing
@@ -204,8 +204,9 @@ pub struct CodexCodec {
     asked: HashMap<String, Asked>,
     /// Each file-change item's changes, for the approval that follows it.
     patches: HashMap<String, Value>,
-    /// The item whose text is streaming, its kind, and its summary part.
-    live: Option<(String, BlockStart, i64)>,
+    /// The item whose text is streaming, whether it is reasoning, and its
+    /// summary part.
+    live: Option<(String, bool, i64)>,
     retries: u32,
 }
 
@@ -822,13 +823,13 @@ impl CodexCodec {
                 .get("item")
                 .map(|item| self.item(item, method == "item/completed"))
                 .unwrap_or_default(),
-            "item/agentMessage/delta" => self.delta(params, BlockStart::Text, 0),
+            "item/agentMessage/delta" => self.delta(params, false, 0),
             "item/reasoning/summaryTextDelta" => {
                 let part = params
                     .get("summaryIndex")
                     .and_then(Value::as_i64)
                     .unwrap_or(0);
-                self.delta(params, BlockStart::Thinking, part)
+                self.delta(params, true, part)
             }
             "item/fileChange/patchUpdated" => {
                 let (Some(item), Some(changes)) = (text(params, "itemId"), params.get("changes"))
@@ -963,7 +964,7 @@ impl CodexCodec {
     }
 
     /// Streams a text or reasoning delta, starting its block on the first.
-    fn delta(&mut self, params: &Value, kind: BlockStart, part: i64) -> Vec<AgentEvent> {
+    fn delta(&mut self, params: &Value, thinking: bool, part: i64) -> Vec<AgentEvent> {
         let (Some(item), Some(delta)) = (
             text(params, "itemId"),
             params.get("delta").and_then(Value::as_str),
@@ -973,42 +974,20 @@ impl CodexCodec {
         let mut events = Vec::new();
         let mut delta = delta.to_owned();
         match &mut self.live {
-            Some((live, live_kind, live_part)) if *live == item && *live_kind == kind => {
+            Some((live, live_thinking, live_part))
+                if *live == item && *live_thinking == thinking =>
+            {
                 if *live_part != part {
                     *live_part = part;
                     delta.insert_str(0, "\n\n");
                 }
             }
             _ => {
-                events.push(AgentEvent::Stream {
-                    thread: Thread::Main,
-                    delta: StreamDelta::MessageStarted {
-                        message_id: item.clone(),
-                    },
-                });
-                events.push(AgentEvent::Stream {
-                    thread: Thread::Main,
-                    delta: StreamDelta::BlockStarted {
-                        index: 0,
-                        block: kind.clone(),
-                    },
-                });
-                self.live = Some((item, kind.clone(), part));
+                events.extend(stream_started(&item, thinking));
+                self.live = Some((item, thinking, part));
             }
         }
-        events.push(AgentEvent::Stream {
-            thread: Thread::Main,
-            delta: match kind {
-                BlockStart::Thinking => StreamDelta::Thinking {
-                    index: 0,
-                    text: delta,
-                },
-                _ => StreamDelta::Text {
-                    index: 0,
-                    text: delta,
-                },
-            },
-        });
+        events.push(stream_piece(thinking, delta));
         events
     }
 
@@ -1127,22 +1106,11 @@ impl CodexCodec {
 
     /// The complete text of a streamed or unstreamed item.
     fn settle(&mut self, id: &str, block: ContentBlock) -> Vec<AgentEvent> {
-        let mut events = vec![AgentEvent::Message {
-            thread: Thread::Main,
-            message: super::event::AssistantMessage {
-                id: id.to_owned(),
-                blocks: vec![block],
-                error: None,
-            },
-        }];
-        if self.live.as_ref().is_some_and(|(live, ..)| live == id) {
+        let streamed = self.live.as_ref().is_some_and(|(live, ..)| live == id);
+        if streamed {
             self.live = None;
-            events.push(AgentEvent::Stream {
-                thread: Thread::Main,
-                delta: StreamDelta::BlockStopped { index: 0 },
-            });
         }
-        events
+        settled(id, block, streamed)
     }
 
     fn outcome(&self, turn: Option<&Value>) -> TurnOutcome {
@@ -1378,7 +1346,7 @@ fn unquote(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_view::event::EARLIER_TITLE_CHARS;
+    use crate::agent_view::event::{BlockStart, EARLIER_TITLE_CHARS, StreamDelta, Thread};
     use crate::agent_view::protocol::testing::{decode, parse};
 
     fn codec() -> CodexCodec {

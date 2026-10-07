@@ -10,7 +10,8 @@
 use serde_json::{Map, Value, json};
 
 use super::event::{
-    AgentCommand, AgentEvent, AssistantMessage, ContentBlock, Thread, ToolResult, TurnOutcome,
+    AgentCommand, AgentEvent, AssistantMessage, BlockStart, ContentBlock, StreamDelta, Thread,
+    ToolResult, TurnOutcome,
 };
 
 /// One agent's wire protocol, for one process.
@@ -191,6 +192,55 @@ pub fn tool_use(id: &str, name: &str, input: Value) -> AgentEvent {
             }],
             error: None,
         },
+    }
+}
+
+/// The start of main-thread message `id`, streamed as one block of text, or
+/// of reasoning when `thinking`.
+pub fn stream_started(id: &str, thinking: bool) -> [AgentEvent; 2] {
+    let block = if thinking {
+        BlockStart::Thinking
+    } else {
+        BlockStart::Text
+    };
+    [
+        main_stream(StreamDelta::MessageStarted {
+            message_id: id.to_owned(),
+        }),
+        main_stream(StreamDelta::BlockStarted { index: 0, block }),
+    ]
+}
+
+/// The next piece of the block [`stream_started`] started.
+pub fn stream_piece(thinking: bool, text: String) -> AgentEvent {
+    main_stream(if thinking {
+        StreamDelta::Thinking { index: 0, text }
+    } else {
+        StreamDelta::Text { index: 0, text }
+    })
+}
+
+/// Main-thread message `id` complete as `block`, which is authoritative over
+/// what streamed; when it was `streamed`, its stream ends too.
+pub fn settled(id: &str, block: ContentBlock, streamed: bool) -> Vec<AgentEvent> {
+    let mut events = vec![AgentEvent::Message {
+        thread: Thread::Main,
+        message: AssistantMessage {
+            id: id.to_owned(),
+            blocks: vec![block],
+            error: None,
+        },
+    }];
+    if streamed {
+        events.push(main_stream(StreamDelta::BlockStopped { index: 0 }));
+    }
+    events
+}
+
+fn main_stream(delta: StreamDelta) -> AgentEvent {
+    AgentEvent::Stream {
+        thread: Thread::Main,
+        delta,
     }
 }
 

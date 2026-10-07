@@ -26,15 +26,15 @@ use std::time::{Duration, Instant, SystemTime};
 use serde_json::{Map, Value, json};
 
 use super::event::{
-    AgentCommand, AgentEvent, ApprovalDecision, ApprovalRequest, AssistantMessage, BlockStart,
-    ContentBlock, ContextUsage, DECLINED_MESSAGE, EarlierConversation, EffortChoice, Handshake,
-    ModeChoice, ModelChoice, RememberOption, SessionInfo, SlashCommand, StreamDelta, Thread,
-    TurnOutcome, earlier_title,
+    AgentCommand, AgentEvent, ApprovalDecision, ApprovalRequest, ContentBlock, ContextUsage,
+    DECLINED_MESSAGE, EarlierConversation, EffortChoice, Handshake, ModeChoice, ModelChoice,
+    RememberOption, SessionInfo, SlashCommand, TurnOutcome, earlier_title,
 };
 use super::present::PATCH_TOOL;
 use super::protocol::{
     Exchange, Incoming, Protocol, client_info, failed_turn, finished_turn, incoming, line,
-    method_not_found, request_key, text, tool_result, tool_use,
+    method_not_found, request_key, settled, stream_piece, stream_started, text, tool_result,
+    tool_use,
 };
 use crate::safe_text::capitalized;
 
@@ -1096,23 +1096,7 @@ impl AcpCodec {
                 self.unnamed += 1;
                 format!("acp-message-{}", self.unnamed)
             });
-            events.push(AgentEvent::Stream {
-                thread: Thread::Main,
-                delta: StreamDelta::MessageStarted {
-                    message_id: id.clone(),
-                },
-            });
-            events.push(AgentEvent::Stream {
-                thread: Thread::Main,
-                delta: StreamDelta::BlockStarted {
-                    index: 0,
-                    block: if thinking {
-                        BlockStart::Thinking
-                    } else {
-                        BlockStart::Text
-                    },
-                },
-            });
+            events.extend(stream_started(&id, thinking));
             self.live = Some(Live {
                 id,
                 thinking,
@@ -1122,15 +1106,7 @@ impl AcpCodec {
         if let Some(live) = &mut self.live {
             live.text.push_str(piece);
         }
-        let text = piece.to_owned();
-        events.push(AgentEvent::Stream {
-            thread: Thread::Main,
-            delta: if thinking {
-                StreamDelta::Thinking { index: 0, text }
-            } else {
-                StreamDelta::Text { index: 0, text }
-            },
-        });
+        events.push(stream_piece(thinking, piece.to_owned()));
         events
     }
 
@@ -1139,24 +1115,12 @@ impl AcpCodec {
         let Some(live) = self.live.take() else {
             return Vec::new();
         };
-        vec![
-            AgentEvent::Message {
-                thread: Thread::Main,
-                message: AssistantMessage {
-                    id: live.id,
-                    blocks: vec![if live.thinking {
-                        ContentBlock::Thinking(live.text)
-                    } else {
-                        ContentBlock::Text(live.text)
-                    }],
-                    error: None,
-                },
-            },
-            AgentEvent::Stream {
-                thread: Thread::Main,
-                delta: StreamDelta::BlockStopped { index: 0 },
-            },
-        ]
+        let block = if live.thinking {
+            ContentBlock::Thinking(live.text)
+        } else {
+            ContentBlock::Text(live.text)
+        };
+        settled(&live.id, block, true)
     }
 
     fn tool_update(&mut self, update: &Value, created: bool) -> Vec<AgentEvent> {
