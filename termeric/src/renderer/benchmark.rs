@@ -3,7 +3,6 @@
 use super::headless_tests::queue_test_run;
 use super::*;
 
-#[cfg(test)]
 pub(crate) struct HeadlessRendererBenchmark {
     pub adapter: String,
     pub frame_ms: Vec<f64>,
@@ -18,7 +17,6 @@ pub(crate) struct HeadlessRendererBenchmark {
 /// Exercise Termeric's real glyph, text, rectangle, upload, and draw pipelines
 /// against an offscreen texture. Presentation and window-system latency remain
 /// part of the optional process-level benchmark lane.
-#[cfg(test)]
 pub(crate) fn benchmark_headless_renderer() -> Result<Option<HeadlessRendererBenchmark>> {
     use std::time::Instant;
 

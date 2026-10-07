@@ -6,7 +6,6 @@ use termeric_core::CellAttrs;
 
 /// Run one render pass into a fresh `width`×`height` target cleared to
 /// `clear`, then read the target back as tightly packed rows.
-#[cfg(test)]
 pub(super) fn render_offscreen(
     device: &Device,
     queue: &Queue,
@@ -90,16 +89,11 @@ pub(super) fn render_offscreen(
     Ok(pixels)
 }
 
-#[cfg(test)]
 pub(super) const HEADLESS_IMAGE_WIDTH: u32 = 64;
-#[cfg(test)]
 const HEADLESS_IMAGE_CELL_HEIGHT: u32 = 4;
-#[cfg(test)]
 const HEADLESS_IMAGE_ROWS: u32 = 52;
-#[cfg(test)]
 pub(super) const HEADLESS_IMAGE_HEIGHT: u32 = HEADLESS_IMAGE_CELL_HEIGHT * HEADLESS_IMAGE_ROWS;
 
-#[cfg(test)]
 fn headless_image_row_color(row: u32) -> [u8; 4] {
     [
         32 + (row * 3 % 200) as u8,
@@ -109,7 +103,6 @@ fn headless_image_row_color(row: u32) -> [u8; 4] {
     ]
 }
 
-#[cfg(test)]
 fn headless_image_fixture() -> termeric_core::StoredImage {
     let source_width = HEADLESS_IMAGE_WIDTH / 2;
     let mut data = Vec::with_capacity((source_width * HEADLESS_IMAGE_HEIGHT * 4) as usize);
@@ -128,7 +121,6 @@ fn headless_image_fixture() -> termeric_core::StoredImage {
     }
 }
 
-#[cfg(test)]
 fn headless_image_presentations(
     image: &termeric_core::StoredImage,
     row_origin: i64,
@@ -197,7 +189,6 @@ fn headless_image_presentations(
     presentations
 }
 
-#[cfg(test)]
 pub(super) fn render_headless_image_state(
     device: &Device,
     queue: &Queue,
@@ -233,7 +224,6 @@ pub(super) fn render_headless_image_state(
     )
 }
 
-#[cfg(test)]
 fn verify_headless_image_state(
     pixels: &[u8],
     source_row_offset: u32,
@@ -283,7 +273,6 @@ fn verify_headless_image_state(
     Ok(())
 }
 
-#[cfg(test)]
 fn expected_headless_image_state(source_row_offset: u32, visible_rows: u32) -> Vec<u8> {
     let mut pixels = vec![0; (HEADLESS_IMAGE_WIDTH * HEADLESS_IMAGE_HEIGHT * 4) as usize];
     for pixel in pixels.as_chunks_mut::<4>().0 {
@@ -304,7 +293,6 @@ fn expected_headless_image_state(source_row_offset: u32, visible_rows: u32) -> V
 /// and after terminal scrolling. Every pixel row must be present in the first
 /// frame; scrolling must clip it once and restoring scrollback must reveal the
 /// complete image again without incrementally discovering rows.
-#[cfg(test)]
 pub(crate) fn headless_image_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
     let mut pipeline = ImagePipeline::new(device, TextureFormat::Rgba8Unorm)?;
     pipeline.resize(queue, HEADLESS_IMAGE_WIDTH, HEADLESS_IMAGE_HEIGHT);
@@ -331,7 +319,6 @@ pub(crate) fn headless_image_render_smoke(device: &Device, queue: &Queue) -> Res
 /// case: rendering through an sRGB view or sampling an sRGB-decoding texture
 /// lightens every mid-tone (Turnip's `#18151A` background presents as
 /// `#56515A`), which fails the exact comparisons below.
-#[cfg(test)]
 pub(crate) fn headless_theme_color_fidelity_smoke(device: &Device, queue: &Queue) -> Result<()> {
     use crate::config::theme::Color as ThemeColor;
 
@@ -415,7 +402,6 @@ pub(crate) fn headless_theme_color_fidelity_smoke(device: &Device, queue: &Queue
 
 /// Chrome labels shape in the desktop's UI face through the shared atlas,
 /// measure consistently with what is drawn, and land on whole pixels.
-#[cfg(test)]
 pub(crate) fn headless_ui_text_smoke(device: &Device, queue: &Queue) -> Result<()> {
     let mut glyph_cache = GlyphCache::for_test(device, queue, 16.0, false)?;
     let size = physical_font_size(ui_text::UI_LABEL_POINTS, 1.0);
@@ -473,7 +459,6 @@ fn target_clip(width: u32, height: u32) -> TextClip {
 /// Shape and submit representative multi-scalar terminal graphemes through the
 /// real text atlas/pipeline. The queued-content assertions act as a small
 /// geometry golden: no case may collapse to its first scalar before shaping.
-#[cfg(test)]
 pub(crate) fn headless_unicode_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
     const FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
     const WIDTH: u32 = 512;
@@ -586,7 +571,6 @@ pub(crate) fn headless_unicode_render_smoke(device: &Device, queue: &Queue) -> R
 
 /// Load a real COLR/CBDT emoji font and carry its RGBA pixels through the
 /// dedicated atlas, vertex flag, bind group, and shader compilation path.
-#[cfg(test)]
 pub(crate) fn headless_color_emoji_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
     let font_path = [
         "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
@@ -630,7 +614,6 @@ pub(crate) fn headless_color_emoji_render_smoke(device: &Device, queue: &Queue) 
 /// Force the real raster/text path beyond a tiny multi-page atlas. Every
 /// scalar must still produce visible geometry, even when all frame-safe pages
 /// are pinned and the permanent replacement glyph is required.
-#[cfg(test)]
 pub(crate) fn headless_glyph_atlas_stress_smoke(device: &Device, queue: &Queue) -> Result<()> {
     const FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
     const GLYPHS: usize = 2_048;
@@ -798,7 +781,6 @@ pub(crate) fn headless_glyph_atlas_stress_smoke(device: &Device, queue: &Queue) 
     Ok(())
 }
 
-#[cfg(test)]
 fn queue_styled_test_run(
     text: &mut TextPipeline,
     content: &str,
@@ -825,7 +807,6 @@ fn queue_styled_test_run(
     run.flush(text);
 }
 
-#[cfg(test)]
 pub(super) fn queue_test_run(
     text: &mut TextPipeline,
     content: &str,
@@ -844,7 +825,6 @@ pub(super) fn queue_test_run(
     );
 }
 
-#[cfg(test)]
 fn render_text_snapshot(
     device: &Device,
     queue: &Queue,
@@ -871,7 +851,6 @@ fn render_text_snapshot(
     })
 }
 
-#[cfg(test)]
 fn render_queued_text_snapshot(
     device: &Device,
     queue: &Queue,
@@ -901,7 +880,6 @@ fn render_queued_text_snapshot(
 /// smoke's visual baseline. The bundled test font removes host font discovery
 /// from the baseline while retaining Termeric's real atlas, shaping, upload,
 /// shader, blending, and GPU readback paths.
-#[cfg(test)]
 pub(crate) fn headless_gui_visual_snapshot(
     device: &Device,
     queue: &Queue,
@@ -929,7 +907,6 @@ pub(crate) fn headless_gui_visual_snapshot(
 
 /// Render deterministic enabled/disabled ligature snapshots through the real
 /// atlas and GPU pipeline, and verify unchanged frames reuse shaped runs.
-#[cfg(test)]
 pub(crate) fn headless_ligature_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
     const FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
     let mut glyph_cache = GlyphCache::for_test(device, queue, 16.0, true)?;
@@ -1075,7 +1052,6 @@ pub(crate) fn headless_ligature_render_smoke(device: &Device, queue: &Queue) -> 
 /// pipelines. The assertions are a portable geometry golden: they verify face
 /// requests, foreground suppression, decoration primitive counts, and pane
 /// clipping without depending on platform-specific font pixels.
-#[cfg(test)]
 pub(crate) fn headless_sgr_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
     const FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
     const WIDTH: u32 = 256;
@@ -1245,7 +1221,6 @@ pub(crate) fn headless_sgr_render_smoke(device: &Device, queue: &Queue) -> Resul
     Ok(())
 }
 
-#[cfg(test)]
 pub(crate) fn headless_palette_input_smoke(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -1341,7 +1316,6 @@ pub(crate) fn headless_palette_input_smoke(
     Ok(())
 }
 
-#[cfg(test)]
 mod headless_image_readback_tests {
     use super::*;
 
