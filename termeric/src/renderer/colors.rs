@@ -107,8 +107,9 @@ impl UiPalette {
             search_error: theme.ansi_color(1).to_f32_array(), // red
             // URL/hyperlink color from theme
             url: theme.ui.url.to_f32_array(),
-            // Command palette — fully theme-derived
-            palette_scrim: with_alpha(scale_rgb(bg.to_f32_array(), 0.0), 0.3),
+            // Command palette. Its scrim is plain black at low alpha, like
+            // every shadow, so it dims light and dark themes alike.
+            palette_scrim: [0.0, 0.0, 0.0, 0.3],
             palette_bg: scale_rgb(bg.to_f32_array(), 0.65),
             palette_input_bg: scale_rgb(bg.to_f32_array(), 0.50),
             palette_accent: cursor.to_f32_array(),
@@ -257,14 +258,6 @@ mod surface_format_tests {
             assert!(!formats.render.is_srgb(), "{available:?} -> {formats:?}");
         }
         assert_eq!(select_surface_formats(&[]), None);
-    }
-}
-
-pub(super) fn contrast_text(bg: [f32; 4]) -> [f32; 4] {
-    if luminance(bg) > 0.6 {
-        [0.12, 0.09, 0.07, 1.0]
-    } else {
-        [0.95, 0.92, 0.88, 1.0]
     }
 }
 

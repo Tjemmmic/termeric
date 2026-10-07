@@ -1,11 +1,11 @@
 //! Tab bar rendering and hit-testing
 
+use super::Renderer;
 use super::icons::draw_icon;
 use super::types::*;
-use super::{Renderer, contrast_text};
 use crate::agents::AgentBadge;
 use crate::tabs::{TabInfo, TabType};
-use crate::ui::color::{mix, scale_alpha, with_alpha};
+use crate::ui::color::{high_contrast_text, mix, scale_alpha, with_alpha};
 use crate::ui::constants::BUTTON_CORNER_RADIUS;
 use crate::ui::geometry::Bounds;
 use crate::ui::icon::Icon;
@@ -777,7 +777,8 @@ impl Renderer {
                 );
                 let count_size = size_px * 0.85;
                 let count_width = self.ui_text_width(&count, count_size);
-                let count_color = with_alpha(contrast_text(self.ui.palette_accent), text_alpha);
+                let count_color =
+                    with_alpha(high_contrast_text(self.ui.palette_accent), text_alpha);
                 self.push_ui_label(
                     &count,
                     badge_x + (badge_width - count_width) / 2.0,
@@ -1092,7 +1093,7 @@ impl Renderer {
         else {
             return;
         };
-        let color = with_alpha(contrast_text(self.ui.tab_bar_bg), 0.98);
+        let color = with_alpha(high_contrast_text(self.ui.tab_bar_bg), 0.98);
         self.draw_focus_ring(bounds, color, BUTTON_CORNER_RADIUS);
     }
 

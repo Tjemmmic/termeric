@@ -62,7 +62,7 @@ pub(crate) use glyph_cache::{MAX_FONT_COVERAGE_GRAPHEMES, MAX_FONT_COVERAGE_INPU
 #[cfg(test)]
 pub(crate) use benchmark::benchmark_headless_renderer;
 pub(crate) use colors::{ENCODED_RGBA_FORMAT, UiPalette};
-use colors::{TerminalPalette, contrast_text, select_surface_formats};
+use colors::{TerminalPalette, select_surface_formats};
 #[cfg(test)]
 pub(crate) use device::discover_adapter;
 pub(crate) use device::{RendererDeviceFailure, RendererDiagnostics, RendererFailureCallback};
@@ -82,7 +82,7 @@ use crate::config::theme::Theme;
 use crate::config::{CursorStyle, RendererBackend, TabBarPosition};
 use crate::terminal::search::Search;
 use crate::terminal::url::UrlCache;
-use crate::ui::color::{contrast_ratio, high_contrast_text, luminance, mix, scale_rgb, with_alpha};
+use crate::ui::color::{contrast_ratio, high_contrast_text, mix, scale_rgb, with_alpha};
 use crate::ui::search_bar::SearchBarInfo;
 use crate::ui::settings::SettingsPanelInfo;
 use anyhow::Result;
