@@ -565,7 +565,7 @@ impl AgentSession {
         self.close();
     }
 
-    /// Seconds until the handshake times out, for scheduling a check.
+    /// When the handshake times out, for scheduling a check.
     pub fn handshake_deadline(&self) -> Option<Instant> {
         self.handshake_deadline
     }
