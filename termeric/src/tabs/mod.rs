@@ -24,6 +24,10 @@ use crate::terminal::events::MAX_FORWARDED_TERMINAL_EVENTS_PER_POLL;
 use crate::terminal::geometry::TerminalArea;
 use crate::terminal::policy::TerminalPolicy;
 
+/// A plugin tab that closes this soon after it was created most likely failed
+/// to start, so the person is shown what it printed.
+pub(crate) const QUICK_EXIT_WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// The exact terminal an app-facing event came from: its tab's stable ID and
 /// its tab-local pane ID. Both are stable for the terminal's lifetime, so a
 /// reply never depends on whichever terminal is focused when App handles the
@@ -1530,7 +1534,7 @@ impl TabManager {
     }
 
     /// Detect plugin tabs that are about to be cleaned up but exited suspiciously
-    /// fast (within 5 seconds of creation). Returns a list of (plugin_id, output_lines)
+    /// fast (within `QUICK_EXIT_WINDOW` of creation). Returns a list of (plugin_id, output_lines)
     /// for each quick-exiting plugin tab, so the caller can show an error overlay.
     ///
     /// Must be called BEFORE `cleanup_closed`, since that removes the tabs.
@@ -1547,8 +1551,7 @@ impl TabManager {
                 TabType::Shell | TabType::Profile { .. } | TabType::Serial { .. } => continue,
             };
 
-            // Was it a quick exit? (< 5 seconds from creation)
-            if tab.created_at.elapsed().as_secs() >= 5 {
+            if tab.created_at.elapsed() >= QUICK_EXIT_WINDOW {
                 continue;
             }
 

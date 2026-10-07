@@ -1927,3 +1927,37 @@ fn c_cancels_the_agent_status_setup_instead_of_copying_it() {
     assert_eq!(memory.lock().unwrap().clipboard, None);
     assert!(!config_dir.join("settings.json").exists());
 }
+
+#[test]
+fn a_plugin_that_exits_at_once_is_named_from_the_agent_catalog() {
+    for (plugin_id, title) in [
+        ("opencode", "OpenCode failed to start"),
+        ("unlisted-plugin", "unlisted-plugin failed to start"),
+    ] {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        let mut tabs = TabManager::for_test(ShellConfig::default());
+        tabs.new_tab_with_command(
+            "/bin/sh",
+            &["-c".into(), "printf 'not configured\\n'; exit 7".into()],
+            None,
+            Some("fixture"),
+            Some(crate::tabs::TabType::Plugin {
+                plugin_id: plugin_id.into(),
+            }),
+            HashMap::new(),
+        )
+        .unwrap();
+        app.tabs = Some(tabs);
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !app.info_overlay.is_awaiting_current() {
+            assert!(
+                Instant::now() < deadline,
+                "{plugin_id} quick exit not shown"
+            );
+            app.process_pty_events();
+            std::thread::yield_now();
+        }
+        assert_eq!(app.info_overlay.title(), title);
+    }
+}

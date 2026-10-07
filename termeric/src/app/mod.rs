@@ -1948,11 +1948,11 @@ impl App {
 
         // Show overlay for any plugin that exited immediately
         for (plugin_id, output_lines) in quick_exits {
-            let display_name = match plugin_id.as_str() {
-                "claude-code" => "Claude Code",
-                "codex" => "Codex",
-                _ => &plugin_id,
-            };
+            let display_name = self
+                .agents
+                .get(&plugin_id)
+                .map_or(plugin_id.as_str(), |agent| agent.name.as_str())
+                .to_owned();
 
             let mut overlay_lines = vec![
                 format!("{} exited immediately.", display_name),
@@ -1977,7 +1977,10 @@ impl App {
             self.info_overlay
                 .show(format!("{} failed to start", display_name), overlay_lines);
             self.request_redraw(RedrawReason::TerminalOutput);
-            log::warn!("Plugin '{}' exited within 5 seconds of launch", plugin_id);
+            log::warn!(
+                "Plugin '{plugin_id}' exited within {} seconds of launch",
+                crate::tabs::QUICK_EXIT_WINDOW.as_secs()
+            );
         }
 
         // Observe every terminal independently so inactive tabs and panes do
