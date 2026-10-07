@@ -181,8 +181,8 @@ impl Renderer {
                     active.then_some(self.ui.palette_accent),
                 );
             }
-            self.build_panel_button(form.save_button, "Save", true, text);
-            self.build_panel_button(form.cancel_button, "Cancel", false, text);
+            self.build_panel_button(form.save_button, "Save", true, false, text, 1.0);
+            self.build_panel_button(form.cancel_button, "Cancel", false, false, text, 1.0);
         }
 
         // ── Commands ──
@@ -235,12 +235,13 @@ impl Renderer {
                 dim,
             );
             if active {
-                let danger = if info.hovered == Some(CommandControl::Delete(index)) {
+                let hovered = info.hovered == Some(CommandControl::Delete(index));
+                let danger = if hovered {
                     self.ui.search_error
                 } else {
                     with_alpha(self.ui.search_error, 0.85)
                 };
-                self.build_panel_button(delete, "Delete", false, danger);
+                self.build_panel_button(delete, "Delete", false, hovered, danger, 1.0);
             }
         }
         self.draw_panel_scroll_thumb(
@@ -449,12 +450,9 @@ impl Renderer {
             } else {
                 "Take Over"
             };
-            let color = if info.hovered == Some(AgentsControl::Supervisor) {
-                text
-            } else {
-                with_alpha(text, 0.9)
-            };
-            self.build_panel_button(section.button, label, true, color);
+            let hovered = info.hovered == Some(AgentsControl::Supervisor);
+            let color = if hovered { text } else { with_alpha(text, 0.9) };
+            self.build_panel_button(section.button, label, true, hovered, color, 1.0);
             for (index, entry) in supervisor
                 .entries
                 .iter()
@@ -697,7 +695,7 @@ impl Renderer {
                 (rename.save_button, "Save", true),
                 (rename.cancel_button, "Cancel", false),
             ] {
-                self.build_panel_button(button, label, primary, text);
+                self.build_panel_button(button, label, primary, false, text, 1.0);
             }
         }
 
@@ -779,12 +777,12 @@ impl Renderer {
                 dim,
             );
             if active {
-                self.build_panel_button(entry.load_button, "Open", true, text);
+                self.build_panel_button(entry.load_button, "Open", true, false, text, 1.0);
                 if let Some(rename) = entry.rename_button {
-                    self.build_panel_button(rename, "Rename", false, text);
+                    self.build_panel_button(rename, "Rename", false, false, text, 1.0);
                 }
                 let danger = with_alpha(self.ui.search_error, 0.95);
-                self.build_panel_button(entry.delete_button, "Delete", false, danger);
+                self.build_panel_button(entry.delete_button, "Delete", false, false, danger, 1.0);
             }
         }
 
@@ -831,24 +829,37 @@ impl Renderer {
     }
 
     /// A quiet text button: a subtle surface for the primary action, text
-    /// alone otherwise, label centred in the UI face.
-    fn build_panel_button(&mut self, rect: Bounds, label: &str, primary: bool, color: [f32; 4]) {
-        let radius = self.px(BUTTON_CORNER_RADIUS);
-        if primary {
+    /// alone otherwise, and the highlight surface while hovered; its label
+    /// centred in the UI face. The surface fades with `opacity`; `color`
+    /// is the label's, already faded.
+    pub(super) fn build_panel_button(
+        &mut self,
+        rect: Bounds,
+        label: &str,
+        primary: bool,
+        hovered: bool,
+        color: [f32; 4],
+        opacity: f32,
+    ) {
+        let surface = if hovered {
+            Some(self.ui.menu_highlight)
+        } else {
+            primary.then_some(self.ui.menu_border)
+        };
+        if let Some(surface) = surface {
             self.rect_pipeline.push_rounded_rect(
                 rect.x,
                 rect.y,
                 rect.width,
                 rect.height,
-                self.ui.menu_border,
-                radius,
+                scale_alpha(surface, opacity),
+                self.px(BUTTON_CORNER_RADIUS),
             );
         }
         let size = self.ui_label_px() * 0.95;
-        let width = self.ui_text_width(label, size).min(rect.width);
-        self.push_ui_label(
+        self.push_ui_label_centered(
             label,
-            rect.x + (rect.width - width) / 2.0,
+            rect.center()[0],
             rect.y,
             rect.height,
             rect.width,

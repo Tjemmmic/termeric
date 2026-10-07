@@ -228,10 +228,9 @@ impl Renderer {
                         self.push_icon(icon, x + button / 2.0, center_y, text);
                     }
                     let box_width = layout.stepper_value_width();
-                    let width = self.ui_text_width(&entry.value, size).min(box_width);
-                    self.push_ui_label(
+                    self.push_ui_label_centered(
                         &entry.value,
-                        layout.value_text_x() + (box_width - width) / 2.0,
+                        layout.value_text_x() + box_width / 2.0,
                         row_y,
                         row.height,
                         box_width,
@@ -331,25 +330,13 @@ impl Renderer {
                 dim
             },
         );
-        let save = layout.save_button;
-        let save_hovered = info.hovered_control == Some(SettingsControl::Save);
-        self.rect_pipeline.push_rounded_rect(
-            save.x,
-            save.y,
-            save.width,
-            save.height,
-            if save_hovered { highlight } else { border },
-            self.px(BUTTON_CORNER_RADIUS),
-        );
-        let label_width = self.ui_text_width("Save", size);
-        self.push_ui_label(
+        self.build_panel_button(
+            layout.save_button,
             "Save",
-            save.x + (save.width - label_width) / 2.0,
-            save.y,
-            save.height,
-            save.width,
-            size,
+            true,
+            info.hovered_control == Some(SettingsControl::Save),
             text,
+            anim,
         );
     }
 

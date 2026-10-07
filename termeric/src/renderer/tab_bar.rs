@@ -776,12 +776,11 @@ impl Renderer {
                     badge_height / 2.0,
                 );
                 let count_size = size_px * 0.85;
-                let count_width = self.ui_text_width(&count, count_size);
                 let count_color =
                     with_alpha(high_contrast_text(self.ui.palette_accent), text_alpha);
-                self.push_ui_label(
+                self.push_ui_label_centered(
                     &count,
-                    badge_x + (badge_width - count_width) / 2.0,
+                    badge_x + badge_width / 2.0,
                     badge_y,
                     badge_height,
                     badge_width,

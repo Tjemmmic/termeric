@@ -107,10 +107,9 @@ impl Renderer {
             match label {
                 Some(label) => {
                     let size = self.ui_label_px();
-                    let width = self.ui_text_width(label, size);
-                    self.push_ui_label(
+                    self.push_ui_label_centered(
                         label,
-                        rect.x + (rect.width - width) / 2.0,
+                        rect.center()[0],
                         rect.y,
                         rect.height,
                         rect.width,
