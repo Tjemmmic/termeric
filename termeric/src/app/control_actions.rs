@@ -3,6 +3,8 @@
 
 use super::redraw_scheduler::RedrawReason;
 use super::*;
+use crate::panes::Pane;
+use crate::tabs::Tab;
 
 /// Who asked for a tab or pane change from outside the window's own input:
 /// the running-GUI control plane or a declarative plugin. Internal automation
@@ -59,6 +61,26 @@ pub(super) fn validate_ordinary_tab_creation_capacity(
     Ok(())
 }
 
+/// A requester's stable tab ID as this platform's tab ID.
+pub(super) fn control_tab_id(tab_id: u64) -> std::result::Result<usize, String> {
+    usize::try_from(tab_id).map_err(|_| "Target tab ID does not fit this platform".to_string())
+}
+
+/// Pane `pane_id` of a requested tab, including one whose shell has exited.
+pub(super) fn control_pane(tab: &Tab, pane_id: u32) -> std::result::Result<&Pane, String> {
+    tab.pane(PaneId(pane_id))
+        .ok_or_else(|| format!("GUI pane {pane_id} does not exist in tab {}", tab.id))
+}
+
+/// Pane `pane_id` of a requested tab, refusing one whose shell has exited.
+pub(super) fn control_running_pane(tab: &Tab, pane_id: u32) -> std::result::Result<&Pane, String> {
+    let pane = control_pane(tab, pane_id)?;
+    if pane.closed {
+        return Err(format!("GUI pane {pane_id} in tab {} is closed", tab.id));
+    }
+    Ok(pane)
+}
+
 fn plugin_pane_layout_state(manager: &PaneManager) -> (Vec<u32>, u32, Option<u32>) {
     (
         manager.pane_ids().into_iter().map(|id| id.0).collect(),
@@ -68,6 +90,47 @@ fn plugin_pane_layout_state(manager: &PaneManager) -> (Vec<u32>, u32, Option<u32
 }
 
 impl App {
+    pub(super) fn control_tabs(&self) -> std::result::Result<&TabManager, String> {
+        self.tabs
+            .as_ref()
+            .ok_or_else(|| "Target window has no initialized tab manager".to_string())
+    }
+
+    pub(super) fn control_tabs_mut(&mut self) -> std::result::Result<&mut TabManager, String> {
+        self.tabs
+            .as_mut()
+            .ok_or_else(|| "Target window has no initialized tab manager".to_string())
+    }
+
+    /// The tab a requester names by stable ID, with its index in the tab
+    /// bar, refusing one that is closing.
+    pub(super) fn control_tab_at(&self, tab_id: u64) -> std::result::Result<(usize, &Tab), String> {
+        let tab_id = control_tab_id(tab_id)?;
+        let (index, tab) = self
+            .control_tabs()?
+            .iter()
+            .find(|(_, tab)| tab.id == tab_id)
+            .ok_or_else(|| format!("GUI tab {tab_id} does not exist in the target window"))?;
+        if tab.closed || tab.closing_at.is_some() {
+            return Err(format!("GUI tab {tab_id} is already closing"));
+        }
+        Ok((index, tab))
+    }
+
+    /// [`Self::control_tab_at`] without the index.
+    pub(super) fn control_tab(&self, tab_id: u64) -> std::result::Result<&Tab, String> {
+        self.control_tab_at(tab_id).map(|(_, tab)| tab)
+    }
+
+    pub(super) fn control_tab_mut(&mut self, tab_id: u64) -> std::result::Result<&mut Tab, String> {
+        let (index, _) = self.control_tab_at(tab_id)?;
+        Ok(&mut self
+            .tabs
+            .as_mut()
+            .expect("validated tab manager disappeared")
+            .all_tabs_mut()[index])
+    }
+
     /// Launch exact argv in an ordinary local tab for the private running-GUI
     /// control plane. The caller has already passed bounded wire validation.
     pub(super) fn launch_control_tab(
@@ -100,11 +163,8 @@ impl App {
                 "GUI control launch working directory {directory:?} does not exist or is not a directory"
             ));
         }
-        let tabs = self
-            .tabs
-            .as_mut()
-            .ok_or_else(|| "Target window has no initialized tab manager".to_string())?;
-        let id = tabs
+        let id = self
+            .control_tabs_mut()?
             .launch_command_tab(
                 crate::tabs::CommandLaunch {
                     program: program.to_string(),
@@ -181,10 +241,7 @@ impl App {
     ) -> std::result::Result<usize, String> {
         let tab_count = self.tabs.as_ref().map_or(0, TabManager::count);
         validate_ordinary_tab_creation_capacity(tab_count)?;
-        let tabs = self
-            .tabs
-            .as_mut()
-            .ok_or_else(|| "Target window has no initialized tab manager".to_string())?;
+        let tabs = self.control_tabs_mut()?;
         let id = match cwd {
             Some(cwd) => tabs.new_tab_with_cwd(Some(&cwd.to_string_lossy()), None),
             None => tabs.new_tab(),
@@ -208,26 +265,8 @@ impl App {
     }
 
     fn select_tab(&mut self, tab_id: u64) -> std::result::Result<bool, String> {
-        let tab_id = usize::try_from(tab_id)
-            .map_err(|_| "Target tab ID does not fit this platform".to_string())?;
-        let tabs = self
-            .tabs
-            .as_ref()
-            .ok_or_else(|| "Target window has no initialized tab manager".to_string())?;
-        let index = tabs
-            .iter()
-            .find_map(|(index, tab)| (tab.id == tab_id).then_some(index))
-            .ok_or_else(|| format!("GUI tab {tab_id} does not exist in the target window"))?;
-        let tab = tabs
-            .iter()
-            .nth(index)
-            .map(|(_, tab)| tab)
-            .expect("validated control tab index disappeared");
-        if tab.closed || tab.closing_at.is_some() {
-            return Err(format!("GUI tab {tab_id} is closing"));
-        }
-        let from = tabs.active_index();
-        let changed = from != index;
+        let (index, _) = self.control_tab_at(tab_id)?;
+        let changed = self.control_tabs()?.active_index() != index;
         if changed {
             self.tabs
                 .as_mut()
@@ -246,12 +285,9 @@ impl App {
         tab_id: u64,
         destination_index: u16,
     ) -> std::result::Result<bool, String> {
-        let tab_id = usize::try_from(tab_id)
-            .map_err(|_| "Target tab ID does not fit this platform".to_string())?;
+        let tab_id = control_tab_id(tab_id)?;
         let changed = self
-            .tabs
-            .as_mut()
-            .ok_or_else(|| "Target window has no initialized tab manager".to_string())?
+            .control_tabs_mut()?
             .move_tab_by_id_to(tab_id, usize::from(destination_index))
             .map_err(|error| format!("Could not move tab {tab_id}: {error:#}"))?;
         if changed {
@@ -274,9 +310,7 @@ impl App {
         let destination_tab_id = usize::try_from(destination_tab_id)
             .map_err(|_| "Destination tab ID does not fit this platform".to_string())?;
         let id = self
-            .tabs
-            .as_mut()
-            .ok_or_else(|| "Target window has no initialized tab manager".to_string())?
+            .control_tabs_mut()?
             .transfer_pane_by_id(
                 source_tab_id,
                 PaneId(pane_id),
@@ -348,17 +382,7 @@ impl App {
         &mut self,
         tab_id: u64,
     ) -> std::result::Result<&mut PaneManager, String> {
-        let tab_id = usize::try_from(tab_id)
-            .map_err(|_| "Target tab ID does not fit this platform".to_string())?;
-        let tab = self
-            .tabs
-            .as_mut()
-            .ok_or_else(|| "Target window has no initialized tab manager".to_string())?
-            .tab_mut_by_id(tab_id)
-            .ok_or_else(|| format!("GUI tab {tab_id} does not exist in the target window"))?;
-        if tab.closed || tab.closing_at.is_some() {
-            return Err(format!("GUI tab {tab_id} is closing"));
-        }
+        let tab = self.control_tab_mut(tab_id)?;
         if tab.live_domain_tab_route().is_some() {
             return Err(format!(
                 "GUI tab {tab_id} belongs to daemon-authoritative live-domain topology"
@@ -388,18 +412,7 @@ impl App {
         divider_id: u64,
         ratio_millis: u16,
     ) -> std::result::Result<(u16, bool), String> {
-        let tab_id = usize::try_from(tab_id)
-            .map_err(|_| "Target tab ID does not fit this platform".to_string())?;
-        let tabs = self
-            .tabs
-            .as_mut()
-            .ok_or_else(|| "Target window has no initialized tab manager".to_string())?;
-        let tab = tabs
-            .tab_mut_by_id(tab_id)
-            .ok_or_else(|| format!("GUI tab {tab_id} does not exist in the target window"))?;
-        if tab.closed || tab.closing_at.is_some() {
-            return Err(format!("GUI tab {tab_id} is closing"));
-        }
+        let tab = self.control_tab_mut(tab_id)?;
         if tab.live_domain_tab_route().is_some() {
             return Err(
                 "Control-requested divider resize is not yet supported for live-domain tabs".into(),
@@ -426,30 +439,8 @@ impl App {
         max_bytes: u32,
     ) -> std::result::Result<(crate::control::protocol::TextScreen, u16, String, bool), String>
     {
-        let tab_id = usize::try_from(tab_id)
-            .map_err(|_| "Target tab ID does not fit this platform".to_string())?;
-        let tabs = self
-            .tabs
-            .as_ref()
-            .ok_or_else(|| "Target window has no initialized tab manager".to_string())?;
-        let tab = tabs
-            .tab_by_id(tab_id)
-            .ok_or_else(|| format!("GUI tab {tab_id} does not exist in the target window"))?;
-        if tab.closed || tab.closing_at.is_some() {
-            return Err(format!("GUI tab {tab_id} is closing"));
-        }
-        if let Some(sole) = tab.panes.lone_pane()
-            && sole.id != PaneId(pane_id)
-        {
-            return Err(format!(
-                "GUI pane {pane_id} does not exist in tab {tab_id}; its sole pane ID is {}",
-                sole.id.0
-            ));
-        }
-        let terminal = &tab
-            .pane(PaneId(pane_id))
-            .ok_or_else(|| format!("GUI pane {pane_id} does not exist in tab {tab_id}"))?
-            .terminal;
+        // A pane whose shell has exited keeps its text, so it can be read.
+        let terminal = &control_pane(self.control_tab(tab_id)?, pane_id)?.terminal;
         let alternate = terminal.presentation_alternate_screen_active();
         let (text, included_history, truncated) = terminal.bounded_presentation_text(
             usize::from(history_lines),
@@ -496,34 +487,12 @@ impl App {
         if self.guardrail.is_awaiting_current() {
             return Err("A destructive-command confirmation is already pending".into());
         }
-        let tab_id = usize::try_from(tab_id)
-            .map_err(|_| "Target tab ID does not fit this platform".to_string())?;
-        let (origin, mode, guarded, read_only) = {
-            let tabs = self
-                .tabs
-                .as_ref()
-                .ok_or_else(|| "Target window has no initialized tab manager".to_string())?;
-            let tab = tabs
-                .tab_by_id(tab_id)
-                .ok_or_else(|| format!("GUI tab {tab_id} does not exist in the target window"))?;
-            if tab.closed || tab.closing_at.is_some() {
-                return Err(format!("GUI tab {tab_id} is closing"));
-            }
-            if let Some(sole) = tab.panes.lone_pane()
-                && sole.id != PaneId(pane_id)
-            {
-                return Err(format!(
-                    "GUI pane {pane_id} does not exist in tab {tab_id}; its sole pane ID is {}",
-                    sole.id.0
-                ));
-            }
-            let pane = tab
-                .pane(PaneId(pane_id))
-                .ok_or_else(|| format!("GUI pane {pane_id} does not exist in tab {tab_id}"))?;
-            if pane.closed {
-                return Err(format!("GUI pane {pane_id} is closed in tab {tab_id}"));
-            }
+        let (tab_id, origin, mode, guarded, read_only) = {
+            let tab = self.control_tab(tab_id)?;
+            let tab_id = tab.id;
+            let pane = control_running_pane(tab, pane_id)?;
             (
+                tab_id,
                 crate::tabs::TerminalEventOrigin {
                     tab_id,
                     pane_id: PaneId(pane_id),
@@ -577,9 +546,7 @@ impl App {
             ));
         }
 
-        self.tabs
-            .as_mut()
-            .ok_or_else(|| "Target window has no initialized tab manager".to_string())?
+        self.control_tabs_mut()?
             .write_user_to_origin(origin, &wire)
             .map_err(|error| format!("Could not write GUI control input: {error}"))?;
         Ok((
@@ -606,42 +573,11 @@ impl App {
         tab_id: u64,
         pane_id: u32,
     ) -> std::result::Result<(bool, bool), String> {
-        let tab_id = usize::try_from(tab_id)
-            .map_err(|_| "Target tab ID does not fit this platform".to_string())?;
-        let tabs = self
-            .tabs
-            .as_ref()
-            .ok_or_else(|| "Target window has no initialized tab manager".to_string())?;
-        let index = tabs
-            .iter()
-            .find_map(|(index, tab)| (tab.id == tab_id).then_some(index))
-            .ok_or_else(|| format!("GUI tab {tab_id} does not exist in the target window"))?;
-        let tab = tabs
-            .iter()
-            .nth(index)
-            .map(|(_, tab)| tab)
-            .expect("validated control tab index disappeared");
-        if tab.closed || tab.closing_at.is_some() {
-            return Err(format!("GUI tab {tab_id} is closing"));
-        }
-        let target = PaneId(pane_id);
-        if let Some(sole) = tab.panes.lone_pane()
-            && sole.id != target
-        {
-            return Err(format!(
-                "GUI pane {pane_id} does not exist in unsplit tab {tab_id}; its sole pane ID is {}",
-                sole.id.0
-            ));
-        }
-        let pane = tab
-            .pane(target)
-            .ok_or_else(|| format!("GUI pane {pane_id} does not exist in tab {tab_id}"))?;
-        if pane.closed {
-            return Err(format!("GUI pane {pane_id} in tab {tab_id} is closed"));
-        }
+        let (index, tab) = self.control_tab_at(tab_id)?;
+        let tab_id = tab.id;
+        let target = control_running_pane(tab, pane_id)?.id;
         let pane_changed = tab.panes.focused_id() != target;
-        let from = tabs.active_index();
-        let tab_changed = from != index;
+        let tab_changed = self.control_tabs()?.active_index() != index;
 
         let live_route = {
             let tabs = self
@@ -688,25 +624,15 @@ impl App {
         requester: Requester,
         tab_id: u64,
     ) -> std::result::Result<(u16, Option<u64>, bool), String> {
-        let tab_id = usize::try_from(tab_id)
-            .map_err(|_| "Target tab ID does not fit this platform".to_string())?;
-        let tabs = self
-            .tabs
-            .as_ref()
-            .ok_or_else(|| "Target window has no initialized tab manager".to_string())?;
-        let (index, tab) = tabs
-            .iter()
-            .find(|(_, tab)| tab.id == tab_id)
-            .ok_or_else(|| format!("GUI tab {tab_id} does not exist in the target window"))?;
-        if tab.closed || tab.closing_at.is_some() {
-            return Err(format!("GUI tab {tab_id} is already closing"));
-        }
+        let (index, tab) = self.control_tab_at(tab_id)?;
+        let tab_id = tab.id;
         if tab.live_domain_tab_route().is_some() {
             return Err(format!(
                 "{} tab closure is not yet supported for live-domain tabs",
                 requester.label()
             ));
         }
+        let tabs = self.control_tabs()?;
         let non_closing_tabs = tabs
             .iter()
             .filter(|(_, tab)| !tab.closed && tab.closing_at.is_none())
@@ -756,19 +682,8 @@ impl App {
         tab_id: u64,
         pane_id: u32,
     ) -> std::result::Result<(u16, u32), String> {
-        let tab_id = usize::try_from(tab_id)
-            .map_err(|_| "Target tab ID does not fit this platform".to_string())?;
-        let tabs = self
-            .tabs
-            .as_ref()
-            .ok_or_else(|| "Target window has no initialized tab manager".to_string())?;
-        let tab = tabs
-            .iter()
-            .find_map(|(_, tab)| (tab.id == tab_id).then_some(tab))
-            .ok_or_else(|| format!("GUI tab {tab_id} does not exist in the target window"))?;
-        if tab.closed || tab.closing_at.is_some() {
-            return Err(format!("GUI tab {tab_id} is closing"));
-        }
+        let tab = self.control_tab(tab_id)?;
+        let tab_id = tab.id;
         if tab.live_domain_tab_route().is_some() {
             return Err(format!(
                 "{} pane closure is not yet supported for live-domain tabs",
@@ -778,18 +693,12 @@ impl App {
         if !tab.allows_pane_splits() {
             return Err("Serial terminal tabs do not contain closable panes".into());
         }
-        let target = PaneId(pane_id);
-        let manager = tab.split_panes().ok_or_else(|| {
-            format!("Cannot close the sole pane {pane_id} in unsplit tab {tab_id}; close the tab instead")
-        })?;
-        let pane = manager
-            .get_pane(target)
-            .ok_or_else(|| format!("GUI pane {pane_id} does not exist in tab {tab_id}"))?;
-        if pane.closed {
+        if tab.split_panes().is_none() {
             return Err(format!(
-                "GUI pane {pane_id} in tab {tab_id} is already closed"
+                "Cannot close the sole pane {pane_id} in unsplit tab {tab_id}; close the tab instead"
             ));
         }
+        let target = control_running_pane(tab, pane_id)?.id;
         let close_copy_mode = self.copy_mode_target
             == Some(crate::tabs::TerminalIdentity {
                 tab_id,

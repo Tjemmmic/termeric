@@ -300,6 +300,62 @@ fn control_pane_and_tab_closure_leave_the_survivor_addressable_and_reject_repeat
 }
 
 #[test]
+fn control_requests_refuse_a_closing_tab_and_an_exited_pane_alike() {
+    let (mut app, first, _) = background_split_tab_app();
+    app.config.security.allow_gui_control_input = true;
+    split_pane_mut(&mut app, first, PaneId(0)).closed = true;
+    let exited = app
+        .focus_pane_for(Requester::Control, first as u64, 0)
+        .unwrap_err();
+    assert_eq!(
+        app.send_text_for(Requester::Control, first as u64, 0, "x", false, false)
+            .unwrap_err(),
+        exited
+    );
+    assert_eq!(
+        app.close_pane_for(Requester::Control, first as u64, 0)
+            .unwrap_err(),
+        exited
+    );
+    // An exited pane keeps its text, so reading it still works.
+    assert!(app.read_control_text(first as u64, 0, 0, 64).is_ok());
+    split_pane_mut(&mut app, first, PaneId(0)).closed = false;
+
+    app.close_tab_for(Requester::Control, first as u64).unwrap();
+    let closing = app
+        .select_tab_for(Requester::Control, first as u64)
+        .unwrap_err();
+    assert_eq!(
+        app.close_tab_for(Requester::Control, first as u64)
+            .unwrap_err(),
+        closing
+    );
+    assert_eq!(
+        app.control_live_domain_close_tab(first as u64).unwrap_err(),
+        closing
+    );
+    assert_eq!(
+        app.focus_pane_for(Requester::Control, first as u64, 1)
+            .unwrap_err(),
+        closing
+    );
+    assert_eq!(
+        app.close_pane_for(Requester::Control, first as u64, 1)
+            .unwrap_err(),
+        closing
+    );
+    assert_eq!(
+        app.read_control_text(first as u64, 1, 0, 64).unwrap_err(),
+        closing
+    );
+    assert_eq!(
+        app.send_text_for(Requester::Control, first as u64, 1, "x", false, false)
+            .unwrap_err(),
+        closing
+    );
+}
+
+#[test]
 fn plugin_pane_creation_is_exact_correlated_and_rejects_unsupported_tabs() {
     let shell = crate::test_support::sleeping_shell();
     let mut tabs = TabManager::for_test(shell.clone());

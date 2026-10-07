@@ -2,6 +2,7 @@
 //! daemon, their completions, and reconciling the window to topology
 //! updates.
 
+use super::control_actions::{control_pane, control_running_pane, control_tab_id};
 use super::redraw_scheduler::RedrawReason;
 use super::*;
 
@@ -163,29 +164,15 @@ impl App {
         pane_id: u32,
         direction: crate::panes::SplitDirection,
     ) -> std::result::Result<Option<LiveDomainControl>, String> {
-        let tab_id = usize::try_from(tab_id)
-            .map_err(|_| "Target tab ID does not fit this platform".to_string())?;
-        let tabs = self
-            .tabs
-            .as_ref()
-            .ok_or_else(|| "Target window has no initialized tab manager".to_string())?;
-        let tab = tabs
-            .tab_by_id(tab_id)
-            .ok_or_else(|| format!("GUI tab {tab_id} does not exist in the target window"))?;
-        if tab.closed || tab.closing_at.is_some() {
-            return Err(format!("GUI tab {tab_id} is closing"));
-        }
+        let tab = self.control_tab(tab_id)?;
         let Some(live) = &tab.live_domain else {
             return Ok(None);
         };
         let remote_pane_id = *live
             .pane_ids
             .get(&PaneId(pane_id))
-            .ok_or_else(|| format!("GUI pane {pane_id} does not exist in tab {tab_id}"))?;
-        let terminal = &tab
-            .pane(PaneId(pane_id))
-            .ok_or_else(|| format!("GUI pane {pane_id} does not exist in tab {tab_id}"))?
-            .terminal;
+            .ok_or_else(|| format!("GUI pane {pane_id} does not exist in tab {}", tab.id))?;
+        let terminal = &control_pane(tab, pane_id)?.terminal;
         let spawn = crate::domain::model::SpawnSpec {
             program: self.config.shell.program.clone(),
             args: self.config.shell.args.clone(),
@@ -206,21 +193,12 @@ impl App {
         &self,
         tab_id: u64,
     ) -> std::result::Result<Option<LiveDomainControl>, String> {
-        let tab_id = usize::try_from(tab_id)
-            .map_err(|_| "Target tab ID does not fit this platform".to_string())?;
-        let tabs = self
-            .tabs
-            .as_ref()
-            .ok_or_else(|| "Target window has no initialized tab manager".to_string())?;
-        let tab = tabs
-            .tab_by_id(tab_id)
-            .ok_or_else(|| format!("GUI tab {tab_id} does not exist in the target window"))?;
-        if tab.closed || tab.closing_at.is_some() {
-            return Err(format!("GUI tab {tab_id} is already closing"));
-        }
+        let tab = self.control_tab(tab_id)?;
+        let tab_id = tab.id;
         let Some((domain_id, remote_tab_id)) = tab.live_domain_tab_route() else {
             return Ok(None);
         };
+        let tabs = self.control_tabs()?;
         let domain_tabs = self.live_domain_topologies.get(domain_id).map_or_else(
             || tabs.live_domain_tab_count(domain_id),
             |topology| topology.tabs.len(),
@@ -243,39 +221,21 @@ impl App {
         tab_id: u64,
         pane_id: u32,
     ) -> std::result::Result<Option<LiveDomainControl>, String> {
-        let tab_id = usize::try_from(tab_id)
-            .map_err(|_| "Target tab ID does not fit this platform".to_string())?;
-        let tabs = self
-            .tabs
-            .as_ref()
-            .ok_or_else(|| "Target window has no initialized tab manager".to_string())?;
-        let tab = tabs
-            .tab_by_id(tab_id)
-            .ok_or_else(|| format!("GUI tab {tab_id} does not exist in the target window"))?;
-        if tab.closed || tab.closing_at.is_some() {
-            return Err(format!("GUI tab {tab_id} is closing"));
-        }
+        let tab = self.control_tab(tab_id)?;
+        let tab_id = tab.id;
         let Some(live) = &tab.live_domain else {
             return Ok(None);
         };
-        let target = PaneId(pane_id);
         let remote_pane_id = *live
             .pane_ids
-            .get(&target)
+            .get(&PaneId(pane_id))
             .ok_or_else(|| format!("GUI pane {pane_id} does not exist in tab {tab_id}"))?;
         if tab.panes.pane_count() <= 1 {
             return Err(format!(
                 "Cannot close the sole pane {pane_id} in unsplit tab {tab_id}; close the tab instead"
             ));
         }
-        let pane = tab
-            .pane(target)
-            .ok_or_else(|| format!("GUI pane {pane_id} does not exist in tab {tab_id}"))?;
-        if pane.closed {
-            return Err(format!(
-                "GUI pane {pane_id} in tab {tab_id} is already closed"
-            ));
-        }
+        control_running_pane(tab, pane_id)?;
         Ok(Some(LiveDomainControl::ClosePane {
             domain_id: live.domain_id.clone(),
             remote_pane_id,
@@ -287,8 +247,7 @@ impl App {
         &self,
         tab_id: u64,
     ) -> std::result::Result<(u16, u32), String> {
-        let tab_id = usize::try_from(tab_id)
-            .map_err(|_| "Target tab ID does not fit this platform".to_string())?;
+        let tab_id = control_tab_id(tab_id)?;
         let tab = self
             .tabs
             .as_ref()
@@ -310,18 +269,8 @@ impl App {
         if !(100..=900).contains(&ratio_millis) {
             return Err("Split ratio must be between 100 and 900 thousandths".into());
         }
-        let tab_id = usize::try_from(tab_id)
-            .map_err(|_| "Target tab ID does not fit this platform".to_string())?;
-        let tabs = self
-            .tabs
-            .as_ref()
-            .ok_or_else(|| "Target window has no initialized tab manager".to_string())?;
-        let tab = tabs
-            .tab_by_id(tab_id)
-            .ok_or_else(|| format!("GUI tab {tab_id} does not exist in the target window"))?;
-        if tab.closed || tab.closing_at.is_some() {
-            return Err(format!("GUI tab {tab_id} is closing"));
-        }
+        let tab = self.control_tab(tab_id)?;
+        let tab_id = tab.id;
         let Some((domain_id, _)) = tab.live_domain_tab_route() else {
             return Ok(None);
         };
@@ -352,8 +301,7 @@ impl App {
         tab_id: u64,
         divider_id: u64,
     ) -> std::result::Result<u16, String> {
-        let tab_id = usize::try_from(tab_id)
-            .map_err(|_| "Target tab ID does not fit this platform".to_string())?;
+        let tab_id = control_tab_id(tab_id)?;
         let remote_split_id = u32::try_from(divider_id)
             .map_err(|_| format!("GUI divider {divider_id} is not a live-domain divider"))?;
         self.tabs
@@ -375,13 +323,9 @@ impl App {
         tab_id: u64,
         destination_index: u16,
     ) -> std::result::Result<Option<(LiveDomainControl, bool)>, String> {
-        let tab_id = usize::try_from(tab_id)
-            .map_err(|_| "Target tab ID does not fit this platform".to_string())?;
+        let tab_id = control_tab_id(tab_id)?;
         let destination_index = usize::from(destination_index);
-        let tabs = self
-            .tabs
-            .as_ref()
-            .ok_or_else(|| "Target window has no initialized tab manager".to_string())?;
+        let tabs = self.control_tabs()?;
         if destination_index >= tabs.count() {
             return Err(format!(
                 "Destination tab index {destination_index} is outside this window's {} tabs",
@@ -442,8 +386,7 @@ impl App {
     }
 
     pub(super) fn control_tab_visual_index(&self, tab_id: u64) -> std::result::Result<u16, String> {
-        let tab_id = usize::try_from(tab_id)
-            .map_err(|_| "Target tab ID does not fit this platform".to_string())?;
+        let tab_id = control_tab_id(tab_id)?;
         let index = self
             .tabs
             .as_ref()
