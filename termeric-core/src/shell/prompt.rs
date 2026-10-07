@@ -7,6 +7,9 @@ use std::collections::{BTreeSet, HashMap, VecDeque};
 /// Maximum number of prompts to track
 const MAX_PROMPTS: usize = 1000;
 
+/// The most bytes of command text a region keeps.
+pub const MAX_COMMAND_TEXT_BYTES: usize = 4 * 1024;
+
 /// Type of prompt mark
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PromptType {
@@ -48,6 +51,13 @@ pub struct CommandRegion {
     pub finish_row: Option<i32>,
     /// Exit code
     pub exit_code: Option<i32>,
+    /// The command as the shell showed it when output started: the text from
+    /// the command-start mark to the output-start mark, with soft wraps
+    /// joined and surrounding blanks dropped. Empty until output starts.
+    pub command_text: String,
+    /// Whether `command_text` is missing some of the command: cut at
+    /// [`MAX_COMMAND_TEXT_BYTES`], or its start was lost before output began.
+    pub command_truncated: bool,
 }
 
 impl CommandRegion {
@@ -75,6 +85,10 @@ pub struct PromptTracker {
     /// Whether a prompt-start mark ever arrived. It outlives `clear()` so a
     /// shell the user integrated by hand is still recognized after a reset.
     prompt_marks_seen: bool,
+    /// Column of the current region's command-start mark, on its
+    /// `command_row`. Rows follow scrolling here; the terminal keeps the
+    /// column right across a reflow until output starts.
+    command_start_column: Option<usize>,
 }
 
 impl Default for PromptTracker {
@@ -85,6 +99,7 @@ impl Default for PromptTracker {
             current_region: None,
             next_region_id: 1,
             prompt_marks_seen: false,
+            command_start_column: None,
         }
     }
 }
@@ -104,9 +119,15 @@ impl PromptTracker {
     /// - B: Prompt end / Command start
     /// - C: Command end / Output start
     /// - D: Output end (with optional exit code)
-    pub(crate) fn handle_osc_133(&mut self, params: &[&[u8]], cursor_row: usize) {
+    ///
+    /// Returns the mark the tracker accepted, if any.
+    pub(crate) fn handle_osc_133(
+        &mut self,
+        params: &[&[u8]],
+        cursor_row: usize,
+    ) -> Option<PromptType> {
         if params.is_empty() {
-            return;
+            return None;
         }
 
         // Parse the type from the first parameter (after the 133)
@@ -117,19 +138,26 @@ impl PromptTracker {
                 // Prompt start
                 log::trace!("OSC 133 A: Prompt start at row {}", cursor_row);
                 self.mark_prompt_start(cursor_row);
+                Some(PromptType::PromptStart)
             }
             "B" => {
                 // Command start (prompt end)
                 log::trace!("OSC 133 B: Command start at row {}", cursor_row);
-                if !self.mark_command_start(cursor_row) {
+                if self.mark_command_start(cursor_row) {
+                    Some(PromptType::CommandStart)
+                } else {
                     log::trace!("Ignoring out-of-order or duplicate OSC 133 B");
+                    None
                 }
             }
             "C" => {
                 // Output start (command end)
                 log::trace!("OSC 133 C: Output start at row {}", cursor_row);
-                if !self.mark_output_start(cursor_row) {
+                if self.mark_output_start(cursor_row) {
+                    Some(PromptType::OutputStart)
+                } else {
                     log::trace!("Ignoring out-of-order or duplicate OSC 133 C");
+                    None
                 }
             }
             "D" => {
@@ -144,12 +172,16 @@ impl PromptTracker {
                     cursor_row,
                     exit_code
                 );
-                if !self.mark_command_finished(cursor_row, exit_code) {
+                if self.mark_command_finished(cursor_row, exit_code) {
+                    Some(PromptType::CommandFinished)
+                } else {
                     log::trace!("Ignoring out-of-order or duplicate OSC 133 D");
+                    None
                 }
             }
             _ => {
                 log::trace!("OSC 133: Unknown type '{}'", type_str);
+                None
             }
         }
     }
@@ -160,6 +192,7 @@ impl PromptTracker {
         // A new prompt is also a recovery boundary. Only a region that reached
         // output is a real command; prompt-only/empty cycles are discarded.
         self.finish_or_discard_current(bounded_row(row));
+        self.command_start_column = None;
 
         self.add_mark(PromptMark {
             row: bounded_row(row),
@@ -176,6 +209,8 @@ impl PromptTracker {
             output_row: None,
             finish_row: None,
             exit_code: None,
+            command_text: String::new(),
+            command_truncated: false,
         });
     }
 
@@ -196,6 +231,44 @@ impl PromptTracker {
             region.command_row = Some(bounded_row(row));
         }
         true
+    }
+
+    /// Record the column of the current region's command-start mark.
+    pub(crate) fn set_command_start_column(&mut self, column: usize) {
+        self.command_start_column = Some(column);
+    }
+
+    /// Where the current command's text begins, as (row, column), while the
+    /// shell has marked the command's start but not its output yet and the
+    /// text is still on the grid.
+    pub(crate) fn pending_command_start(&self) -> Option<(i32, usize)> {
+        let region = self.current_region.as_ref()?;
+        if !region.content_available || region.output_row.is_some() {
+            return None;
+        }
+        Some((region.command_row?, self.command_start_column?))
+    }
+
+    /// Move the pending command start after a reflow, or drop it when its
+    /// cells did not survive, so its text is never read from the wrong place.
+    pub(crate) fn set_pending_command_start(&mut self, start: Option<(i32, usize)>) {
+        match start {
+            Some((row, column)) => {
+                if let Some(region) = &mut self.current_region {
+                    region.command_row = Some(row);
+                }
+                self.command_start_column = Some(column);
+            }
+            None => self.command_start_column = None,
+        }
+    }
+
+    /// Store the current region's command text, read when its output began.
+    pub(crate) fn record_command_text(&mut self, text: String, truncated: bool) {
+        if let Some(region) = &mut self.current_region {
+            region.command_text = text;
+            region.command_truncated = truncated;
+        }
     }
 
     /// Mark the start of command output (OSC 133;C)
@@ -443,6 +516,7 @@ impl PromptTracker {
         self.marks.clear();
         self.regions.clear();
         self.current_region = None;
+        self.command_start_column = None;
     }
 
     /// Adjust row numbers after scrolling

@@ -1,3 +1,4 @@
+mod command_text;
 mod graphics_history;
 mod graphics_relay_geometry;
 mod graphics_resize;

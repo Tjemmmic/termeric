@@ -2,4 +2,5 @@
 
 mod prompt;
 
-pub use prompt::{CommandRegion, PromptTracker};
+pub(crate) use prompt::PromptType;
+pub use prompt::{CommandRegion, MAX_COMMAND_TEXT_BYTES, PromptTracker};

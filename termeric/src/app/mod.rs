@@ -1999,8 +1999,7 @@ impl App {
                         .harvest
                         .observe(pane.terminal.prompt_tracker(), show_indicators);
                     for region in regions {
-                        let (command, command_truncated) =
-                            Self::extract_command_text(&pane.terminal, &region);
+                        let (command, command_truncated) = Self::region_command_text(&region);
                         let (output, output_truncated) =
                             Self::extract_output_text(&pane.terminal, &region);
                         if let Some(harvest) = &mut self.harvest {

@@ -12,7 +12,7 @@ use termeric_core::CommandRegion;
 /// cellar via [`RootCellar::with_capacity`].
 const DEFAULT_MAX_COMMANDS: usize = 100;
 pub const MAX_HARVEST_COMMAND_CHARS: usize = 512;
-pub const MAX_HARVEST_COMMAND_BYTES: usize = 4 * 1024;
+pub const MAX_HARVEST_COMMAND_BYTES: usize = termeric_core::MAX_COMMAND_TEXT_BYTES;
 /// Per-entry output snapshot ceiling. At the default 100-entry history this
 /// contributes at most 6.25 MiB plus string metadata.
 pub const MAX_HARVEST_OUTPUT_BYTES: usize = 64 * 1024;

@@ -92,7 +92,7 @@ fn batched_shell_anchors_match_scalar_mapping_through_reflow_and_eviction() {
                     let outcome = terminal.grid_mut().resize_with_points(
                         new_columns,
                         new_rows,
-                        &mut [None; 2],
+                        &mut [None; crate::grid::REFLOW_POINTS],
                     );
                     let retained: Vec<_> = actual
                         .into_iter()

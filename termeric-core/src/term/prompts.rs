@@ -9,11 +9,34 @@ impl Terminal {
             log::trace!("Ignoring OSC 133 from the alternate screen");
             return;
         }
-        let cursor_row = self.grid().cursor().row;
+        let cursor = self.grid().cursor();
+        let cursor_row = cursor.row;
+        // A cursor waiting to wrap sits past the last cell, not on it.
+        let cursor_col = cursor.col + usize::from(cursor.wrap_pending);
         if params.first().is_some_and(|value| *value == b"A") {
             self.prompt_navigation = None;
         }
-        self.prompt_tracker.handle_osc_133(params, cursor_row);
+        // The command runs from where the prompt ended to where output
+        // begins; read its start before output-start closes it.
+        let command_start = self.prompt_tracker.pending_command_start();
+        match self.prompt_tracker.handle_osc_133(params, cursor_row) {
+            Some(PromptType::CommandStart) => {
+                self.prompt_tracker.set_command_start_column(cursor_col);
+            }
+            Some(PromptType::OutputStart) => {
+                let (text, truncated) = match command_start {
+                    Some(start) => self.command_text_between(
+                        start,
+                        (i32::try_from(cursor_row).unwrap_or(i32::MAX), cursor_col),
+                        MAX_COMMAND_TEXT_BYTES,
+                    ),
+                    // The start was erased or lost in a reflow.
+                    None => (String::new(), true),
+                };
+                self.prompt_tracker.record_command_text(text, truncated);
+            }
+            _ => {}
+        }
     }
 
     /// Navigate to the previous retained OSC 133 prompt from the current

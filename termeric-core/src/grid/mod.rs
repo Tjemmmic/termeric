@@ -26,6 +26,10 @@ use storage::GridStorage;
 
 static NEXT_GRID_ID: AtomicU64 = AtomicU64::new(1);
 
+/// How many caller points a resize carries through a reflow: a selection's
+/// two ends and the start of a command still being typed.
+pub(crate) const REFLOW_POINTS: usize = 3;
+
 /// Cursor position and state
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Cursor {
@@ -173,15 +177,17 @@ impl Grid {
     /// Return the exact number of viewport rows archived during resize. This
     /// is a selection translation only when the column count is unchanged.
     pub(crate) fn resize_with_row_shift(&mut self, cols: usize, rows: usize) -> usize {
-        self.resize_with_points(cols, rows, &mut [None; 2])
+        self.resize_with_points(cols, rows, &mut [None; REFLOW_POINTS])
             .archived_rows
     }
 
+    /// Resize, carrying each of `points` (row, column) to where its cell
+    /// went, or `None` when the cell was not retained.
     pub(crate) fn resize_with_points(
         &mut self,
         cols: usize,
         rows: usize,
-        points: &mut [Option<(i32, usize)>; 2],
+        points: &mut [Option<(i32, usize)>; REFLOW_POINTS],
     ) -> ResizeOutcome {
         let mut tracking = self.take_valid_resize_tracking();
         if self.cols != cols
@@ -197,7 +203,13 @@ impl Grid {
             self.mark_rows_changed();
         }
         let ((new_row, new_col), outcome) = if let Some(tracking) = &mut tracking {
-            let mut combined = [points[0], points[1], tracking.points[0], tracking.points[1]];
+            let mut combined = [
+                points[0],
+                points[1],
+                points[2],
+                tracking.points[0],
+                tracking.points[1],
+            ];
             let result = self.storage.resize_with_points(
                 cols,
                 rows,
@@ -205,8 +217,8 @@ impl Grid {
                 self.cursor.col,
                 &mut combined,
             );
-            *points = [combined[0], combined[1]];
-            tracking.points = [combined[2], combined[3]];
+            *points = [combined[0], combined[1], combined[2]];
+            tracking.points = [combined[3], combined[4]];
             result
         } else {
             self.storage

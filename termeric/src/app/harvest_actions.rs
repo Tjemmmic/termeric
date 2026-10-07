@@ -4,7 +4,6 @@
 use super::redraw_scheduler::RedrawReason;
 use super::*;
 
-const MAX_COMMAND_REGION_COMMAND_BYTES: usize = crate::harvest::MAX_HARVEST_COMMAND_BYTES;
 const MAX_COMMAND_REGION_OUTPUT_BYTES: usize = 64 * 1024;
 
 fn harvest_explain_context(
@@ -177,7 +176,7 @@ impl App {
                     .prompt_tracker()
                     .completed_region_by_id(target.region_id)
                     .filter(|region| region.content_available)
-                    .map(|region| Self::extract_command_text(terminal, region))
+                    .map(Self::region_command_text)
             })
             .filter(|(text, _)| !text.trim().is_empty())
             .unwrap_or_else(|| {
@@ -644,24 +643,13 @@ impl App {
         format!("No completed command yet; {shell} integration is active")
     }
 
-    /// Extract just the command line entered by the user (between command
-    /// start and output start).
-    pub(super) fn extract_command_text(
-        terminal: &termeric_core::Terminal,
-        region: &termeric_core::CommandRegion,
-    ) -> (String, bool) {
+    /// The command a region ran, as the terminal read it when its output
+    /// began; empty once the region's rows are no longer retained.
+    pub(super) fn region_command_text(region: &termeric_core::CommandRegion) -> (String, bool) {
         if !region.content_available {
             return (String::new(), false);
         }
-        let start = region.command_row.unwrap_or(region.prompt_row);
-        // End at the row just before output starts, or the prompt row if
-        // output never began.
-        let end = region
-            .output_row
-            .map(|r| r.saturating_sub(1))
-            .unwrap_or(start);
-        let end = end.max(start);
-        terminal.bounded_rows_text(start, end, MAX_COMMAND_REGION_COMMAND_BYTES)
+        (region.command_text.clone(), region.command_truncated)
     }
 
     /// Extract the output block of a command (between output start and

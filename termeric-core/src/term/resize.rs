@@ -16,11 +16,20 @@ impl Terminal {
         if !same_columns {
             self.navigation_cursor = None;
         }
-        let mut primary_points = if !same_columns && !self.alt_screen_active {
+        let [selection_start, selection_end] = if !same_columns && !self.alt_screen_active {
             self.selection_reflow_points()
         } else {
             [None; 2]
         };
+        // A command still being typed is read from its start cell once its
+        // output begins, so that cell follows a reflow. The prompt is on the
+        // primary screen whichever screen is showing.
+        let command_start = if same_columns {
+            None
+        } else {
+            self.prompt_tracker.pending_command_start()
+        };
+        let mut primary_points = [selection_start, selection_end, command_start];
         let primary_resize = self
             .grid
             .resize_with_points(cols, rows, &mut primary_points);
@@ -30,7 +39,7 @@ impl Terminal {
             if same_columns {
                 self.remap_selection_after_height_resize(primary_shift, rows);
             } else {
-                self.restore_reflow_selection(primary_points);
+                self.restore_reflow_selection([primary_points[0], primary_points[1]]);
             }
             self.repair_multicells_with_selection(&resize_blank);
         } else {
@@ -46,6 +55,10 @@ impl Terminal {
             .collect();
         let remapped_shell_rows = restore_shell_anchors(&self.grid, retained_shell_anchors);
         self.prompt_tracker.remap_rows(&remapped_shell_rows);
+        if command_start.is_some() {
+            self.prompt_tracker
+                .set_pending_command_start(primary_points[2]);
+        }
         self.prompt_navigation = prompt_navigation_row
             .and_then(|row| remapped_shell_rows.get(&row).copied())
             .filter(|row| {
@@ -57,11 +70,12 @@ impl Terminal {
                 row,
                 scroll_offset: self.grid.scroll_offset(),
             });
-        let mut alternate_points = if !same_columns && self.alt_screen_active {
+        let [selection_start, selection_end] = if !same_columns && self.alt_screen_active {
             self.selection_reflow_points()
         } else {
             [None; 2]
         };
+        let mut alternate_points = [selection_start, selection_end, None];
         let alternate_shift = self
             .alt_grid
             .resize_with_points(cols, rows, &mut alternate_points)
@@ -70,7 +84,7 @@ impl Terminal {
             if same_columns {
                 self.remap_selection_after_height_resize(alternate_shift, rows);
             } else {
-                self.restore_reflow_selection(alternate_points);
+                self.restore_reflow_selection([alternate_points[0], alternate_points[1]]);
             }
             self.repair_multicells_with_selection(&resize_blank);
         } else {

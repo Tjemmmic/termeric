@@ -9,7 +9,9 @@ mod cellar;
 mod indicators;
 pub mod sprouts;
 
-pub use cellar::{CellarAction, CellarLayout, CommandEntry, MAX_HARVEST_COMMAND_BYTES, RootCellar};
+pub use cellar::{CellarAction, CellarLayout, CommandEntry, RootCellar};
+#[cfg(test)]
+pub use cellar::MAX_HARVEST_COMMAND_BYTES;
 pub use indicators::GrowthIndicator;
 pub use sprouts::{SproutAvailability, SproutMenu, SproutMenuLayout};
 

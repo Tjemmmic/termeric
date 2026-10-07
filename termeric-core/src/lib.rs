@@ -34,7 +34,7 @@ pub use grid::{
     Grid, MultiCell, MultiCellAlignment, RowView,
 };
 pub use pty::Pty;
-pub use shell::CommandRegion;
+pub use shell::{CommandRegion, MAX_COMMAND_TEXT_BYTES};
 pub use term::{
     DynamicColors, ExtraCursorColor, ExtraCursorColors, ExtraCursorShape, ExtraCursorState, Point,
     PointerShape, Selection, SelectionType, Terminal,

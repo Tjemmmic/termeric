@@ -592,8 +592,14 @@ impl<'a> RowView<'a> {
 
     /// Extract plain text without reconstructing historical style cells.
     pub fn plain_text(&self, cols: usize) -> String {
-        let mut text = String::with_capacity(cols);
-        for cell in self.iter().take(cols) {
+        self.plain_text_range(0, cols)
+    }
+
+    /// Plain text of the cells from column `start` up to, not including,
+    /// column `end`.
+    pub fn plain_text_range(&self, start: usize, end: usize) -> String {
+        let mut text = String::with_capacity(end.saturating_sub(start));
+        for cell in self.iter().take(end).skip(start) {
             if !cell.is_wide_char_spacer()
                 && (!cell.multicell.is_present() || cell.multicell.is_leader())
             {

@@ -1151,7 +1151,7 @@ impl App {
         }
         let tracker = terminal.prompt_tracker();
         let region = tracker.completed_region(tracker.completed_count().checked_sub(1)?)?;
-        let (command, _) = App::extract_command_text(terminal, region);
+        let (command, _) = App::region_command_text(region);
         let command = command.trim().to_owned();
         let (output, truncated) = App::extract_output_text(terminal, region);
         if command.is_empty() || output.trim().is_empty() {
@@ -1182,7 +1182,7 @@ impl App {
             }
             let tracker = terminal.prompt_tracker();
             let region = tracker.completed_region(tracker.completed_count().checked_sub(1)?)?;
-            let (command, _) = App::extract_command_text(terminal, region);
+            let (command, _) = App::region_command_text(region);
             let command = command.trim().to_owned();
             let rows = match (region.output_row, region.finish_row) {
                 (Some(start), Some(end)) if end > start => usize::try_from(end - start).ok()?,

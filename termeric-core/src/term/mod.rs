@@ -57,7 +57,7 @@ use crate::graphics::{
 use crate::grid::{
     Cell, CellAttrs, CellContent, CellFlags, Color, ColorSpec, Grid, HyperlinkRegistry, MultiCell,
 };
-use crate::shell::PromptTracker;
+use crate::shell::{MAX_COMMAND_TEXT_BYTES, PromptTracker, PromptType};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -3239,6 +3239,53 @@ impl Terminal {
             }
         }
         out
+    }
+
+    /// A command line as the shell showed it: the text from `start` up to,
+    /// not including, `end`, both (row, column). Soft-wrapped rows join with
+    /// no break, other row ends become newlines, and surrounding blanks are
+    /// dropped. `truncated` is true when `start` is no longer retained or
+    /// the text was cut at `max_bytes`.
+    pub(crate) fn command_text_between(
+        &self,
+        (start_row, start_col): (i32, usize),
+        (end_row, end_col): (i32, usize),
+        max_bytes: usize,
+    ) -> (String, bool) {
+        let oldest = -i32::try_from(self.grid().scrollback_len()).unwrap_or(i32::MAX);
+        if start_row < oldest {
+            return (String::new(), true);
+        }
+        let mut text = String::new();
+        let mut truncated = false;
+        for row_index in start_row..=end_row {
+            let Some(row) = self.grid().row_at_offset(row_index) else {
+                break;
+            };
+            let from = if row_index == start_row { start_col } else { 0 };
+            let to = if row_index == end_row {
+                end_col
+            } else {
+                self.cols
+            };
+            let piece = row.plain_text_range(from, to);
+            if row_index != end_row && !row.is_wrapped() {
+                text.push_str(piece.trim_end());
+                text.push('\n');
+            } else {
+                text.push_str(&piece);
+            }
+            // Stop reading once the budget is spent; only the rows read so
+            // far are ever held.
+            if text.len() > max_bytes {
+                truncated = true;
+                break;
+            }
+        }
+        let text = text.trim();
+        let kept = crate::safe_text::floor_char_boundary(text, max_bytes);
+        truncated |= kept < text.len();
+        (text[..kept].to_owned(), truncated)
     }
 
     /// Extract a row range without allocating beyond an explicit UTF-8 byte
