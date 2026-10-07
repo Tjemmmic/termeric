@@ -13,6 +13,14 @@ pub const MAX_CONTEXT_FILES: usize = 16;
 pub const MAX_CONTEXT_PATH_CHARS: usize = 1024;
 pub const MAX_CONTEXT_SOURCE_CHARS: usize = 10_000;
 pub const MAX_ASSEMBLED_CONTEXT_CHARS: usize = 64_000;
+/// The widest a UTF-8 character can be.
+const MAX_UTF8_CHAR_BYTES: usize = 4;
+/// The most bytes [`MAX_CONTEXT_SOURCE_CHARS`] characters can take.
+const MAX_CONTEXT_SOURCE_BYTES: usize = MAX_CONTEXT_SOURCE_CHARS * MAX_UTF8_CHAR_BYTES;
+/// How many files a directory walk lists when Git cannot list them.
+const MAX_FILE_TREE_ENTRIES: usize = 5_000;
+/// How deep a directory walk goes when Git cannot list the files.
+const MAX_FILE_TREE_DEPTH: usize = 32;
 const CONTEXT_COMMAND_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,15 +152,37 @@ fn gather_specific_files(root: Option<&Path>, paths: &[PathBuf]) -> Result<Vec<S
                 path.display()
             ));
         }
-        let content = fs::read_to_string(&canonical)
+        let content = read_file_start(&canonical, MAX_CONTEXT_SOURCE_CHARS)
             .map_err(|error| format!("Could not read {}: {error}", canonical.display()))?;
-        files.push(format!(
-            "=== File: {} ===\n{}",
-            canonical.display(),
-            crate::safe_text::truncate_with_ellipsis(&content, MAX_CONTEXT_SOURCE_CHARS)
-        ));
+        files.push(format!("=== File: {} ===\n{content}", canonical.display()));
     }
     Ok(files)
+}
+
+/// At most `max_chars` characters from the start of `path`, cut as
+/// [`crate::safe_text::truncate_with_ellipsis`] cuts them. Only the bytes
+/// those characters can take are read, however large the file is.
+fn read_file_start(path: &Path, max_chars: usize) -> std::io::Result<String> {
+    // Room for one character past the cap, so a longer file still reads as
+    // cut and ends in an ellipsis.
+    let limit = (max_chars + 1) * MAX_UTF8_CHAR_BYTES;
+    let mut bytes = Vec::new();
+    fs::File::open(path)?
+        .take(limit as u64)
+        .read_to_end(&mut bytes)?;
+    let reached_limit = bytes.len() == limit;
+    let text = match String::from_utf8(bytes) {
+        Ok(text) => text,
+        // The limit cut the last character short; the file may well go on.
+        Err(error) if reached_limit && error.utf8_error().error_len().is_none() => {
+            let valid = error.utf8_error().valid_up_to();
+            let mut bytes = error.into_bytes();
+            bytes.truncate(valid);
+            String::from_utf8(bytes).expect("the prefix before the cut is valid UTF-8")
+        }
+        Err(error) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, error)),
+    };
+    Ok(crate::safe_text::truncate_with_ellipsis(&text, max_chars))
 }
 
 fn bounded_git_diff(cwd: Option<&Path>, staged: bool) -> Result<Option<String>, String> {
@@ -160,12 +190,11 @@ fn bounded_git_diff(cwd: Option<&Path>, staged: bool) -> Result<Option<String>, 
     if staged {
         args.push("--cached");
     }
-    run_bounded_command("git", &args, cwd, MAX_CONTEXT_SOURCE_CHARS * 4)
+    run_bounded_command("git", &args, cwd, MAX_CONTEXT_SOURCE_BYTES)
 }
 
 fn bounded_file_tree(cwd: Option<&Path>) -> Result<Option<String>, String> {
-    if let Some(output) =
-        run_bounded_command("git", &["ls-files"], cwd, MAX_CONTEXT_SOURCE_CHARS * 4)?
+    if let Some(output) = run_bounded_command("git", &["ls-files"], cwd, MAX_CONTEXT_SOURCE_BYTES)?
     {
         if !output.trim().is_empty() {
             return Ok(Some(crate::safe_text::truncate_with_ellipsis(
@@ -179,8 +208,9 @@ fn bounded_file_tree(cwd: Option<&Path>) -> Result<Option<String>, String> {
     };
     let mut files = Vec::new();
     collect_files(root, root, 0, &mut files)?;
-    Ok((!files.is_empty())
-        .then(|| crate::safe_text::truncate_with_ellipsis(&files.join("\n"), 5_000)))
+    Ok((!files.is_empty()).then(|| {
+        crate::safe_text::truncate_with_ellipsis(&files.join("\n"), MAX_CONTEXT_SOURCE_CHARS)
+    }))
 }
 
 fn collect_files(
@@ -189,7 +219,7 @@ fn collect_files(
     depth: usize,
     output: &mut Vec<String>,
 ) -> Result<(), String> {
-    if depth > 32 || output.len() >= 5_000 {
+    if depth > MAX_FILE_TREE_DEPTH || output.len() >= MAX_FILE_TREE_ENTRIES {
         return Ok(());
     }
     let entries = fs::read_dir(directory)
@@ -199,7 +229,7 @@ fn collect_files(
         .map_err(|error| format!("Could not read directory entry: {error}"))?;
     entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
-        if output.len() >= 5_000 {
+        if output.len() >= MAX_FILE_TREE_ENTRIES {
             break;
         }
         let path = entry.path();
@@ -348,6 +378,63 @@ mod tests {
         .unwrap();
         assert!(text.contains("=== File:"));
         assert!(text.chars().count() <= MAX_ASSEMBLED_CONTEXT_CHARS);
+    }
+
+    #[test]
+    fn specific_files_are_read_only_as_far_as_the_cap() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("large.log");
+        // Two-byte characters past the cap, then bytes that are not UTF-8:
+        // reading the whole file would fail on them.
+        let mut content = "é".repeat(MAX_CONTEXT_SOURCE_CHARS * 3).into_bytes();
+        content.extend_from_slice(&[0xff; 64]);
+        fs::write(&file, content).unwrap();
+        let paths = validate_specific_files(Some(directory.path()), "large.log").unwrap();
+
+        let text = gather_context(ContextGatherRequest {
+            request_id: 3,
+            cwd: Some(directory.path().to_path_buf()),
+            selected: vec![ContextSourceId::SpecificFiles],
+            specific_files: paths,
+            terminal_output: None,
+        })
+        .unwrap();
+        let (_, start) = text.split_once("===\n").unwrap();
+        assert_eq!(start.chars().count(), MAX_CONTEXT_SOURCE_CHARS);
+        assert!(start.ends_with('…'));
+        assert!(
+            start
+                .chars()
+                .rev()
+                .skip(1)
+                .all(|character| character == 'é')
+        );
+    }
+
+    #[test]
+    fn specific_files_cut_mid_character_by_the_bound_still_read() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("wide.txt");
+        // Three-byte characters never land on the four-byte bound.
+        fs::write(&file, "界".repeat(MAX_CONTEXT_SOURCE_CHARS * 2)).unwrap();
+        let start = read_file_start(&file, MAX_CONTEXT_SOURCE_CHARS).unwrap();
+        assert_eq!(start.chars().count(), MAX_CONTEXT_SOURCE_CHARS);
+        assert!(start.ends_with('…'));
+    }
+
+    #[test]
+    fn specific_files_that_are_short_keep_their_text_and_reject_invalid_utf8() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("short.txt");
+        fs::write(&file, "fn main() {}\n").unwrap();
+        assert_eq!(
+            read_file_start(&file, MAX_CONTEXT_SOURCE_CHARS).unwrap(),
+            "fn main() {}\n"
+        );
+        // A short file ending in half a character is not UTF-8.
+        fs::write(&file, [b'a', 0xc3]).unwrap();
+        let error = read_file_start(&file, MAX_CONTEXT_SOURCE_CHARS).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     }
 
     #[test]
