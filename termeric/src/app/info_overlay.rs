@@ -47,6 +47,9 @@ impl App {
                 self.info_overlay.activate_focused(request_id)
             }
         } else if self.info_overlay.input_focused() {
+            // Under AltGr a character key types, even where the layout
+            // reports Ctrl with it.
+            let control = self.modifiers.control_key() && !self.alt_graph_active;
             if let Some(field_key) = self.text_edit_for_key(key) {
                 if let FieldKey::Edit(edit) = field_key {
                     self.info_overlay.edit_input(request_id, edit);
@@ -57,14 +60,12 @@ impl App {
                     Key::Named(NamedKey::Escape) => InfoOverlayAction::CancelInput { request_id },
                     _ if let Some(scroll) = scroll => scroll_action(scroll),
                     Key::Character(character)
-                        if self.modifiers.control_key()
-                            && character.as_str().eq_ignore_ascii_case("c") =>
+                        if control && character.as_str().eq_ignore_ascii_case("c") =>
                     {
                         InfoOverlayAction::Copy { request_id }
                     }
                     Key::Character(character)
-                        if self.modifiers.control_key()
-                            && character.as_str().eq_ignore_ascii_case("d") =>
+                        if control && character.as_str().eq_ignore_ascii_case("d") =>
                     {
                         self.info_overlay.choice(request_id, "unset").map_or(
                             InfoOverlayAction::None,
@@ -310,6 +311,7 @@ mod tests {
     use super::*;
     use crate::ui::info_overlay::{InfoOverlayChoice, InfoOverlayFocus};
     use winit::event::MouseButton;
+    use winit::keyboard::Key;
 
     const LABEL: &str = "Value: ";
 
@@ -330,6 +332,29 @@ mod tests {
                 shortcut: None,
             }],
         )
+    }
+
+    #[test]
+    fn altgr_types_into_the_field_where_ctrl_c_and_ctrl_d_would_copy_or_unset() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        let (clipboard, memory) = super::super::clipboard::Clipboard::in_memory();
+        app.clipboard = clipboard;
+        let request = show_field(&mut app, "");
+        // Some layouts report Ctrl+Alt with AltGr.
+        app.modifiers = ModifiersState::CONTROL | ModifiersState::ALT;
+        app.alt_graph_active = true;
+        for letter in ["d", "c"] {
+            app.handle_info_overlay_key(&Key::Character(letter.into()), false);
+        }
+        assert_eq!(app.info_overlay.input_value(request), Some("dc"));
+        assert_eq!(memory.lock().unwrap().clipboard, None);
+
+        // Without AltGr, Ctrl+C is still the field's copy chord.
+        app.modifiers = ModifiersState::CONTROL;
+        app.alt_graph_active = false;
+        app.handle_info_overlay_key(&Key::Character("c".into()), false);
+        assert_eq!(app.info_overlay.input_value(request), Some("dc"));
+        assert!(memory.lock().unwrap().clipboard.is_some());
     }
 
     #[test]
