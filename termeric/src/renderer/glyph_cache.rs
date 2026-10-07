@@ -1923,31 +1923,28 @@ pub(crate) fn deterministic_test_font_data() -> Vec<u8> {
     deterministic_test_font_data_named("FiraMono-Medium.ttf")
 }
 
+/// One of the fonts tests shape with, built into the test binary from
+/// `tests/fixtures/fonts/` (each beside its SIL Open Font License), so
+/// they shape the same text the same way on every machine and build.
 #[cfg(test)]
 fn deterministic_test_font_data_named(filename: &str) -> Vec<u8> {
-    use std::path::PathBuf;
-
-    let cargo_home = std::env::var_os("CARGO_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")))
-        .expect("Cargo home is unavailable");
-    let registry_sources = cargo_home.join("registry/src");
-    for registry in std::fs::read_dir(registry_sources).expect("Cargo registry is unavailable") {
-        let registry = registry.expect("invalid Cargo registry entry").path();
-        for package in std::fs::read_dir(registry).expect("Cargo registry index is unreadable") {
-            let package = package.expect("invalid Cargo package entry").path();
-            if package
-                .file_name()
-                .is_some_and(|name| name.to_string_lossy().starts_with("cosmic-text-"))
-            {
-                let font = package.join("fonts").join(filename);
-                if font.is_file() {
-                    return std::fs::read(font).expect("cosmic-text test font is unreadable");
-                }
-            }
-        }
+    macro_rules! fixture {
+        ($name:literal) => {
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/fonts/",
+                $name
+            ))
+            .as_slice()
+        };
     }
-    panic!("cosmic-text's deterministic test font {filename} was not found");
+    let data = match filename {
+        "FiraMono-Medium.ttf" => fixture!("FiraMono-Medium.ttf"),
+        "InterVariable.ttf" => fixture!("InterVariable.ttf"),
+        "NotoSansArabic.ttf" => fixture!("NotoSansArabic.ttf"),
+        _ => panic!("no test font fixture named {filename}"),
+    };
+    data.to_vec()
 }
 
 /// Expand an alpha mask by one pixel to the right. This is used only when the
