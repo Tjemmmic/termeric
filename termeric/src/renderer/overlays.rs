@@ -118,13 +118,14 @@ impl Renderer {
                     layout.content.width,
                     line_height,
                     with_alpha(self.ui.palette_accent, 0.08 * anim),
-                    BUTTON_CORNER_RADIUS,
+                    self.px(BUTTON_CORNER_RADIUS),
                 );
+                let underline = self.px(BORDER_WIDTH);
                 self.rect_pipeline.push_rect(
                     layout.content.x,
-                    line_y + line_height - BORDER_WIDTH,
+                    line_y + line_height - underline,
                     layout.content.width,
-                    BORDER_WIDTH,
+                    underline,
                     with_alpha(self.ui.palette_accent, 0.55 * anim),
                 );
             } else if choice.is_some() {
@@ -135,7 +136,7 @@ impl Renderer {
                     layout.content.width,
                     line_height,
                     with_alpha(self.ui.palette_accent, alpha * anim),
-                    BUTTON_CORNER_RADIUS,
+                    self.px(BUTTON_CORNER_RADIUS),
                 );
             }
             if line.is_empty() {
@@ -307,7 +308,7 @@ impl Renderer {
             card_width,
             card_height,
             card_bg,
-            CARD_CORNER_RADIUS,
+            self.px(CARD_CORNER_RADIUS),
         );
 
         let border = with_alpha(self.ui.palette_border, 0.4 * anim);
@@ -483,7 +484,7 @@ impl Renderer {
             card_width,
             card_height,
             card_bg,
-            CARD_CORNER_RADIUS,
+            self.px(CARD_CORNER_RADIUS),
         );
 
         // Card border
@@ -533,7 +534,7 @@ impl Renderer {
                             layout.content.width,
                             layout.row_height,
                             highlight_color,
-                            4.0,
+                            self.px(BUTTON_CORNER_RADIUS),
                         );
                     }
                     let checkbox = if source.selected { "[✓] " } else { "[ ] " };
@@ -569,7 +570,7 @@ impl Renderer {
                     layout.file_input.width,
                     layout.file_input.height,
                     with_alpha(self.ui.palette_input_bg, anim),
-                    BUTTON_CORNER_RADIUS,
+                    self.px(BUTTON_CORNER_RADIUS),
                 );
                 let columns = (layout.file_input.width / char_scale).floor().max(1.0) as usize;
                 let total = snapshot.file_input.chars().count();

@@ -4,6 +4,7 @@
 use super::Renderer;
 use crate::input::keybindings::BindableAction;
 use crate::ui::color::scale_alpha;
+use crate::ui::constants::BUTTON_CORNER_RADIUS;
 use crate::ui::shortcuts_panel::{ShortcutsPanelInfo, ShortcutsPanelLayout};
 
 impl Renderer {
@@ -19,8 +20,6 @@ impl Renderer {
         let anim = info.animation;
         let cell_width = self.cell_width();
         let cell_height = self.cell_height();
-        let scale = self.scale_factor;
-        let px = |logical: f32| (logical * scale).round().max(1.0);
         let fade = |color: [f32; 4], alpha: f32| scale_alpha(color, alpha * anim);
 
         let scrim = fade(self.ui.palette_scrim, 1.0);
@@ -40,7 +39,7 @@ impl Renderer {
         let padding = layout.padding;
         let row_height = layout.row_height;
         self.build_modal_frame(panel_x, panel_y, panel_width, panel_height, anim);
-        let line = px(1.0);
+        let line = self.px(1.0);
         let size = self.ui_label_px();
         let text = fade(self.ui.palette_text, 1.0);
         let dim = fade(self.ui.menu_text_dim, 1.0);
@@ -65,7 +64,7 @@ impl Renderer {
             input.width,
             input.height,
             fade(self.ui.palette_input_bg, 0.8),
-            px(6.0),
+            self.px(BUTTON_CORNER_RADIUS),
         );
         self.push_magnifier(
             input.x + cell_width * crate::ui::constants::FILTER_ICON_CENTER_CELLS,
@@ -108,7 +107,7 @@ impl Renderer {
                 self.rect_pipeline.push_rect(
                     view.cursor_x,
                     view.text_y,
-                    px(2.0).min(view.right - view.cursor_x),
+                    self.px(2.0).min(view.right - view.cursor_x),
                     cell_height,
                     fade(self.ui.palette_accent, 0.9),
                 );
@@ -127,9 +126,9 @@ impl Renderer {
 
         // ── Headings and shortcuts (already sliced to the visible window) ──
         let list_y = layout.list.y;
-        let scrollbar_width = px(3.0);
+        let scrollbar_width = self.px(3.0);
         let label_x = panel_x + padding + cell_width * 0.5;
-        let right = panel_x + panel_width - padding - scrollbar_width - px(6.0);
+        let right = panel_x + panel_width - padding - scrollbar_width - self.px(6.0);
         for (row_index, entry) in info.entries.iter().enumerate().take(layout.rows_that_fit) {
             let row_y = (list_y + row_index as f32 * row_height).round();
             if entry.is_header {
@@ -151,7 +150,7 @@ impl Renderer {
                     panel_width - padding,
                     row_height,
                     fade(self.ui.menu_highlight, 1.0),
-                    px(6.0),
+                    self.px(BUTTON_CORNER_RADIUS),
                 );
             }
             let (binding, binding_color) = if entry.selected && info.recording {
@@ -181,7 +180,7 @@ impl Renderer {
                 label_x,
                 row_y,
                 row_height,
-                right - binding_width - px(16.0) - label_x,
+                right - binding_width - self.px(16.0) - label_x,
                 size,
                 label_color,
             );
@@ -192,7 +191,8 @@ impl Renderer {
         if info.total_rows > rows_that_fit && rows_that_fit > 0 {
             let track_x = panel_x + panel_width - padding * 0.5 - scrollbar_width;
             let track_h = layout.list_height;
-            let thumb_h = (track_h * rows_that_fit as f32 / info.total_rows as f32).max(px(24.0));
+            let thumb_h =
+                (track_h * rows_that_fit as f32 / info.total_rows as f32).max(self.px(24.0));
             let max_scroll = info.total_rows.saturating_sub(rows_that_fit);
             let fraction = if max_scroll > 0 {
                 info.scroll_offset as f32 / max_scroll as f32
@@ -243,7 +243,7 @@ impl Renderer {
             ("Enter changes · Delete clears".to_string(), dim)
         };
         let instruction_right = panel_x + panel_width - padding;
-        let available = instruction_right - (panel_x + padding + count_width + px(24.0));
+        let available = instruction_right - (panel_x + padding + count_width + self.px(24.0));
         let width = self
             .ui_text_width(&instruction, footer_size)
             .min(available.max(0.0));

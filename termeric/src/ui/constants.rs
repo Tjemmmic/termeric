@@ -1,10 +1,18 @@
-//! Visual constants shared by the renderer and UI layout. Measurements are
-//! in pixels unless noted otherwise.
+//! Visual constants shared by the renderer and UI layout. Chrome lengths are
+//! logical pixels, scaled to the display where they are drawn
+//! (`Renderer::px`); the rest are noted.
 
-/// Corner radius for overlay cards and modal panels.
+/// Corner radius for cards: toasts, the info overlay, the guardrail
+/// confirmation, and Harvest panels.
 pub const CARD_CORNER_RADIUS: f32 = 12.0;
 
-/// Corner radius for small interactive buttons.
+/// Corner radius for the shared modal frame (Settings, the command palette).
+pub const MODAL_CORNER_RADIUS: f32 = 10.0;
+
+/// Corner radius for popup menus, dropdowns, and the find box.
+pub const MENU_CORNER_RADIUS: f32 = 8.0;
+
+/// Corner radius for buttons, tabs, and highlighted list rows.
 pub const BUTTON_CORNER_RADIUS: f32 = 6.0;
 
 /// Standard border width for UI elements.

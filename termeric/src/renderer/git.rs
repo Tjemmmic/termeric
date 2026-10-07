@@ -3,6 +3,7 @@
 use super::icons::draw_icon;
 use super::types::*;
 use super::{Renderer, TextClip};
+use crate::ui::constants::BUTTON_CORNER_RADIUS;
 use crate::ui::icon::Icon;
 
 const EDGE: f32 = 2.0;
@@ -326,7 +327,7 @@ impl Renderer {
                     layout.width - EDGE * 2.0,
                     layout.row_height,
                     [accent[0], accent[1], accent[2], 0.15],
-                    4.0,
+                    self.px(BUTTON_CORNER_RADIUS),
                 );
             }
             self.git_completion_text(

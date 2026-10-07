@@ -343,12 +343,12 @@ Draw rounded rectangles with `RectPipeline::push_rounded_rect`; a radius of half
 | Radius | Used for |
 |---|---|
 | 12px (`CARD_CORNER_RADIUS`) | Cards: toasts, the info overlay, the guardrail confirmation, Harvest panels |
-| 10px | The shared modal frame (Settings, command palette) |
-| 8px | Popup menus, dropdowns, the find box |
-| 6px (`BUTTON_CORNER_RADIUS`) | Buttons, tabs, Settings sidebar rows |
+| 10px (`MODAL_CORNER_RADIUS`) | The shared modal frame (Settings, command palette) |
+| 8px (`MENU_CORNER_RADIUS`) | Popup menus, dropdowns, the find box, the Git completion list |
+| 6px (`BUTTON_CORNER_RADIUS`) | Buttons, tabs, highlighted list rows (Settings sidebar, menus, the palette) |
 | 2px | Block cursor |
 
-Shared constants live in `termeric/src/ui/constants.rs`; add a constant there rather than a new literal when a radius is reused.
+Radii are logical pixels: draw them scaled with `Renderer::px`, which rounds a logical length to whole physical pixels. Shared constants live in `termeric/src/ui/constants.rs`; add a constant there rather than a new literal when a radius is reused.
 
 #### Geometry
 

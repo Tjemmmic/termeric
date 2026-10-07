@@ -10,7 +10,7 @@ use super::colors::UiPalette;
 use crate::harvest::{CommandHealth, GrowthPhase};
 use crate::renderer::types::{CellarRenderInfo, IndicatorRenderInfo, SproutMenuRenderInfo};
 use crate::ui::color::{scale_alpha, with_alpha};
-use crate::ui::constants::BORDER_WIDTH;
+use crate::ui::constants::{BORDER_WIDTH, BUTTON_CORNER_RADIUS};
 use crate::ui::icon::Icon;
 
 impl Renderer {
@@ -120,7 +120,7 @@ impl Renderer {
             panel_x + cell_width * 0.5,
             layout.list.y - cell_height * 0.5,
             panel_width - cell_width,
-            BORDER_WIDTH,
+            self.px(BORDER_WIDTH),
             border,
         );
 
@@ -136,7 +136,7 @@ impl Renderer {
                     row.width,
                     row.height,
                     with_alpha(self.ui.palette_accent, 0.14 * anim),
-                    4.0,
+                    self.px(BUTTON_CORNER_RADIUS),
                 );
             }
 
@@ -229,7 +229,7 @@ impl Renderer {
                     row.width,
                     row.height,
                     highlight_bg,
-                    4.0,
+                    self.px(BUTTON_CORNER_RADIUS),
                 );
             }
 

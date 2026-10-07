@@ -10,28 +10,31 @@ impl Renderer {
     /// A soft shadow under a card, `layers` rounded rectangles spreading
     /// down and out with falling alpha.
     pub(super) fn draw_card_shadow(&mut self, card: Bounds, alpha: f32, layers: u32) {
+        let radius = self.px(CARD_CORNER_RADIUS);
+        let step = self.px(4.0);
         for layer in 0..layers {
-            let spread = (layer as f32 + 1.0) * 4.0;
+            let spread = (layer as f32 + 1.0) * step;
             self.rect_pipeline.push_rounded_rect(
                 card.x - spread,
                 card.y - spread * 0.5 + spread * 0.8,
                 card.width + spread * 2.0,
                 card.height + spread * 1.5,
                 [0.0, 0.0, 0.0, alpha / (layer as f32 + 1.0)],
-                CARD_CORNER_RADIUS + spread,
+                radius + spread,
             );
         }
     }
 
     /// A rounded card surface with a hairline border.
     pub(super) fn draw_card(&mut self, card: Bounds, background: [f32; 4], border: [f32; 4]) {
+        let radius = self.px(CARD_CORNER_RADIUS);
         self.rect_pipeline.push_rounded_rect(
             card.x,
             card.y,
             card.width,
             card.height,
             background,
-            CARD_CORNER_RADIUS,
+            radius,
         );
         self.rect_pipeline.push_rounded_outline(
             card.x,
@@ -39,8 +42,8 @@ impl Renderer {
             card.width,
             card.height,
             border,
-            CARD_CORNER_RADIUS,
-            BORDER_WIDTH,
+            radius,
+            self.px(BORDER_WIDTH),
         );
     }
 
@@ -96,18 +99,19 @@ impl Renderer {
         };
         // A press sinks the button by a pixel on every side.
         let button = if pressed {
-            button.inset(1.0, 1.0)
+            button.inset(self.px(1.0), self.px(1.0))
         } else {
             button
         };
         let accent = self.ui.palette_accent;
+        let radius = self.px(BUTTON_CORNER_RADIUS);
         self.rect_pipeline.push_rounded_rect(
             button.x,
             button.y,
             button.width,
             button.height,
             with_alpha(accent, background_alpha * anim),
-            BUTTON_CORNER_RADIUS,
+            radius,
         );
         let border_alpha = if hovered { 0.65 } else { 0.35 };
         self.rect_pipeline.push_rounded_outline(
@@ -116,17 +120,18 @@ impl Renderer {
             button.width,
             button.height,
             with_alpha(accent, border_alpha * anim),
-            BUTTON_CORNER_RADIUS,
-            BORDER_WIDTH,
+            radius,
+            self.px(BORDER_WIDTH),
         );
         if hovered && !pressed {
+            let glow = self.px(2.0);
             self.rect_pipeline.push_rounded_rect(
-                button.x - 2.0,
-                button.y - 2.0,
-                button.width + 4.0,
-                button.height + 4.0,
+                button.x - glow,
+                button.y - glow,
+                button.width + glow * 2.0,
+                button.height + glow * 2.0,
                 with_alpha(accent, 0.06 * anim),
-                BUTTON_CORNER_RADIUS + 2.0,
+                radius + glow,
             );
         }
         let text_alpha = if hovered { 1.0 } else { 0.8 };
@@ -150,8 +155,8 @@ impl Renderer {
             bounds.width,
             bounds.height,
             color,
-            BUTTON_CORNER_RADIUS,
-            2.0,
+            self.px(BUTTON_CORNER_RADIUS),
+            self.px(2.0),
         );
     }
 }

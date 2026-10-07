@@ -3,6 +3,7 @@
 use super::Renderer;
 use super::types::*;
 use crate::ui::color::{scale_alpha, with_alpha};
+use crate::ui::constants::{BUTTON_CORNER_RADIUS, MENU_CORNER_RADIUS};
 use crate::ui::icon::Icon;
 use crate::ui::search_bar::{SearchBarInfo, SearchBarLayout};
 use crate::ui::text_input_viewport::TextInputViewport;
@@ -26,13 +27,11 @@ impl Renderer {
         if layout.bar.width <= 0.0 {
             return;
         }
-        let scale = self.scale_factor;
-        let px = |logical: f32| (logical * scale).round().max(1.0);
         let text = self.ui.menu_text;
         let dim = self.ui.menu_text_dim;
         let accent = self.ui.palette_accent;
         let error_color = self.ui.search_error;
-        let radius = px(8.0);
+        let radius = self.px(MENU_CORNER_RADIUS);
         let bar = layout.bar;
 
         // ── Floating surface with a hairline border ──
@@ -43,7 +42,7 @@ impl Renderer {
         };
         self.rect_pipeline
             .push_rounded_rect(bar.x, bar.y, bar.width, bar.height, border, radius);
-        let hairline = px(1.0);
+        let hairline = self.px(1.0);
         self.rect_pipeline.push_rounded_rect(
             bar.x + hairline,
             bar.y + hairline,
@@ -102,7 +101,7 @@ impl Renderer {
                 self.rect_pipeline.push_rect(
                     view.cursor_x,
                     view.text_y,
-                    px(2.0).min(view.right - view.cursor_x),
+                    self.px(2.0).min(view.right - view.cursor_x),
                     self.cell_height(),
                     accent,
                 );
@@ -145,7 +144,7 @@ impl Renderer {
                     rect.width,
                     rect.height,
                     with_alpha(accent, 0.28),
-                    px(5.0),
+                    self.px(BUTTON_CORNER_RADIUS),
                 );
             }
             let color = if on { text } else { dim };

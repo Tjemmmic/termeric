@@ -25,8 +25,6 @@ impl Renderer {
         }
         let cell_width = self.cell_width();
         let cell_height = self.cell_height();
-        let scale = self.scale_factor;
-        let px = |logical: f32| (logical * scale).round().max(1.0);
         let fade = |color: [f32; 4], alpha: f32| scale_alpha(color, alpha * anim);
 
         let scrim = fade(self.ui.palette_scrim, 1.0);
@@ -44,7 +42,7 @@ impl Renderer {
         let (panel_x, panel_y) = (layout.panel_x.round(), layout.panel_y.round());
         let (panel_width, panel_height) = (layout.panel_width.round(), layout.panel_height.round());
         self.build_modal_frame(panel_x, panel_y, panel_width, panel_height, anim);
-        let line = px(1.0);
+        let line = self.px(1.0);
         let size = self.ui_label_px();
         let text = fade(self.ui.palette_text, 1.0);
         let dim = fade(self.ui.menu_text_dim, 1.0);
@@ -70,7 +68,7 @@ impl Renderer {
             input.width,
             input.height,
             field,
-            px(6.0),
+            self.px(BUTTON_CORNER_RADIUS),
         );
         self.push_magnifier(
             input.x + cell_width * FILTER_ICON_CENTER_CELLS,
@@ -111,7 +109,7 @@ impl Renderer {
                 self.rect_pipeline.push_rect(
                     view.cursor_x,
                     view.text_y,
-                    px(2.0).min(view.right - view.cursor_x),
+                    self.px(2.0).min(view.right - view.cursor_x),
                     cell_height,
                     fade(self.ui.palette_accent, 0.9),
                 );
@@ -157,7 +155,7 @@ impl Renderer {
                     row.width,
                     row.height,
                     fill,
-                    px(6.0),
+                    self.px(BUTTON_CORNER_RADIUS),
                 );
             }
             self.push_ui_label(
@@ -234,7 +232,7 @@ impl Renderer {
                     } else {
                         fade(self.ui.menu_highlight, 0.55)
                     },
-                    px(6.0),
+                    self.px(BUTTON_CORNER_RADIUS),
                 );
             }
             self.push_ui_label(
@@ -262,7 +260,7 @@ impl Renderer {
                             control,
                             control,
                             field,
-                            px(5.0),
+                            self.px(BUTTON_CORNER_RADIUS),
                         );
                         self.push_icon(icon, x + button / 2.0, center_y, text);
                     }
@@ -333,10 +331,10 @@ impl Renderer {
         let rows = layout.rows_that_fit;
         if total > rows && rows > 0 {
             let track_h = rows as f32 * layout.row_height;
-            let thumb_h = (track_h * rows as f32 / total as f32).max(px(24.0));
+            let thumb_h = (track_h * rows as f32 / total as f32).max(self.px(24.0));
             let max_scroll = total - rows;
             let fraction = info.scroll_offset.min(max_scroll) as f32 / max_scroll as f32;
-            let width = px(layout.scrollbar_width);
+            let width = self.px(layout.scrollbar_width);
             self.rect_pipeline.push_rounded_rect(
                 panel_x + panel_width - padding * 0.5 - width,
                 layout.list_y + fraction * (track_h - thumb_h),
@@ -382,7 +380,7 @@ impl Renderer {
             save.width,
             save.height,
             if save_hovered { highlight } else { border },
-            px(5.0),
+            self.px(BUTTON_CORNER_RADIUS),
         );
         let label_width = self.ui_text_width("Save", size);
         self.push_ui_label(
@@ -429,10 +427,8 @@ impl Renderer {
         };
         let rect = dropdown.rect;
 
-        let scale = self.scale_factor;
-        let px = |logical: f32| (logical * scale).round().max(1.0);
         let fade = |color: [f32; 4]| scale_alpha(color, anim);
-        self.push_menu_surface(rect.bounds, scale, anim);
+        self.push_menu_surface(rect.bounds, anim);
 
         // ── Options in the UI face ──
         let size = self.ui_label_px();
@@ -457,7 +453,7 @@ impl Renderer {
                     } else {
                         scale_alpha(self.ui.menu_highlight, 0.55 * anim)
                     },
-                    px(5.0),
+                    self.px(BUTTON_CORNER_RADIUS),
                 );
             }
             self.push_ui_label(

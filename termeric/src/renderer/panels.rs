@@ -3,6 +3,7 @@
 
 use super::Renderer;
 use crate::ui::color::{scale_alpha, with_alpha};
+use crate::ui::constants::BUTTON_CORNER_RADIUS;
 use crate::ui::geometry::Bounds;
 use crate::ui::icon::Icon;
 
@@ -64,8 +65,6 @@ impl Renderer {
         let cell_width = self.cell_width();
         let cell_height = self.cell_height();
         let layout = self.commands_panel_layout(info, window_width, window_height);
-        let scale = self.scale_factor;
-        let px = |logical: f32| (logical * scale).round().max(1.0);
         let panel = layout.panel;
         let padding = layout.padding;
         let size = self.ui_label_px();
@@ -103,10 +102,10 @@ impl Renderer {
             dim,
         );
         self.rect_pipeline.push_rect(
-            panel.x + px(1.0),
+            panel.x + self.px(1.0),
             layout.separator_y.round(),
-            panel.width - px(1.0),
-            px(1.0),
+            panel.width - self.px(1.0),
+            self.px(1.0),
             self.ui.menu_border,
         );
 
@@ -119,7 +118,7 @@ impl Renderer {
                 container.width,
                 container.height,
                 self.ui.menu_highlight,
-                px(6.0),
+                self.px(BUTTON_CORNER_RADIUS),
             );
             for (field, rect, label, value, placeholder) in [
                 (
@@ -154,7 +153,7 @@ impl Renderer {
                     rect.width,
                     rect.height,
                     self.ui.palette_input_bg,
-                    px(5.0),
+                    self.px(BUTTON_CORNER_RADIUS),
                 );
                 if active {
                     self.push_rect_outline(
@@ -162,7 +161,7 @@ impl Renderer {
                         rect.y,
                         rect.width,
                         rect.height,
-                        px(1.0),
+                        self.px(1.0),
                         self.ui.palette_accent,
                     );
                 }
@@ -203,9 +202,9 @@ impl Renderer {
                 if active {
                     self.rect_pipeline.push_rect(
                         view.cursor_x,
-                        rect.y + px(3.0),
-                        px(2.0).min(view.right - view.cursor_x),
-                        rect.height - px(6.0),
+                        rect.y + self.px(3.0),
+                        self.px(2.0).min(view.right - view.cursor_x),
+                        rect.height - self.px(6.0),
                         self.ui.palette_accent,
                     );
                 }
@@ -238,16 +237,16 @@ impl Renderer {
             if active {
                 self.rect_pipeline.push_rounded_rect(
                     row.x + padding * 0.5,
-                    row.y + px(2.0),
+                    row.y + self.px(2.0),
                     row.width - padding,
-                    row.height - px(4.0),
+                    row.height - self.px(4.0),
                     self.ui.menu_highlight,
-                    px(6.0),
+                    self.px(BUTTON_CORNER_RADIUS),
                 );
             }
             let name_x = row.x + padding;
             let right = if active {
-                delete.x - px(8.0)
+                delete.x - self.px(8.0)
             } else {
                 row.x + row.width - padding
             };
@@ -292,7 +291,7 @@ impl Renderer {
                 rect.y,
                 rect.width,
                 rect.height,
-                px(2.0),
+                self.px(2.0),
                 self.ui.palette_accent,
             );
         }
@@ -324,8 +323,6 @@ impl Renderer {
                 .map(|supervisor| supervisor.entries.len()),
         )
         .scrolled(info.scroll_offset);
-        let scale = self.scale_factor;
-        let px = |logical: f32| (logical * scale).round().max(1.0);
         let panel = layout.panel;
         let padding = layout.padding;
         let size = self.ui_label_px();
@@ -352,10 +349,10 @@ impl Renderer {
             text,
         );
         self.rect_pipeline.push_rect(
-            panel.x + px(1.0),
+            panel.x + self.px(1.0),
             layout.separator_y.round(),
-            panel.width - px(1.0),
-            px(1.0),
+            panel.width - self.px(1.0),
+            self.px(1.0),
             self.ui.menu_border,
         );
 
@@ -383,11 +380,11 @@ impl Renderer {
             let surface = if active {
                 self.rect_pipeline.push_rounded_rect(
                     row.x + padding * 0.5,
-                    row.y + px(2.0),
+                    row.y + self.px(2.0),
                     row.width - padding,
-                    row.height - px(4.0),
+                    row.height - self.px(4.0),
                     self.ui.menu_highlight,
-                    px(6.0),
+                    self.px(BUTTON_CORNER_RADIUS),
                 );
                 self.ui.menu_highlight
             } else {
@@ -409,7 +406,7 @@ impl Renderer {
                 self.rect_pipeline
                     .push_rounded_rect(dot_x, dot_y, dot, dot, fill, dot / 2.0);
                 if matches!(row_info.state, AgentRowState::Working | AgentRowState::Idle) {
-                    let inner = (dot - px(1.5) * 2.0).max(1.0);
+                    let inner = (dot - self.px(1.5) * 2.0).max(1.0);
                     self.rect_pipeline.push_rounded_rect(
                         dot_x + (dot - inner) / 2.0,
                         dot_y + (dot - inner) / 2.0,
@@ -420,7 +417,7 @@ impl Renderer {
                     );
                 }
             }
-            let name_x = title_x + dot + px(8.0);
+            let name_x = title_x + dot + self.px(8.0);
             let right = row.x + row.width - padding;
             let name_width = self.push_ui_label(
                 &row_info.name,
@@ -431,7 +428,7 @@ impl Renderer {
                 size,
                 text,
             );
-            let place_x = name_x + name_width + px(8.0);
+            let place_x = name_x + name_width + self.px(8.0);
             if place_x < right {
                 self.push_ui_label(
                     &row_info.place,
@@ -466,10 +463,10 @@ impl Renderer {
         // ── Supervisor ──
         if let (Some(section), Some(supervisor)) = (layout.supervisor, info.supervisor.as_ref()) {
             self.rect_pipeline.push_rect(
-                panel.x + px(1.0),
+                panel.x + self.px(1.0),
                 section.section.y.round(),
-                panel.width - px(1.0),
-                px(1.0),
+                panel.width - self.px(1.0),
+                self.px(1.0),
                 self.ui.menu_border,
             );
             let heading = format!("Supervisor · {}", supervisor.mode);
@@ -524,7 +521,7 @@ impl Renderer {
                 rect.y,
                 rect.width,
                 rect.height,
-                px(2.0),
+                self.px(2.0),
                 self.ui.palette_accent,
             );
         }
@@ -545,18 +542,17 @@ impl Renderer {
         if visible == 0 || visible >= total {
             return;
         }
-        let px = |logical: f32| (logical * self.scale_factor).round().max(1.0);
         let track_height = visible as f32 * row_height;
-        let thumb_height = (track_height * visible as f32 / total as f32).max(px(24.0));
+        let thumb_height = (track_height * visible as f32 / total as f32).max(self.px(24.0));
         let travel = (track_height - thumb_height).max(0.0);
         let thumb_top = list_top + travel * offset as f32 / (total - visible) as f32;
         self.rect_pipeline.push_rounded_rect(
-            panel.x + panel.width - px(6.0),
+            panel.x + panel.width - self.px(6.0),
             thumb_top,
-            px(3.0),
+            self.px(3.0),
             thumb_height,
             color,
-            px(1.5),
+            self.px(1.5),
         );
     }
 
@@ -569,7 +565,7 @@ impl Renderer {
             width,
             height,
         } = panel;
-        let hairline = self.scale_factor.round().max(1.0);
+        let hairline = self.px(1.0);
         let scrim = self.ui.scrim;
         self.rect_pipeline
             .push_rect(0.0, y, x, height, scale_alpha(scrim, animation));
@@ -594,7 +590,7 @@ impl Renderer {
                 width,
                 height,
                 self.ui.menu_highlight,
-                (5.0 * self.scale_factor).round(),
+                self.px(BUTTON_CORNER_RADIUS),
             );
         }
         let color = if hovered {
@@ -685,8 +681,6 @@ impl Renderer {
         }
         let cell_height = self.cell_height();
         let layout = self.session_panel_layout(info, window_width, window_height);
-        let scale = self.scale_factor;
-        let px = |logical: f32| (logical * scale).round().max(1.0);
         let panel = layout.panel;
         let padding_x = layout.padding_x;
         let size = self.ui_label_px();
@@ -705,7 +699,7 @@ impl Renderer {
                 Icon::Back,
                 hovered_control == Some(SessionPanelControl::Back),
             );
-            title_x = back.x + back.width + px(2.0);
+            title_x = back.x + back.width + self.px(2.0);
         }
         self.build_header_icon_button(
             close,
@@ -751,7 +745,7 @@ impl Renderer {
                 input.width,
                 input.height,
                 self.ui.palette_input_bg,
-                px(5.0),
+                self.px(BUTTON_CORNER_RADIUS),
             );
             if let Some(view) = layout.rename_input_viewport(name, info.rename_cursor) {
                 self.text_pipeline.push_ui_run(
@@ -769,9 +763,9 @@ impl Renderer {
                 );
                 self.rect_pipeline.push_rect(
                     view.cursor_x,
-                    input.y + px(3.0),
-                    px(2.0).min(view.right - view.cursor_x),
-                    input.height - px(6.0),
+                    input.y + self.px(3.0),
+                    self.px(2.0).min(view.right - view.cursor_x),
+                    input.height - self.px(6.0),
                     self.ui.palette_accent,
                 );
             }
@@ -784,10 +778,10 @@ impl Renderer {
         }
 
         self.rect_pipeline.push_rect(
-            panel.x + px(1.0),
+            panel.x + self.px(1.0),
             layout.separator_y.round(),
-            panel.width - px(1.0),
-            px(1.0),
+            panel.width - self.px(1.0),
+            self.px(1.0),
             self.ui.menu_border,
         );
 
@@ -819,17 +813,17 @@ impl Renderer {
             if active {
                 self.rect_pipeline.push_rounded_rect(
                     row.x + padding_x * 0.5,
-                    row.y + px(2.0),
+                    row.y + self.px(2.0),
                     row.width - padding_x,
-                    row.height - px(4.0),
+                    row.height - self.px(4.0),
                     self.ui.menu_highlight,
-                    px(6.0),
+                    self.px(BUTTON_CORNER_RADIUS),
                 );
             }
             let line = cell_height * 1.3;
             let title_top = entry.load_button.y + (entry.load_button.height - line) / 2.0;
             let actions_left = if active {
-                entry.load_button.x - px(8.0)
+                entry.load_button.x - self.px(8.0)
             } else {
                 row.x + row.width - padding_x
             };
@@ -876,9 +870,9 @@ impl Renderer {
         {
             let link_color = if hovered_control == Some(SessionPanelControl::SnapshotsLink) {
                 self.rect_pipeline.push_rect(
-                    link.x + px(1.0),
+                    link.x + self.px(1.0),
                     link.y,
-                    link.width - px(1.0),
+                    link.width - self.px(1.0),
                     link.height,
                     self.ui.menu_highlight,
                 );
@@ -887,10 +881,10 @@ impl Renderer {
                 dim
             };
             self.rect_pipeline.push_rect(
-                link.x + px(1.0),
+                link.x + self.px(1.0),
                 link.y,
-                link.width - px(1.0),
-                px(1.0),
+                link.width - self.px(1.0),
+                self.px(1.0),
                 self.ui.menu_border,
             );
             let label = format!("Tab snapshots ({})", info.snapshot_count);
@@ -915,7 +909,7 @@ impl Renderer {
     /// A quiet text button: a subtle surface for the primary action, text
     /// alone otherwise, label centred in the UI face.
     fn build_panel_button(&mut self, rect: Bounds, label: &str, primary: bool, color: [f32; 4]) {
-        let radius = (5.0 * self.scale_factor).round();
+        let radius = self.px(BUTTON_CORNER_RADIUS);
         if primary {
             self.rect_pipeline.push_rounded_rect(
                 rect.x,

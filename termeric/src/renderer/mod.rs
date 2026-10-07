@@ -381,6 +381,12 @@ impl Renderer {
         self.scale_factor
     }
 
+    /// A logical chrome length in whole physical pixels, never below one, so
+    /// chrome geometry lands on the pixel grid at every display scale.
+    pub(super) fn px(&self, logical: f32) -> f32 {
+        (logical * self.scale_factor).round().max(1.0)
+    }
+
     /// Cell width and height in physical pixels.
     pub fn cell_size(&self) -> (f32, f32) {
         self.glyph_cache.cell_size()

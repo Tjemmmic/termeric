@@ -3,6 +3,7 @@
 use super::Renderer;
 use crate::ui::color::scale_alpha;
 use crate::ui::command_palette::{PaletteInfo, PaletteLayout};
+use crate::ui::constants::{BUTTON_CORNER_RADIUS, MODAL_CORNER_RADIUS};
 
 impl Renderer {
     /// A centred modal's soft shadow, hairline border, and raised surface,
@@ -15,20 +16,19 @@ impl Renderer {
         height: f32,
         animation: f32,
     ) {
-        let px = |logical: f32| (logical * self.scale_factor).round().max(1.0);
         let fade = |color: [f32; 4]| scale_alpha(color, animation);
-        let radius = px(10.0);
-        for (spread, alpha) in [(px(2.0), 0.18), (px(10.0), 0.10)] {
+        let radius = self.px(MODAL_CORNER_RADIUS);
+        for (spread, alpha) in [(self.px(2.0), 0.18), (self.px(10.0), 0.10)] {
             self.rect_pipeline.push_rounded_rect(
                 x - spread,
-                y - spread / 2.0 + px(3.0),
+                y - spread / 2.0 + self.px(3.0),
                 width + spread * 2.0,
                 height + spread * 2.0,
                 [0.0, 0.0, 0.0, alpha * animation],
                 radius + spread,
             );
         }
-        let line = px(1.0);
+        let line = self.px(1.0);
         self.rect_pipeline.push_rounded_rect(
             x,
             y,
@@ -59,8 +59,6 @@ impl Renderer {
         let anim = info.animation;
         let cell_width = self.cell_width();
         let cell_height = self.cell_height();
-        let scale = self.scale_factor;
-        let px = |logical: f32| (logical * scale).round().max(1.0);
         let fade = |color: [f32; 4], alpha: f32| scale_alpha(color, alpha * anim);
 
         let scrim = fade(self.ui.palette_scrim, 1.0);
@@ -81,7 +79,7 @@ impl Renderer {
         let row_height = layout.row_height;
 
         self.build_modal_frame(panel_x, panel_y, panel_width, panel_height, anim);
-        let line = px(1.0);
+        let line = self.px(1.0);
 
         // ── Query field ──
         let input_x = panel_x + padding;
@@ -94,7 +92,7 @@ impl Renderer {
             input_w,
             input_height,
             fade(self.ui.palette_input_bg, 0.8),
-            px(6.0),
+            self.px(BUTTON_CORNER_RADIUS),
         );
         // Magnifier in the slot before the query text.
         self.push_magnifier(
@@ -136,7 +134,7 @@ impl Renderer {
             self.rect_pipeline.push_rect(
                 view.cursor_x,
                 view.text_y,
-                px(2.0),
+                self.px(2.0),
                 cell_height,
                 fade(self.ui.palette_accent, 0.9),
             );
@@ -157,8 +155,8 @@ impl Renderer {
         let size = self.ui_label_px();
         let list_y = layout.list_y;
         let text_x = panel_x + padding + cell_width * 0.5;
-        let scrollbar_width = px(3.0);
-        let right = panel_x + panel_width - padding - scrollbar_width - px(6.0);
+        let scrollbar_width = self.px(3.0);
+        let right = panel_x + panel_width - padding - scrollbar_width - self.px(6.0);
         for (row_index, entry) in info.entries.iter().enumerate().take(layout.visible_count) {
             let row_y = (list_y + row_index as f32 * row_height).round();
             let selected = row_index == info.selected;
@@ -169,7 +167,7 @@ impl Renderer {
                     panel_width - padding,
                     row_height,
                     fade(self.ui.menu_highlight, 1.0),
-                    px(6.0),
+                    self.px(BUTTON_CORNER_RADIUS),
                 );
             }
             let text = fade(self.ui.palette_text, if selected { 1.0 } else { 0.88 });
@@ -192,7 +190,7 @@ impl Renderer {
                         size,
                         dim,
                     );
-                    width.min(available) + px(16.0)
+                    width.min(available) + self.px(16.0)
                 }
                 None => 0.0,
             };
@@ -215,7 +213,7 @@ impl Renderer {
             let track_x = panel_x + panel_width - padding * 0.5 - scrollbar_width;
             let track_h = layout.list_height;
             let thumb_h =
-                (track_h * visible_count as f32 / info.total_entries as f32).max(px(24.0));
+                (track_h * visible_count as f32 / info.total_entries as f32).max(self.px(24.0));
             let max_scroll = info.total_entries.saturating_sub(visible_count);
             let fraction = if max_scroll > 0 {
                 info.scroll_offset as f32 / max_scroll as f32

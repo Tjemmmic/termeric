@@ -56,31 +56,30 @@ impl Renderer {
         color: [f32; 4],
         background: [f32; 4],
     ) {
-        let px = |logical: f32| (logical * self.scale_factor).round().max(1.0);
         let (cx, cy) = (cx.round(), cy.round());
-        let ring = px(10.0);
+        let ring = self.px(10.0);
         self.rect_pipeline.push_rounded_rect(
-            cx - ring / 2.0 - px(1.0),
-            cy - ring / 2.0 - px(1.0),
+            cx - ring / 2.0 - self.px(1.0),
+            cy - ring / 2.0 - self.px(1.0),
             ring,
             ring,
             color,
             ring / 2.0,
         );
-        let hole = ring - px(3.0);
+        let hole = ring - self.px(3.0);
         self.rect_pipeline.push_rounded_rect(
-            cx - hole / 2.0 - px(1.0),
-            cy - hole / 2.0 - px(1.0),
+            cx - hole / 2.0 - self.px(1.0),
+            cy - hole / 2.0 - self.px(1.0),
             hole,
             hole,
             background,
             hole / 2.0,
         );
         self.rect_pipeline.push_line(
-            cx + px(2.0),
-            cy + px(2.0),
-            cx + px(5.0),
-            cy + px(5.0),
+            cx + self.px(2.0),
+            cy + self.px(2.0),
+            cx + self.px(5.0),
+            cy + self.px(5.0),
             (1.6 * self.scale_factor).max(1.0),
             color,
         );

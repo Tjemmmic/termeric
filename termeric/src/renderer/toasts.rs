@@ -91,18 +91,18 @@ impl Renderer {
                 w,
                 row_h,
                 [0.0, 0.0, 0.0, 0.25 * opacity],
-                CARD_CORNER_RADIUS,
+                self.px(CARD_CORNER_RADIUS),
             );
             self.rect_pipeline
-                .push_rounded_rect(x, y, w, row_h, bg, CARD_CORNER_RADIUS);
+                .push_rounded_rect(x, y, w, row_h, bg, self.px(CARD_CORNER_RADIUS));
             self.rect_pipeline.push_rounded_outline(
                 x,
                 y,
                 w,
                 row_h,
                 border_color,
-                CARD_CORNER_RADIUS,
-                BORDER_WIDTH,
+                self.px(CARD_CORNER_RADIUS),
+                self.px(BORDER_WIDTH),
             );
             // Left accent bar (severity indicator)
             self.rect_pipeline.push_rounded_rect(
