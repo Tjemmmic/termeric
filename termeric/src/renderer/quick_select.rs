@@ -30,19 +30,18 @@ impl Renderer {
             .max(1);
         let cursor_row = visible_row(info.cursor.row, scroll_offset, visible_rows);
 
-        // Four physical edges make the copy cursor distinguishable without
+        // An outlined cell makes the copy cursor distinguishable without
         // relying on hue or opacity alone.
         if let Some(visual_row) = cursor_row {
-            let x = offset_x + info.cursor.col as f32 * cell_width;
-            let y = offset_y + visual_row as f32 * cell_height;
-            let color = self.ui.palette_accent;
-            let edge = 2.0;
-            self.rect_pipeline.push_rect(x, y, cell_width, edge, color);
-            self.rect_pipeline
-                .push_rect(x, y + cell_height - edge, cell_width, edge, color);
-            self.rect_pipeline.push_rect(x, y, edge, cell_height, color);
-            self.rect_pipeline
-                .push_rect(x + cell_width - edge, y, edge, cell_height, color);
+            self.rect_pipeline.push_rounded_outline(
+                offset_x + info.cursor.col as f32 * cell_width,
+                offset_y + visual_row as f32 * cell_height,
+                cell_width,
+                cell_height,
+                self.ui.palette_accent,
+                0.0,
+                self.px(2.0),
+            );
         }
 
         for hint in &info.hints {
@@ -88,14 +87,15 @@ impl Renderer {
             with_alpha(self.ui.palette_bg, 0.96),
             3.0,
         );
+        // The status stops at the last whole cell inside the pane.
         let mut text_x = offset_x + cell_width;
-        for character in info.status.chars().take(pane_width as usize) {
-            self.text_pipeline
-                .push_char(character, text_x, status_y, self.ui.palette_text);
-            text_x += cell_width;
+        for character in info.status.chars() {
             if text_x + cell_width > offset_x + pane_width {
                 break;
             }
+            self.text_pipeline
+                .push_char(character, text_x, status_y, self.ui.palette_text);
+            text_x += cell_width;
         }
     }
 }
@@ -105,8 +105,7 @@ mod tests {
     use super::*;
     use crate::renderer::QuickSelectHintRenderInfo;
 
-    /// Golden contract for the scrollback-to-overlay coordinate mapping. The
-    /// actual native harness separately captures the rendered X11 surface.
+    /// Golden contract for the scrollback-to-overlay coordinate mapping.
     #[test]
     fn copy_and_hint_overlay_visual_rows_match_the_golden_snapshot() {
         let info = CopyModeRenderInfo {
