@@ -2,6 +2,7 @@
 //! confirming and uploading it to a live-domain pane.
 
 use super::*;
+use crate::ui::info_overlay::push_key_choice;
 use anyhow::Context as _;
 
 const MAX_DROPPED_PATH_BYTES: usize = 4_096;
@@ -224,7 +225,7 @@ impl App {
                         ),
                     ),
                 };
-                let lines = vec![
+                let mut lines = vec![
                     format!("Upload this local {noun} to the focused live-domain pane?"),
                     String::new(),
                     format!("Source: {}", source.display()),
@@ -234,27 +235,25 @@ impl App {
                     "The destination must not exist. Termeric will not overwrite it.".into(),
                     "After upload, the quoted remote path is inserted without Enter.".into(),
                     String::new(),
-                    "  U  Upload".into(),
-                    "  C  Cancel".into(),
                 ];
-                let request_id = self.info_overlay.show_choices(
-                    "Confirm live-domain upload",
-                    lines,
-                    vec![
-                        crate::ui::info_overlay::InfoOverlayChoice::new(
-                            "file-upload-confirm",
-                            "Upload",
-                            9,
-                            Some('u'),
-                        ),
-                        crate::ui::info_overlay::InfoOverlayChoice::new(
-                            "file-upload-cancel",
-                            "Cancel",
-                            10,
-                            Some('c'),
-                        ),
-                    ],
+                let mut choices = Vec::new();
+                push_key_choice(
+                    &mut lines,
+                    &mut choices,
+                    "file-upload-confirm",
+                    'u',
+                    "Upload",
                 );
+                push_key_choice(
+                    &mut lines,
+                    &mut choices,
+                    "file-upload-cancel",
+                    'c',
+                    "Cancel",
+                );
+                let request_id =
+                    self.info_overlay
+                        .show_choices("Confirm live-domain upload", lines, choices);
                 self.overlay_flow = Some(OverlayFlow::FileUpload(PendingFileUpload {
                     request_id,
                     source,

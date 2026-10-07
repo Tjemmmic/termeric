@@ -97,15 +97,15 @@ impl App {
             "Select a plugin to inspect its source, permissions, status, and actions.".into(),
             String::new(),
         ];
-        let install_line = lines.len();
-        lines.push("[I] Install local plugin".into());
-        lines.push(String::new());
-        let mut choices = vec![InfoOverlayChoice::new(
+        let mut choices = Vec::new();
+        push_key_choice(
+            &mut lines,
+            &mut choices,
             "install",
+            'i',
             "Install local plugin",
-            install_line,
-            Some('i'),
-        )];
+        );
+        lines.push(String::new());
         for (index, status) in statuses[start..end].iter().enumerate() {
             let health = if status.diagnostic.is_some() {
                 "error"
@@ -1022,14 +1022,9 @@ impl App {
                 ));
             }
             DeclarativeSetting::Boolean { .. } => {
-                let true_line = lines.len();
-                lines.push("[T] Set true".into());
-                let false_line = lines.len();
-                lines.push("[F] Set false".into());
-                let mut choices = vec![
-                    InfoOverlayChoice::new("value:true", "Set true", true_line, Some('t')),
-                    InfoOverlayChoice::new("value:false", "Set false", false_line, Some('f')),
-                ];
+                let mut choices = Vec::new();
+                push_key_choice(&mut lines, &mut choices, "value:true", 't', "Set true");
+                push_key_choice(&mut lines, &mut choices, "value:false", 'f', "Set false");
                 add_setting_navigation_choices(&mut lines, &mut choices, configured, false, false);
                 self.show_runtime_plugin_setting_choices(
                     plugin_id,
@@ -1153,17 +1148,14 @@ impl App {
                 "Remove the installed copy and its registry entry. The source directory is left alone.",
             ),
         };
-        let lines = vec![
+        let mut lines = vec![
             format!("Plugin: {plugin_id}"),
             explanation.into(),
             String::new(),
-            "[Y] Confirm".into(),
-            "[N] Cancel".into(),
         ];
-        let choices = vec![
-            InfoOverlayChoice::new("confirm", "Confirm", 3, Some('y')),
-            InfoOverlayChoice::new("cancel", "Cancel", 4, Some('n')),
-        ];
+        let mut choices = Vec::new();
+        push_key_choice(&mut lines, &mut choices, "confirm", 'y', "Confirm");
+        push_key_choice(&mut lines, &mut choices, "cancel", 'n', "Cancel");
         let request_id = self.info_overlay.show_choices(title, lines, choices);
         self.overlay_flow = Some(OverlayFlow::RuntimePlugins(
             PendingRuntimePluginManagement {
@@ -1210,12 +1202,10 @@ impl App {
                 plugin_id, page, ..
             } => (Some(plugin_id.clone()), *page),
         };
-        let lines = vec![error.into(), String::new(), "[B] Back".into()];
-        let request_id = self.info_overlay.show_choices(
-            title,
-            lines,
-            vec![InfoOverlayChoice::new("back", "Back", 2, Some('b'))],
-        );
+        let mut lines = vec![error.into(), String::new()];
+        let mut choices = Vec::new();
+        push_key_choice(&mut lines, &mut choices, "back", 'b', "Back");
+        let request_id = self.info_overlay.show_choices(title, lines, choices);
         self.overlay_flow = Some(OverlayFlow::RuntimePlugins(
             PendingRuntimePluginManagement {
                 request_id,
