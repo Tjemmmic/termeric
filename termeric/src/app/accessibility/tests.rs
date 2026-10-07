@@ -315,6 +315,49 @@ fn f6_walks_the_chrome_and_enter_activates_what_has_focus() {
 }
 
 #[test]
+fn a_screen_reader_click_on_close_tab_hands_the_keyboard_back_like_f6_enter() {
+    use winit::keyboard::{Key, NamedKey};
+    let config = Config {
+        shell: crate::test_support::sleeping_shell(),
+        ..Config::default()
+    };
+    let mut app = App::new_headless_with_tabs(config);
+    app.handle_action(crate::input::Action::NewTab);
+    assert_eq!(app.tabs.as_ref().unwrap().count(), 2);
+
+    app.handle_accessibility_action(click(tab_close_node(0)));
+    let closing = |app: &App| {
+        app.tabs
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(_, tab)| tab.is_closing())
+            .count()
+    };
+    assert_eq!(closing(&app), 1);
+    assert_eq!(app.accessibility.keyboard_focus, ChromeFocus::Terminal);
+    assert_eq!(app.accessibility.focus_override, None);
+    assert_eq!(app.chrome_focus_render_target(), None);
+    // Keys reach the terminal again instead of the chrome swallowing them.
+    assert!(!app.handle_chrome_keyboard(&Key::Character("a".into()), ElementState::Pressed));
+    assert!(!app.handle_chrome_keyboard(&Key::Named(NamedKey::Enter), ElementState::Pressed));
+
+    // Focus alone moves the focus ring without acting, as F6 and the arrows do.
+    app.handle_accessibility_action(ActionRequest {
+        action: Action::Focus,
+        target_tree: TreeId::ROOT,
+        target_node: tab_close_node(0),
+        data: None,
+    });
+    assert_eq!(closing(&app), 1);
+    assert_eq!(app.accessibility.keyboard_focus, ChromeFocus::CloseTab(0));
+    assert_eq!(app.accessibility.focus_override, Some(tab_close_node(0)));
+    // A control that is not drawn takes no focus.
+    app.handle_accessibility_action(click(tab_close_node(5)));
+    assert_eq!(app.accessibility.keyboard_focus, ChromeFocus::CloseTab(0));
+}
+
+#[test]
 fn dispatched_primary_press_returns_chrome_focus_to_terminal() {
     let mut app = App::new_headless(Config::default()).unwrap();
     for focus in [

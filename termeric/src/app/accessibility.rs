@@ -807,34 +807,9 @@ impl App {
         if !matches!(request.action, Action::Click | Action::Focus) {
             return;
         }
-        self.accessibility.focus_override = Some(request.target_node);
         let id = request.target_node.0;
-        if (TAB_BASE..PANE_BASE).contains(&id) {
-            let offset = id - TAB_BASE;
-            let index = (offset / 2) as usize;
-            self.accessibility.keyboard_focus = if offset.is_multiple_of(2) {
-                ChromeFocus::Tab(index)
-            } else {
-                ChromeFocus::CloseTab(index)
-            };
-            if offset.is_multiple_of(2) {
-                let from = self
-                    .tabs
-                    .as_ref()
-                    .map(TabManager::active_index)
-                    .unwrap_or(0);
-                if let Some(tabs) = &mut self.tabs {
-                    tabs.switch_to(index);
-                }
-                if from != index {
-                    self.refresh_focused_terminal_surfaces();
-                }
-            } else if request.action == Action::Click {
-                self.handle_action(crate::input::Action::SwitchToTab(index));
-                self.handle_action(crate::input::Action::CloseTab);
-                self.accessibility.focus_override = None;
-            }
-        } else if (PANE_BASE..LINE_BASE).contains(&id) {
+        if (PANE_BASE..LINE_BASE).contains(&id) {
+            self.accessibility.focus_override = Some(request.target_node);
             self.accessibility.keyboard_focus = ChromeFocus::Terminal;
             let pane_id = PaneId((id - PANE_BASE) as u32);
             if let Some(tab) = self.tabs.as_mut().and_then(TabManager::active_tab_mut)
@@ -845,50 +820,19 @@ impl App {
                 self.refresh_focused_terminal_surfaces();
                 self.accessibility.focus_override = None;
             }
+        } else if let Some(focus) = self
+            .chrome_focus_sequence()
+            .into_iter()
+            .find(|focus| focus.node() == Some(request.target_node))
+        {
+            // A screen reader moves the F6 focus ring, and its Click is F6 +
+            // Enter on that control: one path, so both leave the same state.
+            self.set_chrome_focus(focus);
+            if request.action == Action::Click {
+                self.activate_chrome_focus();
+            }
         } else {
-            let focus = match request.target_node {
-                NEW_TAB => ChromeFocus::NewTab,
-                WORKSPACES => ChromeFocus::Workspaces,
-                COMMANDS => ChromeFocus::Commands,
-                SETTINGS => ChromeFocus::Settings,
-                PREVIOUS_TAB => ChromeFocus::PreviousTab,
-                NEXT_TAB => ChromeFocus::NextTab,
-                _ => self.accessibility.keyboard_focus,
-            };
-            self.accessibility.keyboard_focus = focus;
-            if let Some(renderer) = &mut self.renderer {
-                renderer.set_tab_bar_keyboard_focus(focus.render_target());
-            }
-            if request.action != Action::Click {
-                self.request_redraw(RedrawReason::Accessibility);
-                return;
-            }
-            match request.target_node {
-                NEW_TAB => {
-                    self.handle_action(crate::input::Action::NewTab);
-                    self.accessibility.focus_override = None;
-                    self.accessibility.keyboard_focus = ChromeFocus::Terminal;
-                }
-                WORKSPACES => self.toggle_workspace_menu(true),
-                COMMANDS => self.commands_panel.toggle(),
-                SETTINGS => self.toggle_settings_surface(),
-                PREVIOUS_TAB => {
-                    self.handle_action(crate::input::Action::PrevTab);
-                    self.accessibility.focus_override = None;
-                    self.accessibility.keyboard_focus = ChromeFocus::Terminal;
-                }
-                NEXT_TAB => {
-                    self.handle_action(crate::input::Action::NextTab);
-                    self.accessibility.focus_override = None;
-                    self.accessibility.keyboard_focus = ChromeFocus::Terminal;
-                }
-                _ => {}
-            }
-            if self.accessibility.keyboard_focus == ChromeFocus::Terminal
-                && let Some(renderer) = &mut self.renderer
-            {
-                renderer.set_tab_bar_keyboard_focus(None);
-            }
+            self.accessibility.focus_override = Some(request.target_node);
         }
         self.request_redraw(RedrawReason::Accessibility);
     }
