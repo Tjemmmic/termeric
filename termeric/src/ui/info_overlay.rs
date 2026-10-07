@@ -602,6 +602,16 @@ impl InfoOverlay {
         })?
     }
 
+    /// Whether C copies the notice: a choice bound to C takes the key
+    /// instead. Choice shortcuts are lower-case, as `push_key_choice` draws
+    /// them upper-case.
+    pub fn copy_key_free(&self) -> bool {
+        !self
+            .choices
+            .iter()
+            .any(|choice| choice.shortcut == Some('c'))
+    }
+
     pub fn set_viewport(&mut self, rows: usize, columns: usize) {
         self.viewport.resize(rows, columns);
         self.ensure_focus_visible();

@@ -198,6 +198,40 @@ fn live_domain_drop_requires_request_scoped_confirmation_without_reading_content
     assert!(app.pending_file_upload().is_none());
 }
 
+#[test]
+fn c_cancels_the_live_domain_upload_confirmation_instead_of_copying_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("upload.bin");
+    std::fs::write(&source, b"never sent").unwrap();
+    let config = Config {
+        shell: crate::test_support::sleeping_shell(),
+        ..Config::default()
+    };
+    let mut app = App::new_headless_with_tabs(config);
+    let (clipboard, memory) = super::super::clipboard::Clipboard::in_memory();
+    app.clipboard = clipboard;
+    app.live_domain_authority = Some(crate::domain::DomainAuthority::Local);
+    app.tabs
+        .as_mut()
+        .unwrap()
+        .active_tab_mut()
+        .unwrap()
+        .live_domain = Some(crate::tabs::LiveDomainTab {
+        domain_id: "domain-upload".into(),
+        tab_id: 7,
+        pane_ids: HashMap::from([(PaneId(0), 42)]),
+    });
+
+    assert!(app.handle_dropped_path(&source));
+    let request_id = app.info_overlay.request_id();
+    assert!(app.info_overlay.is_awaiting(request_id));
+    app.handle_info_overlay_key(&winit::keyboard::Key::Character("c".into()), false);
+
+    assert!(!app.info_overlay.is_awaiting(request_id));
+    assert!(app.pending_file_upload().is_none());
+    assert_eq!(memory.lock().unwrap().clipboard, None);
+}
+
 fn kitty_send_request(id: &str) -> termeric_core::KittyFileTransferCommand {
     termeric_core::KittyFileTransferCommand {
         action: termeric_core::KittyFileTransferAction::Send,

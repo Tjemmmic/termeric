@@ -424,3 +424,27 @@ fn a_finished_mouse_selection_fills_primary_and_with_copy_on_select_the_clipboar
     app.finish_native_selection();
     assert_eq!(memory.lock().unwrap().primary.as_deref(), Some("text"));
 }
+
+#[test]
+fn c_copies_a_notice_whose_choices_leave_c_free() {
+    let mut app = App::new_headless(Config::default()).unwrap();
+    let (clipboard, memory) = super::super::clipboard::Clipboard::in_memory();
+    app.clipboard = clipboard;
+    let request_id = app.info_overlay.show_choices(
+        "Question",
+        vec!["Go on?".into(), "  Y  Yes".into()],
+        vec![crate::ui::info_overlay::InfoOverlayChoice::new(
+            "yes",
+            "Yes",
+            1,
+            Some('y'),
+        )],
+    );
+    app.handle_info_overlay_key(&winit::keyboard::Key::Character("c".into()), false);
+
+    assert!(app.info_overlay.is_awaiting(request_id));
+    assert_eq!(
+        memory.lock().unwrap().clipboard.as_deref(),
+        Some("Go on?\n  Y  Yes")
+    );
+}

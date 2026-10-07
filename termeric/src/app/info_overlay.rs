@@ -81,25 +81,26 @@ impl App {
                     }
                 }
                 _ if let Some(scroll) = scroll => scroll_action(scroll),
-                Key::Character(character) if character.as_str().eq_ignore_ascii_case("c") => {
-                    InfoOverlayAction::Copy { request_id }
-                }
-                // A held key must not pick a choice it did not
-                // mean to reach.
-                Key::Character(_) if repeat => InfoOverlayAction::None,
-                Key::Character(character) => character
-                    .as_str()
-                    .chars()
-                    .next()
-                    .and_then(|shortcut| {
+                Key::Character(character) => {
+                    let choice = character.as_str().chars().next().and_then(|shortcut| {
                         self.info_overlay.choice_for_shortcut(request_id, shortcut)
-                    })
-                    .map_or(InfoOverlayAction::None, |choice| {
-                        InfoOverlayAction::Choose {
+                    });
+                    match choice {
+                        // A held key must not pick a choice it did not
+                        // mean to reach.
+                        Some(_) if repeat => InfoOverlayAction::None,
+                        Some(choice) => InfoOverlayAction::Choose {
                             request_id,
                             choice_id: choice.id.clone(),
+                        },
+                        None if character.as_str().eq_ignore_ascii_case("c")
+                            && self.info_overlay.copy_key_free() =>
+                        {
+                            InfoOverlayAction::Copy { request_id }
                         }
-                    }),
+                        None => InfoOverlayAction::None,
+                    }
+                }
                 _ => InfoOverlayAction::None,
             }
         };

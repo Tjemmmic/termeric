@@ -1883,3 +1883,47 @@ fn earlier_claude_conversations_come_from_the_configured_directory() {
     assert_eq!(past.len(), 1);
     assert_eq!(past[0].title, "Plan the release");
 }
+
+#[test]
+fn c_cancels_the_agent_status_setup_instead_of_copying_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let program = temp.path().join("claude");
+    std::fs::write(&program, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let config_dir = temp.path().join("claude-config");
+    let mut app = App::new_headless(Config::default()).unwrap();
+    let (clipboard, memory) = super::super::clipboard::Clipboard::in_memory();
+    app.clipboard = clipboard;
+    app.agents = crate::agents::AgentCatalog::from_config(&std::collections::BTreeMap::from([
+        (
+            "claude-code".to_owned(),
+            crate::agents::AgentConfig {
+                program: Some(program.display().to_string()),
+                env: std::collections::BTreeMap::from([(
+                    "CLAUDE_CONFIG_DIR".to_owned(),
+                    config_dir.display().to_string(),
+                )]),
+                ..Default::default()
+            },
+        ),
+        (
+            "codex".to_owned(),
+            crate::agents::AgentConfig {
+                enabled: Some(false),
+                ..Default::default()
+            },
+        ),
+    ]));
+
+    app.open_agent_hook_setup(true);
+    let request_id = app.info_overlay.request_id();
+    assert!(app.info_overlay.is_awaiting(request_id));
+    assert!(app.pending_hook_change.is_some());
+    app.handle_info_overlay_key(&winit::keyboard::Key::Character("c".into()), false);
+
+    assert!(!app.info_overlay.is_awaiting(request_id));
+    assert!(app.pending_hook_change.is_none());
+    assert_eq!(memory.lock().unwrap().clipboard, None);
+    assert!(!config_dir.join("settings.json").exists());
+}

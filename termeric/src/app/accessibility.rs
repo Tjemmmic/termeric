@@ -3742,7 +3742,9 @@ impl App {
 
         let mut copy = Node::new(Role::Button);
         copy.set_label("Copy notice content");
-        copy.set_keyboard_shortcut("C");
+        if self.info_overlay.copy_key_free() {
+            copy.set_keyboard_shortcut("C");
+        }
         copy.set_bounds(bounds_rect(layout.copy_button));
         if awaiting {
             copy.add_action(Action::Click);
