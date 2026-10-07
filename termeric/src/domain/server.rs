@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
@@ -481,9 +481,7 @@ pub fn run_foreground(
     log::debug!("Domain runtime directory: {}", paths.directory.display());
     let token = paths.load_or_create_token()?;
     prepare_socket_path(&paths)?;
-    let listener = UnixListener::bind(&paths.socket)
-        .with_context(|| format!("bind local domain socket {}", paths.socket.display()))?;
-    fs::set_permissions(&paths.socket, fs::Permissions::from_mode(0o600))?;
+    let listener = local_socket::bind_private(&paths.socket, "local domain socket")?;
 
     let shutdown = Arc::new(AtomicBool::new(false));
     let state = Arc::new(Mutex::new(ServerState {
@@ -2717,6 +2715,7 @@ mod topology_lifecycle_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::net::UnixListener;
 
     fn read_graphics_attachment_snapshot(stream: &mut UnixStream) -> Vec<u8> {
         let mut snapshot = Vec::new();

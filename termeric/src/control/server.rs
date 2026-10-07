@@ -9,8 +9,6 @@ use crate::app::AppEvent;
 use crate::deadline_io::{Deadline, PollReader, SocketWriter};
 use crate::local_socket::{self, OwnedFile};
 use anyhow::Context;
-use std::fs;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -46,15 +44,7 @@ impl ControlServer {
     ) -> anyhow::Result<Self> {
         let paths = &endpoint.paths;
         let token = paths.load_or_create_token()?;
-        let listener = UnixListener::bind(&paths.socket)
-            .with_context(|| format!("bind GUI control socket {}", paths.socket.display()))?;
-        fs::set_permissions(&paths.socket, fs::Permissions::from_mode(0o600))?;
-        let metadata = fs::symlink_metadata(&paths.socket)?;
-        if metadata.uid() != local_socket::effective_uid()
-            || metadata.permissions().mode() & 0o777 != 0o600
-        {
-            anyhow::bail!("GUI control socket could not be secured to mode 0600");
-        }
+        let listener = local_socket::bind_private(&paths.socket, "GUI control socket")?;
 
         let shutdown = Arc::new(AtomicBool::new(false));
         let server_shutdown = Arc::clone(&shutdown);

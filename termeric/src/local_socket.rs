@@ -359,6 +359,24 @@ pub(crate) fn wake(socket: &Path) {
     let _ = UnixStream::connect(socket);
 }
 
+/// Listens at `path`, which only this user may then connect to: the socket
+/// is set to mode 0600 and checked to be this user's 0600 socket after.
+/// `what` names it in errors.
+pub(crate) fn bind_private(path: &Path, what: &str) -> anyhow::Result<UnixListener> {
+    let listener =
+        UnixListener::bind(path).with_context(|| format!("bind {what} {}", path.display()))?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("secure {what} {}", path.display()))?;
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_socket()
+        || metadata.uid() != effective_uid()
+        || metadata.permissions().mode() & 0o777 != 0o600
+    {
+        anyhow::bail!("{what} could not be secured to mode 0600");
+    }
+    Ok(listener)
+}
+
 /// What a server found at its socket path before binding there.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum SocketPath {
@@ -622,6 +640,20 @@ mod tests {
             received.try_recv().is_err(),
             "the waking connection was served"
         );
+    }
+
+    #[test]
+    fn private_sockets_are_this_users_alone() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket = temp.path().join("fixture.sock");
+        let _listener = bind_private(&socket, "fixture socket").unwrap();
+        let metadata = fs::symlink_metadata(&socket).unwrap();
+        assert!(metadata.file_type().is_socket());
+        assert_eq!(metadata.uid(), effective_uid());
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        UnixStream::connect(&socket).unwrap();
+        // A second server cannot take the path over.
+        assert!(bind_private(&socket, "fixture socket").is_err());
     }
 
     #[test]
