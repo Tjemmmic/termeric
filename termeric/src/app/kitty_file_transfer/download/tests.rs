@@ -1611,7 +1611,7 @@ fn publication_uses_staging_inode_not_replacement_name() {
             let destination = root.path().join("published");
             let result = PublicationTarget::open(&destination)
                 .unwrap()
-                .publish(staged);
+                .publish(StagedFile::from(staged));
             if remove_original {
                 assert!(
                     result.is_err(),
@@ -1662,7 +1662,7 @@ fn publication_retains_parent_after_ancestor_replacement() {
                 replacement_parent,
             } = replace_parent(root.path(), replace_ancestor, symbolic);
             let before = fs::metadata(&replacement_parent).unwrap();
-            let published = target.publish(staged).unwrap();
+            let published = target.publish(StagedFile::from(staged)).unwrap();
             let metadata = published.metadata().unwrap();
             assert_eq!(
                 (metadata.dev(), metadata.ino()),
@@ -1720,7 +1720,7 @@ fn publication_never_overwrites_existing_symlinks() {
         let staging_path = staged.path().to_owned();
         let error = PublicationTarget::open(&destination)
             .unwrap()
-            .publish(staged)
+            .publish(StagedFile::from(staged))
             .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
         assert!(!staging_path.exists());
@@ -1757,7 +1757,7 @@ fn staged_file_metadata_is_complete_before_publication() {
             assert_eq!(prepared.permissions().mode() & 0o777, mode);
             let published = PublicationTarget::open(&destination)
                 .unwrap()
-                .publish(staged)
+                .publish(StagedFile::from(staged))
                 .unwrap();
             let after = published.metadata().unwrap();
             assert_eq!((after.dev(), after.ino()), (prepared.dev(), prepared.ino()));
@@ -1813,7 +1813,7 @@ fn prepared_file_does_not_change_an_existing_destination() {
     prepare_staged_file(staged.as_file(), 0o000, Some(-1)).unwrap();
     let error = PublicationTarget::open(&destination)
         .unwrap()
-        .publish(staged)
+        .publish(StagedFile::from(staged))
         .unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
     drop(error);

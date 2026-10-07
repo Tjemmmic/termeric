@@ -769,35 +769,33 @@ fn create_hard_link(
     created: &mut Vec<CreatedPath>,
 ) -> io::Result<()> {
     ensure_creation_capacity(created)?;
-    {
-        // source is only a transaction lookup key. Its current pathname
-        // cannot grant authority to link or timestamp a replacement inode.
-        let entry = created
-            .iter()
-            .find(|entry| entry.path == source && entry.kind == CreatedKind::File)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "source was not recorded"))?;
-        let file = entry._identity_guard.as_ref().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::PermissionDenied, "source handle is missing")
-        })?;
-        let identity = file.metadata()?;
-        if !identity.is_file() || identity.dev() != entry.device || identity.ino() != entry.inode {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "source handle does not match its recorded regular-file identity",
-            ));
-        }
-        let published = PublicationTarget::open(destination)?.link_file(file)?;
-        // Record directly from the known source, not a fresh destination
-        // lookup that could observe an intervening replacement.
-        created.push(CreatedPath {
-            path: destination.to_owned(),
-            device: identity.dev(),
-            inode: identity.ino(),
-            kind: CreatedKind::File,
-            _identity_guard: Some(published),
-        });
-        Ok(())
+    // source is only a transaction lookup key. Its current pathname
+    // cannot grant authority to link or timestamp a replacement inode.
+    let entry = created
+        .iter()
+        .find(|entry| entry.path == source && entry.kind == CreatedKind::File)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "source was not recorded"))?;
+    let file = entry._identity_guard.as_ref().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::PermissionDenied, "source handle is missing")
+    })?;
+    let identity = file.metadata()?;
+    if !identity.is_file() || identity.dev() != entry.device || identity.ino() != entry.inode {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "source handle does not match its recorded regular-file identity",
+        ));
     }
+    let published = PublicationTarget::open(destination)?.link_file(file)?;
+    // Record directly from the known source, not a fresh destination
+    // lookup that could observe an intervening replacement.
+    created.push(CreatedPath {
+        path: destination.to_owned(),
+        device: identity.dev(),
+        inode: identity.ino(),
+        kind: CreatedKind::File,
+        _identity_guard: Some(published),
+    });
+    Ok(())
 }
 
 struct StagedFile {
@@ -970,8 +968,7 @@ impl PublicationTarget {
         ensure_directory_access(entry)
     }
 
-    fn publish(self, temporary: impl Into<StagedFile>) -> io::Result<File> {
-        let temporary = temporary.into();
+    fn publish(self, temporary: StagedFile) -> io::Result<File> {
         self.link_file(temporary.as_file())
     }
 
@@ -1206,6 +1203,8 @@ fn create_directory(path: &Path, created: &mut Vec<CreatedPath>) -> io::Result<(
 }
 
 fn ensure_directory_access(entry: &mut CreatedPath) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+
     let directory = entry._identity_guard.as_ref().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -1223,36 +1222,32 @@ fn ensure_directory_access(entry: &mut CreatedPath) -> io::Result<()> {
             "directory handle does not match its recorded identity",
         ));
     }
-    {
-        use std::os::fd::AsRawFd;
-        // SAFETY: directory owns a live descriptor; F_GETFL takes no
-        // additional argument and does not mutate descriptor state.
-        let flags = unsafe { libc::fcntl(directory.as_raw_fd(), libc::F_GETFL) };
-        if flags < 0 {
-            return Err(io::Error::last_os_error());
+    // SAFETY: directory owns a live descriptor; F_GETFL takes no
+    // additional argument and does not mutate descriptor state.
+    let flags = unsafe { libc::fcntl(directory.as_raw_fd(), libc::F_GETFL) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if flags & libc::O_PATH != 0 {
+        // This trusted procfs magic link names the retained inode,
+        // even if the destination/ancestor pathname was replaced.
+        // Keep directory borrowed until reopening is complete. If
+        // procfs is unavailable, fail without a destination fallback.
+        let proc_path = format!("/proc/self/fd/{}", directory.as_raw_fd());
+        fs::set_permissions(&proc_path, Permissions::from_mode(0o700))?;
+        let upgraded = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NONBLOCK)
+            .open(&proc_path)?;
+        let metadata = upgraded.metadata()?;
+        if !metadata.is_dir() || metadata.dev() != entry.device || metadata.ino() != entry.inode {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "reopened directory does not match its recorded identity",
+            ));
         }
-        if flags & libc::O_PATH != 0 {
-            // This trusted procfs magic link names the retained inode,
-            // even if the destination/ancestor pathname was replaced.
-            // Keep directory borrowed until reopening is complete. If
-            // procfs is unavailable, fail without a destination fallback.
-            let proc_path = format!("/proc/self/fd/{}", directory.as_raw_fd());
-            fs::set_permissions(&proc_path, Permissions::from_mode(0o700))?;
-            let upgraded = fs::OpenOptions::new()
-                .read(true)
-                .custom_flags(libc::O_DIRECTORY | libc::O_NONBLOCK)
-                .open(&proc_path)?;
-            let metadata = upgraded.metadata()?;
-            if !metadata.is_dir() || metadata.dev() != entry.device || metadata.ino() != entry.inode
-            {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "reopened directory does not match its recorded identity",
-                ));
-            }
-            entry._identity_guard = Some(upgraded);
-            return Ok(());
-        }
+        entry._identity_guard = Some(upgraded);
+        return Ok(());
     }
     directory.set_permissions(Permissions::from_mode(0o700))
 }
@@ -1320,59 +1315,56 @@ fn record_created(
     record_created_with(path, kind, created, |path| fs::symlink_metadata(path))
 }
 
+/// [`record_created`], observing the path's identity with `inspect`, which
+/// tests use to fail the observation while the path is being replaced.
 fn record_created_with(
     path: &Path,
     kind: CreatedKind,
     created: &mut Vec<CreatedPath>,
     inspect: impl FnOnce(&Path) -> io::Result<fs::Metadata>,
 ) -> io::Result<()> {
-    match inspect(path) {
-        Ok(metadata) => {
-            let kind_matches = match kind {
-                CreatedKind::Directory => metadata.is_dir(),
-                CreatedKind::File => metadata.is_file(),
-                CreatedKind::Symlink => metadata.file_type().is_symlink(),
-            };
-            if !kind_matches {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "created path changed type before its identity was recorded",
-                ));
-            }
-            // Bookkeeping must never open a symbolic link's target: it
-            // could be a FIFO/device, and a followed handle would not pin
-            // the link's inode anyway. Linux O_PATH pins even dangling
-            // symlinks without opening their contents or requiring readers.
-            let identity_guard = if kind == CreatedKind::Directory {
-                // Retain an fchmod-capable handle before final permissions
-                // can remove owner access needed by rollback.
-                open_directory_identity(path)
-            } else {
-                let flags = libc::O_PATH | libc::O_NOFOLLOW;
-                fs::OpenOptions::new()
-                    .read(true)
-                    .custom_flags(flags)
-                    .open(path)
-            }
-            .ok()
-            .filter(|file| {
-                file.metadata().is_ok_and(|opened| {
-                    opened.dev() == metadata.dev() && opened.ino() == metadata.ino()
-                })
-            });
-            created.push(CreatedPath {
-                path: path.to_path_buf(),
-                device: metadata.dev(),
-                inode: metadata.ino(),
-                kind,
-                _identity_guard: identity_guard,
-            });
-            Ok(())
-        }
-        // Without an observed identity there is no safe cleanup authority:
-        // the pathname might already refer to somebody else's replacement.
-        Err(error) => Err(error),
+    // Without an observed identity there is no safe cleanup authority: the
+    // pathname might already refer to somebody else's replacement.
+    let metadata = inspect(path)?;
+    let kind_matches = match kind {
+        CreatedKind::Directory => metadata.is_dir(),
+        CreatedKind::File => metadata.is_file(),
+        CreatedKind::Symlink => metadata.file_type().is_symlink(),
+    };
+    if !kind_matches {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "created path changed type before its identity was recorded",
+        ));
     }
+    // Bookkeeping must never open a symbolic link's target: it could be a
+    // FIFO/device, and a followed handle would not pin the link's inode
+    // anyway. Linux O_PATH pins even dangling symlinks without opening their
+    // contents or requiring readers.
+    let identity_guard = if kind == CreatedKind::Directory {
+        // Retain an fchmod-capable handle before final permissions can
+        // remove owner access needed by rollback.
+        open_directory_identity(path)
+    } else {
+        let flags = libc::O_PATH | libc::O_NOFOLLOW;
+        fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(flags)
+            .open(path)
+    }
+    .ok()
+    .filter(|file| {
+        file.metadata()
+            .is_ok_and(|opened| opened.dev() == metadata.dev() && opened.ino() == metadata.ino())
+    });
+    created.push(CreatedPath {
+        path: path.to_path_buf(),
+        device: metadata.dev(),
+        inode: metadata.ino(),
+        kind,
+        _identity_guard: identity_guard,
+    });
+    Ok(())
 }
 
 fn rollback_paths(created: &[CreatedPath]) {
@@ -1430,46 +1422,45 @@ fn check_cancel(cancellation: &AtomicBool, file_id: &str) -> Result<(), Transact
 }
 
 fn apply_link_mtime(entry: &CreatedPath, mtime_ns: Option<i64>) -> io::Result<()> {
-    {
-        use std::os::fd::AsRawFd;
+    use std::os::fd::AsRawFd;
 
-        let Some(mtime_ns) = mtime_ns else {
-            return Ok(());
-        };
-        let file = entry._identity_guard.as_ref().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::PermissionDenied, "link handle is missing")
-        })?;
-        let metadata = file.metadata()?;
-        let kind_matches = match entry.kind {
-            CreatedKind::Symlink => metadata.file_type().is_symlink(),
-            CreatedKind::File => metadata.is_file(),
-            CreatedKind::Directory => false,
-        };
-        if !kind_matches || metadata.dev() != entry.device || metadata.ino() != entry.inode {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "link handle does not match its recorded identity",
-            ));
-        }
-        let times = timestamp_times(mtime_ns)?;
-        // SAFETY: file owns the live descriptor, c"" is NUL-terminated,
-        // and times contains exactly two initialized timespec values.
-        // AT_EMPTY_PATH operates on the pinned O_PATH inode; NOFOLLOW
-        // keeps symlink timestamps on the link, never its target. Do not
-        // fall back to a pathname if this requires a newer kernel.
-        let result = unsafe {
-            libc::utimensat(
-                file.as_raw_fd(),
-                c"".as_ptr(),
-                times.as_ptr(),
-                libc::AT_EMPTY_PATH | libc::AT_SYMLINK_NOFOLLOW,
-            )
-        };
-        if result == 0 {
-            Ok(())
-        } else {
-            Err(io::Error::last_os_error())
-        }
+    let Some(mtime_ns) = mtime_ns else {
+        return Ok(());
+    };
+    let file = entry
+        ._identity_guard
+        .as_ref()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::PermissionDenied, "link handle is missing"))?;
+    let metadata = file.metadata()?;
+    let kind_matches = match entry.kind {
+        CreatedKind::Symlink => metadata.file_type().is_symlink(),
+        CreatedKind::File => metadata.is_file(),
+        CreatedKind::Directory => false,
+    };
+    if !kind_matches || metadata.dev() != entry.device || metadata.ino() != entry.inode {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "link handle does not match its recorded identity",
+        ));
+    }
+    let times = timestamp_times(mtime_ns)?;
+    // SAFETY: file owns the live descriptor, c"" is NUL-terminated,
+    // and times contains exactly two initialized timespec values.
+    // AT_EMPTY_PATH operates on the pinned O_PATH inode; NOFOLLOW
+    // keeps symlink timestamps on the link, never its target. Do not
+    // fall back to a pathname if this requires a newer kernel.
+    let result = unsafe {
+        libc::utimensat(
+            file.as_raw_fd(),
+            c"".as_ptr(),
+            times.as_ptr(),
+            libc::AT_EMPTY_PATH | libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
     }
 }
 
