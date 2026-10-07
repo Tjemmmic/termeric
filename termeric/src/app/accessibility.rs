@@ -894,8 +894,6 @@ impl App {
                         self.search_cursor_pos = value.len();
                         self.ime.clear_preedit();
                         self.accessibility.focus_override = Some(SEARCH_INPUT);
-                        self.redraw_scheduler
-                            .request(redraw_scheduler::RedrawReason::Accessibility);
                     }
                 }
                 _ => {}
@@ -1410,8 +1408,6 @@ impl App {
                     if self.settings_panel.accessibility_set_filter(value) {
                         self.ime.clear_preedit();
                         self.accessibility.focus_override = Some(SETTINGS_INPUT);
-                        self.redraw_scheduler
-                            .request(redraw_scheduler::RedrawReason::Accessibility);
                     }
                 }
                 _ => {}
@@ -1430,8 +1426,6 @@ impl App {
                 }
                 _ => {}
             }
-            self.redraw_scheduler
-                .request(redraw_scheduler::RedrawReason::Accessibility);
             return;
         }
         let Some(target) = self
@@ -1452,8 +1446,6 @@ impl App {
                 Action::Click => {
                     self.settings_panel.select_page(page);
                     self.accessibility.focus_override = Some(request.target_node);
-                    self.redraw_scheduler
-                        .request(redraw_scheduler::RedrawReason::Accessibility);
                 }
                 Action::Focus => self.accessibility.focus_override = Some(request.target_node),
                 _ => {}
@@ -1578,8 +1570,6 @@ impl App {
                     if self.shortcuts_panel.accessibility_set_filter(value) {
                         self.ime.clear_preedit();
                         self.accessibility.focus_override = Some(SHORTCUTS_INPUT);
-                        self.redraw_scheduler
-                            .request(redraw_scheduler::RedrawReason::Accessibility);
                     }
                 }
                 _ => {}
@@ -1837,8 +1827,6 @@ impl App {
                         };
                         if accepted {
                             self.ime.clear_preedit();
-                            self.redraw_scheduler
-                                .request(redraw_scheduler::RedrawReason::Accessibility);
                             self.accessibility.focus_override = Some(request.target_node);
                         }
                     }
@@ -1953,8 +1941,6 @@ impl App {
                     if self.session_panel.accessibility_set_rename(value) {
                         self.ime.clear_preedit();
                         self.accessibility.focus_override = Some(SESSION_RENAME_INPUT);
-                        self.redraw_scheduler
-                            .request(redraw_scheduler::RedrawReason::Accessibility);
                     }
                 }
                 _ => {}
@@ -2246,7 +2232,6 @@ impl App {
                 self.agent_view.state.focus = focus;
                 self.agent_view.state.focus_visible = true;
                 self.reveal_agent_view_target(&target);
-                self.request_redraw(RedrawReason::Action);
             }
             _ => {}
         }
