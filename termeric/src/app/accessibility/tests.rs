@@ -4444,3 +4444,19 @@ fn a_headless_tree_spans_the_window_its_dialogs_are_laid_out_in() {
     assert!(dialog.x0 >= window.x0 && dialog.x1 <= window.x1);
     assert!(dialog.y0 >= window.y0 && dialog.y1 <= window.y1);
 }
+
+#[test]
+fn a_text_caret_counts_characters_and_an_off_boundary_one_goes_to_the_end() {
+    let caret = |cursor_byte| {
+        let mut node = Node::new(Role::TextInput);
+        set_text_value(&mut node, SEARCH_INPUT, "aé😀b", cursor_byte);
+        node.text_selection()
+            .map(|selection| selection.focus.character_index)
+    };
+    assert_eq!(caret(None), None);
+    assert_eq!(caret(Some(0)), Some(0));
+    assert_eq!(caret(Some(3)), Some(2), "after the two-byte é");
+    assert_eq!(caret(Some(7)), Some(3), "after the four-byte emoji");
+    assert_eq!(caret(Some(2)), Some(4), "inside é");
+    assert_eq!(caret(Some(99)), Some(4), "past the end");
+}

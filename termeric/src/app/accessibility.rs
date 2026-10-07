@@ -2512,31 +2512,7 @@ impl App {
             let mut input = Node::new(Role::SearchInput);
             input.set_label("Search terminal history");
             input.set_placeholder("Type to search");
-            input.set_value(info.query.clone());
-            input.set_character_lengths(
-                info.query
-                    .chars()
-                    .map(|character| character.len_utf8() as u8)
-                    .collect::<Vec<_>>(),
-            );
-            let cursor = info
-                .query
-                .get(..info.cursor_pos.min(info.query.len()))
-                .filter(|_| {
-                    info.query
-                        .is_char_boundary(info.cursor_pos.min(info.query.len()))
-                })
-                .map(str::chars)
-                .map(Iterator::count)
-                .unwrap_or_else(|| info.query.chars().count());
-            let position = TextPosition {
-                node: SEARCH_INPUT,
-                character_index: cursor,
-            };
-            input.set_text_selection(TextSelection {
-                anchor: position,
-                focus: position,
-            });
+            set_text_value(&mut input, SEARCH_INPUT, &info.query, Some(info.cursor_pos));
             input.set_bounds(bounds_rect(layout.input));
             input.add_action(Action::Focus);
             if info.is_active {
@@ -3125,27 +3101,7 @@ impl App {
         let mut input = Node::new(Role::SearchInput);
         input.set_label(words.input);
         input.set_placeholder(info.placeholder.clone());
-        input.set_value(info.input.clone());
-        input.set_character_lengths(
-            info.input
-                .chars()
-                .map(|character| character.len_utf8() as u8)
-                .collect::<Vec<_>>(),
-        );
-        let cursor = info
-            .input
-            .get(..info.cursor)
-            .map(str::chars)
-            .map(Iterator::count)
-            .unwrap_or_else(|| info.input.chars().count());
-        let position = TextPosition {
-            node: ids.input,
-            character_index: cursor,
-        };
-        input.set_text_selection(TextSelection {
-            anchor: position,
-            focus: position,
-        });
+        set_text_value(&mut input, ids.input, &info.input, Some(info.cursor));
         input.set_bounds(rect(
             layout.panel_x + layout.padding,
             layout.panel_y + layout.padding,
@@ -3433,23 +3389,7 @@ impl App {
             let mut node = Node::new(Role::TextInput);
             node.set_label(input.label.trim_end_matches([' ', ':']));
             node.set_description(format!("Single-line value, at most {}", input.limit));
-            node.set_value(input.value.clone());
-            node.set_character_lengths(
-                input
-                    .value
-                    .chars()
-                    .map(|character| character.len_utf8() as u8)
-                    .collect::<Vec<_>>(),
-            );
-            let cursor = input.value[..input.cursor_byte].chars().count();
-            let position = TextPosition {
-                node: input_id,
-                character_index: cursor,
-            };
-            node.set_text_selection(TextSelection {
-                anchor: position,
-                focus: position,
-            });
+            set_text_value(&mut node, input_id, &input.value, Some(input.cursor_byte));
             node.set_bounds(bounds_rect(input_rect));
             if awaiting {
                 node.add_action(Action::Focus);
@@ -4154,27 +4094,7 @@ impl App {
         let mut input = Node::new(Role::SearchInput);
         input.set_label("Filter keyboard shortcuts");
         input.set_placeholder("Filter shortcuts...");
-        input.set_value(info.filter.clone());
-        input.set_character_lengths(
-            info.filter
-                .chars()
-                .map(|character| character.len_utf8() as u8)
-                .collect::<Vec<_>>(),
-        );
-        let cursor = info
-            .filter
-            .get(..info.cursor)
-            .map(str::chars)
-            .map(Iterator::count)
-            .unwrap_or_else(|| info.filter.chars().count());
-        let position = TextPosition {
-            node: SHORTCUTS_INPUT,
-            character_index: cursor,
-        };
-        input.set_text_selection(TextSelection {
-            anchor: position,
-            focus: position,
-        });
+        set_text_value(&mut input, SHORTCUTS_INPUT, &info.filter, Some(info.cursor));
         input.set_bounds(bounds_rect(layout.input));
         input.set_controls([SHORTCUTS_LIST]);
         if info.recording {
@@ -4321,27 +4241,12 @@ impl App {
         let mut input = Node::new(Role::SearchInput);
         input.set_label("Search settings");
         input.set_placeholder("Search settings");
-        input.set_value(info.filter.clone());
-        input.set_character_lengths(
-            info.filter
-                .chars()
-                .map(|character| character.len_utf8() as u8)
-                .collect::<Vec<_>>(),
+        set_text_value(
+            &mut input,
+            SETTINGS_INPUT,
+            &info.filter,
+            Some(info.filter_cursor),
         );
-        let cursor = info
-            .filter
-            .get(..info.filter_cursor)
-            .map(str::chars)
-            .map(Iterator::count)
-            .unwrap_or_else(|| info.filter.chars().count());
-        let cursor_position = TextPosition {
-            node: SETTINGS_INPUT,
-            character_index: cursor,
-        };
-        input.set_text_selection(TextSelection {
-            anchor: cursor_position,
-            focus: cursor_position,
-        });
         input.set_bounds(bounds_rect(layout.input));
         input.set_controls([SETTINGS_LIST]);
         if info.dropdown_open {
@@ -5031,26 +4936,12 @@ impl App {
         if let (Some(value), Some(rename)) = (&info.rename_text, layout.rename) {
             let mut input = Node::new(Role::TextInput);
             input.set_label("Workspace name");
-            input.set_value(value.clone());
-            input.set_character_lengths(
-                value
-                    .chars()
-                    .map(|character| character.len_utf8() as u8)
-                    .collect::<Vec<_>>(),
+            set_text_value(
+                &mut input,
+                SESSION_RENAME_INPUT,
+                value,
+                Some(info.rename_cursor),
             );
-            let cursor = value
-                .get(..info.rename_cursor)
-                .map(str::chars)
-                .map(Iterator::count)
-                .unwrap_or_else(|| value.chars().count());
-            let position = TextPosition {
-                node: SESSION_RENAME_INPUT,
-                character_index: cursor,
-            };
-            input.set_text_selection(TextSelection {
-                anchor: position,
-                focus: position,
-            });
             input.add_action(Action::Focus);
             input.add_action(Action::SetValue);
             input.set_bounds(bounds_rect(rename.input));
@@ -5251,31 +5142,36 @@ fn command_form_input(
     let mut input = Node::new(Role::TextInput);
     input.set_label(label);
     input.set_placeholder(placeholder);
-    input.set_value(value);
-    input.set_character_lengths(
+    set_text_value(&mut input, id, value, cursor);
+    input.add_action(Action::Focus);
+    input.set_bounds(bounds_rect(bounds));
+    input
+}
+
+/// Give text node `id` its value and, with a caret, a collapsed selection
+/// there. AccessKit counts the caret in characters; one off a character
+/// boundary or past the end goes to the end.
+fn set_text_value(node: &mut Node, id: NodeId, value: &str, cursor_byte: Option<usize>) {
+    node.set_value(value);
+    node.set_character_lengths(
         value
             .chars()
             .map(|character| character.len_utf8() as u8)
             .collect::<Vec<_>>(),
     );
-    if let Some(cursor) = cursor {
+    if let Some(cursor_byte) = cursor_byte {
         let character_index = value
-            .get(..cursor)
-            .map(str::chars)
-            .map(Iterator::count)
-            .unwrap_or_else(|| value.chars().count());
+            .get(..cursor_byte)
+            .map_or_else(|| value.chars().count(), |before| before.chars().count());
         let position = TextPosition {
             node: id,
             character_index,
         };
-        input.set_text_selection(TextSelection {
+        node.set_text_selection(TextSelection {
             anchor: position,
             focus: position,
         });
     }
-    input.add_action(Action::Focus);
-    input.set_bounds(bounds_rect(bounds));
-    input
 }
 
 fn append_terminal_nodes(
