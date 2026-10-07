@@ -11,6 +11,8 @@ pub enum Icon {
     ChevronUp,
     Back,
     History,
+    /// A clockwise arrow: run again.
+    Rerun,
     More,
     Send,
     Stop,

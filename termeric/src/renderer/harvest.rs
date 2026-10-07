@@ -198,7 +198,6 @@ impl Renderer {
         }
 
         let cell_width = self.cell_width();
-        let cell_height = self.cell_height();
         let anim = menu.opacity;
 
         let bg = with_alpha(self.ui.palette_bg, 0.95 * anim);
@@ -230,10 +229,11 @@ impl Renderer {
                 );
             }
 
-            self.text_pipeline.push_char(
+            // The icon fills the start of the two-cell slot before the name.
+            self.push_icon(
                 *icon,
-                row.x + menu.layout.padding,
-                row.y + (row.height - cell_height) / 2.0,
+                row.x + menu.layout.padding + self.px(8.0),
+                row.y + row.height / 2.0,
                 if *enabled {
                     icon_color
                 } else {

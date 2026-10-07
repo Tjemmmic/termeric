@@ -8,6 +8,7 @@
 
 use super::cellar::CommandEntry;
 use crate::ui::geometry::Bounds;
+use crate::ui::icon::Icon;
 use std::time::Instant;
 
 /// An action available in the sprout menu
@@ -40,15 +41,16 @@ impl SproutAction {
         }
     }
 
-    /// Get the icon character for this action
-    pub fn icon(&self) -> char {
+    /// The vector icon beside this action in the menu.
+    pub fn icon(&self) -> Icon {
         match self {
-            Self::CopyOutput => '\u{2398}',    // Copy symbol
-            Self::CopyCommand => '\u{2318}',   // Command
-            Self::Rerun => '\u{21BB}',         // Clockwise arrow
-            Self::SearchOutput => '\u{1F50D}', // Magnifying glass
-            Self::ScrollTo => '\u{2193}',      // Down arrow
-            Self::Explain => '\u{2139}',       // Info
+            Self::CopyOutput => Icon::Copy,
+            Self::CopyCommand => Icon::Prompt,
+            Self::Rerun => Icon::Rerun,
+            Self::SearchOutput => Icon::Search,
+            Self::ScrollTo => Icon::ChevronDown,
+            // Explain hands the command to a coding agent.
+            Self::Explain => Icon::Agent,
         }
     }
 

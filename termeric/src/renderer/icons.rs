@@ -212,6 +212,23 @@ fn strokes(icon: Icon) -> Vec<Stroke> {
             },
             Path(&[[0.0, -3.2], [0.0, 0.2], [2.2, 1.6]]),
         ],
+        // Most of a circle, clockwise, with its head at the top left.
+        Icon::Rerun => vec![
+            Path(&[
+                [2.5, -4.3],
+                [4.3, -2.5],
+                [5.0, 0.0],
+                [4.3, 2.5],
+                [2.5, 4.3],
+                [0.0, 5.0],
+                [-2.5, 4.3],
+                [-4.3, 2.5],
+                [-5.0, 0.0],
+                [-4.3, -2.5],
+                [-2.5, -4.3],
+            ]),
+            Path(&[[-5.5, -4.3], [-2.5, -4.3], [-4.0, -1.7]]),
+        ],
         Icon::More => vec![
             Dot {
                 center: [-4.5, 0.0],
@@ -424,6 +441,7 @@ mod tests {
             Icon::ChevronUp,
             Icon::Back,
             Icon::History,
+            Icon::Rerun,
             Icon::More,
             Icon::Send,
             Icon::Stop,

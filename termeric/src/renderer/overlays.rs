@@ -516,18 +516,39 @@ impl Renderer {
                             self.px(BUTTON_CORNER_RADIUS),
                         );
                     }
-                    let checkbox = if source.selected { "[✓] " } else { "[ ] " };
                     let color = if source.available {
                         check_color
                     } else {
                         dim_color
                     };
+                    // A checkbox, ticked while the source is chosen.
+                    let size = self.px(12.0);
+                    let check = Bounds::new(
+                        (layout.content.x + self.px(4.0)).round(),
+                        (line_y + (layout.row_height - size) / 2.0).round(),
+                        size,
+                        size,
+                    );
+                    self.rect_pipeline.push_rounded_outline(
+                        check.x,
+                        check.y,
+                        check.width,
+                        check.height,
+                        color,
+                        self.px(3.0),
+                        self.px(BORDER_WIDTH),
+                    );
+                    if source.selected {
+                        let [cx, cy] = check.center();
+                        self.push_icon(Icon::Check, cx, cy, color);
+                    }
+                    let label_x = check.right() + self.px(8.0);
                     self.push_ui_label(
-                        &format!("{checkbox}{}", source.label),
-                        layout.content.x,
+                        &source.label,
+                        label_x,
                         line_y,
                         layout.row_height,
-                        layout.content.width,
+                        layout.content.right() - label_x,
                         label_size,
                         color,
                     );

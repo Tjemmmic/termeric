@@ -496,8 +496,8 @@ pub struct CellarEntryInfo {
 
 /// Sprout context menu render info
 pub struct SproutMenuRenderInfo {
-    /// Actions with (label, icon_char, enabled) tuples.
-    pub actions: Vec<(String, char, bool)>,
+    /// Actions with (label, icon, enabled) tuples.
+    pub actions: Vec<(String, crate::ui::icon::Icon, bool)>,
     /// Currently selected action index
     pub selected: usize,
     /// Menu opacity (for fade animation)
