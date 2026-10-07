@@ -268,10 +268,26 @@ pub(crate) fn authenticate(
             "protocol version {version} is incompatible with server version {server_version}"
         ));
     }
-    if token != expected_token {
+    if !tokens_match(token, expected_token) {
         return Err(format!("{service} authentication failed"));
     }
     Ok(())
+}
+
+/// Whether `presented` is `expected`, comparing every byte whichever differ,
+/// so how long a refusal takes says nothing about how much of a guess was
+/// right. Only the length, which every real token shares, ends it early.
+fn tokens_match(presented: &str, expected: &str) -> bool {
+    presented.len() == expected.len()
+        && presented
+            .bytes()
+            .zip(expected.bytes())
+            // black_box keeps the compiler from turning the fold back into
+            // a comparison that stops at the first difference.
+            .fold(0_u8, |difference, (left, right)| {
+                std::hint::black_box(difference | (left ^ right))
+            })
+            == 0
 }
 
 /// A server's bounded count of connected clients.
@@ -534,6 +550,20 @@ mod tests {
             authenticate("fixture", 1, 1, "wrong", "secret"),
             Err("fixture authentication failed".into())
         );
+    }
+
+    #[test]
+    fn tokens_match_only_when_every_byte_does() {
+        let token = "0123456789abcdef".repeat(4);
+        assert!(tokens_match(&token, &token));
+        for position in [0, 31, 63] {
+            let mut guess = token.clone().into_bytes();
+            guess[position] ^= 1;
+            assert!(!tokens_match(std::str::from_utf8(&guess).unwrap(), &token));
+        }
+        assert!(!tokens_match(&token[..63], &token));
+        assert!(!tokens_match(&format!("{token}0"), &token));
+        assert!(!tokens_match("", &token));
     }
 
     #[test]
