@@ -312,16 +312,22 @@ impl Renderer {
         );
     }
 
-    /// A two-pixel keyboard focus ring just inside `bounds`.
-    pub(super) fn draw_focus_ring(&mut self, bounds: Bounds, color: [f32; 4]) {
+    /// The keyboard focus ring every chrome control shows: two logical
+    /// pixels just inside `bounds`, rounded by the logical `radius` of the
+    /// control it surrounds.
+    pub(super) fn draw_focus_ring(&mut self, bounds: Bounds, color: [f32; 4], radius: f32) {
+        let stroke = self.px(2.0);
+        if bounds.width <= stroke * 2.0 || bounds.height <= stroke * 2.0 {
+            return;
+        }
         self.rect_pipeline.push_rounded_outline(
             bounds.x,
             bounds.y,
             bounds.width,
             bounds.height,
             color,
-            self.px(BUTTON_CORNER_RADIUS),
-            self.px(2.0),
+            self.px(radius),
+            stroke,
         );
     }
 }

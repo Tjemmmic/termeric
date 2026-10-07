@@ -242,7 +242,11 @@ impl Renderer {
                 InfoOverlayFocus::Continue => Some(layout.continue_button),
             };
             if let Some(bounds) = bounds {
-                self.draw_focus_ring(bounds, with_alpha(self.ui.palette_accent, anim));
+                self.draw_focus_ring(
+                    bounds,
+                    with_alpha(self.ui.palette_accent, anim),
+                    BUTTON_CORNER_RADIUS,
+                );
             }
         }
 

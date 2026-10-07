@@ -6,6 +6,7 @@ use super::{Renderer, contrast_text};
 use crate::agents::AgentBadge;
 use crate::tabs::{TabInfo, TabType};
 use crate::ui::color::{mix, scale_alpha, with_alpha};
+use crate::ui::constants::BUTTON_CORNER_RADIUS;
 use crate::ui::geometry::Bounds;
 use crate::ui::icon::Icon;
 
@@ -357,7 +358,7 @@ impl TabChrome {
     }
 
     fn corner_radius(self) -> f32 {
-        self.px(6.0)
+        self.px(BUTTON_CORNER_RADIUS)
     }
 
     /// Visible surface of a top-bar tab slot.
@@ -1078,7 +1079,8 @@ impl Renderer {
         );
     }
 
-    /// Draw a warm, high-contrast focus outline without covering tab content.
+    /// Draw a high-contrast focus ring around a tab-bar control, inside
+    /// its bounds so it never covers a neighbour.
     pub(super) fn build_tab_bar_keyboard_focus(
         &mut self,
         target: TabBarClick,
@@ -1086,33 +1088,12 @@ impl Renderer {
         window_width: f32,
         window_height: f32,
     ) {
-        let Some(Bounds {
-            x,
-            y,
-            width,
-            height,
-        }) = self.tab_bar_element_rect(target, tabs, window_width, window_height)
+        let Some(bounds) = self.tab_bar_element_rect(target, tabs, window_width, window_height)
         else {
             return;
         };
-        let inset = 1.0;
-        let left = x + inset;
-        let top = y + inset;
-        let right = x + width - inset;
-        let bottom = y + height - inset;
-        if right <= left || bottom <= top {
-            return;
-        }
         let color = with_alpha(contrast_text(self.ui.tab_bar_bg), 0.98);
-        let thickness = 2.0;
-        self.rect_pipeline
-            .push_line(left, top, right, top, thickness, color);
-        self.rect_pipeline
-            .push_line(right, top, right, bottom, thickness, color);
-        self.rect_pipeline
-            .push_line(right, bottom, left, bottom, thickness, color);
-        self.rect_pipeline
-            .push_line(left, bottom, left, top, thickness, color);
+        self.draw_focus_ring(bounds, color, BUTTON_CORNER_RADIUS);
     }
 
     /// Exact rendered bounds for a tab-bar control. Accessibility and focus

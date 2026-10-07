@@ -156,13 +156,14 @@ impl Renderer {
                     self.px(BUTTON_CORNER_RADIUS),
                 );
                 if active {
-                    self.push_rect_outline(
+                    self.rect_pipeline.push_rounded_outline(
                         rect.x,
                         rect.y,
                         rect.width,
                         rect.height,
-                        self.px(1.0),
                         self.ui.palette_accent,
+                        self.px(BUTTON_CORNER_RADIUS),
+                        self.px(1.0),
                     );
                 }
                 let Some(view) = layout.input_viewport(info, field) else {
@@ -257,14 +258,7 @@ impl Renderer {
             .browse_focus
             .and_then(|control| layout.control_rect(control))
         {
-            self.push_rect_outline(
-                rect.x,
-                rect.y,
-                rect.width,
-                rect.height,
-                self.px(2.0),
-                self.ui.palette_accent,
-            );
+            self.draw_focus_ring(rect, self.ui.palette_accent, BUTTON_CORNER_RADIUS);
         }
     }
 
@@ -487,14 +481,7 @@ impl Renderer {
             .filter(|control| !matches!(control, AgentsControl::Agent(_)))
             .and_then(|control| layout.control_rect(control))
         {
-            self.push_rect_outline(
-                rect.x,
-                rect.y,
-                rect.width,
-                rect.height,
-                self.px(2.0),
-                self.ui.palette_accent,
-            );
+            self.draw_focus_ring(rect, self.ui.palette_accent, BUTTON_CORNER_RADIUS);
         }
     }
 
@@ -562,23 +549,6 @@ impl Renderer {
             self.ui.menu_text_dim
         };
         self.push_icon(icon, x + width / 2.0, y + height / 2.0, color);
-    }
-
-    /// A rectangular outline of `stroke` pixels inside the given bounds.
-    fn push_rect_outline(
-        &mut self,
-        x: f32,
-        y: f32,
-        width: f32,
-        height: f32,
-        stroke: f32,
-        color: [f32; 4],
-    ) {
-        if width <= stroke * 2.0 || height <= stroke * 2.0 {
-            return;
-        }
-        self.rect_pipeline
-            .push_rounded_outline(x, y, width, height, color, 0.0, stroke);
     }
 
     /// Hit-test the custom commands panel
