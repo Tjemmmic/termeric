@@ -90,6 +90,7 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `cli.rs` | Command-line parsing into window-local startup plans |
 | `mcp.rs` | `termeric mcp`, an MCP server over stdio backed by the control protocol |
 | `serial.rs` | Serial transport for serial terminal profiles |
+| `raw_terminal.rs` | Raw mode for the terminal the domain relay and the serial bridge run in; input that is not a terminal is left alone |
 | `test_support/` | Test builds only: shared fixtures (`sleeping_shell`, `poll_until`, …), the release benchmark suite (`benchmarks.rs`), and soaks (`soak.rs`) |
 | `paths.rs` | Configuration and data directories; test builds resolve them under a per-process temporary directory |
 | `safe_fs.rs` | Hardened reads (no symlinks, FIFOs, or unbounded reads) and atomic private-staging writes for Termeric's own files |

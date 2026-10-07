@@ -6,7 +6,7 @@ use crate::deadline_io::{self, Deadline, PollReader, SocketWriter};
 use crate::local_socket::SocketPaths;
 use anyhow::Context;
 use std::io::{Read, Write};
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, RawFd};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::os::unix::net::UnixStream;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -763,7 +763,8 @@ impl DomainClient {
             frame => anyhow::bail!("unexpected attach response {frame:?}"),
         };
 
-        let _raw_terminal = RawTerminal::enter(libc::STDIN_FILENO)?;
+        let _raw_terminal = crate::raw_terminal::RawTerminal::enter(libc::STDIN_FILENO)
+            .context("put the relay's terminal into raw mode")?;
         let mut stdout = std::io::stdout().lock();
         attachment_snapshot::replay(&mut stream, &mut stdout, &snapshot)?;
         drop(stdout);
@@ -1110,7 +1111,9 @@ fn read_frame_with_timeout<T: serde::de::DeserializeOwned>(
 /// stdout or across the SSH connection. Without `start_server` it refuses
 /// instead of starting a daemon (`stop-server`).
 pub fn run_ssh_stdio_bridge(start_server: bool) -> anyhow::Result<()> {
-    let mut stdin = bridge::clone_input(libc::STDIN_FILENO)?;
+    // Unbuffered, so negotiation and forwarding never see bytes a StdinLock
+    // prefetched out of sight of descriptor readiness.
+    let mut stdin = std::fs::File::from(std::io::stdin().as_fd().try_clone_to_owned()?);
     let mut stdout = std::io::stdout().lock();
     let hello = read_frame_with_timeout::<ClientFrame>(&mut stdin, RESPONSE_TIMEOUT)
         .context("read SSH domain bridge negotiation")?;
@@ -1213,53 +1216,6 @@ fn copy_with_flush(reader: &mut impl Read, writer: &mut impl Write) -> std::io::
         writer.write_all(&buffer[..read])?;
         writer.flush()?;
         copied = copied.saturating_add(read as u64);
-    }
-}
-
-struct RawTerminal {
-    descriptor: libc::c_int,
-    original: Option<libc::termios>,
-}
-
-impl RawTerminal {
-    fn enter(descriptor: libc::c_int) -> anyhow::Result<Self> {
-        // SAFETY: termios calls receive a valid descriptor and initialized
-        // storage. ENOTTY is accepted for pipe-based automation.
-        unsafe {
-            let mut original: libc::termios = std::mem::zeroed();
-            if libc::tcgetattr(descriptor, &mut original) != 0 {
-                let error = std::io::Error::last_os_error();
-                if error.raw_os_error() == Some(libc::ENOTTY) {
-                    return Ok(Self {
-                        descriptor,
-                        original: None,
-                    });
-                }
-                return Err(error).context("read relay terminal attributes");
-            }
-            let mut raw = original;
-            libc::cfmakeraw(&mut raw);
-            if libc::tcsetattr(descriptor, libc::TCSANOW, &raw) != 0 {
-                return Err(std::io::Error::last_os_error())
-                    .context("enable raw relay terminal mode");
-            }
-            Ok(Self {
-                descriptor,
-                original: Some(original),
-            })
-        }
-    }
-}
-
-impl Drop for RawTerminal {
-    fn drop(&mut self) {
-        if let Some(original) = &self.original {
-            // SAFETY: the stored termios came from this descriptor and remains
-            // valid until this process exits.
-            unsafe {
-                libc::tcsetattr(self.descriptor, libc::TCSANOW, original);
-            }
-        }
     }
 }
 

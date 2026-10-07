@@ -7,7 +7,7 @@ fn unbuffered_negotiation_deadline_covers_trickled_header_and_payload() {
     use super::super::{ClientFrame, protocol, read_frame_with_timeout};
     for prefix in [1, 4] {
         let (input, mut source) = UnixStream::pair().unwrap();
-        let mut input = clone_input(input.as_raw_fd()).unwrap();
+        let mut input = std::fs::File::from(std::os::fd::OwnedFd::from(input));
         let mut wire = Vec::new();
         protocol::write_frame(
             &mut wire,
@@ -56,7 +56,7 @@ fn input_eof_half_closes_and_drains_final_daemon_response() {
     coalesced.extend_from_slice(b"request\0bytes");
     source.write_all(&coalesced).unwrap();
     source.shutdown(Shutdown::Write).unwrap();
-    let mut input = clone_input(input.as_raw_fd()).unwrap();
+    let mut input = std::fs::File::from(std::os::fd::OwnedFd::from(input));
     assert_eq!(
         super::super::protocol::read_frame::<super::super::ClientFrame>(&mut input).unwrap(),
         hello

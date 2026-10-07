@@ -5,22 +5,10 @@ use crate::deadline_io::readable;
 use anyhow::Context;
 use std::io::{Read, Write};
 use std::net::Shutdown;
-use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
-
-pub(super) fn clone_input(descriptor: RawFd) -> std::io::Result<std::fs::File> {
-    // Keep negotiation and forwarding unbuffered: a StdinLock could prefetch
-    // request bytes that descriptor readiness would no longer see afterward.
-    // SAFETY: fcntl duplicates an open descriptor without changing/closing it;
-    // a successful new CLOEXEC descriptor is adopted exactly once below.
-    let duplicate = unsafe { libc::fcntl(descriptor, libc::F_DUPFD_CLOEXEC, 0) };
-    if duplicate < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(unsafe { std::fs::File::from_raw_fd(duplicate) })
-}
 
 struct InputFailure<'a> {
     alive: &'a AtomicBool,

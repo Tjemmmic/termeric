@@ -3,6 +3,10 @@
 use crate::config::{SerialFlowControl, SerialParity, SerialProfileConfig};
 use anyhow::Context;
 use std::ffi::OsString;
+use std::fs::{File, OpenOptions};
+use std::io::{self, Read, Write};
+use std::os::fd::{AsFd, AsRawFd, RawFd};
+use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
 use std::path::PathBuf;
 
 const INTERNAL_COMMAND: &str = "__serial-bridge";
@@ -86,16 +90,14 @@ pub(crate) fn is_internal_command(argument: Option<&OsString>) -> bool {
 }
 
 pub(crate) fn run_bridge(options: BridgeOptions) -> anyhow::Result<()> {
-    use std::os::fd::AsFd;
-
-    let device = linux::ConfiguredDevice::open(&options.config)?;
-    let _stdin_mode = linux::RawMode::apply(libc::STDIN_FILENO)
+    let device = ConfiguredDevice::open(&options.config)?;
+    let _stdin_mode = crate::raw_terminal::RawTerminal::enter(libc::STDIN_FILENO)
         .context("put the terminal side of the serial bridge into raw mode")?;
     // Unbuffered handles on the bridge's own stdin and stdout, so a poll
     // that reports input always finds it in the descriptor.
-    let terminal_input = std::fs::File::from(std::io::stdin().as_fd().try_clone_to_owned()?);
-    let terminal_output = std::fs::File::from(std::io::stdout().as_fd().try_clone_to_owned()?);
-    linux::relay_between(
+    let terminal_input = File::from(std::io::stdin().as_fd().try_clone_to_owned()?);
+    let terminal_output = File::from(std::io::stdout().as_fd().try_clone_to_owned()?);
+    relay_between(
         &terminal_input,
         &terminal_output,
         device.file(),
@@ -109,265 +111,219 @@ pub(crate) fn run_bridge(options: BridgeOptions) -> anyhow::Result<()> {
     })
 }
 
-mod linux {
-    use super::*;
-    use std::fs::{File, OpenOptions};
-    use std::io::{self, Read, Write};
-    use std::os::fd::{AsRawFd, RawFd};
-    use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
+struct ConfiguredDevice {
+    file: File,
+    original: libc::termios,
+}
 
-    pub(super) struct ConfiguredDevice {
-        file: File,
-        original: libc::termios,
-    }
-
-    impl ConfiguredDevice {
-        pub(super) fn open(config: &SerialProfileConfig) -> anyhow::Result<Self> {
-            let file = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .custom_flags(libc::O_NOCTTY | libc::O_CLOEXEC | libc::O_NONBLOCK)
-                .open(&config.device)
-                .with_context(|| format!("open serial device {}", config.device.display()))?;
-            if !file.metadata()?.file_type().is_char_device() {
-                anyhow::bail!(
-                    "serial device {} is not a character device",
+impl ConfiguredDevice {
+    fn open(config: &SerialProfileConfig) -> anyhow::Result<Self> {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NOCTTY | libc::O_CLOEXEC | libc::O_NONBLOCK)
+            .open(&config.device)
+            .with_context(|| format!("open serial device {}", config.device.display()))?;
+        if !file.metadata()?.file_type().is_char_device() {
+            anyhow::bail!(
+                "serial device {} is not a character device",
+                config.device.display()
+            );
+        }
+        let fd = file.as_raw_fd();
+        // SAFETY: fd is a live descriptor. TIOCEXCL asks the kernel to
+        // reject competing opens until this descriptor closes.
+        if unsafe { libc::ioctl(fd, libc::TIOCEXCL) } != 0 {
+            return Err(io::Error::last_os_error()).with_context(|| {
+                format!(
+                    "claim serial device {} exclusively",
                     config.device.display()
-                );
-            }
-            let fd = file.as_raw_fd();
-            // SAFETY: fd is a live descriptor. TIOCEXCL asks the kernel to
-            // reject competing opens until this descriptor closes.
-            if unsafe { libc::ioctl(fd, libc::TIOCEXCL) } != 0 {
-                return Err(io::Error::last_os_error()).with_context(|| {
-                    format!(
-                        "claim serial device {} exclusively",
-                        config.device.display()
-                    )
-                });
-            }
-            // SAFETY: F_GETFL/F_SETFL operate on the live owned descriptor.
-            let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-            if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK) } < 0
-            {
-                return Err(io::Error::last_os_error())
-                    .context("put the serial device into blocking mode");
-            }
-            let original = termios(fd).context("read serial device attributes")?;
-            configure(fd, original, config).context("configure serial device")?;
-            Ok(Self { file, original })
+                )
+            });
         }
-
-        pub(super) fn file(&self) -> &File {
-            &self.file
+        // SAFETY: F_GETFL/F_SETFL operate on the live owned descriptor.
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+        if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK) } < 0 {
+            return Err(io::Error::last_os_error())
+                .context("put the serial device into blocking mode");
         }
+        let original = termios(fd).context("read serial device attributes")?;
+        configure(fd, original, config).context("configure serial device")?;
+        Ok(Self { file, original })
     }
 
-    impl Drop for ConfiguredDevice {
-        fn drop(&mut self) {
-            // SAFETY: the descriptor remains owned by self while Drop runs.
-            if unsafe { libc::tcsetattr(self.file.as_raw_fd(), libc::TCSANOW, &self.original) } != 0
-            {
-                log::warn!(
-                    "Could not restore serial device attributes: {}",
-                    io::Error::last_os_error()
-                );
-            }
+    fn file(&self) -> &File {
+        &self.file
+    }
+}
+
+impl Drop for ConfiguredDevice {
+    fn drop(&mut self) {
+        // SAFETY: the descriptor remains owned by self while Drop runs.
+        if unsafe { libc::tcsetattr(self.file.as_raw_fd(), libc::TCSANOW, &self.original) } != 0 {
+            log::warn!(
+                "Could not restore serial device attributes: {}",
+                io::Error::last_os_error()
+            );
         }
     }
+}
 
-    pub(super) struct RawMode {
-        fd: RawFd,
-        original: libc::termios,
+fn termios(fd: RawFd) -> io::Result<libc::termios> {
+    // SAFETY: zeroed termios is valid output storage for tcgetattr.
+    let mut value = unsafe { std::mem::zeroed::<libc::termios>() };
+    // SAFETY: fd is live and value is valid writable storage.
+    if unsafe { libc::tcgetattr(fd, &mut value) } != 0 {
+        return Err(io::Error::last_os_error());
     }
+    Ok(value)
+}
 
-    impl RawMode {
-        pub(super) fn apply(fd: RawFd) -> anyhow::Result<Self> {
-            let original = termios(fd)?;
-            let mut raw = original;
-            // SAFETY: raw points to initialized writable termios storage.
-            unsafe { libc::cfmakeraw(&mut raw) };
-            // SAFETY: fd is the bridge's live terminal input descriptor.
-            if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &raw) } != 0 {
-                return Err(io::Error::last_os_error().into());
-            }
-            Ok(Self { fd, original })
+fn configure(fd: RawFd, mut value: libc::termios, config: &SerialProfileConfig) -> io::Result<()> {
+    // SAFETY: value points to initialized writable termios storage.
+    unsafe { libc::cfmakeraw(&mut value) };
+    value.c_cflag |= libc::CLOCAL | libc::CREAD;
+    value.c_cflag &= !(libc::CSIZE | libc::PARENB | libc::PARODD | libc::CSTOPB | libc::CRTSCTS);
+    value.c_cflag |= match config.data_bits {
+        5 => libc::CS5,
+        6 => libc::CS6,
+        7 => libc::CS7,
+        8 => libc::CS8,
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid data bits",
+            ));
         }
+    };
+    match config.parity {
+        SerialParity::None => {}
+        SerialParity::Even => value.c_cflag |= libc::PARENB,
+        SerialParity::Odd => value.c_cflag |= libc::PARENB | libc::PARODD,
     }
-
-    impl Drop for RawMode {
-        fn drop(&mut self) {
-            // SAFETY: the bridge still owns stdin while this guard is alive.
-            if unsafe { libc::tcsetattr(self.fd, libc::TCSANOW, &self.original) } != 0 {
-                log::warn!(
-                    "Could not restore serial bridge terminal attributes: {}",
-                    io::Error::last_os_error()
-                );
-            }
-        }
+    if config.stop_bits == 2 {
+        value.c_cflag |= libc::CSTOPB;
     }
-
-    fn termios(fd: RawFd) -> io::Result<libc::termios> {
-        // SAFETY: zeroed termios is valid output storage for tcgetattr.
-        let mut value = unsafe { std::mem::zeroed::<libc::termios>() };
-        // SAFETY: fd is live and value is valid writable storage.
-        if unsafe { libc::tcgetattr(fd, &mut value) } != 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(value)
+    value.c_iflag &= !(libc::IXON | libc::IXOFF | libc::IXANY);
+    match config.flow_control {
+        SerialFlowControl::None => {}
+        SerialFlowControl::Software => value.c_iflag |= libc::IXON | libc::IXOFF,
+        SerialFlowControl::Hardware => value.c_cflag |= libc::CRTSCTS,
     }
-
-    fn configure(
-        fd: RawFd,
-        mut value: libc::termios,
-        config: &SerialProfileConfig,
-    ) -> io::Result<()> {
-        // SAFETY: value points to initialized writable termios storage.
-        unsafe { libc::cfmakeraw(&mut value) };
-        value.c_cflag |= libc::CLOCAL | libc::CREAD;
-        value.c_cflag &=
-            !(libc::CSIZE | libc::PARENB | libc::PARODD | libc::CSTOPB | libc::CRTSCTS);
-        value.c_cflag |= match config.data_bits {
-            5 => libc::CS5,
-            6 => libc::CS6,
-            7 => libc::CS7,
-            8 => libc::CS8,
-            _ => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "invalid data bits",
-                ));
-            }
-        };
-        match config.parity {
-            SerialParity::None => {}
-            SerialParity::Even => value.c_cflag |= libc::PARENB,
-            SerialParity::Odd => value.c_cflag |= libc::PARENB | libc::PARODD,
-        }
-        if config.stop_bits == 2 {
-            value.c_cflag |= libc::CSTOPB;
-        }
-        value.c_iflag &= !(libc::IXON | libc::IXOFF | libc::IXANY);
-        match config.flow_control {
-            SerialFlowControl::None => {}
-            SerialFlowControl::Software => value.c_iflag |= libc::IXON | libc::IXOFF,
-            SerialFlowControl::Hardware => value.c_cflag |= libc::CRTSCTS,
-        }
-        value.c_cc[libc::VMIN] = 1;
-        value.c_cc[libc::VTIME] = 0;
-        let speed = baud_constant(config.baud)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "unsupported baud rate"))?;
-        // SAFETY: value is initialized and speed is a platform termios rate.
-        if unsafe { libc::cfsetispeed(&mut value, speed) } != 0
-            || unsafe { libc::cfsetospeed(&mut value, speed) } != 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: fd is live and value contains validated attributes.
-        if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &value) } != 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(())
+    value.c_cc[libc::VMIN] = 1;
+    value.c_cc[libc::VTIME] = 0;
+    let speed = baud_constant(config.baud)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "unsupported baud rate"))?;
+    // SAFETY: value is initialized and speed is a platform termios rate.
+    if unsafe { libc::cfsetispeed(&mut value, speed) } != 0
+        || unsafe { libc::cfsetospeed(&mut value, speed) } != 0
+    {
+        return Err(io::Error::last_os_error());
     }
-
-    fn baud_constant(baud: u32) -> Option<libc::speed_t> {
-        Some(match baud {
-            50 => libc::B50,
-            75 => libc::B75,
-            110 => libc::B110,
-            134 => libc::B134,
-            150 => libc::B150,
-            200 => libc::B200,
-            300 => libc::B300,
-            600 => libc::B600,
-            1_200 => libc::B1200,
-            1_800 => libc::B1800,
-            2_400 => libc::B2400,
-            4_800 => libc::B4800,
-            9_600 => libc::B9600,
-            19_200 => libc::B19200,
-            38_400 => libc::B38400,
-            57_600 => libc::B57600,
-            115_200 => libc::B115200,
-            230_400 => libc::B230400,
-            460_800 => libc::B460800,
-            500_000 => libc::B500000,
-            576_000 => libc::B576000,
-            921_600 => libc::B921600,
-            1_000_000 => libc::B1000000,
-            1_152_000 => libc::B1152000,
-            1_500_000 => libc::B1500000,
-            2_000_000 => libc::B2000000,
-            2_500_000 => libc::B2500000,
-            3_000_000 => libc::B3000000,
-            3_500_000 => libc::B3500000,
-            4_000_000 => libc::B4000000,
-            _ => return None,
-        })
+    // SAFETY: fd is live and value contains validated attributes.
+    if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &value) } != 0 {
+        return Err(io::Error::last_os_error());
     }
+    Ok(())
+}
 
-    pub(super) fn relay_between(
-        mut terminal_input: &File,
-        mut terminal_output: &File,
-        mut device_input: &File,
-        mut device_output: &File,
-    ) -> io::Result<()> {
-        let mut buffer = [0u8; RELAY_BUFFER_BYTES];
-        loop {
-            let mut polls = [
-                libc::pollfd {
-                    fd: terminal_input.as_raw_fd(),
-                    events: libc::POLLIN,
-                    revents: 0,
-                },
-                libc::pollfd {
-                    fd: device_input.as_raw_fd(),
-                    events: libc::POLLIN,
-                    revents: 0,
-                },
-            ];
-            // SAFETY: polls is valid for its exact two-element length.
-            let ready = unsafe { libc::poll(polls.as_mut_ptr(), polls.len() as _, -1) };
-            if ready < 0 {
-                let error = io::Error::last_os_error();
-                if error.kind() == io::ErrorKind::Interrupted {
-                    continue;
-                }
-                return Err(error);
+fn baud_constant(baud: u32) -> Option<libc::speed_t> {
+    Some(match baud {
+        50 => libc::B50,
+        75 => libc::B75,
+        110 => libc::B110,
+        134 => libc::B134,
+        150 => libc::B150,
+        200 => libc::B200,
+        300 => libc::B300,
+        600 => libc::B600,
+        1_200 => libc::B1200,
+        1_800 => libc::B1800,
+        2_400 => libc::B2400,
+        4_800 => libc::B4800,
+        9_600 => libc::B9600,
+        19_200 => libc::B19200,
+        38_400 => libc::B38400,
+        57_600 => libc::B57600,
+        115_200 => libc::B115200,
+        230_400 => libc::B230400,
+        460_800 => libc::B460800,
+        500_000 => libc::B500000,
+        576_000 => libc::B576000,
+        921_600 => libc::B921600,
+        1_000_000 => libc::B1000000,
+        1_152_000 => libc::B1152000,
+        1_500_000 => libc::B1500000,
+        2_000_000 => libc::B2000000,
+        2_500_000 => libc::B2500000,
+        3_000_000 => libc::B3000000,
+        3_500_000 => libc::B3500000,
+        4_000_000 => libc::B4000000,
+        _ => return None,
+    })
+}
+
+fn relay_between(
+    mut terminal_input: &File,
+    mut terminal_output: &File,
+    mut device_input: &File,
+    mut device_output: &File,
+) -> io::Result<()> {
+    let mut buffer = [0u8; RELAY_BUFFER_BYTES];
+    loop {
+        let mut polls = [
+            libc::pollfd {
+                fd: terminal_input.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: device_input.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+        ];
+        // SAFETY: polls is valid for its exact two-element length.
+        let ready = unsafe { libc::poll(polls.as_mut_ptr(), polls.len() as _, -1) };
+        if ready < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
             }
-            // An interrupted read polls again; write_all retries on its own.
-            if polls[0].revents & libc::POLLIN != 0 {
-                let read = match terminal_input.read(&mut buffer) {
-                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                    read => read?,
-                };
-                if read == 0 {
-                    return Ok(());
-                }
-                device_output.write_all(&buffer[..read])?;
-            }
-            if polls[1].revents & libc::POLLIN != 0 {
-                let read = match device_input.read(&mut buffer) {
-                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                    read => read?,
-                };
-                if read == 0 {
-                    return Err(io::Error::new(
-                        io::ErrorKind::UnexpectedEof,
-                        "serial device disconnected",
-                    ));
-                }
-                terminal_output.write_all(&buffer[..read])?;
-            }
-            if polls[0].revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+            return Err(error);
+        }
+        // An interrupted read polls again; write_all retries on its own.
+        if polls[0].revents & libc::POLLIN != 0 {
+            let read = match terminal_input.read(&mut buffer) {
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                read => read?,
+            };
+            if read == 0 {
                 return Ok(());
             }
-            if polls[1].revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+            device_output.write_all(&buffer[..read])?;
+        }
+        if polls[1].revents & libc::POLLIN != 0 {
+            let read = match device_input.read(&mut buffer) {
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                read => read?,
+            };
+            if read == 0 {
                 return Err(io::Error::new(
-                    io::ErrorKind::BrokenPipe,
+                    io::ErrorKind::UnexpectedEof,
                     "serial device disconnected",
                 ));
             }
+            terminal_output.write_all(&buffer[..read])?;
+        }
+        if polls[0].revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+            return Ok(());
+        }
+        if polls[1].revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "serial device disconnected",
+            ));
         }
     }
 }
@@ -405,7 +361,7 @@ mod tests {
             device: temp.path().to_path_buf(),
             ..SerialProfileConfig::default()
         };
-        let error = linux::ConfiguredDevice::open(&config)
+        let error = ConfiguredDevice::open(&config)
             .err()
             .expect("regular file must be rejected");
         assert!(error.to_string().contains("not a character device"));
@@ -443,7 +399,7 @@ mod tests {
             assert_ne!(poll.revents & libc::POLLIN, 0);
         };
         let relay = std::thread::spawn(move || {
-            linux::relay_between(
+            relay_between(
                 &bridge_terminal_input,
                 &bridge_terminal_output,
                 &bridge_device_input,
