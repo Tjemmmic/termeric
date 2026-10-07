@@ -1,12 +1,66 @@
-//! Shared pieces of the chrome's cards and dialogs: shadows, card surfaces,
-//! scrollbars, buttons, and focus rings.
+//! Shared pieces of the chrome's cards and dialogs: raised surfaces,
+//! shadows, card surfaces, scrollbars, buttons, and focus rings.
 
 use super::Renderer;
-use crate::ui::color::with_alpha;
+use crate::ui::color::{scale_alpha, with_alpha};
 use crate::ui::constants::*;
 use crate::ui::geometry::Bounds;
 
 impl Renderer {
+    /// A raised chrome surface: soft `shadows` (each a logical spread and
+    /// its alpha) dropped `drop` logical pixels, a hairline `border`, and the
+    /// menu background inside it, all faded by `opacity`. `radius` is
+    /// logical. The modal frame, anchored menus, and the find box are drawn
+    /// with it.
+    pub(super) fn push_raised_surface(
+        &mut self,
+        bounds: Bounds,
+        radius: f32,
+        shadows: &[(f32, f32)],
+        drop: f32,
+        border: [f32; 4],
+        opacity: f32,
+    ) {
+        let Bounds {
+            x,
+            y,
+            width,
+            height,
+        } = bounds;
+        let radius = self.px(radius);
+        let drop = self.px(drop);
+        for &(spread, alpha) in shadows {
+            let spread = self.px(spread);
+            self.rect_pipeline.push_rounded_rect(
+                x - spread,
+                y - spread / 2.0 + drop,
+                width + spread * 2.0,
+                height + spread * 2.0,
+                [0.0, 0.0, 0.0, alpha * opacity],
+                radius + spread,
+            );
+        }
+        // The border is the surface's own edge: a full rounded rectangle in
+        // its color with the background inset a hairline inside it.
+        let line = self.px(BORDER_WIDTH);
+        self.rect_pipeline.push_rounded_rect(
+            x,
+            y,
+            width,
+            height,
+            scale_alpha(border, opacity),
+            radius,
+        );
+        self.rect_pipeline.push_rounded_rect(
+            x + line,
+            y + line,
+            width - line * 2.0,
+            height - line * 2.0,
+            scale_alpha(self.ui.menu_bg, opacity),
+            radius - line,
+        );
+    }
+
     /// A soft shadow under a card, `layers` rounded rectangles spreading
     /// down and out with falling alpha.
     pub(super) fn draw_card_shadow(&mut self, card: Bounds, alpha: f32, layers: u32) {

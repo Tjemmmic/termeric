@@ -58,39 +58,13 @@ impl Renderer {
     /// dropdown): a soft two-layer shadow, a hairline border, and the menu
     /// background, all faded by `opacity`.
     pub(super) fn push_menu_surface(&mut self, bounds: Bounds, opacity: f32) {
-        let Bounds {
-            x,
-            y,
-            width,
-            height,
-        } = bounds;
-        let radius = self.px(MENU_CORNER_RADIUS);
-        for (spread, alpha) in [(self.px(2.0), 0.16), (self.px(8.0), 0.08)] {
-            self.rect_pipeline.push_rounded_rect(
-                x - spread,
-                y - spread / 2.0 + self.px(2.0),
-                width + spread * 2.0,
-                height + spread * 2.0,
-                [0.0, 0.0, 0.0, alpha * opacity],
-                radius + spread,
-            );
-        }
-        let line = self.px(1.0);
-        self.rect_pipeline.push_rounded_rect(
-            x,
-            y,
-            width,
-            height,
-            scale_alpha(self.ui.menu_border, opacity),
-            radius,
-        );
-        self.rect_pipeline.push_rounded_rect(
-            x + line,
-            y + line,
-            width - line * 2.0,
-            height - line * 2.0,
-            scale_alpha(self.ui.menu_bg, opacity),
-            radius - line,
+        self.push_raised_surface(
+            bounds,
+            MENU_CORNER_RADIUS,
+            &[(2.0, 0.16), (8.0, 0.08)],
+            2.0,
+            self.ui.menu_border,
+            opacity,
         );
     }
 

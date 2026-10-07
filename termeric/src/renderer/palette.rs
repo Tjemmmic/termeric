@@ -4,6 +4,7 @@ use super::Renderer;
 use crate::ui::color::scale_alpha;
 use crate::ui::command_palette::{PaletteInfo, PaletteLayout};
 use crate::ui::constants::{BUTTON_CORNER_RADIUS, MODAL_CORNER_RADIUS};
+use crate::ui::geometry::Bounds;
 
 impl Renderer {
     /// A centred modal's soft shadow, hairline border, and raised surface,
@@ -16,34 +17,13 @@ impl Renderer {
         height: f32,
         animation: f32,
     ) {
-        let fade = |color: [f32; 4]| scale_alpha(color, animation);
-        let radius = self.px(MODAL_CORNER_RADIUS);
-        for (spread, alpha) in [(self.px(2.0), 0.18), (self.px(10.0), 0.10)] {
-            self.rect_pipeline.push_rounded_rect(
-                x - spread,
-                y - spread / 2.0 + self.px(3.0),
-                width + spread * 2.0,
-                height + spread * 2.0,
-                [0.0, 0.0, 0.0, alpha * animation],
-                radius + spread,
-            );
-        }
-        let line = self.px(1.0);
-        self.rect_pipeline.push_rounded_rect(
-            x,
-            y,
-            width,
-            height,
-            fade(self.ui.menu_border),
-            radius,
-        );
-        self.rect_pipeline.push_rounded_rect(
-            x + line,
-            y + line,
-            width - line * 2.0,
-            height - line * 2.0,
-            fade(self.ui.menu_bg),
-            radius - line,
+        self.push_raised_surface(
+            Bounds::new(x, y, width, height),
+            MODAL_CORNER_RADIUS,
+            &[(2.0, 0.18), (10.0, 0.10)],
+            3.0,
+            self.ui.menu_border,
+            animation,
         );
     }
 

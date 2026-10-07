@@ -31,26 +31,15 @@ impl Renderer {
         let dim = self.ui.menu_text_dim;
         let accent = self.ui.palette_accent;
         let error_color = self.ui.search_error;
-        let radius = self.px(MENU_CORNER_RADIUS);
         let bar = layout.bar;
 
-        // ── Floating surface with a hairline border ──
+        // ── Floating surface with a hairline border, flat over the panes ──
         let border = if info.regex_error.is_some() {
             with_alpha(error_color, 0.7)
         } else {
             self.ui.menu_border
         };
-        self.rect_pipeline
-            .push_rounded_rect(bar.x, bar.y, bar.width, bar.height, border, radius);
-        let hairline = self.px(1.0);
-        self.rect_pipeline.push_rounded_rect(
-            bar.x + hairline,
-            bar.y + hairline,
-            bar.width - hairline * 2.0,
-            bar.height - hairline * 2.0,
-            self.ui.menu_bg,
-            radius - hairline,
-        );
+        self.push_raised_surface(bar, MENU_CORNER_RADIUS, &[], 0.0, border, 1.0);
 
         let icon = layout.icon;
         self.push_magnifier(
