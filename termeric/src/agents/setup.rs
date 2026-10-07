@@ -9,7 +9,6 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -26,7 +25,7 @@ const HOOK_TIMEOUT_SECONDS: u64 = 5;
 /// at three seconds, and warns at every start about a longer one.
 const SHORT_HOOK_TIMEOUT_SECONDS: u64 = 2;
 /// Settings files are small; anything larger is not one Termeric should edit.
-const MAX_SETTINGS_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_SETTINGS_BYTES: usize = 4 * 1024 * 1024;
 
 /// An agent whose hooks Termeric knows how to install.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -435,18 +434,10 @@ fn render(entries: &Entries, indent: &str) -> String {
 
 /// Read a settings file, treating a missing one as empty.
 pub fn read_settings(path: &Path) -> Result<String> {
-    match fs::metadata(path) {
-        Ok(metadata) => {
-            anyhow::ensure!(metadata.is_file(), "{} is not a file", path.display());
-            anyhow::ensure!(
-                metadata.len() <= MAX_SETTINGS_BYTES,
-                "{} is too large to edit",
-                path.display()
-            );
-            fs::read_to_string(path).with_context(|| format!("read {}", path.display()))
-        }
+    match crate::safe_fs::read_linked_text(path, MAX_SETTINGS_BYTES) {
+        Ok(text) => Ok(text),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-        Err(error) => Err(error).with_context(|| format!("inspect {}", path.display())),
+        Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
     }
 }
 
@@ -492,38 +483,16 @@ fn write_settings(path: &Path, previous: &str, text: &str) -> Result<()> {
         .ok()
         .map(|metadata| metadata.permissions());
     if !previous.is_empty() {
-        replace(
-            &directory.join(format!("{name}.termeric-backup")),
-            previous,
-            permissions.clone(),
-        )?;
+        let backup = directory.join(format!("{name}.termeric-backup"));
+        crate::safe_fs::atomic_replace_keeping(&backup, permissions.clone(), |writer| {
+            writer.write_all(previous.as_bytes())
+        })
+        .with_context(|| format!("write {}", backup.display()))?;
     }
-    replace(&target, text, permissions)
-}
-
-fn replace(path: &Path, text: &str, permissions: Option<fs::Permissions>) -> Result<()> {
-    let temporary = path.with_file_name(format!(
-        ".{}.termeric-{}",
-        path.file_name().unwrap_or_default().to_string_lossy(),
-        std::process::id()
-    ));
-    let result = (|| -> Result<()> {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
-        if let Some(permissions) = permissions {
-            file.set_permissions(permissions)?;
-        }
-        file.write_all(text.as_bytes())?;
-        file.sync_all()?;
-        fs::rename(&temporary, path)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result.with_context(|| format!("write {}", path.display()))
+    crate::safe_fs::atomic_replace_keeping(&target, permissions, |writer| {
+        writer.write_all(text.as_bytes())
+    })
+    .with_context(|| format!("write {}", target.display()))
 }
 
 #[cfg(test)]
@@ -817,5 +786,23 @@ mod tests {
         assert!(write_settings(&dangling, "", "{}\n").is_err());
         assert!(fs::symlink_metadata(&dangling).unwrap().is_symlink());
         assert!(!dotfiles.join("gone.json").exists());
+    }
+
+    #[test]
+    fn new_settings_files_are_private_and_leave_no_staging_behind() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("agent").join("settings.json");
+        let text = rewrite(CLAUDE_CODE, "", &exe(), true).unwrap();
+        assert!(replace_if_unchanged(&path, "", &text).unwrap());
+        assert_eq!(fs::read_to_string(&path).unwrap(), text);
+        // Settings can hold API keys; a new file never takes the umask's
+        // world-readable default.
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o077, 0);
+        let entries: Vec<_> = fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(entries, ["settings.json"]);
     }
 }

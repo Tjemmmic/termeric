@@ -18,6 +18,13 @@ pub(crate) fn read_text(path: &Path, limit: usize) -> io::Result<String> {
     read_capped_text(open_regular(path, limit)?, limit)
 }
 
+/// [`read_text`] for a file the person owns, such as an agent's
+/// `settings.json`, which a dotfile manager may have made a symbolic link:
+/// the link is resolved, and only the regular file it names is read.
+pub(crate) fn read_linked_text(path: &Path, limit: usize) -> io::Result<String> {
+    read_text(&fs::canonicalize(path)?, limit)
+}
+
 /// The whole of `path`, opened through [`open_regular`] and capped at `limit`
 /// bytes even if the file grows while it is read.
 pub(crate) fn read_bytes(path: &Path, limit: usize) -> io::Result<Vec<u8>> {
@@ -272,6 +279,30 @@ mod tests {
         assert_eq!(fs::read_to_string(&target).unwrap(), "unchanged");
         assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o077, 0);
         assert_eq!(read_text(&path, 1024).unwrap(), "new snapshot");
+    }
+
+    #[test]
+    fn linked_reads_follow_links_to_regular_files_only() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        fs::write(&target, "linked").unwrap();
+        let link = dir.path().join("link");
+        symlink(&target, &link).unwrap();
+        assert_eq!(read_linked_text(&link, 1024).unwrap(), "linked");
+        assert_eq!(
+            read_linked_text(&link, 3).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        let dangling = dir.path().join("dangling");
+        symlink(dir.path().join("gone"), &dangling).unwrap();
+        assert_eq!(
+            read_linked_text(&dangling, 1024).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        let linked_directory = dir.path().join("directory");
+        symlink(dir.path(), &linked_directory).unwrap();
+        assert!(read_linked_text(&linked_directory, 1024).is_err());
     }
 
     #[test]
