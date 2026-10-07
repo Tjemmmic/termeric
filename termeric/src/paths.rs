@@ -1,13 +1,21 @@
 //! Where Termeric keeps its configuration and data.
+//!
+//! Both directories are found from the home directory. Without one there
+//! is nowhere to keep Termeric's files, and nothing falls back to the
+//! current directory: what needs a directory is skipped or refused.
 
 use std::path::PathBuf;
+
+/// Why something that needs [`config_dir`] or [`data_dir`] cannot work.
+pub const NO_HOME_DIRECTORY: &str =
+    "No home directory was found, so Termeric has nowhere to keep its files";
 
 /// `~/.config/termeric`: configuration, themes, plugins, and shell
 /// integration.
 pub fn config_dir() -> Option<PathBuf> {
     #[cfg(test)]
     {
-        Some(test_root().join("config"))
+        (!NO_HOME.get()).then(|| test_root().join("config"))
     }
     #[cfg(not(test))]
     {
@@ -19,7 +27,7 @@ pub fn config_dir() -> Option<PathBuf> {
 pub fn data_dir() -> Option<PathBuf> {
     #[cfg(test)]
     {
-        Some(test_root().join("data"))
+        (!NO_HOME.get()).then(|| test_root().join("data"))
     }
     #[cfg(not(test))]
     {
@@ -37,6 +45,25 @@ fn test_root() -> &'static std::path::Path {
 }
 
 #[cfg(test)]
+thread_local! {
+    static NO_HOME: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `test` on this thread as if no home directory could be found.
+#[cfg(test)]
+pub(crate) fn without_home<R>(test: impl FnOnce() -> R) -> R {
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            NO_HOME.set(false);
+        }
+    }
+    NO_HOME.set(true);
+    let _restore = Restore;
+    test()
+}
+
+#[cfg(test)]
 mod tests {
     #[test]
     fn tests_never_resolve_the_persons_own_directories() {
@@ -44,14 +71,28 @@ mod tests {
         for dir in [super::config_dir(), super::data_dir()] {
             assert!(dir.unwrap().starts_with(&root));
         }
+        let plugins = crate::plugin::runtime::PluginPaths::configured().unwrap();
         for path in [
-            crate::config::Config::config_path(),
-            crate::config::Config::themes_dir(),
-            crate::plugin::runtime::registry_path(),
-            crate::plugin::runtime::plugins_dir(),
-            crate::app::state::AppState::state_path(),
+            crate::config::Config::config_path().unwrap(),
+            crate::config::Config::themes_dir().unwrap(),
+            plugins.registry,
+            plugins.root,
+            crate::app::state::AppState::state_path().unwrap(),
         ] {
             assert!(path.starts_with(&root), "{}", path.display());
         }
+    }
+
+    #[test]
+    fn without_a_home_directory_nothing_resolves() {
+        super::without_home(|| {
+            assert_eq!(super::config_dir(), None);
+            assert_eq!(super::data_dir(), None);
+            assert_eq!(crate::config::Config::config_path(), None);
+            assert_eq!(crate::config::Config::themes_dir(), None);
+            assert_eq!(crate::plugin::runtime::PluginPaths::configured(), None);
+            assert_eq!(crate::app::state::AppState::state_path(), None);
+        });
+        assert!(super::config_dir().is_some());
     }
 }

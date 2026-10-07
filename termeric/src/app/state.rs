@@ -3,7 +3,7 @@
 //! Stores runtime state separate from user configuration.
 //! State is stored in XDG_DATA_HOME (~/.local/share/termeric/).
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -33,7 +33,9 @@ pub struct AppState {
 impl AppState {
     /// Load state from file or return default
     pub fn load() -> Self {
-        let state_path = Self::state_path();
+        let Some(state_path) = Self::state_path() else {
+            return Self::default();
+        };
         let content = match crate::safe_fs::read_text(&state_path, MAX_STATE_BYTES) {
             Ok(content) => content,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Self::default(),
@@ -48,9 +50,9 @@ impl AppState {
         })
     }
 
-    /// Save state to file
+    /// Save state to file; without a data directory it is not kept.
     pub fn save(&self) -> Result<()> {
-        let state_path = Self::state_path();
+        let state_path = Self::state_path().context(crate::paths::NO_HOME_DIRECTORY)?;
 
         // Ensure state directory exists
         if let Some(parent) = state_path.parent() {
@@ -64,14 +66,14 @@ impl AppState {
         Ok(())
     }
 
-    /// Get the state file path (XDG_DATA_HOME/termeric/state.json)
-    pub fn state_path() -> PathBuf {
+    /// The state file (XDG_DATA_HOME/termeric/state.json), `None` without a
+    /// data directory.
+    pub fn state_path() -> Option<PathBuf> {
         #[cfg(test)]
         if let Some(path) = TEST_STATE_PATH.with(|state| state.borrow().clone()) {
-            return path;
+            return Some(path);
         }
-        crate::paths::data_dir()
-            .map_or_else(|| PathBuf::from("state.json"), |dir| dir.join("state.json"))
+        crate::paths::data_dir().map(|dir| dir.join("state.json"))
     }
 
     #[cfg(test)]
@@ -165,5 +167,15 @@ mod tests {
         });
         AppState::set_test_state_path(None);
         result.unwrap();
+    }
+
+    #[test]
+    fn without_a_data_directory_state_is_neither_read_nor_kept() {
+        crate::paths::without_home(|| {
+            assert!(!AppState::load().first_boot_complete);
+            let mut state = AppState::default();
+            assert!(state.mark_first_boot_complete().is_err());
+            assert!(state.remember_workspace("workspace-a").is_err());
+        });
     }
 }

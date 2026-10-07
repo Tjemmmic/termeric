@@ -12,12 +12,18 @@ impl Application {
     pub(super) fn sync_plugin_generations(&mut self, now: Instant) {
         if self.plugin_host.generation() != self.plugin_generation_seen {
             // That reload read the registry as it is now.
-            self.last_plugin_registry_mtime = self.plugin_paths.registry_mtime();
+            self.last_plugin_registry_mtime = self
+                .plugin_paths
+                .as_ref()
+                .and_then(crate::plugin::runtime::PluginPaths::registry_mtime);
         } else if now.saturating_duration_since(self.last_plugin_registry_check)
             >= App::CONFIG_POLL_INTERVAL
         {
             self.last_plugin_registry_check = now;
-            let mtime = self.plugin_paths.registry_mtime();
+            let mtime = self
+                .plugin_paths
+                .as_ref()
+                .and_then(crate::plugin::runtime::PluginPaths::registry_mtime);
             if mtime != self.last_plugin_registry_mtime {
                 self.last_plugin_registry_mtime = mtime;
                 self.plugin_host.advance_generation();

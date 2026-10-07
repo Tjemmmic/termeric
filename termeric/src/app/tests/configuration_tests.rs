@@ -490,7 +490,7 @@ fn app_with_config_file(text: &str) -> (tempfile::TempDir, std::path::PathBuf, A
     let path = directory.path().join("config.toml");
     std::fs::write(&path, text).unwrap();
     let mut app = App::new_headless(Config::load_from(&path).unwrap()).unwrap();
-    app.config_path = path.clone();
+    app.config_path = Some(path.clone());
     (directory, path, app)
 }
 
@@ -515,7 +515,7 @@ fn a_failed_save_says_why() {
     // operating system's reason is the part worth reading.
     let blocker = directory.path().join("blocker");
     std::fs::write(&blocker, "").unwrap();
-    app.config_path = blocker.join("config.toml");
+    app.config_path = Some(blocker.join("config.toml"));
     app.apply_settings_action(SettingsAction::SetVisualBell(false));
     app.apply_settings_action(SettingsAction::SaveConfig);
     let message = &app.toasts.iter().last().unwrap().message;
@@ -524,6 +524,22 @@ fn a_failed_save_says_why() {
         "{message}"
     );
     assert!(message.contains("Not a directory"), "{message}");
+}
+
+#[test]
+fn without_a_configuration_directory_defaults_run_and_nothing_is_saved() {
+    crate::paths::without_home(|| {
+        let (_, warning) = Config::load_for_startup();
+        assert!(warning.is_some(), "startup says settings cannot be saved");
+        let mut app = App::new_headless(Config::default()).unwrap();
+        assert_eq!(app.config_path, None);
+        assert_eq!(app.supervisor_rules_path, None);
+        assert_eq!(app.runtime_plugin_paths, None);
+        app.apply_settings_action(SettingsAction::SetVisualBell(false));
+        assert!(app.save_config().is_err());
+        assert!(app.config_has_unsaved_changes());
+        assert!(app.discover_runtime_plugins_for_app().unwrap().0.is_empty());
+    });
 }
 
 #[test]
@@ -793,9 +809,7 @@ fn a_theme_that_does_not_load_stays_configured_until_another_is_chosen() {
 /// Make the next poll look at the files it watches, without treating the
 /// configuration file as changed.
 fn poll_files_now(app: &mut App) {
-    app.last_config_mtime = std::fs::metadata(&app.config_path)
-        .and_then(|metadata| metadata.modified())
-        .ok();
+    app.last_config_mtime = app.config_path.as_deref().and_then(super::file_mtime);
     app.last_config_check = Instant::now()
         .checked_sub(App::CONFIG_POLL_INTERVAL)
         .expect("the clock is past one poll interval");

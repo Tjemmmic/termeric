@@ -130,8 +130,13 @@ impl App {
             .is_some_and(|supervisor| supervisor.session == id)
     }
 
-    fn ensure_rules_file(&self) -> anyhow::Result<String> {
-        let path = &self.supervisor_rules_path;
+    /// The rules file and what it says, written with the default rules
+    /// first if it does not exist yet.
+    fn ensure_rules_file(&self) -> anyhow::Result<(&std::path::Path, String)> {
+        let path = self
+            .supervisor_rules_path
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!(crate::paths::NO_HOME_DIRECTORY))?;
         match std::fs::metadata(path) {
             Ok(metadata) if metadata.len() > MAX_RULES_BYTES => anyhow::bail!(
                 "{} is larger than {} KiB; shorten it",
@@ -141,13 +146,13 @@ impl App {
             _ => {}
         }
         match std::fs::read_to_string(path) {
-            Ok(rules) => Ok(rules),
+            Ok(rules) => Ok((path, rules)),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 if let Some(parent) = path.parent() {
                     std::fs::create_dir_all(parent)?;
                 }
                 std::fs::write(path, supervisor::DEFAULT_RULES)?;
-                Ok(supervisor::DEFAULT_RULES.to_string())
+                Ok((path, supervisor::DEFAULT_RULES.to_string()))
             }
             Err(error) => Err(error.into()),
         }
@@ -194,7 +199,7 @@ impl App {
             .filter(|agent| agent.enabled)
             .cloned()
             .ok_or_else(|| format!("The supervisor runs {}, which is turned off", kind.name()))?;
-        let rules = self
+        let (_, rules) = self
             .ensure_rules_file()
             .map_err(|error| format!("Could not read the supervisor rules: {error:#}"))?;
         let token = new_token().ok_or("Could not create a supervisor token")?;
@@ -412,12 +417,14 @@ impl App {
 
     /// Open the rules file in the person's editor, in a new tab.
     pub(super) fn edit_supervisor_rules(&mut self) {
-        if let Err(error) = self.ensure_rules_file() {
-            self.toasts
-                .error(format!("Could not create the supervisor rules: {error:#}"));
-            return;
-        }
-        let path = self.supervisor_rules_path.display().to_string();
+        let path = match self.ensure_rules_file() {
+            Ok((path, _)) => path.display().to_string(),
+            Err(error) => {
+                self.toasts
+                    .error(format!("Could not create the supervisor rules: {error:#}"));
+                return;
+            }
+        };
         let opened = self.tabs.as_mut().map(|tabs| {
             tabs.new_tab_with_command(
                 "/bin/sh",

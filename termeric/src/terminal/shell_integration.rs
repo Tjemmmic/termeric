@@ -115,49 +115,49 @@ impl ShellIntegrationSupport {
 /// are left untouched because injecting an interactive rc file would change
 /// their semantics.
 pub fn prepare_shell_launch(shell: &ShellConfig) -> ShellLaunch {
-    let base = crate::paths::config_dir()
-        .map(|dir| dir.join("shell-integration"))
-        .unwrap_or_else(|| PathBuf::from(".termeric-shell-integration"));
+    // The integration files live in the configuration directory; without
+    // one the shell starts as configured, with nothing written anywhere.
+    let Some(base) = crate::paths::config_dir().map(|dir| dir.join("shell-integration")) else {
+        return plain_shell_launch(
+            shell,
+            format!(
+                "Shell integration is unavailable: {}",
+                crate::paths::NO_HOME_DIRECTORY
+            ),
+        );
+    };
     match prepare_shell_launch_in(shell, &base) {
         Ok(launch) => launch,
         Err(error) => {
             log::warn!("Shell integration could not be prepared: {error:#}");
-            ShellLaunch {
-                program: shell
-                    .program
-                    .clone()
-                    .or_else(|| std::env::var("SHELL").ok()),
-                args: shell.args.clone(),
-                env: shell
-                    .env
-                    .iter()
-                    .map(|(key, value)| (key.clone(), value.clone()))
-                    .collect(),
-                integration: ShellIntegrationSupport::Unavailable(format!(
-                    "Shell integration setup failed: {error:#}"
-                )),
-            }
+            plain_shell_launch(shell, format!("Shell integration setup failed: {error:#}"))
         }
     }
 }
 
-fn prepare_shell_launch_in(shell: &ShellConfig, base: &Path) -> Result<ShellLaunch> {
-    let program = shell
-        .program
-        .clone()
-        .or_else(|| std::env::var("SHELL").ok());
-    let mut launch = ShellLaunch {
-        program,
+/// The configured shell launched as it is, with integration unavailable
+/// for `reason`.
+fn plain_shell_launch(shell: &ShellConfig, reason: String) -> ShellLaunch {
+    ShellLaunch {
+        program: shell
+            .program
+            .clone()
+            .or_else(|| std::env::var("SHELL").ok()),
         args: shell.args.clone(),
         env: shell
             .env
             .iter()
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect(),
-        integration: ShellIntegrationSupport::Unavailable(format!(
-            "Shell integration is unavailable; configure {SUPPORTED_SHELLS}"
-        )),
-    };
+        integration: ShellIntegrationSupport::Unavailable(reason),
+    }
+}
+
+fn prepare_shell_launch_in(shell: &ShellConfig, base: &Path) -> Result<ShellLaunch> {
+    let mut launch = plain_shell_launch(
+        shell,
+        format!("Shell integration is unavailable; configure {SUPPORTED_SHELLS}"),
+    );
 
     let Some(program) = launch.program.as_deref() else {
         return Ok(launch);
@@ -505,6 +505,20 @@ mod tests {
             nushell.integration,
             ShellIntegrationSupport::Enabled("nushell")
         );
+    }
+
+    #[test]
+    fn without_a_configuration_directory_shells_start_unintegrated() {
+        let mut configured = shell("/bin/bash", &[]);
+        configured.env.insert("PROFILE_MARK".into(), "exact".into());
+        let launch = crate::paths::without_home(|| prepare_shell_launch(&configured));
+        assert_eq!(launch.program.as_deref(), Some("/bin/bash"));
+        assert!(launch.args.is_empty());
+        assert_eq!(launch.env, [("PROFILE_MARK".into(), "exact".into())]);
+        assert!(matches!(
+            launch.integration,
+            ShellIntegrationSupport::Unavailable(_)
+        ));
     }
 
     #[test]

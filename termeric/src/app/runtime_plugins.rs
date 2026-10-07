@@ -33,23 +33,33 @@ impl App {
         Vec<crate::plugin::runtime::DeclarativePlugin>,
         Vec<RuntimePluginStatus>,
     )> {
-        let paths = &self.runtime_plugin_paths;
+        // Without a configuration directory no plugin can be installed.
+        let Some(paths) = &self.runtime_plugin_paths else {
+            return Ok((Vec::new(), Vec::new()));
+        };
         crate::plugin::runtime::discover_runtime_plugins_at(&paths.registry, &paths.root)
     }
 
+    /// Where plugins live, or why there is nowhere for them.
+    fn runtime_plugin_paths(&self) -> Result<&crate::plugin::runtime::PluginPaths> {
+        self.runtime_plugin_paths
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!(crate::paths::NO_HOME_DIRECTORY))
+    }
+
     fn execute_runtime_plugin_admin(&self, command: PluginAdminCommand) -> Result<String> {
-        let paths = &self.runtime_plugin_paths;
+        let paths = self.runtime_plugin_paths()?;
         crate::plugin::runtime::execute_admin_at(command, &paths.registry, &paths.root)
     }
 
     fn preview_runtime_plugin_update(&self, plugin_id: &str) -> Result<PluginUpdatePreview> {
-        let paths = &self.runtime_plugin_paths;
+        let paths = self.runtime_plugin_paths()?;
         crate::plugin::runtime::preview_update_at(plugin_id, &paths.registry, &paths.root)
     }
 
     #[cfg(test)]
     pub(crate) fn set_runtime_plugin_test_paths(&mut self, registry: PathBuf, root: PathBuf) {
-        self.runtime_plugin_paths = crate::plugin::runtime::PluginPaths { registry, root };
+        self.runtime_plugin_paths = Some(crate::plugin::runtime::PluginPaths { registry, root });
         self.sync_plugins_from_config();
     }
 
@@ -435,8 +445,10 @@ impl App {
     }
 
     fn open_runtime_plugin_permission_review(&mut self, plugin_id: String, page: usize) {
-        let paths = &self.runtime_plugin_paths;
-        match crate::plugin::runtime::preview_grants_at(&plugin_id, &paths.registry, &paths.root) {
+        let preview = self.runtime_plugin_paths().and_then(|paths| {
+            crate::plugin::runtime::preview_grants_at(&plugin_id, &paths.registry, &paths.root)
+        });
+        match preview {
             Ok(preview) => {
                 // A grant narrower than its request is shown ungranted, and
                 // selecting it grants the requested scope.

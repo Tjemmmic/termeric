@@ -1187,8 +1187,9 @@ pub struct App {
     last_agent_scan: Instant,
     /// Enter keys waiting to submit text typed into agents.
     pending_agent_submits: Vec<agents::PendingAgentSubmit>,
-    /// The configuration file this window loads, saves, and watches.
-    config_path: PathBuf,
+    /// The configuration file this window loads, saves, and watches; `None`
+    /// without a configuration directory, when nothing is loaded or saved.
+    config_path: Option<PathBuf>,
     /// Last observed mtime of the config file (for change detection)
     last_config_mtime: Option<std::time::SystemTime>,
     /// Coding agents with configuration applied; rebuilt on every config change.
@@ -1372,9 +1373,9 @@ pub struct App {
     guardrail: GuardrailOverlay,
     /// The multi-step flow the info overlay is running, if any.
     overlay_flow: Option<OverlayFlow>,
-    /// Where third-party plugins and their registry live; tests point this
-    /// at a temporary directory.
-    runtime_plugin_paths: crate::plugin::runtime::PluginPaths,
+    /// Where third-party plugins and their registry live, `None` without a
+    /// configuration directory; tests point this at a temporary directory.
+    runtime_plugin_paths: Option<crate::plugin::runtime::PluginPaths>,
     /// Agent status hooks awaiting the person's confirmation.
     pending_hook_change: Option<agent_hooks::PendingHookChange>,
     /// Git work comparing an agent's changes, running on a worker thread.
@@ -1387,8 +1388,9 @@ pub struct App {
     agent_change_review: Option<agent_changes::ChangeReview>,
     /// The agent overseeing this window's other agents, if started.
     supervisor: Option<supervisor::Supervisor>,
-    /// The plain-language rules given to a new supervisor.
-    supervisor_rules_path: PathBuf,
+    /// The plain-language rules given to a new supervisor, `None` without a
+    /// configuration directory.
+    supervisor_rules_path: Option<PathBuf>,
     /// This window's ID in the control protocol.
     control_window_id: u64,
     /// At most one background file upload may be active per native window.
@@ -1500,11 +1502,10 @@ impl App {
     ) -> Result<Self> {
         let config_path = Config::config_path();
         let background_image_path = config.window.background_image.path.clone();
-        let last_background_image_stamp = background_image_path.as_deref().and_then(|path| {
-            crate::renderer::BackgroundImageStamp::for_path(
-                &crate::renderer::resolve_background_image_path(path),
-            )
-        });
+        let last_background_image_stamp = background_image_path
+            .as_deref()
+            .and_then(crate::renderer::resolve_background_image_path)
+            .and_then(|path| crate::renderer::BackgroundImageStamp::for_path(&path));
         let cursor_blink_period = (config.cursor.blink_rate as f32 / 1000.0) * 2.0;
         // A configured theme that does not load stays configured, so a save
         // never replaces it; turmeric is shown meanwhile, and applying the
@@ -1588,10 +1589,10 @@ impl App {
             agent_features_held: false,
             agent_features_held_notice: Default::default(),
             agents: crate::agents::AgentCatalog::default(),
-            last_config_mtime: use_system_state
-                .then(|| std::fs::metadata(&config_path))
-                .and_then(Result::ok)
-                .and_then(|metadata| metadata.modified().ok()),
+            last_config_mtime: config_path
+                .as_deref()
+                .filter(|_| use_system_state)
+                .and_then(file_mtime),
             config_path,
             theme_file: None,
             theme_file_modified: None,
@@ -1685,7 +1686,7 @@ impl App {
             pending_revert: None,
             agent_change_review: None,
             supervisor: None,
-            supervisor_rules_path: Config::config_path().with_file_name("supervisor.md"),
+            supervisor_rules_path: crate::paths::config_dir().map(|dir| dir.join("supervisor.md")),
             control_window_id: 1,
             active_file_upload: None,
             session_export: None,
@@ -3451,7 +3452,7 @@ impl App {
 
     /// Replace the running configuration with the one on disk.
     fn reload_config_from_disk(&mut self) {
-        match Config::load_from(&self.config_path) {
+        match self.config_file().and_then(Config::load_from) {
             Ok(config) => {
                 if let Err(error) = self.apply_config(config) {
                     self.report_config_problem(
@@ -3476,17 +3477,17 @@ impl App {
     /// the old file beside it, and then use the defaults. Only the confirmed
     /// Reset Configuration does this.
     fn reset_config_to_defaults(&mut self) {
-        let backup =
-            match crate::config::save::reset(&self.config_path, std::time::SystemTime::now()) {
-                Ok(backup) => backup,
-                Err(error) => {
-                    self.toasts.error(format!("Reset failed: {error:#}"));
-                    return;
-                }
-            };
-        self.last_config_mtime = std::fs::metadata(&self.config_path)
-            .and_then(|metadata| metadata.modified())
-            .ok();
+        let backup = match self
+            .config_file()
+            .and_then(|path| crate::config::save::reset(path, std::time::SystemTime::now()))
+        {
+            Ok(backup) => backup,
+            Err(error) => {
+                self.toasts.error(format!("Reset failed: {error:#}"));
+                return;
+            }
+        };
+        self.last_config_mtime = self.config_path.as_deref().and_then(file_mtime);
         if let Err(error) = self.apply_config(Config::default()) {
             self.toasts.error(format!(
                 "The file was reset, but the defaults failed: {error}"
@@ -3923,18 +3924,32 @@ impl App {
         self.config.validate()?;
         let live = self.persisted_config_table()?;
         let baseline = self.saved_config.clone().unwrap_or_default();
-        let file = crate::config::save::save(&self.config_path, &baseline, &self.config)?;
+        let path = self.config_file()?;
+        let file = crate::config::save::save(path, &baseline, &self.config)?;
+        let shown = path.display().to_string();
         // When the file now holds exactly the live settings, the poller need
         // not reload this write. Otherwise another program changed the file
         // too, and the reload brings in its changes.
         if file == live {
-            self.last_config_mtime = std::fs::metadata(&self.config_path)
-                .and_then(|metadata| metadata.modified())
-                .ok();
+            self.last_config_mtime = file_mtime(path);
         }
         self.saved_config = Some(live);
-        Ok(self.config_path.display().to_string())
+        Ok(shown)
     }
+
+    /// The configuration file, or why there is none to load or save.
+    fn config_file(&self) -> Result<&std::path::Path> {
+        self.config_path
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!(crate::paths::NO_HOME_DIRECTORY))
+    }
+}
+
+/// When `path` was last modified, if it can be read.
+fn file_mtime(path: &std::path::Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
 }
 
 fn native_window_title(quick_access: bool, active_tab_title: Option<&str>) -> String {

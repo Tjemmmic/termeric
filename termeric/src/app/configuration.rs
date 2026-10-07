@@ -13,11 +13,15 @@ impl App {
     /// Ask before Reset Configuration replaces the file. The confirmation has
     /// no letter shortcut, so a repeated key cannot reset.
     pub(super) fn confirm_config_reset(&mut self) {
+        let path = match self.config_file() {
+            Ok(path) => path.display().to_string(),
+            Err(error) => {
+                self.toasts.error(format!("Reset failed: {error:#}"));
+                return;
+            }
+        };
         let lines = vec![
-            format!(
-                "Replace {} with a file that sets nothing?",
-                self.config_path.display()
-            ),
+            format!("Replace {path} with a file that sets nothing?"),
             "Every setting returns to its default. The current file is kept".into(),
             "beside it as a .bak copy.".into(),
             String::new(),
@@ -130,11 +134,11 @@ impl App {
             return;
         }
         self.background_image_path = policy.path.clone();
-        self.last_background_image_stamp = policy.path.as_deref().and_then(|path| {
-            crate::renderer::BackgroundImageStamp::for_path(
-                &crate::renderer::resolve_background_image_path(path),
-            )
-        });
+        self.last_background_image_stamp = policy
+            .path
+            .as_deref()
+            .and_then(crate::renderer::resolve_background_image_path)
+            .and_then(|path| crate::renderer::BackgroundImageStamp::for_path(&path));
         self.background_image_generation = self.background_image_generation.wrapping_add(1);
 
         if policy.path.is_none() {
@@ -162,8 +166,16 @@ impl App {
         let Some(proxy) = EVENT_LOOP_PROXY.get().cloned() else {
             return;
         };
+        let Some(resolved_path) = crate::renderer::resolve_background_image_path(&configured_path)
+        else {
+            self.toasts.warning(format!(
+                "Background image {} is relative to the configuration directory: {}",
+                configured_path.display(),
+                crate::paths::NO_HOME_DIRECTORY
+            ));
+            return;
+        };
         let generation = self.background_image_generation;
-        let resolved_path = crate::renderer::resolve_background_image_path(&configured_path);
         self.background_image_loading = true;
         let spawn = std::thread::Builder::new()
             .name("termeric-background-image".into())
@@ -231,8 +243,8 @@ impl App {
         let Some(path) = self.background_image_path.as_deref() else {
             return false;
         };
-        let resolved = crate::renderer::resolve_background_image_path(path);
-        let stamp = crate::renderer::BackgroundImageStamp::for_path(&resolved);
+        let stamp = crate::renderer::resolve_background_image_path(path)
+            .and_then(|resolved| crate::renderer::BackgroundImageStamp::for_path(&resolved));
         if stamp == self.last_background_image_stamp {
             return false;
         }
@@ -250,9 +262,7 @@ impl App {
         self.last_config_check = Instant::now();
         let mut changed = false;
 
-        let current_mtime = std::fs::metadata(&self.config_path)
-            .and_then(|m| m.modified())
-            .ok();
+        let current_mtime = self.config_path.as_deref().and_then(super::file_mtime);
 
         if current_mtime != self.last_config_mtime {
             changed = true;
@@ -260,8 +270,8 @@ impl App {
 
             // Only reload if the file exists (avoid racing with editors that
             // briefly delete + rewrite).
-            if self.config_path.exists() {
-                match crate::config::Config::load_from(&self.config_path) {
+            if let Some(path) = self.config_path.clone().filter(|path| path.exists()) {
+                match crate::config::Config::load_from(&path) {
                     Ok(config) => {
                         if let Err(error) = self.apply_config(config) {
                             self.report_config_problem(

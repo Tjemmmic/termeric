@@ -251,11 +251,12 @@ pub struct CustomCommand {
 }
 
 impl Config {
-    /// Load configuration from file or return defaults when no file exists.
-    /// Parse and validation errors are returned so runtime reloads can preserve
-    /// the last known-good configuration.
+    /// Load configuration from file or return defaults when no file exists,
+    /// or no configuration directory to hold one. Parse and validation
+    /// errors are returned so runtime reloads can preserve the last
+    /// known-good configuration.
     pub fn load_or_default() -> Result<Self> {
-        Self::load_from(&Self::config_path())
+        Self::config_path().map_or_else(|| Ok(Self::default()), |path| Self::load_from(&path))
     }
 
     /// Load the configuration file at `config_path`, or defaults when there
@@ -282,6 +283,15 @@ impl Config {
     /// Load startup configuration without making a malformed user file fatal.
     /// The warning is returned for presentation after the UI is initialized.
     pub fn load_for_startup() -> (Self, Option<String>) {
+        if Self::config_path().is_none() {
+            return (
+                Self::default(),
+                Some(format!(
+                    "{}; using the default configuration, which cannot be saved",
+                    crate::paths::NO_HOME_DIRECTORY
+                )),
+            );
+        }
         match Self::load_or_default() {
             Ok(config) => (config, None),
             Err(error) => (
@@ -487,17 +497,15 @@ impl Config {
         })
     }
 
-    /// Get the configuration file path
-    pub fn config_path() -> PathBuf {
-        crate::paths::config_dir().map_or_else(
-            || PathBuf::from("config.toml"),
-            |dir| dir.join("config.toml"),
-        )
+    /// The configuration file, `None` without a configuration directory.
+    pub fn config_path() -> Option<PathBuf> {
+        crate::paths::config_dir().map(|dir| dir.join("config.toml"))
     }
 
-    /// Get the themes directory path
-    pub fn themes_dir() -> PathBuf {
-        crate::paths::config_dir().map_or_else(|| PathBuf::from("themes"), |dir| dir.join("themes"))
+    /// The custom themes directory, `None` without a configuration
+    /// directory.
+    pub fn themes_dir() -> Option<PathBuf> {
+        crate::paths::config_dir().map(|dir| dir.join("themes"))
     }
 }
 

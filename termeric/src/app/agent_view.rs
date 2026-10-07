@@ -1714,8 +1714,8 @@ mod tests {
     /// A configuration file reading `text`, which `app` loads and watches.
     fn config_file(app: &mut App, text: &str) -> tempfile::TempDir {
         let directory = tempfile::tempdir().unwrap();
-        app.config_path = directory.path().join("config.toml");
-        std::fs::write(&app.config_path, text).unwrap();
+        app.config_path = Some(directory.path().join("config.toml"));
+        std::fs::write(app.config_path.as_ref().unwrap(), text).unwrap();
         directory
     }
 

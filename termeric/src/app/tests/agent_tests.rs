@@ -1540,7 +1540,7 @@ done
     );
     config.supervisor.mode = SupervisorMode::Assist;
     let mut app = App::new_headless(config.with_agent_features()).unwrap();
-    app.supervisor_rules_path = temp.path().join("supervisor.md");
+    app.supervisor_rules_path = Some(temp.path().join("supervisor.md"));
     let mut tabs = TabManager::for_test(ShellConfig::default());
     tabs.new_tab_with_command(
         "/bin/sh",
@@ -1829,7 +1829,7 @@ fn codex_supervises_as_an_agent_view_conversation() {
     config.supervisor.agent = "codex".into();
     config.supervisor.mode = SupervisorMode::Watch;
     let mut app = App::new_headless(config).unwrap();
-    app.supervisor_rules_path = temp.path().join("supervisor.md");
+    app.supervisor_rules_path = Some(temp.path().join("supervisor.md"));
     let mut tabs = TabManager::for_test(ShellConfig::default());
     tabs.new_tab().unwrap();
     app.tabs = Some(tabs);

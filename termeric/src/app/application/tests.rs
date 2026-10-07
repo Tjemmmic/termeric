@@ -4759,11 +4759,12 @@ fn one_plugin_reload_moves_every_window_to_one_generation() {
     let mut application =
         Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
     application.pending.clear();
-    application.plugin_paths = crate::plugin::runtime::PluginPaths {
+    let plugin_paths = crate::plugin::runtime::PluginPaths {
         registry: registry.clone(),
         root: root.clone(),
     };
-    application.last_plugin_registry_mtime = application.plugin_paths.registry_mtime();
+    application.last_plugin_registry_mtime = plugin_paths.registry_mtime();
+    application.plugin_paths = Some(plugin_paths);
     let natives = [WindowId::from(11_u64), WindowId::from(12_u64)];
     for native in natives {
         let mut window = App::new_headless(Config::default()).unwrap();

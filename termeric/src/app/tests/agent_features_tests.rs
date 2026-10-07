@@ -305,7 +305,7 @@ fn the_settings_switch_saves_only_its_own_key() {
     let original = "# Mine.\n[window]\npadding = 4\n";
     std::fs::write(&path, original).unwrap();
     let mut app = App::new_headless(Config::load_from(&path).unwrap()).unwrap();
-    app.config_path = path.clone();
+    app.config_path = Some(path.clone());
 
     set_agent_features(&mut app, true);
     app.apply_settings_action(SettingsAction::SaveConfig);

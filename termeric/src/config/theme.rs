@@ -113,7 +113,9 @@ impl Theme {
     /// Scans `Config::themes_dir()` for `.toml` files and returns their
     /// stem names (e.g., `my-theme.toml` -> `"my-theme"`).
     pub fn list_custom() -> Vec<String> {
-        Self::list_custom_in_dir(&super::Config::themes_dir())
+        super::Config::themes_dir()
+            .map(|dir| Self::list_custom_in_dir(&dir))
+            .unwrap_or_default()
     }
 
     fn list_custom_in_dir(dir: &Path) -> Vec<String> {
@@ -150,29 +152,36 @@ impl Theme {
     /// Resolve a configured theme: the file at `explicit_path`, else the
     /// custom theme `name`, else the built-in one.
     pub fn resolve(name: &str, explicit_path: Option<&Path>) -> Result<Self> {
-        Self::resolve_in_dir(name, explicit_path, &super::Config::themes_dir())
+        Self::resolve_in_dir(name, explicit_path, super::Config::themes_dir().as_deref())
     }
 
     /// The file a configured theme is read from whenever it exists:
     /// `explicit_path`, or the custom theme file for `name`. Watching it
     /// follows edits to the theme and finds it when it appears.
     pub fn configured_file(name: &str, explicit_path: Option<&Path>) -> Option<PathBuf> {
-        Self::configured_file_in_dir(name, explicit_path, &super::Config::themes_dir())
+        Self::configured_file_in_dir(name, explicit_path, super::Config::themes_dir().as_deref())
     }
 
+    /// Without a custom themes directory, only an explicit path names a
+    /// file.
     fn configured_file_in_dir(
         name: &str,
         explicit_path: Option<&Path>,
-        custom_dir: &Path,
+        custom_dir: Option<&Path>,
     ) -> Option<PathBuf> {
         match explicit_path {
             Some(path) => Some(path.to_path_buf()),
-            None => (Path::new(name).components().count() == 1)
-                .then(|| custom_dir.join(format!("{name}.toml"))),
+            None => custom_dir
+                .filter(|_| Path::new(name).components().count() == 1)
+                .map(|dir| dir.join(format!("{name}.toml"))),
         }
     }
 
-    fn resolve_in_dir(name: &str, explicit_path: Option<&Path>, custom_dir: &Path) -> Result<Self> {
+    fn resolve_in_dir(
+        name: &str,
+        explicit_path: Option<&Path>,
+        custom_dir: Option<&Path>,
+    ) -> Result<Self> {
         if let Some(path) = explicit_path {
             return Self::load(path);
         }
@@ -683,10 +692,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("warm-root.toml");
         assert_eq!(
-            Theme::configured_file_in_dir("warm-root", None, dir.path()),
+            Theme::configured_file_in_dir("warm-root", None, Some(dir.path())),
             Some(path.clone())
         );
-        assert!(Theme::resolve_in_dir("warm-root", None, dir.path()).is_err());
+        assert!(Theme::resolve_in_dir("warm-root", None, Some(dir.path())).is_err());
 
         let custom = include_str!("../../themes/roots/turmeric.toml").replacen(
             "name = \"Turmeric\"",
@@ -694,13 +703,23 @@ mod tests {
             1,
         );
         std::fs::write(&path, custom).unwrap();
-        let theme = Theme::resolve_in_dir("warm-root", None, dir.path()).unwrap();
+        let theme = Theme::resolve_in_dir("warm-root", None, Some(dir.path())).unwrap();
         assert_eq!(theme.meta.name, "Warm Root");
         // A name that is a path names no custom file.
         assert_eq!(
-            Theme::configured_file_in_dir("../warm-root", None, dir.path()),
+            Theme::configured_file_in_dir("../warm-root", None, Some(dir.path())),
             None
         );
+    }
+
+    #[test]
+    fn without_a_themes_directory_only_built_in_and_explicit_themes_load() {
+        crate::paths::without_home(|| {
+            assert!(Theme::list_custom().is_empty());
+            assert_eq!(Theme::configured_file("warm-root", None), None);
+            assert_eq!(Theme::resolve("ginger", None).unwrap().meta.name, "Ginger");
+            assert!(Theme::resolve("warm-root", None).is_err());
+        });
     }
 
     #[test]

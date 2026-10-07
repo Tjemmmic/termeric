@@ -53,7 +53,7 @@ pub struct Application {
     /// The plugin generation every window was last brought to.
     plugin_generation_seen: u64,
     /// The plugin registry, polled once for the whole process.
-    plugin_paths: crate::plugin::runtime::PluginPaths,
+    plugin_paths: Option<crate::plugin::runtime::PluginPaths>,
     last_plugin_registry_mtime: Option<std::time::SystemTime>,
     last_plugin_registry_check: Instant,
     /// The renderer `--renderer` chose for every window of this process,
@@ -394,7 +394,9 @@ impl Application {
             fatal_startup_error: None,
             plugin_generation_seen: plugin_host.generation(),
             plugin_host,
-            last_plugin_registry_mtime: plugin_paths.registry_mtime(),
+            last_plugin_registry_mtime: plugin_paths
+                .as_ref()
+                .and_then(crate::plugin::runtime::PluginPaths::registry_mtime),
             last_plugin_registry_check: Instant::now(),
             plugin_paths,
             renderer_backend,

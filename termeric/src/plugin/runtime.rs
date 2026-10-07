@@ -623,12 +623,14 @@ pub struct PluginPaths {
 }
 
 impl PluginPaths {
-    /// Beside the configuration file.
-    pub fn configured() -> Self {
-        Self {
-            registry: registry_path(),
-            root: plugins_dir(),
-        }
+    /// Beside the configuration file; `None` without a configuration
+    /// directory, where no plugin can be installed.
+    pub fn configured() -> Option<Self> {
+        let dir = crate::paths::config_dir()?;
+        Some(Self {
+            registry: dir.join("plugins.toml"),
+            root: dir.join("plugins"),
+        })
     }
 
     /// When the registry was last written, which the running app polls to
@@ -1282,7 +1284,8 @@ pub enum PluginConfigurationChange {
 }
 
 pub fn execute_admin(command: PluginAdminCommand) -> Result<String> {
-    execute_admin_at(command, &registry_path(), &plugins_dir())
+    let paths = PluginPaths::configured().context(crate::paths::NO_HOME_DIRECTORY)?;
+    execute_admin_at(command, &paths.registry, &paths.root)
 }
 
 pub(crate) fn execute_admin_at(
@@ -2065,19 +2068,6 @@ fn render_registry(
         })
         .collect::<Vec<_>>()
         .join("\n"))
-}
-
-pub fn registry_path() -> PathBuf {
-    crate::config::Config::config_path().parent().map_or_else(
-        || PathBuf::from("plugins.toml"),
-        |parent| parent.join("plugins.toml"),
-    )
-}
-
-pub fn plugins_dir() -> PathBuf {
-    crate::config::Config::config_path()
-        .parent()
-        .map_or_else(|| PathBuf::from("plugins"), |parent| parent.join("plugins"))
 }
 
 /// Built-in agents register as plugins under their own IDs, so a

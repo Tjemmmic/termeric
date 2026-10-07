@@ -53,13 +53,13 @@ pub(crate) struct DecodedBackgroundImage {
 }
 
 /// Resolve relative user paths beside the persistent configuration file.
-pub(crate) fn resolve_background_image_path(path: &Path) -> PathBuf {
+/// Without a configuration directory a relative path names no file, rather
+/// than one in the current directory.
+pub(crate) fn resolve_background_image_path(path: &Path) -> Option<PathBuf> {
     if path.is_absolute() {
-        return path.to_path_buf();
+        return Some(path.to_path_buf());
     }
-    crate::config::Config::config_path()
-        .parent()
-        .map_or_else(|| path.to_path_buf(), |parent| parent.join(path))
+    crate::paths::config_dir().map(|dir| dir.join(path))
 }
 
 /// Read and decode one static PNG or JPEG under explicit CPU-memory limits.
@@ -387,11 +387,19 @@ mod tests {
         assert_eq!(
             resolve_background_image_path(relative),
             crate::config::Config::config_path()
-                .parent()
                 .unwrap()
-                .join(relative)
+                .parent()
+                .map(|dir| dir.join(relative))
         );
         let absolute = std::env::temp_dir().join("termeric-background.png");
-        assert_eq!(resolve_background_image_path(&absolute), absolute);
+        assert_eq!(
+            resolve_background_image_path(&absolute),
+            Some(absolute.clone())
+        );
+
+        crate::paths::without_home(|| {
+            assert_eq!(resolve_background_image_path(relative), None);
+            assert_eq!(resolve_background_image_path(&absolute), Some(absolute));
+        });
     }
 }

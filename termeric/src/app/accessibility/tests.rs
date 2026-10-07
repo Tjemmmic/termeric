@@ -1953,7 +1953,7 @@ fn command_deletion_unifies_focus_and_retires_stale_duplicate_actions() {
         // Deleting a command saves the configuration, to a file of this
         // case's own.
         let directory = tempfile::tempdir().unwrap();
-        app.config_path = directory.path().join("config.toml");
+        app.config_path = Some(directory.path().join("config.toml"));
         let duplicate = crate::config::CustomCommand {
             name: "same".into(),
             command: "inert: never run".into(),
@@ -2055,7 +2055,7 @@ fn command_deletion_unifies_focus_and_retires_stale_duplicate_actions() {
                 assert!(app.commands_panel.is_open(), "{route}: stale Run activated");
             }
         }
-        let persisted = Config::load_from(&app.config_path).unwrap();
+        let persisted = Config::load_from(app.config_path.as_deref().unwrap()).unwrap();
         assert_eq!(persisted.commands.len(), remaining);
         if editing {
             assert_eq!(app.commands_panel.form_name.text(), "retained name");
