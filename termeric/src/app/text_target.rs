@@ -1,0 +1,135 @@
+//! Where typed, pasted, and composed (IME) text goes. Pastes, input-method
+//! previews and commits, and the input method's caret all ask
+//! [`App::text_target`], in the same order keyboard dispatch offers keys, so
+//! none of them can send text to a field the keys would not reach.
+
+use super::modal_layer::ModalLayer;
+use super::palette_input::PaletteModal;
+use super::*;
+
+/// The surface that receives text, or `Blocked` when the surface that owns
+/// input has no field to take it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TextTarget {
+    Palette(PaletteModal),
+    ShortcutsFilter,
+    SettingsFilter,
+    WorkspaceRename,
+    CommandsForm,
+    /// The focused text field of an info overlay, such as a font editor's.
+    InfoOverlayInput,
+    TabRename,
+    AgentView,
+    Search,
+    Terminal,
+    Blocked,
+}
+
+impl App {
+    /// The top modal layer's own field, or nothing beneath it; then tab
+    /// rename, the agent view while it holds the keyboard, the find box, and
+    /// finally the focused terminal when it can take input.
+    pub(super) fn text_target(&self) -> TextTarget {
+        if let Some(layer) = self.top_modal_layer() {
+            return match layer {
+                ModalLayer::DomainPicker
+                | ModalLayer::UnicodePicker
+                | ModalLayer::CommandPalette => self
+                    .open_palette_modal()
+                    .filter(|modal| self.palette_owner(*modal).query_editable())
+                    .map_or(TextTarget::Blocked, TextTarget::Palette),
+                ModalLayer::ShortcutsPanel if !self.shortcuts_panel.is_recording() => {
+                    TextTarget::ShortcutsFilter
+                }
+                ModalLayer::Settings if !self.settings_panel.is_dropdown_open() => {
+                    TextTarget::SettingsFilter
+                }
+                ModalLayer::SessionPanel if self.session_panel.is_renaming() => {
+                    TextTarget::WorkspaceRename
+                }
+                ModalLayer::CommandsPanel if self.commands_panel.is_editing() => {
+                    TextTarget::CommandsForm
+                }
+                ModalLayer::InfoOverlay if self.info_overlay.input_focused() => {
+                    TextTarget::InfoOverlayInput
+                }
+                _ => TextTarget::Blocked,
+            };
+        }
+        if self.tab_rename.is_some() {
+            return TextTarget::TabRename;
+        }
+        if self.agent_view_has_keyboard() {
+            return if self.agent_view_accepts_text() {
+                TextTarget::AgentView
+            } else {
+                TextTarget::Blocked
+            };
+        }
+        if self.search.is_active() {
+            return TextTarget::Search;
+        }
+        // Arming takes every key, so nothing may reach a terminal either.
+        if self.copy_mode.is_active()
+            || matches!(self.broadcast, BroadcastState::Armed { .. })
+            || self.focused_pane_read_only()
+            || self.active_terminal().is_none()
+        {
+            TextTarget::Blocked
+        } else {
+            TextTarget::Terminal
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use winit::event::Ime;
+
+    /// Broadcast arming and a read-only pane stop text at the terminal only:
+    /// a field above it takes pastes and composed text, as it takes keys.
+    #[test]
+    fn arming_and_read_only_panes_block_the_terminal_but_not_the_fields_above_it() {
+        let mut app = App::new_headless_running("sleep 2", "text-target");
+        assert_eq!(app.text_target(), TextTarget::Terminal);
+        let tab_id = app.tabs.as_ref().unwrap().active_tab_id().unwrap();
+        app.broadcast = BroadcastState::Armed {
+            tab_id,
+            expires: Instant::now() + Duration::from_secs(10),
+            targets: Vec::new(),
+        };
+        assert_eq!(app.text_target(), TextTarget::Blocked);
+
+        app.command_palette.open();
+        assert!(app.paste_clipboard_payload("root"));
+        app.handle_ime_event(Ime::Preedit("draft".into(), None));
+        assert!(app.ime.preedit().is_some());
+        app.handle_ime_event(Ime::Commit("s".into()));
+        assert_eq!(app.command_palette.build_info().input, "roots");
+        app.command_palette.close();
+
+        app.info_overlay.set_reduced_motion(true);
+        let request = app.info_overlay.show_input(
+            "Rule",
+            vec!["Rule: ".into()],
+            0,
+            "Rule: ",
+            "",
+            64,
+            Vec::new(),
+        );
+        assert!(app.paste_clipboard_payload("tuber"));
+        app.handle_ime_event(Ime::Commit("s".into()));
+        assert_eq!(app.info_overlay.input_value(request), Some("tubers"));
+        assert!(app.info_overlay.dismiss(request));
+        app.info_overlay.update_animation();
+
+        app.broadcast = BroadcastState::Inactive;
+        assert_eq!(app.text_target(), TextTarget::Terminal);
+        app.toggle_focused_pane_read_only();
+        assert_eq!(app.text_target(), TextTarget::Blocked);
+        app.handle_ime_event(Ime::Preedit("draft".into(), None));
+        assert!(app.ime.preedit().is_none());
+    }
+}

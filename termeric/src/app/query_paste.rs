@@ -1,87 +1,19 @@
 //! Clipboard ownership for bounded single-line queries and command forms.
 
-use super::modal_layer::ModalLayer;
-use super::palette_input::PaletteModal;
+use super::text_target::TextTarget;
 use super::*;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PasteTarget {
-    Palette(PaletteModal),
-    Search,
-    CommandsForm,
-    WorkspaceRename,
-    TabRename,
-    ShortcutsFilter,
-    SettingsFilter,
-    /// The focused text field of an info overlay, such as a font editor's.
-    InfoOverlayInput,
-    AgentView,
-    Blocked,
-    Terminal,
-}
-
 impl App {
-    fn clipboard_paste_target(&self) -> PasteTarget {
-        let top = self.top_modal_layer();
-        if matches!(self.broadcast, BroadcastState::Armed { .. }) {
-            return PasteTarget::Blocked;
-        }
-        // Match keyboard dispatch: the top layer's own field, or nothing.
-        if let Some(layer) = top {
-            return match layer {
-                ModalLayer::DomainPicker
-                | ModalLayer::UnicodePicker
-                | ModalLayer::CommandPalette => self
-                    .open_palette_modal()
-                    .map_or(PasteTarget::Blocked, PasteTarget::Palette),
-                ModalLayer::ShortcutsPanel if !self.shortcuts_panel.is_recording() => {
-                    PasteTarget::ShortcutsFilter
-                }
-                ModalLayer::Settings if !self.settings_panel.is_dropdown_open() => {
-                    PasteTarget::SettingsFilter
-                }
-                ModalLayer::SessionPanel if self.session_panel.is_renaming() => {
-                    PasteTarget::WorkspaceRename
-                }
-                ModalLayer::CommandsPanel if self.commands_panel.is_editing() => {
-                    PasteTarget::CommandsForm
-                }
-                ModalLayer::InfoOverlay if self.info_overlay.input_focused() => {
-                    PasteTarget::InfoOverlayInput
-                }
-                _ => PasteTarget::Blocked,
-            };
-        }
-        if self.tab_rename.is_some() {
-            return PasteTarget::TabRename;
-        }
-        if self.agent_view_has_keyboard() {
-            return if self.agent_view_accepts_text() {
-                PasteTarget::AgentView
-            } else {
-                PasteTarget::Blocked
-            };
-        }
-        if self.search.is_active() {
-            return PasteTarget::Search;
-        }
-        if self.file_drop_input_blocked() {
-            PasteTarget::Blocked
-        } else {
-            PasteTarget::Terminal
-        }
-    }
-
     pub(super) fn clipboard_paste_blocked(&self) -> bool {
-        self.clipboard_paste_target() == PasteTarget::Blocked
+        self.text_target() == TextTarget::Blocked
     }
 
     pub(super) fn handle_query_paste_key(&mut self, key: &winit::keyboard::Key) -> bool {
         if self.shortcut_registry.check(key, self.modifiers)
             != Some(crate::input::keybindings::BindableAction::Paste)
             || matches!(
-                self.clipboard_paste_target(),
-                PasteTarget::Blocked | PasteTarget::Terminal
+                self.text_target(),
+                TextTarget::Blocked | TextTarget::Terminal
             )
         {
             return false;
@@ -93,11 +25,11 @@ impl App {
     /// Clipboard-only dispatch. Protocol pastes and file drops keep their
     /// explicitly terminal-owned path; a rejected query never falls through.
     pub(super) fn paste_clipboard_payload(&mut self, text: &str) -> bool {
-        let target = self.clipboard_paste_target();
+        let target = self.text_target();
         match target {
-            PasteTarget::Blocked => return false,
-            PasteTarget::Terminal => return self.write_paste_text(text),
-            PasteTarget::AgentView => return self.paste_into_agent_view(text),
+            TextTarget::Blocked => return false,
+            TextTarget::Terminal => return self.write_paste_text(text),
+            TextTarget::AgentView => return self.paste_into_agent_view(text),
             _ => {}
         }
         self.paste_into_field(target, text)
@@ -106,24 +38,29 @@ impl App {
     /// A middle click on the find box's query pastes the primary selection
     /// where it landed, under the same limits as a keyboard paste into it.
     pub(super) fn paste_primary_into_search(&mut self, cursor: usize) -> bool {
-        if !self.focus_search_query_at(cursor, RedrawReason::PointerInput)
-            || self.clipboard_paste_target() != PasteTarget::Search
-        {
+        self.focus_search_query_at(cursor, RedrawReason::PointerInput)
+            && self.paste_primary_into_field(TextTarget::Search)
+    }
+
+    /// Pastes the primary selection into `target`, a field a middle click
+    /// has just focused, when it is still where text goes.
+    pub(super) fn paste_primary_into_field(&mut self, target: TextTarget) -> bool {
+        if self.text_target() != target {
             return false;
         }
         let Some(text) = self.primary_selection_text() else {
             return false;
         };
-        self.paste_into_field(PasteTarget::Search, &text)
+        self.paste_into_field(target, &text)
     }
 
     /// A paste into one of the single-line fields: all of `text`, or none of
     /// it when it is empty, too long, or breaks the line.
-    fn paste_into_field(&mut self, target: PasteTarget, text: &str) -> bool {
+    fn paste_into_field(&mut self, target: TextTarget, text: &str) -> bool {
         if text.is_empty() {
             return false;
         }
-        let limit = if target == PasteTarget::CommandsForm {
+        let limit = if target == TextTarget::CommandsForm {
             crate::ui::commands::panel::CommandsPanel::MAX_FORM_COMMAND_BYTES
         } else {
             crate::terminal::search::MAX_SEARCH_QUERY_BYTES
@@ -135,29 +72,18 @@ impl App {
             return false;
         }
         let accepted = match target {
-            PasteTarget::Palette(modal) => self.palette_owner_mut(modal).insert_query_text(text),
-            PasteTarget::CommandsForm => self.commands_panel.insert_form_text(text),
-            PasteTarget::WorkspaceRename => self.session_panel.insert_rename_text(text),
-            PasteTarget::TabRename => self.insert_tab_rename_text(text),
-            PasteTarget::ShortcutsFilter => self.shortcuts_panel.insert_filter_text(text),
-            PasteTarget::SettingsFilter => self.settings_panel.insert_filter_text(text),
-            PasteTarget::InfoOverlayInput => {
+            TextTarget::Palette(modal) => self.palette_owner_mut(modal).insert_query_text(text),
+            TextTarget::CommandsForm => self.commands_panel.insert_form_text(text),
+            TextTarget::WorkspaceRename => self.session_panel.insert_rename_text(text),
+            TextTarget::TabRename => self.insert_tab_rename_text(text),
+            TextTarget::ShortcutsFilter => self.shortcuts_panel.insert_filter_text(text),
+            TextTarget::SettingsFilter => self.settings_panel.insert_filter_text(text),
+            TextTarget::InfoOverlayInput => {
                 let request_id = self.info_overlay.request_id();
                 self.info_overlay.insert_input_text(request_id, text)
             }
-            PasteTarget::Search => {
-                let cursor = self.search_cursor_pos;
-                let accepted = self
-                    .with_search_and_active_grid(|search, grid| {
-                        search.insert_text(cursor, text, grid)
-                    })
-                    .unwrap_or(false);
-                if accepted {
-                    self.search_cursor_pos += text.len();
-                }
-                accepted
-            }
-            PasteTarget::Blocked | PasteTarget::Terminal | PasteTarget::AgentView => unreachable!(),
+            TextTarget::Search => self.insert_search_text(text),
+            TextTarget::Blocked | TextTarget::Terminal | TextTarget::AgentView => unreachable!(),
         };
         if accepted {
             self.ime.clear_preedit();
@@ -173,6 +99,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::palette_input::PaletteModal;
     use crate::input::keybindings::{BindableAction, KeyChord};
     use crate::ui::text_input::TextInputEdit;
     use winit::keyboard::{Key, NamedKey};
@@ -333,7 +260,7 @@ mod tests {
                 "Roots",
                 max_chars,
             ));
-            assert_eq!(app.clipboard_paste_target(), PasteTarget::TabRename);
+            assert_eq!(app.text_target(), TextTarget::TabRename);
             app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
             for value in [
                 "",
@@ -446,7 +373,7 @@ mod tests {
 
     fn exercise_workspace_rename_paste(app: &mut App) {
         open_workspace_rename(app);
-        assert_eq!(app.clipboard_paste_target(), PasteTarget::WorkspaceRename);
+        assert_eq!(app.text_target(), TextTarget::WorkspaceRename);
         assert!(app.session_panel.accessibility_set_rename("az"));
         app.session_panel.rename_edit(TextInputEdit::Left);
         app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
@@ -563,7 +490,7 @@ mod tests {
         let mut app = App::new_headless(Config::default()).unwrap();
         let config_before = toml::to_string(&app.config).unwrap();
         app.settings_panel.toggle();
-        assert_eq!(app.clipboard_paste_target(), PasteTarget::SettingsFilter);
+        assert_eq!(app.text_target(), TextTarget::SettingsFilter);
         assert!(app.paste_clipboard_payload("e\u{301}👩\u{200d}💻"));
         assert!(app.paste_clipboard_payload("界"));
         let before = app
@@ -659,7 +586,7 @@ mod tests {
     fn shortcut_filter_paste_is_atomic_at_caret_and_obeys_its_own_scalar_limit() {
         let mut app = App::new_headless(Config::default()).unwrap();
         app.shortcuts_panel.open();
-        assert_eq!(app.clipboard_paste_target(), PasteTarget::ShortcutsFilter);
+        assert_eq!(app.text_target(), TextTarget::ShortcutsFilter);
         assert!(app.paste_clipboard_payload("az"));
         app.shortcuts_panel.edit_filter(TextInputEdit::Left);
         app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
@@ -793,11 +720,11 @@ mod tests {
             app.search.start();
             app.commands_panel.toggle();
             app.commands_panel.start_add();
-            assert_eq!(app.clipboard_paste_target(), PasteTarget::CommandsForm);
+            assert_eq!(app.text_target(), TextTarget::CommandsForm);
             assert!(app.paste_clipboard_payload("form only"));
             assert!(app.search.query().is_empty());
             open(&mut app);
-            assert_eq!(app.clipboard_paste_target(), PasteTarget::Blocked);
+            assert_eq!(app.text_target(), TextTarget::Blocked);
             assert!(!app.paste_clipboard_payload("hidden"));
             assert_eq!(app.commands_panel.form_name.text(), "form only");
             assert!(app.search.query().is_empty());
@@ -807,8 +734,8 @@ mod tests {
         app.commands_panel.start_add();
         app.command_palette.open();
         assert_eq!(
-            app.clipboard_paste_target(),
-            PasteTarget::Palette(PaletteModal::Commands)
+            app.text_target(),
+            TextTarget::Palette(PaletteModal::Commands)
         );
         assert!(app.paste_clipboard_payload("palette only"));
         assert!(app.commands_panel.form_name.text().is_empty());
@@ -839,7 +766,7 @@ mod tests {
                 PaletteModal::Unicode => app.unicode_picker.open(),
                 PaletteModal::Domains => app.domain_picker.open(&app.config.domains),
             }
-            assert_eq!(app.clipboard_paste_target(), PasteTarget::Palette(modal));
+            assert_eq!(app.text_target(), TextTarget::Palette(modal));
             assert!(app.paste_clipboard_payload("az"));
             assert!(app.handle_palette_edit_key(&Key::Named(NamedKey::ArrowLeft)));
             assert!(app.paste_clipboard_payload("界e\u{301}👩\u{200d}💻"));
@@ -892,7 +819,7 @@ mod tests {
             let mut app = App::new_headless(Config::default()).unwrap();
             app.search.start();
             open(&mut app);
-            assert_eq!(app.clipboard_paste_target(), PasteTarget::Blocked);
+            assert_eq!(app.text_target(), TextTarget::Blocked);
             assert!(!app.paste_clipboard_payload("hidden"));
             assert!(app.search.query().is_empty());
         }
@@ -900,16 +827,18 @@ mod tests {
         assert!(app.paste_clipboard_payload("background"));
         app.unicode_picker.open();
         assert_eq!(
-            app.clipboard_paste_target(),
-            PasteTarget::Palette(PaletteModal::Unicode)
+            app.text_target(),
+            TextTarget::Palette(PaletteModal::Unicode)
         );
         app.domain_picker.open(&app.config.domains);
         assert_eq!(
-            app.clipboard_paste_target(),
-            PasteTarget::Palette(PaletteModal::Domains)
+            app.text_target(),
+            TextTarget::Palette(PaletteModal::Domains)
         );
         assert!(app.domain_picker.activate().is_some());
         assert!(app.domain_picker.is_busy());
+        // A busy picker's query is read-only, so it takes no text at all.
+        assert_eq!(app.text_target(), TextTarget::Blocked);
         assert!(!app.paste_clipboard_payload("local"));
         assert_eq!(app.command_palette.build_info().input, "background");
         assert!(app.unicode_picker.build_info().input.is_empty());

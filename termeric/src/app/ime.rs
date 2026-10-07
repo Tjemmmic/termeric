@@ -3,7 +3,8 @@
 //! Preedit text is application-owned display state. It is never written to a
 //! PTY; only `Ime::Commit` reaches the currently focused text surface.
 
-use super::modal_layer::ModalLayer;
+use super::palette_input::PaletteModal;
+use super::text_target::TextTarget;
 use winit::event::Ime;
 
 use super::*;
@@ -53,7 +54,7 @@ impl App {
                 self.ime.clear_preedit();
             }
             Ime::Preedit(text, cursor) => {
-                if self.accepts_ime_text() {
+                if self.text_target() != TextTarget::Blocked {
                     self.ime.set_preedit(text, cursor);
                 } else {
                     self.ime.clear_preedit();
@@ -67,101 +68,94 @@ impl App {
         self.request_redraw(RedrawReason::KeyboardInput);
     }
 
-    /// Return whether the current focus owner is a text destination. Modal
-    /// surfaces without an editable field intentionally swallow IME input.
-    fn accepts_ime_text(&self) -> bool {
-        let top = self.top_modal_layer();
-        if top == Some(ModalLayer::InfoOverlay) {
-            return self.info_overlay.input_focused();
-        }
-        if matches!(self.broadcast, BroadcastState::Armed { .. }) {
-            return false;
-        }
-        if let Some(layer) = top {
-            return match layer {
-                ModalLayer::DomainPicker
-                | ModalLayer::UnicodePicker
-                | ModalLayer::CommandPalette => self
-                    .open_palette_modal()
-                    .is_some_and(|modal| self.palette_owner(modal).query_editable()),
-                ModalLayer::ShortcutsPanel => !self.shortcuts_panel.is_recording(),
-                ModalLayer::Settings => !self.settings_panel.is_dropdown_open(),
-                ModalLayer::SessionPanel => self.session_panel.is_renaming(),
-                ModalLayer::CommandsPanel => self.commands_panel.is_editing(),
-                // Like every key, IME text must not reach a field beneath a
-                // layer that has none of its own.
-                ModalLayer::Guardrail
-                | ModalLayer::InfoOverlay
-                | ModalLayer::DiffReview
-                | ModalLayer::ContextPicker
-                | ModalLayer::SproutMenu
-                | ModalLayer::Cellar
-                | ModalLayer::WorkspaceMenu
-                | ModalLayer::AgentsPanel => false,
-            };
-        }
-        if self.tab_rename.is_some() {
-            return true;
-        }
-        if self.agent_view_has_keyboard() {
-            return self.agent_view_accepts_text();
-        }
-        if self.search.is_active() {
-            return true;
-        }
-        !self.copy_mode.is_active()
-            && !self.focused_pane_read_only()
-            && self.active_terminal().is_some()
-    }
-
     fn commit_ime_text(&mut self, text: &str) {
-        if text.is_empty() || !self.accepts_ime_text() {
+        if text.is_empty() {
             return;
         }
-
-        if self.info_overlay.input_focused() {
-            let request_id = self.info_overlay.request_id();
-            self.info_overlay.insert_input_text(request_id, text);
-        } else if let Some(modal) = self.open_palette_modal() {
-            self.palette_owner_mut(modal).insert_query_text(text);
-        } else if self.shortcuts_panel.is_active() {
-            self.shortcuts_panel.insert_filter_text(text);
-        } else if self.settings_panel.is_active() {
-            self.settings_panel.insert_filter_text(text);
-        } else if self.session_panel.is_open() {
-            self.session_panel.insert_rename_text(text);
-        } else if self.commands_panel.is_open() {
-            self.commands_panel.insert_form_text(text);
-        } else if self.tab_rename.is_some() {
-            self.insert_tab_rename_text(text);
-        } else if self.agent_view_has_keyboard() {
-            self.commit_agent_view_text(text);
-        } else if self.search.is_active() {
-            let cursor = self.search_cursor_pos;
-            if self
-                .with_search_and_active_grid(|search, grid| search.insert_text(cursor, text, grid))
-                .unwrap_or(false)
-            {
-                self.search_cursor_pos += text.len();
+        match self.text_target() {
+            TextTarget::Blocked => {}
+            TextTarget::Palette(modal) => {
+                self.palette_owner_mut(modal).insert_query_text(text);
             }
-        } else {
-            let encoded = crate::input::encode_ime_text(self.active_kitty_keyboard_flags(), text);
-            self.write_to_pty(&encoded);
+            TextTarget::ShortcutsFilter => {
+                self.shortcuts_panel.insert_filter_text(text);
+            }
+            TextTarget::SettingsFilter => {
+                self.settings_panel.insert_filter_text(text);
+            }
+            TextTarget::WorkspaceRename => {
+                self.session_panel.insert_rename_text(text);
+            }
+            TextTarget::CommandsForm => {
+                self.commands_panel.insert_form_text(text);
+            }
+            TextTarget::InfoOverlayInput => {
+                let request_id = self.info_overlay.request_id();
+                self.info_overlay.insert_input_text(request_id, text);
+            }
+            TextTarget::TabRename => {
+                self.insert_tab_rename_text(text);
+            }
+            TextTarget::AgentView => {
+                self.commit_agent_view_text(text);
+            }
+            TextTarget::Search => {
+                self.insert_search_text(text);
+            }
+            TextTarget::Terminal => {
+                let encoded =
+                    crate::input::encode_ime_text(self.active_kitty_keyboard_flags(), text);
+                self.write_to_pty(&encoded);
+            }
         }
     }
 
-    fn palette_ime_viewport(
+    /// The input viewport of `target` when it is a field of a palette,
+    /// dialog, or panel; `None` for any other target.
+    fn field_ime_viewport(
         &self,
+        target: TextTarget,
         width: f32,
         height: f32,
         cell_width: f32,
         cell_height: f32,
     ) -> Option<crate::ui::text_input_viewport::TextInputViewport> {
-        let owner = self.palette_owner(self.open_palette_modal()?);
-        if !owner.query_editable() {
-            return None;
+        match target {
+            TextTarget::Palette(modal) => {
+                self.palette_ime_viewport(modal, width, height, cell_width, cell_height)
+            }
+            TextTarget::ShortcutsFilter => {
+                self.shortcuts_panel
+                    .input_viewport(width, height, cell_width, cell_height)
+            }
+            TextTarget::SettingsFilter => {
+                self.settings_panel
+                    .input_viewport(width, height, cell_width, cell_height)
+            }
+            TextTarget::WorkspaceRename => {
+                self.session_ime_viewport(width, height, cell_width, cell_height)
+            }
+            TextTarget::CommandsForm => {
+                self.commands_ime_viewport(width, height, cell_width, cell_height)
+            }
+            TextTarget::InfoOverlayInput
+            | TextTarget::TabRename
+            | TextTarget::AgentView
+            | TextTarget::Search
+            | TextTarget::Terminal
+            | TextTarget::Blocked => None,
         }
-        let info = owner.build_info();
+    }
+
+    fn palette_ime_viewport(
+        &self,
+        modal: PaletteModal,
+        width: f32,
+        height: f32,
+        cell_width: f32,
+        cell_height: f32,
+    ) -> Option<crate::ui::text_input_viewport::TextInputViewport> {
+        let info = self.palette_owner(modal).build_info();
         crate::ui::command_palette::PaletteLayout::calculate(
             width,
             height,
@@ -171,64 +165,6 @@ impl App {
             info.entries.len(),
         )
         .input_viewport(&info.input, info.cursor)
-    }
-
-    /// Match commit_ime_text's destination priority: the agent view's
-    /// message box yields to every modal surface and rename field above it.
-    fn agent_view_owns_ime_text(&self) -> bool {
-        self.top_modal_layer().is_none()
-            && self.tab_rename.is_none()
-            && self.agent_view_has_keyboard()
-            && self.agent_view_accepts_text()
-            && self.accepts_ime_text()
-    }
-
-    /// Match commit_ime_text's destination priority: a retained search must
-    /// not steal candidate geometry from a higher-priority text surface.
-    fn search_owns_ime_text(&self) -> bool {
-        self.top_modal_layer().is_none()
-            && self.tab_rename.is_none()
-            && self.search.is_active()
-            && self.accepts_ime_text()
-    }
-
-    fn commands_owns_ime_text(&self) -> bool {
-        self.modal_layer_on_top(ModalLayer::CommandsPanel)
-            && self.commands_panel.is_editing()
-            && self.accepts_ime_text()
-    }
-
-    fn shortcuts_owns_ime_text(&self) -> bool {
-        self.modal_layer_on_top(ModalLayer::ShortcutsPanel)
-            && !self.shortcuts_panel.is_recording()
-            && self.accepts_ime_text()
-    }
-
-    fn settings_owns_ime_text(&self) -> bool {
-        self.modal_layer_on_top(ModalLayer::Settings)
-            && !self.settings_panel.is_dropdown_open()
-            && self.accepts_ime_text()
-    }
-
-    fn settings_ime_viewport(
-        &self,
-        width: f32,
-        height: f32,
-        cell_width: f32,
-        cell_height: f32,
-    ) -> Option<crate::ui::text_input_viewport::TextInputViewport> {
-        self.settings_owns_ime_text()
-            .then(|| {
-                self.settings_panel
-                    .input_viewport(width, height, cell_width, cell_height)
-            })
-            .flatten()
-    }
-
-    fn session_owns_ime_text(&self) -> bool {
-        self.modal_layer_on_top(ModalLayer::SessionPanel)
-            && self.session_panel.is_renaming()
-            && self.accepts_ime_text()
     }
 
     fn session_ime_viewport(
@@ -242,32 +178,8 @@ impl App {
             .renderer
             .as_ref()
             .map_or(0.0, crate::renderer::Renderer::tab_bar_height);
-        self.session_owns_ime_text()
-            .then(|| {
-                self.session_panel.rename_input_viewport(
-                    width,
-                    height,
-                    top,
-                    cell_width,
-                    cell_height,
-                )
-            })
-            .flatten()
-    }
-
-    fn shortcuts_ime_viewport(
-        &self,
-        width: f32,
-        height: f32,
-        cell_width: f32,
-        cell_height: f32,
-    ) -> Option<crate::ui::text_input_viewport::TextInputViewport> {
-        self.shortcuts_owns_ime_text()
-            .then(|| {
-                self.shortcuts_panel
-                    .input_viewport(width, height, cell_width, cell_height)
-            })
-            .flatten()
+        self.session_panel
+            .rename_input_viewport(width, height, top, cell_width, cell_height)
     }
 
     fn commands_ime_viewport(
@@ -277,9 +189,6 @@ impl App {
         cell_width: f32,
         cell_height: f32,
     ) -> Option<crate::ui::text_input_viewport::TextInputViewport> {
-        if !self.commands_owns_ime_text() {
-            return None;
-        }
         // Only form state is needed here; do not clone the command inventory
         // a second time just to position the input method.
         let info = self.commands_panel.build_info(&[]);
@@ -300,24 +209,15 @@ impl App {
         .input_viewport(&info, info.edit_mode.clone())
     }
 
-    fn search_ime_viewport(
-        &self,
-        layout: &crate::ui::search_bar::SearchBarLayout,
-        cell_width: f32,
-    ) -> Option<crate::ui::text_input_viewport::TextInputViewport> {
-        self.search_owns_ime_text()
-            .then(|| self.search.build_info(self.search_cursor_pos))
-            .and_then(|info| layout.input_viewport(&info, cell_width))
-    }
-
     /// Keep the native candidate window and preedit decoration on the focused
     /// input's shared geometry, not the terminal cursor behind a palette.
     pub(super) fn ime_preedit_render_info(&self) -> Option<crate::renderer::ImePreeditRenderInfo> {
-        if !self.accepts_ime_text() {
+        let target = self.text_target();
+        if target == TextTarget::Blocked {
             return None;
         }
         let renderer = self.renderer.as_ref()?;
-        if self.info_overlay.input_focused() {
+        if target == TextTarget::InfoOverlayInput {
             let request_id = self.info_overlay.request_id();
             let input = self.info_overlay.input_info(request_id)?;
             let (window_width, window_height) = renderer.window_size();
@@ -347,83 +247,48 @@ impl App {
                 (row.x + row.width - x).max(layout.char_scale),
             );
         }
-        if self.open_palette_modal().is_some()
-            || self.commands_owns_ime_text()
-            || self.shortcuts_owns_ime_text()
-            || self.settings_owns_ime_text()
-            || self.session_owns_ime_text()
-        {
-            let (width, height) = renderer.window_size();
-            let view = if self.commands_owns_ime_text() {
-                self.commands_ime_viewport(
-                    width as f32,
-                    height as f32,
-                    renderer.cell_width(),
-                    renderer.cell_height(),
-                )
-            } else if self.shortcuts_owns_ime_text() {
-                self.shortcuts_ime_viewport(
-                    width as f32,
-                    height as f32,
-                    renderer.cell_width(),
-                    renderer.cell_height(),
-                )
-            } else if self.settings_owns_ime_text() {
-                self.settings_ime_viewport(
-                    width as f32,
-                    height as f32,
-                    renderer.cell_width(),
-                    renderer.cell_height(),
-                )
-            } else if self.session_owns_ime_text() {
-                self.session_ime_viewport(
-                    width as f32,
-                    height as f32,
-                    renderer.cell_width(),
-                    renderer.cell_height(),
-                )
-            } else {
-                self.palette_ime_viewport(
-                    width as f32,
-                    height as f32,
-                    renderer.cell_width(),
-                    renderer.cell_height(),
-                )
-            }?;
-            return self.ime_target(
-                [
-                    view.cursor_x,
-                    view.text_y,
-                    renderer.cell_width(),
-                    renderer.cell_height(),
-                ],
-                view.right - view.cursor_x,
-            );
-        }
-        if self.agent_view_owns_ime_text() {
-            let scene = self.agent_view.scene.as_ref()?;
-            let caret = scene.caret?.bounds;
-            return self.ime_target(
-                [caret.x, caret.y, caret.width, caret.height],
-                (scene.panel.right() - caret.x).max(renderer.cell_width()),
-            );
-        }
-        if self.search_owns_ime_text() {
-            let info = self.search.build_info(self.search_cursor_pos);
-            let layout = renderer.search_bar_layout(&info, renderer.window_size().0 as f32);
-            // A collapsed query has no visible caret; do not fall back to a
-            // terminal position or overlap the neighboring search controls.
-            let view = self.search_ime_viewport(&layout, renderer.cell_width())?;
-            return self.ime_target(
-                [
-                    view.cursor_x,
-                    view.text_y,
-                    renderer.cell_width(),
-                    renderer.cell_height(),
-                ],
-                view.right - view.cursor_x,
-            );
-        }
+        let (width, height) = renderer.window_size();
+        let (cell_width, cell_height) = renderer.cell_size();
+        let view = match target {
+            TextTarget::AgentView => {
+                let scene = self.agent_view.scene.as_ref()?;
+                let caret = scene.caret?.bounds;
+                return self.ime_target(
+                    [caret.x, caret.y, caret.width, caret.height],
+                    (scene.panel.right() - caret.x).max(cell_width),
+                );
+            }
+            TextTarget::Search => {
+                let info = self.search.build_info(self.search_cursor_pos);
+                let layout = renderer.search_bar_layout(&info, width as f32);
+                // A collapsed query has no visible caret; do not fall back to a
+                // terminal position or overlap the neighboring search controls.
+                layout.input_viewport(&info, cell_width)?
+            }
+            // A tab title being renamed has no caret of its own; the input
+            // method opens at the terminal cursor beneath the tab bar.
+            TextTarget::TabRename | TextTarget::Terminal => {
+                return self.terminal_ime_target(renderer);
+            }
+            field => self.field_ime_viewport(
+                field,
+                width as f32,
+                height as f32,
+                cell_width,
+                cell_height,
+            )?,
+        };
+        self.ime_target(
+            [view.cursor_x, view.text_y, cell_width, cell_height],
+            view.right - view.cursor_x,
+        )
+    }
+
+    /// The input method's caret at the focused pane's drawn cursor.
+    fn terminal_ime_target(
+        &self,
+        renderer: &crate::renderer::Renderer,
+    ) -> Option<crate::renderer::ImePreeditRenderInfo> {
         let panes = &self.tabs.as_ref()?.active_tab()?.panes;
         let terminal = &panes.focused_pane()?.terminal;
         // The cursor that is drawn: synchronized output freezes the

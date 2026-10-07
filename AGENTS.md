@@ -218,6 +218,8 @@ In `app/event_loop.rs` (KeyboardInput handler), after AltGraph tracking and quer
 
 Snapshot DECCKM/DECKPAM from `active_terminal()` immediately before encoding, then write through `Tab::write()` so the mode and PTY always belong to the same focused pane. AltGraph state is explicit and is cleared on focus loss.
 
+Text that isn't a key press (clipboard and middle-click pastes, IME preedit and commits, and the IME caret) goes where `App::text_target()` (`app/text_target.rs`) says, decided in this same order. A surface with no field to take it is `Blocked`; text never falls through to a field or terminal beneath. Whether a key types text rather than making a chord is `types_text` (`app/text_field_keys.rs`), shared by every field.
+
 Copy mode is bound to the focused tab/pane identity at entry. Mouse focus changes cancel it, resize tracks its cursor/anchor through a grid-bound resize transaction, and its selection is synchronized only through `focused_terminal_mut()`. Quick select scans the visible focused grid and must not create a second text model.
 
 Mouse, focus, alternate-scroll, and paste reports snapshot mode from the terminal that receives the bytes (the focused one, or the hovered pane for the wheel). Protocol writes bypass editable-line alias/completion handling. Shift is the explicit native mouse bypass.

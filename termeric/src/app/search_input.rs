@@ -104,8 +104,12 @@ impl App {
                     self.search.toggle_filter();
                 }
             }
-            Key::Named(NamedKey::Space) if typing => self.insert_search_text(" "),
-            Key::Character(text) if typing => self.insert_search_text(text),
+            Key::Named(NamedKey::Space) if typing => {
+                self.insert_search_text(" ");
+            }
+            Key::Character(text) if typing => {
+                self.insert_search_text(text);
+            }
             _ => return false,
         }
         self.request_redraw(RedrawReason::Search);
@@ -130,14 +134,17 @@ impl App {
         true
     }
 
-    fn insert_search_text(&mut self, text: &str) {
+    /// Inserts `text` at the query's caret and moves the caret past it.
+    /// Returns false when the query refused it.
+    pub(super) fn insert_search_text(&mut self, text: &str) -> bool {
         let cursor = self.search_cursor_pos;
-        if self
+        let inserted = self
             .with_search_and_active_grid(|search, grid| search.insert_text(cursor, text, grid))
-            .unwrap_or(false)
-        {
+            .unwrap_or(false);
+        if inserted {
             self.search_cursor_pos += text.len();
         }
+        inserted
     }
 }
 

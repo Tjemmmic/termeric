@@ -62,6 +62,7 @@ mod terminal_input;
 #[cfg(test)]
 mod tests;
 mod text_field_keys;
+mod text_target;
 mod theme_picker;
 mod transcripts;
 mod unicode_picker;
@@ -3687,12 +3688,8 @@ impl App {
     /// focused, through the same checks and framing as a keyboard paste.
     fn paste_primary_selection(&mut self) {
         // A field that holds the keyboard does not take a paste aimed at the
-        // terminal beneath the pointer, nor does that terminal (the find box
-        // and copy mode are among `file_drop_input_blocked`'s surfaces).
-        if self.tab_rename.is_some()
-            || self.agent_view_has_keyboard()
-            || self.file_drop_input_blocked()
-        {
+        // terminal beneath the pointer, nor does that terminal.
+        if self.text_target() != text_target::TextTarget::Terminal {
             return;
         }
         if let Some(text) = self.primary_selection_text()
