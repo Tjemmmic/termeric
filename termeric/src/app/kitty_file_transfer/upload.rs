@@ -77,7 +77,6 @@ pub(super) fn reopen_upload_regular_file(pinned: &std::fs::File) -> std::io::Res
 /// delivered, so the worker never reads further ahead than the terminal.
 struct Delivery<'a, E> {
     emit: E,
-    cancellation: &'a AtomicBool,
     session_id: &'a str,
     total_files: usize,
     reply_uses_8bit_controls: bool,
@@ -125,16 +124,11 @@ impl<E: FnMut(UploadWorkerCompletion) -> bool> Delivery<'_, E> {
         }) {
             return false;
         }
-        loop {
-            if self.cancellation.load(Ordering::Acquire) {
-                return false;
-            }
-            match receiver.recv_timeout(Duration::from_millis(100)) {
-                Ok(written) => return written,
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return false,
-            }
-        }
+        // The App answers every completion it handles, false once the upload
+        // is no longer active (including after cancellation), and a
+        // completion for a closed window is dropped with its sender, so this
+        // wait always ends.
+        receiver.recv().unwrap_or(false)
     }
 }
 
@@ -161,7 +155,6 @@ pub(super) fn run_upload_worker(
     let total_files = paths.len();
     let mut delivery = Delivery {
         emit,
-        cancellation: &cancellation,
         session_id: &session_id,
         total_files,
         reply_uses_8bit_controls,

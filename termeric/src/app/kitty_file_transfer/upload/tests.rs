@@ -248,6 +248,45 @@ fn upload_worker_opens_after_consent_and_streams_bounded_canonical_frames() {
 }
 
 #[test]
+fn upload_worker_stops_when_a_completion_is_dropped_unanswered() {
+    // A completion for a window that has closed is dropped with its
+    // acknowledgement sender; the worker must stop rather than wait forever.
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("approved.txt");
+    std::fs::write(&path, b"never sent").unwrap();
+    let path_name = path.to_str().unwrap().to_string();
+    let (sender, receiver) = sync_channel(1);
+    sender.send(request("dropped", "f1", &path_name)).unwrap();
+    let (done, finished) = sync_channel(1);
+    let worker = std::thread::spawn(move || {
+        let mut emitted = 0;
+        run_upload_worker(
+            receiver,
+            "dropped".into(),
+            vec![UploadPath {
+                file_id: "f1".into(),
+                requested_name: path_name,
+                path,
+            }],
+            false,
+            Arc::new(AtomicBool::new(false)),
+            |completion| {
+                emitted += 1;
+                drop(completion);
+                true
+            },
+        );
+        done.send(emitted).unwrap();
+    });
+    let emitted = finished
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the worker kept waiting for a dropped completion");
+    assert_eq!(emitted, 1, "nothing follows an undelivered completion");
+    worker.join().unwrap();
+    drop(sender);
+}
+
+#[test]
 fn upload_worker_refuses_symlinks_without_reading_their_targets() {
     use std::os::unix::fs::symlink;
 
