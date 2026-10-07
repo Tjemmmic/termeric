@@ -1,6 +1,6 @@
 //! Workspace rename keyboard ownership after higher-priority modal surfaces.
 
-use super::text_field_keys::FieldKey;
+use super::text_field_keys::{FieldKey, types_text};
 use super::*;
 use crate::ui::session_panel::SessionPanelAction;
 use winit::keyboard::{Key, NamedKey};
@@ -39,10 +39,7 @@ impl App {
             self.session_panel.rename_edit(edit);
         } else {
             let plain = self.modifiers.is_empty() && !self.alt_graph_active;
-            let text = self.alt_graph_active
-                || !self.modifiers.intersects(
-                    ModifiersState::CONTROL | ModifiersState::ALT | ModifiersState::SUPER,
-                );
+            let text = types_text(self.modifiers, self.alt_graph_active);
             match key {
                 Key::Named(NamedKey::Escape) if plain => {
                     self.apply_session_panel_action(SessionPanelAction::CancelRename);

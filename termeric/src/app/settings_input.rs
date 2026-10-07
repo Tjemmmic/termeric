@@ -101,21 +101,13 @@ impl App {
                 {
                     return false;
                 }
-                if !self.alt_graph_active
-                    && self.modifiers.intersects(
-                        ModifiersState::CONTROL | ModifiersState::ALT | ModifiersState::SUPER,
-                    )
-                {
+                if !super::text_field_keys::types_text(self.modifiers, self.alt_graph_active) {
                     return true;
                 }
                 self.settings_panel.insert_filter_text(text)
             }
             Key::Named(NamedKey::Space) => {
-                if !self.alt_graph_active
-                    && self.modifiers.intersects(
-                        ModifiersState::CONTROL | ModifiersState::ALT | ModifiersState::SUPER,
-                    )
-                {
+                if !super::text_field_keys::types_text(self.modifiers, self.alt_graph_active) {
                     return true;
                 }
                 self.settings_panel.insert_filter_text(" ")

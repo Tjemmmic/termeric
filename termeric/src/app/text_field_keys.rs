@@ -20,16 +20,15 @@ impl App {
     pub(super) fn text_edit_for_key(&self, key: &Key) -> Option<FieldKey> {
         text_edit_for_key(key, self.modifiers, self.alt_graph_active)
     }
+}
 
-    /// Whether a character key types its character under the held
-    /// modifiers: alone, with Shift, or through AltGr. Ctrl, Alt, or Super
-    /// make it a chord instead.
-    pub(super) fn key_types_text(&self) -> bool {
-        self.alt_graph_active
-            || !self
-                .modifiers
-                .intersects(ModifiersState::CONTROL | ModifiersState::ALT | ModifiersState::SUPER)
-    }
+/// Whether a character key (or Space) types its text under the held
+/// modifiers: alone, with Shift, or through AltGr. Ctrl, Alt, or Super make
+/// it a chord instead. Every text field and copy mode share this one rule.
+pub(super) fn types_text(modifiers: ModifiersState, alt_graph_active: bool) -> bool {
+    alt_graph_active
+        || !modifiers
+            .intersects(ModifiersState::CONTROL | ModifiersState::ALT | ModifiersState::SUPER)
 }
 
 /// Plain arrows, Home, End, Backspace, and Delete edit by grapheme; Ctrl turns
@@ -117,6 +116,24 @@ mod tests {
                 text_edit_for_key(&key, ModifiersState::empty(), false),
                 None
             );
+        }
+    }
+
+    #[test]
+    fn text_types_alone_with_shift_or_through_altgr_but_not_in_a_chord() {
+        assert!(types_text(ModifiersState::empty(), false));
+        assert!(types_text(ModifiersState::SHIFT, false));
+        assert!(types_text(
+            ModifiersState::CONTROL | ModifiersState::ALT,
+            true
+        ));
+        for modifiers in [
+            ModifiersState::CONTROL,
+            ModifiersState::ALT,
+            ModifiersState::SUPER,
+            ModifiersState::SUPER | ModifiersState::SHIFT,
+        ] {
+            assert!(!types_text(modifiers, false), "{modifiers:?}");
         }
     }
 }

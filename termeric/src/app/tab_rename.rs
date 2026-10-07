@@ -73,10 +73,8 @@ impl App {
         let mut commit = false;
         let mut cancel = false;
         let plain = self.modifiers.is_empty() && !self.alt_graph_active;
-        let text_allowed = self.alt_graph_active
-            || !self
-                .modifiers
-                .intersects(ModifiersState::CONTROL | ModifiersState::ALT | ModifiersState::SUPER);
+        let text_allowed =
+            super::text_field_keys::types_text(self.modifiers, self.alt_graph_active);
         match key {
             Key::Named(NamedKey::Enter) if plain => commit = true,
             Key::Named(NamedKey::Escape) if plain => cancel = true,

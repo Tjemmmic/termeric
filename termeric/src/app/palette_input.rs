@@ -4,7 +4,7 @@
 //! edits for whichever is open; only what a chosen entry means differs.
 
 use super::modal_layer::ModalLayer;
-use super::text_field_keys::FieldKey;
+use super::text_field_keys::{FieldKey, types_text};
 use super::*;
 use crate::ui::command_palette::{PaletteLayout, PaletteResult};
 use crate::ui::domain_picker::DomainPickerCommand;
@@ -183,7 +183,7 @@ impl App {
         };
         let toggles_palette = self.shortcut_registry.check(key, self.modifiers)
             == Some(crate::input::keybindings::BindableAction::ToggleCommandPalette);
-        let typing = !self.modifiers.control_key() && !self.modifiers.alt_key();
+        let typing = types_text(self.modifiers, self.alt_graph_active);
         let choice = match key {
             // The shortcut that opens the command palette closes any of
             // them, checked before a character key becomes query input.
@@ -204,7 +204,7 @@ impl App {
                 None
             }
             Key::Named(NamedKey::Enter) => self.activate_palette_modal(modal),
-            Key::Named(NamedKey::Space) => {
+            Key::Named(NamedKey::Space) if typing => {
                 self.palette_owner_mut(modal).insert_query_text(" ");
                 None
             }
@@ -284,6 +284,38 @@ mod tests {
             assert!(app.handle_palette_modal_key(&Key::Character("P".into())));
             assert_eq!(app.open_palette_modal(), None, "{modal:?}");
             assert!(!app.handle_palette_modal_key(&Key::Character("x".into())));
+        }
+    }
+
+    #[test]
+    fn palette_queries_take_altgr_text_and_ignore_chorded_text_and_space() {
+        for modal in [
+            PaletteModal::Commands,
+            PaletteModal::Unicode,
+            PaletteModal::Domains,
+        ] {
+            let mut app = App::new_headless(Config::default()).unwrap();
+            open(&mut app, modal);
+            // AltGr can arrive as Ctrl+Alt; the text it composes still types.
+            app.modifiers = ModifiersState::CONTROL | ModifiersState::ALT;
+            app.alt_graph_active = true;
+            assert!(app.handle_palette_modal_key(&Key::Character("@".into())));
+            assert!(app.handle_palette_modal_key(&Key::Named(NamedKey::Space)));
+            app.alt_graph_active = false;
+            for modifiers in [
+                ModifiersState::SUPER,
+                ModifiersState::ALT,
+                ModifiersState::CONTROL,
+            ] {
+                app.modifiers = modifiers;
+                assert!(app.handle_palette_modal_key(&Key::Character("x".into())));
+                assert!(app.handle_palette_modal_key(&Key::Named(NamedKey::Space)));
+            }
+            assert_eq!(
+                app.palette_owner(modal).build_info().input,
+                "@ ",
+                "{modal:?}"
+            );
         }
     }
 

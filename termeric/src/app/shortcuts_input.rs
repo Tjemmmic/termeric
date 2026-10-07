@@ -124,11 +124,7 @@ impl App {
             Key::Named(NamedKey::Space) => " ",
             _ => return false,
         };
-        if !self.alt_graph_active
-            && self
-                .modifiers
-                .intersects(ModifiersState::CONTROL | ModifiersState::ALT | ModifiersState::SUPER)
-        {
+        if !super::text_field_keys::types_text(self.modifiers, self.alt_graph_active) {
             return true;
         }
         if self.shortcuts_panel.insert_filter_text(text) {

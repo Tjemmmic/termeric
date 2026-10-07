@@ -1,6 +1,6 @@
 //! The find box's keys, after higher-priority surfaces have intercepted keyboard input.
 
-use super::text_field_keys::FieldKey;
+use super::text_field_keys::{FieldKey, types_text};
 use super::*;
 use winit::event::ElementState;
 use winit::keyboard::{Key, NamedKey};
@@ -60,6 +60,7 @@ impl App {
         let plain = self.modifiers.is_empty() && !self.alt_graph_active;
         let alt = self.modifiers == ModifiersState::ALT && !self.alt_graph_active;
         let shift = self.modifiers == ModifiersState::SHIFT && !self.alt_graph_active;
+        let typing = types_text(self.modifiers, self.alt_graph_active);
         match key {
             Key::Named(NamedKey::Escape) if plain => {
                 self.search.cancel();
@@ -103,8 +104,8 @@ impl App {
                     self.search.toggle_filter();
                 }
             }
-            Key::Named(NamedKey::Space) if self.key_types_text() => self.insert_search_text(" "),
-            Key::Character(text) if self.key_types_text() => self.insert_search_text(text),
+            Key::Named(NamedKey::Space) if typing => self.insert_search_text(" "),
+            Key::Character(text) if typing => self.insert_search_text(text),
             _ => return false,
         }
         self.request_redraw(RedrawReason::Search);

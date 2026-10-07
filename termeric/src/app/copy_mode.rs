@@ -375,7 +375,10 @@ impl App {
                 self.toasts.info(format!("Quick-select action: {action}"));
             }
             Key::Named(NamedKey::Backspace) if plain => self.copy_mode.backspace_hint(),
-            Key::Character(text) if self.key_types_text() && text.chars().count() == 1 => {
+            Key::Character(text)
+                if super::text_field_keys::types_text(self.modifiers, self.alt_graph_active)
+                    && text.chars().count() == 1 =>
+            {
                 let character = text.chars().next().unwrap_or_default();
                 if let Some((selected, action)) = self.copy_mode.push_hint_key(character) {
                     self.activate_hint(selected.value, action);
@@ -526,9 +529,7 @@ fn copy_mode_command(
     let plain = modifiers.is_empty() && !alt_graph;
     let ctrl = modifiers == ModifiersState::CONTROL && !alt_graph;
     let alt = modifiers == ModifiersState::ALT && !alt_graph;
-    let typed = alt_graph
-        || !modifiers
-            .intersects(ModifiersState::CONTROL | ModifiersState::ALT | ModifiersState::SUPER);
+    let typed = super::text_field_keys::types_text(modifiers, alt_graph);
     let command = match key {
         Key::Named(named) => match named {
             NamedKey::Escape if plain => Leave,

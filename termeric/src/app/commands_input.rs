@@ -1,6 +1,6 @@
 //! Inline command-form keyboard ownership after higher-priority surfaces.
 
-use super::text_field_keys::FieldKey;
+use super::text_field_keys::{FieldKey, types_text};
 use super::*;
 use crate::ui::commands::panel::CommandsPanelAction;
 use winit::keyboard::{Key, NamedKey};
@@ -95,10 +95,7 @@ impl App {
             self.commands_panel.form_edit(edit);
         } else {
             let plain = self.modifiers.is_empty() && !self.alt_graph_active;
-            let text = self.alt_graph_active
-                || !self.modifiers.intersects(
-                    ModifiersState::CONTROL | ModifiersState::ALT | ModifiersState::SUPER,
-                );
+            let text = types_text(self.modifiers, self.alt_graph_active);
             match key {
                 Key::Named(NamedKey::Escape) if plain => self.commands_panel.cancel_edit(),
                 Key::Named(NamedKey::Tab)

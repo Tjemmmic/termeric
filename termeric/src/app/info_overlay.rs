@@ -1,7 +1,7 @@
 //! Info overlay actions: scrolling, focus, text entry, and choices, routed
 //! back to the flow that opened the overlay.
 
-use super::text_field_keys::FieldKey;
+use super::text_field_keys::{FieldKey, types_text};
 use super::*;
 
 impl App {
@@ -59,10 +59,14 @@ impl App {
                             },
                         )
                     }
+                    Key::Named(NamedKey::Space)
+                        if types_text(self.modifiers, self.alt_graph_active) =>
+                    {
+                        self.info_overlay.insert_input_text(request_id, " ");
+                        InfoOverlayAction::None
+                    }
                     Key::Character(character)
-                        if !self.modifiers.control_key()
-                            && !self.modifiers.super_key()
-                            && !self.modifiers.alt_key() =>
+                        if types_text(self.modifiers, self.alt_graph_active) =>
                     {
                         self.info_overlay
                             .insert_input_text(request_id, character.as_str());
