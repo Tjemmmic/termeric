@@ -776,9 +776,9 @@ pub fn session_summary(session: &AgentSession) -> String {
             };
         }
         return match (approval.tool_name.as_str(), subject) {
-            ("Bash", Some(command)) => format!("Wants to run {command}"),
-            ("AskUserQuestion", _) => "Asked you a question".to_owned(),
-            ("ExitPlanMode", _) => "Has a plan for you to review".to_owned(),
+            (present::BASH_TOOL, Some(command)) => format!("Wants to run {command}"),
+            (present::ASK_USER_QUESTION_TOOL, _) => "Asked you a question".to_owned(),
+            (present::EXIT_PLAN_MODE_TOOL, _) => "Has a plan for you to review".to_owned(),
             (_, Some(subject)) => format!("Wants to change {subject}"),
             (tool, None) => format!("Wants to use {}", present::summarize_name(tool)),
         };

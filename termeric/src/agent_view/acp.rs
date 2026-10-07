@@ -30,7 +30,10 @@ use super::event::{
     DECLINED_MESSAGE, EarlierConversation, EffortChoice, Handshake, ModeChoice, ModelChoice,
     RememberOption, SessionInfo, SlashCommand, TurnOutcome, earlier_title,
 };
-use super::present::PATCH_TOOL;
+use super::present::{
+    AGENT_TOOL, BASH_TOOL, EDIT_TOOL, GLOB_TOOL, GREP_TOOL, PATCH_TOOL, READ_TOOL, TODO_WRITE_TOOL,
+    WEB_FETCH_TOOL, WEB_SEARCH_TOOL, WRITE_TOOL,
+};
 use super::protocol::{
     Exchange, Incoming, Protocol, client_info, failed_turn, finished_turn, incoming, line,
     method_not_found, plan, request_key, settled, stream_piece, stream_started, text, todo,
@@ -1353,7 +1356,7 @@ fn present_tool(state: &ToolState) -> (String, Value) {
                     read[key] = json!(value);
                 }
             }
-            named_tool("Read", read)
+            named_tool(READ_TOOL, read)
         }
         "edit" => present_edit(state, &named, &path, &diffs),
         "delete" => {
@@ -1372,13 +1375,13 @@ fn present_tool(state: &ToolState) -> (String, Value) {
         "search" => {
             let pattern = first_text(input, &["pattern", "query"]).unwrap_or(title);
             if named == "glob" {
-                named_tool("Glob", json!({ "pattern": pattern }))
+                named_tool(GLOB_TOOL, json!({ "pattern": pattern }))
             } else {
                 let mut grep = json!({ "pattern": pattern });
                 if let Some(path) = first_text(input, &["path"]) {
                     grep["path"] = json!(path);
                 }
-                named_tool("Grep", grep)
+                named_tool(GREP_TOOL, grep)
             }
         }
         "execute" => {
@@ -1386,27 +1389,28 @@ fn present_tool(state: &ToolState) -> (String, Value) {
             if let Some(description) = first_text(input, &["description"]) {
                 bash["description"] = json!(description);
             }
-            named_tool("Bash", bash)
+            named_tool(BASH_TOOL, bash)
         }
         "fetch" => match first_text(input, &["query"]) {
-            Some(query) => named_tool("WebSearch", json!({ "query": query })),
+            Some(query) => named_tool(WEB_SEARCH_TOOL, json!({ "query": query })),
             None => named_tool(
-                "WebFetch",
+                WEB_FETCH_TOOL,
                 json!({ "url": first_text(input, &["url"]).unwrap_or(title) }),
             ),
         },
         "think" if input.get("subagent_type").is_some() || input.get("prompt").is_some() => {
             named_tool(
-                "Agent",
+                AGENT_TOOL,
                 json!({
                     "description": first_text(input, &["description"]).unwrap_or(title),
                     "subagent_type": first_text(input, &["subagent_type"]),
                 }),
             )
         }
-        _ if named == "todowrite" || input.get("todos").is_some_and(Value::is_array) => {
-            named_tool("TodoWrite", json!({ "todos": todos(input.get("todos")) }))
-        }
+        _ if named == "todowrite" || input.get("todos").is_some_and(Value::is_array) => named_tool(
+            TODO_WRITE_TOOL,
+            json!({ "todos": todos(input.get("todos")) }),
+        ),
         // Anything else reads as its own title, e.g. an MCP tool's name.
         _ => {
             let name = if title.is_empty() { "Tool" } else { title };
@@ -1426,13 +1430,13 @@ fn present_edit(
     let input = &state.raw_input;
     let edit = |path: &str, old: &str, new: &str| {
         (
-            "Edit".to_owned(),
+            EDIT_TOOL.to_owned(),
             json!({ "file_path": path, "old_string": old, "new_string": new }),
         )
     };
     let write = |path: &str, content: &str| {
         (
-            "Write".to_owned(),
+            WRITE_TOOL.to_owned(),
             json!({ "file_path": path, "content": content }),
         )
     };
@@ -1458,7 +1462,7 @@ fn present_edit(
         }
         [] if named == "write" => write(path, ""),
         [] if !matches!(named, "apply_patch" | "patch") => {
-            ("Edit".to_owned(), json!({ "file_path": path }))
+            (EDIT_TOOL.to_owned(), json!({ "file_path": path }))
         }
         diffs => patch(
             diffs
@@ -1973,7 +1977,7 @@ mod tests {
             [
                 tool_use(
                     "plan-1",
-                    "TodoWrite",
+                    TODO_WRITE_TOOL,
                     json!({ "todos": [
                         { "content": "Read", "status": "completed", "activeForm": "Read" },
                         { "content": "Edit", "status": "in_progress", "activeForm": "Edit" },

@@ -12,8 +12,9 @@
 //! a session started ahead of its first message leaves nothing behind in
 //! Codex's history. Codex's tool calls are translated into the vocabulary
 //! the panel presents (see [`super::present`]): commands read as `Bash`,
-//! patches as `Patch`, web searches as `WebSearch`, and MCP tools by their
-//! `mcp__server__tool` name.
+//! patches as `Patch`, web searches as `WebSearch`, requests for more
+//! permissions as `Permissions`, and MCP tools by their `mcp__server__tool`
+//! name.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -26,7 +27,9 @@ use super::event::{
     DECLINED_MESSAGE, EarlierConversation, Handshake, ModeChoice, ModelChoice, RememberOption,
     Retry, SessionInfo, SlashCommand, TurnOutcome, earlier_title, invoked_name,
 };
-use super::present::PATCH_TOOL;
+use super::present::{
+    AGENT_TOOL, ASK_USER_QUESTION_TOOL, BASH_TOOL, PATCH_TOOL, PERMISSIONS_TOOL, WEB_SEARCH_TOOL,
+};
 use super::protocol::{
     Exchange, Incoming, Protocol, client_info, content_text, failed_turn, finished_turn, incoming,
     line, method_not_found, plan, request_key, settled, stream_piece, stream_started, text, todo,
@@ -696,7 +699,7 @@ impl CodexCodec {
                 (
                     AskedKind::Command,
                     approval(
-                        "Bash",
+                        BASH_TOOL,
                         json!({ "command": command.unwrap_or_default() }),
                         reason.or(network),
                         Some(remember),
@@ -730,7 +733,7 @@ impl CodexCodec {
                 (
                     AskedKind::Permissions(requested.clone()),
                     approval(
-                        "Permissions",
+                        PERMISSIONS_TOOL,
                         json!({ "permissions": requested }),
                         reason,
                         Some(RememberOption {
@@ -774,7 +777,7 @@ impl CodexCodec {
                 (
                     AskedKind::Questions(ids),
                     approval(
-                        "AskUserQuestion",
+                        ASK_USER_QUESTION_TOOL,
                         json!({ "questions": questions }),
                         None,
                         None,
@@ -1026,7 +1029,7 @@ impl CodexCodec {
                 let command = text(item, "command").map(|command| display_command(&command));
                 let mut events = vec![tool_use(
                     &id,
-                    "Bash",
+                    BASH_TOOL,
                     json!({ "command": command.unwrap_or_default() }),
                 )];
                 if completed {
@@ -1074,7 +1077,7 @@ impl CodexCodec {
             }
             "webSearch" => {
                 let query = text(item, "query").unwrap_or_default();
-                let mut events = vec![tool_use(&id, "WebSearch", json!({ "query": query }))];
+                let mut events = vec![tool_use(&id, WEB_SEARCH_TOOL, json!({ "query": query }))];
                 if completed {
                     events.push(tool_result(&id, String::new(), false));
                 }
@@ -1086,7 +1089,7 @@ impl CodexCodec {
                     .unwrap_or_default();
                 let mut events = vec![tool_use(
                     &id,
-                    "Agent",
+                    AGENT_TOOL,
                     json!({ "description": description, "subagent_type": text(item, "tool") }),
                 )];
                 if completed {
@@ -1675,7 +1678,7 @@ mod tests {
             [
                 tool_use(
                     "plan-u1",
-                    "TodoWrite",
+                    crate::agent_view::present::TODO_WRITE_TOOL,
                     json!({ "todos": [
                         { "content": "Read", "status": "completed", "activeForm": "Read" },
                         { "content": "Edit", "status": "in_progress", "activeForm": "Edit" },

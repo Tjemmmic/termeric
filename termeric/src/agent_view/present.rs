@@ -3,7 +3,10 @@
 //!
 //! Tool names and input shapes are Claude Code's, the first agent the panel
 //! drove; other agents' protocols translate their tool calls into the same
-//! vocabulary, adding [`PATCH_TOOL`] for changes to several files at once.
+//! vocabulary, adding [`PATCH_TOOL`] for changes to several files at once
+//! and [`PERMISSIONS_TOOL`] for Codex's requests for more permissions. The
+//! names the translators write or the panel looks for are constants here;
+//! names only Claude Code uses stay as it writes them.
 //! Unknown tools and unexpected shapes fall back to the tool's name, so a new
 //! tool shows plainly instead of disappearing.
 
@@ -19,6 +22,23 @@ use super::transcript::{Item, ToolCall};
 /// file. A change may carry the file's text before and after instead of a
 /// diff, as `"old_text"` and `"new_text"`.
 pub const PATCH_TOOL: &str = "Patch";
+
+/// More permissions for the rest of the turn or the session, as Codex asks
+/// for them: input `{"permissions": …}`, the permissions requested.
+pub const PERMISSIONS_TOOL: &str = "Permissions";
+
+pub const READ_TOOL: &str = "Read";
+pub const GREP_TOOL: &str = "Grep";
+pub const GLOB_TOOL: &str = "Glob";
+pub const EDIT_TOOL: &str = "Edit";
+pub const WRITE_TOOL: &str = "Write";
+pub const BASH_TOOL: &str = "Bash";
+pub const WEB_FETCH_TOOL: &str = "WebFetch";
+pub const WEB_SEARCH_TOOL: &str = "WebSearch";
+pub const AGENT_TOOL: &str = "Agent";
+pub const TODO_WRITE_TOOL: &str = "TodoWrite";
+pub const ASK_USER_QUESTION_TOOL: &str = "AskUserQuestion";
+pub const EXIT_PLAN_MODE_TOOL: &str = "ExitPlanMode";
 
 /// What kind of action a tool call is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,15 +57,15 @@ pub enum ToolKind {
 
 pub fn kind(name: &str) -> ToolKind {
     match name {
-        "Read" | "NotebookRead" | "LS" => ToolKind::Read,
-        "Grep" | "Glob" | "ToolSearch" => ToolKind::Search,
-        "Edit" | "MultiEdit" | "Write" | "NotebookEdit" | PATCH_TOOL => ToolKind::Edit,
-        "Bash" | "BashOutput" | "KillShell" | "KillBash" => ToolKind::Command,
-        "WebFetch" | "WebSearch" => ToolKind::Web,
-        "Task" | "Agent" => ToolKind::SubAgent,
-        "TodoWrite" => ToolKind::Todo,
-        "AskUserQuestion" => ToolKind::Question,
-        "ExitPlanMode" => ToolKind::Plan,
+        READ_TOOL | "NotebookRead" | "LS" => ToolKind::Read,
+        GREP_TOOL | GLOB_TOOL | "ToolSearch" => ToolKind::Search,
+        EDIT_TOOL | "MultiEdit" | WRITE_TOOL | "NotebookEdit" | PATCH_TOOL => ToolKind::Edit,
+        BASH_TOOL | "BashOutput" | "KillShell" | "KillBash" => ToolKind::Command,
+        WEB_FETCH_TOOL | WEB_SEARCH_TOOL => ToolKind::Web,
+        "Task" | AGENT_TOOL => ToolKind::SubAgent,
+        TODO_WRITE_TOOL => ToolKind::Todo,
+        ASK_USER_QUESTION_TOOL => ToolKind::Question,
+        EXIT_PLAN_MODE_TOOL => ToolKind::Plan,
         _ => ToolKind::Other,
     }
 }
@@ -87,7 +107,7 @@ pub fn summarize(tool: &ToolCall, cwd: &Path) -> Summary {
             detail,
         };
     match tool.name.as_str() {
-        "Read" => {
+        READ_TOOL => {
             let lines = match (
                 input.get("offset").and_then(Value::as_u64),
                 input.get("limit").and_then(Value::as_u64),
@@ -102,20 +122,20 @@ pub fn summarize(tool: &ToolCall, cwd: &Path) -> Summary {
             summary("Read", path("file_path"), true, lines)
         }
         "LS" => summary("Listed", path("path"), true, None),
-        "Grep" => summary(
+        GREP_TOOL => summary(
             "Searched",
             field(input, "pattern").map(str::to_owned),
             true,
             path("path").map(|path| format!("in {path}")),
         ),
-        "Glob" => summary(
+        GLOB_TOOL => summary(
             "Found files",
             field(input, "pattern").map(str::to_owned),
             true,
             None,
         ),
-        "Edit" | "MultiEdit" => summary("Edited", path("file_path"), true, None),
-        "Write" => summary("Wrote", path("file_path"), true, None),
+        EDIT_TOOL | "MultiEdit" => summary("Edited", path("file_path"), true, None),
+        WRITE_TOOL => summary("Wrote", path("file_path"), true, None),
         "NotebookEdit" => summary("Edited", path("notebook_path"), true, None),
         PATCH_TOOL => {
             let changes = patch_changes(input);
@@ -138,33 +158,33 @@ pub fn summarize(tool: &ToolCall, cwd: &Path) -> Summary {
                 ),
             }
         }
-        "Bash" => summary(
+        BASH_TOOL => summary(
             "Ran",
             field(input, "command").map(first_line),
             true,
             field(input, "description").map(str::to_owned),
         ),
-        "WebFetch" => summary(
+        WEB_FETCH_TOOL => summary(
             "Fetched",
             field(input, "url").map(str::to_owned),
             false,
             None,
         ),
-        "WebSearch" => summary(
+        WEB_SEARCH_TOOL => summary(
             "Searched the web",
             field(input, "query").map(str::to_owned),
             false,
             None,
         ),
-        "Task" | "Agent" => summary(
+        "Task" | AGENT_TOOL => summary(
             "Sub-agent",
             field(input, "description").map(str::to_owned),
             false,
             field(input, "subagent_type").map(str::to_owned),
         ),
-        "TodoWrite" => summary("Updated to-dos", None, false, None),
-        "AskUserQuestion" => summary("Asked", None, false, None),
-        "ExitPlanMode" => summary("Plan", None, false, None),
+        TODO_WRITE_TOOL => summary("Updated to-dos", None, false, None),
+        ASK_USER_QUESTION_TOOL => summary("Asked", None, false, None),
+        EXIT_PLAN_MODE_TOOL => summary("Plan", None, false, None),
         name => {
             // MCP tools are named mcp__server__tool.
             let mut parts = name.splitn(3, "__");
@@ -484,7 +504,7 @@ pub fn file_diff(tool: &ToolCall, cwd: &Path) -> Option<FileDiff> {
         return Some(counted(path, lines, false));
     }
     match tool.name.as_str() {
-        "Edit" => {
+        EDIT_TOOL => {
             let old = field(&tool.input, "old_string")?;
             let new = field(&tool.input, "new_string")?;
             Some(counted(path, compare(old, new), false))
@@ -506,7 +526,7 @@ pub fn file_diff(tool: &ToolCall, cwd: &Path) -> Option<FileDiff> {
             }
             Some(counted(path, lines, false))
         }
-        "Write" => {
+        WRITE_TOOL => {
             let content = field(&tool.input, "content")?;
             let created = detail
                 .and_then(|detail| field(detail, "type"))

@@ -15,6 +15,9 @@ use super::event::{
     AgentEvent, ApprovalRequest, BlockStart, ContentBlock, ContextUsage, ExitReport, Handshake,
     Retry, SessionInfo, StreamDelta, Thread, ToolResult, TurnOutcome,
 };
+use super::present::{
+    BASH_TOOL, EDIT_TOOL, GLOB_TOOL, GREP_TOOL, PATCH_TOOL, READ_TOOL, WRITE_TOOL, patch_paths,
+};
 
 /// Longest tool result text kept for display.
 const MAX_RESULT_BYTES: usize = 64 * 1024;
@@ -913,9 +916,9 @@ fn bounded_result(mut result: ToolResult) -> ToolResult {
 pub fn edited_paths(tool: &ToolCall) -> Vec<&str> {
     let field = |key: &str| tool.input.get(key).and_then(Value::as_str);
     match tool.name.as_str() {
-        "Edit" | "MultiEdit" | "Write" => field("file_path").into_iter().collect(),
+        EDIT_TOOL | "MultiEdit" | WRITE_TOOL => field("file_path").into_iter().collect(),
         "NotebookEdit" => field("notebook_path").into_iter().collect(),
-        super::present::PATCH_TOOL => super::present::patch_paths(&tool.input),
+        PATCH_TOOL => patch_paths(&tool.input),
         _ => Vec::new(),
     }
 }
@@ -946,15 +949,15 @@ fn sub_agent_step(name: &str, input: &Value) -> String {
         )
     };
     match name {
-        "Read" | "Edit" | "Write" | "MultiEdit" => field("file_path").map_or_else(
+        READ_TOOL | EDIT_TOOL | WRITE_TOOL | "MultiEdit" => field("file_path").map_or_else(
             || name.to_owned(),
             |path| format!("{name} {}", file_name(path)),
         ),
-        "Grep" | "Glob" => field("pattern").map_or_else(
+        GREP_TOOL | GLOB_TOOL => field("pattern").map_or_else(
             || "Searched".to_owned(),
             |pattern| format!("Searched {pattern}"),
         ),
-        "Bash" => field("description")
+        BASH_TOOL => field("description")
             .or_else(|| field("command"))
             .map_or_else(|| "Ran a command".to_owned(), str::to_owned),
         other => other.to_owned(),

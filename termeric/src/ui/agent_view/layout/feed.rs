@@ -44,9 +44,9 @@ impl Builder<'_, '_> {
         let width = viewport.width - self.m.pad * 2.0;
         let mut y = self.m.pad;
         let items = transcript.items();
-        let latest_todo = items
-            .iter()
-            .rposition(|item| matches!(item, Item::Tool(tool) if tool.name == "TodoWrite"));
+        let latest_todo = items.iter().rposition(
+            |item| matches!(item, Item::Tool(tool) if present::kind(&tool.name) == ToolKind::Todo),
+        );
 
         if items.is_empty() && session.activity() != Activity::Starting {
             let hint = format!(
@@ -2851,29 +2851,29 @@ fn approval_title(approval: &ApprovalRequest, cwd: &Path) -> String {
             .map(|path| present::relative(path, cwd))
     };
     match approval.tool_name.as_str() {
-        "Bash" => "Run this command?".to_owned(),
-        "Edit" | "MultiEdit" | "NotebookEdit" => {
+        present::BASH_TOOL => "Run this command?".to_owned(),
+        present::EDIT_TOOL | "MultiEdit" | "NotebookEdit" => {
             match path("file_path").or_else(|| path("notebook_path")) {
                 Some(path) => format!("Edit {path}?"),
                 None => "Make this edit?".to_owned(),
             }
         }
-        "Write" => match path("file_path") {
+        present::WRITE_TOOL => match path("file_path") {
             Some(path) => format!("Write {path}?"),
             None => "Write this file?".to_owned(),
         },
-        "Read" => match path("file_path") {
+        present::READ_TOOL => match path("file_path") {
             Some(path) => format!("Read {path}?"),
             None => "Read this file?".to_owned(),
         },
-        "WebFetch" => "Fetch this page?".to_owned(),
-        "WebSearch" => "Search the web?".to_owned(),
+        present::WEB_FETCH_TOOL => "Fetch this page?".to_owned(),
+        present::WEB_SEARCH_TOOL => "Search the web?".to_owned(),
         PATCH_TOOL => match present::patch_paths(&approval.input).as_slice() {
             [] => "Make these changes?".to_owned(),
             [path] => format!("Change {}?", present::relative(path, cwd)),
             paths => format!("Change {} files?", paths.len()),
         },
-        "Permissions" => "Grant these permissions?".to_owned(),
+        present::PERMISSIONS_TOOL => "Grant these permissions?".to_owned(),
         _ => match &approval.title {
             Some(title) => title.clone(),
             None => format!("Allow {}?", present::summarize_name(&approval.tool_name)),
@@ -2890,10 +2890,10 @@ fn approval_subject(approval: &ApprovalRequest) -> Option<String> {
             .map(str::to_owned)
     };
     match approval.tool_name.as_str() {
-        "Bash" => field("command"),
-        "WebFetch" => field("url"),
-        "WebSearch" => field("query"),
-        "Grep" | "Glob" => field("pattern"),
+        present::BASH_TOOL => field("command"),
+        present::WEB_FETCH_TOOL => field("url"),
+        present::WEB_SEARCH_TOOL => field("query"),
+        present::GREP_TOOL | present::GLOB_TOOL => field("pattern"),
         _ => None,
     }
 }

@@ -13,6 +13,7 @@ use super::event::{
     AgentCommand, AgentEvent, AssistantMessage, BlockStart, ContentBlock, StreamDelta, Thread,
     ToolResult, TurnOutcome,
 };
+use super::present::TODO_WRITE_TOOL;
 
 /// One agent's wire protocol, for one process.
 pub trait Protocol: Send {
@@ -271,7 +272,7 @@ pub fn todo(content: &str, status: &str) -> Value {
 /// is a report, not a tool call that runs.
 pub fn plan(id: &str, todos: Vec<Value>) -> Vec<AgentEvent> {
     vec![
-        tool_use(id, "TodoWrite", json!({ "todos": todos })),
+        tool_use(id, TODO_WRITE_TOOL, json!({ "todos": todos })),
         tool_result(id, String::new(), false),
     ]
 }
