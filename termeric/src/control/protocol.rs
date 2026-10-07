@@ -1285,7 +1285,9 @@ impl Request {
                         "GUI control source and destination window IDs must be nonzero".into(),
                     );
                 }
-                if usize::from(*destination_index) > MAX_TABS_PER_WINDOW {
+                // A window never holds more than MAX_TABS_PER_WINDOW tabs, so
+                // the last position a tab can land on is one below it.
+                if usize::from(*destination_index) >= MAX_TABS_PER_WINDOW {
                     return Err("GUI control destination tab index exceeds the window limit".into());
                 }
                 Ok(())
@@ -2665,6 +2667,34 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn tab_move_request_accepts_exactly_the_indexes_its_reply_can_report() {
+        let move_to = |destination_index: usize| Request::MoveTab {
+            request_id: "0".repeat(32),
+            source_window_id: 7,
+            tab_id: 3,
+            destination_window_id: 9,
+            destination_index: u16::try_from(destination_index).unwrap(),
+        };
+        let moved_to = |destination_index: usize| Response::TabMoved {
+            process_id: 42,
+            request_id: "0".repeat(32),
+            source_window_id: 7,
+            source_tab_id: 3,
+            destination_window_id: 9,
+            destination_tab_id: 11,
+            destination_index: u16::try_from(destination_index).unwrap(),
+            source_window_closing: false,
+            changed: true,
+        };
+
+        let last = MAX_TABS_PER_WINDOW - 1;
+        assert!(move_to(last).validate().is_ok());
+        assert!(moved_to(last).validate().is_ok());
+        assert!(move_to(MAX_TABS_PER_WINDOW).validate().is_err());
+        assert!(moved_to(MAX_TABS_PER_WINDOW).validate().is_err());
     }
 
     #[test]
