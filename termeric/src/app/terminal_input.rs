@@ -33,16 +33,12 @@ impl App {
             return false;
         }
         let Some(branch) = self
-            .git_completion_index
-            .filter(|_| self.git_completions_visible)
-            .and_then(|index| self.git_completions.get(index))
-            .cloned()
+            .git_completion
+            .take()
+            .map(|popup| popup.selected_branch().to_owned())
         else {
             return false;
         };
-        self.git_completions_visible = false;
-        self.git_completions.clear();
-        self.git_completion_index = None;
         if self.focused_pane_read_only() || !matches!(self.broadcast, BroadcastState::Inactive) {
             self.toasts
                 .warning("Completion was not sent while input is locked or broadcasting");
@@ -103,7 +99,7 @@ impl App {
 
         // Broadcast deliberately bypasses alias expansion and completion.
         if self.write_broadcast_bytes(data) {
-            self.git_completions_visible = false;
+            self.dismiss_git_completion_popup();
             return;
         }
 
@@ -113,12 +109,7 @@ impl App {
             if interactive_assistance && self.accept_git_completion(true) {
                 return;
             }
-            if self.git_completions_visible {
-                // Dismiss completions
-                self.git_completions_visible = false;
-                self.git_completions.clear();
-                self.git_completion_index = None;
-            }
+            self.dismiss_git_completion_popup();
 
             // Enter pressed — check if first word matches a custom command name or alias
             let trimmed = self.input_line_buffer.trim().to_string();
@@ -195,20 +186,11 @@ impl App {
             && self.git_completion_has_room()
             && let Some(partial) = crate::git::detect_git_completion(&self.input_line_buffer)
         {
-            let completions = self.git_watcher.complete_branch(partial);
-            if !completions.is_empty() {
-                self.git_completions = completions.into();
-                self.git_completion_index = Some(0);
-                self.git_completions_visible = true;
-            } else {
-                self.git_completions_visible = false;
-                self.git_completions.clear();
-                self.git_completion_index = None;
-            }
+            self.git_completion = crate::app::git_completion::GitCompletionPopup::new(
+                self.git_watcher.complete_branch(partial),
+            );
         } else {
-            self.git_completions_visible = false;
-            self.git_completions.clear();
-            self.git_completion_index = None;
+            self.dismiss_git_completion_popup();
         }
 
         // The tab routes to its focused pane's terminal and PTY.
@@ -232,9 +214,7 @@ impl App {
     /// received.
     pub(super) fn clear_terminal_input_tracking(&mut self) {
         self.input_line_buffer.clear();
-        self.git_completions_visible = false;
-        self.git_completions.clear();
-        self.git_completion_index = None;
+        self.dismiss_git_completion_popup();
     }
 
     /// Write terminal-protocol bytes without treating them as editable shell
@@ -394,7 +374,7 @@ mod tests {
             } else {
                 app.run_custom_command(command);
             }
-            assert!(!app.git_completions_visible);
+            assert!(app.git_completion.is_none());
             assert!(app.input_line_buffer.is_empty());
             app.write_to_pty(b"Z");
             assert_command_bytes(&mut app, expected.as_bytes());
@@ -416,8 +396,7 @@ mod tests {
             plugin_id: "inert-explicit-git-guard".into(),
         };
         app.run_custom_command(command);
-        assert!(!app.git_completions_visible);
-        assert!(app.git_completions.is_empty());
+        assert!(app.git_completion.is_none());
         app.write_to_pty(b"Z");
         assert_command_bytes(&mut app, expected.as_bytes());
     }
@@ -428,11 +407,11 @@ mod tests {
         let mut app = raw_command_app(expected.len());
         let _repository = seed_git_completion_cache(&mut app);
         app.write_to_pty(b"git checkout ma");
-        assert!(app.git_completions_visible);
-        assert_eq!(&*app.git_completions, ["main"]);
-        assert_eq!(app.git_completion_index, Some(0));
+        let popup = app.git_completion.as_ref().unwrap();
+        assert_eq!(&**popup.completions(), ["main"]);
+        assert_eq!(popup.selected(), 0);
         app.write_to_pty(b"\r");
-        assert!(!app.git_completions_visible);
+        assert!(app.git_completion.is_none());
         assert!(app.input_line_buffer.is_empty());
         app.write_to_pty(b"Z");
         assert_command_bytes(&mut app, expected);
@@ -452,9 +431,9 @@ mod tests {
             .shell_integration =
             crate::terminal::shell_integration::ShellIntegrationSupport::Enabled("bash");
         app.write_to_pty(b"git checkout to");
-        app.git_completions = vec!["topic;printf${IFS}UNEXPECTED".into()].into();
-        app.git_completion_index = Some(0);
-        app.git_completions_visible = true;
+        app.git_completion = crate::app::git_completion::GitCompletionPopup::new(vec![
+            "topic;printf${IFS}UNEXPECTED".into(),
+        ]);
         app.write_to_pty(b"\r");
         app.write_to_pty(b"Z");
         assert_command_bytes(&mut app, expected);
@@ -474,14 +453,13 @@ mod tests {
             .shell_integration =
             crate::terminal::shell_integration::ShellIntegrationSupport::Enabled("bash");
         app.write_to_pty(b"git checkout a");
-        app.git_completions = vec!["a'b".into()].into();
-        app.git_completion_index = Some(0);
-        app.git_completions_visible = true;
+        app.git_completion =
+            crate::app::git_completion::GitCompletionPopup::new(vec!["a'b".into()]);
         assert!(app.handle_git_completion_key(&winit::keyboard::Key::Named(
             winit::keyboard::NamedKey::Tab,
         )));
         assert_eq!(app.input_line_buffer, "git checkout 'a'\\''b'");
-        assert!(!app.git_completions_visible);
+        assert!(app.git_completion.is_none());
         app.write_to_pty(b"\r");
         assert!(app.input_line_buffer.is_empty());
         app.write_to_pty(b"Z");
@@ -504,9 +482,8 @@ mod tests {
                 app.toggle_focused_pane_read_only();
             }
             app.input_line_buffer = typed.into();
-            app.git_completions = vec!["main".into()].into();
-            app.git_completion_index = Some(0);
-            app.git_completions_visible = true;
+            app.git_completion =
+                crate::app::git_completion::GitCompletionPopup::new(vec!["main".into()]);
             app.modifiers = ModifiersState::CONTROL;
             let key = Key::Named(NamedKey::Tab);
             assert!(!app.handle_git_completion_key(&key));
@@ -532,9 +509,8 @@ mod tests {
         let expected = b"git checkout ma\rZ";
         let mut app = raw_command_app(expected.len());
         app.write_to_pty(b"git checkout ma");
-        app.git_completions = vec!["main".into()].into();
-        app.git_completion_index = Some(0);
-        app.git_completions_visible = true;
+        app.git_completion =
+            crate::app::git_completion::GitCompletionPopup::new(vec!["main".into()]);
         app.modifiers = ModifiersState::CONTROL;
         assert!(!app.handle_git_completion_key(&Key::Named(NamedKey::Enter)));
         // Even if the terminal's keyboard mode encodes this key as legacy CR,
@@ -557,12 +533,11 @@ mod tests {
                 let expected = format!("{typed}Z");
                 let mut app = raw_command_app(expected.len());
                 app.write_to_pty(typed.as_bytes());
-                app.git_completions = vec![branch.into()].into();
-                app.git_completion_index = Some(0);
-                app.git_completions_visible = true;
+                app.git_completion =
+                    crate::app::git_completion::GitCompletionPopup::new(vec![branch.into()]);
                 assert!(app.accept_git_completion(submit));
                 assert_eq!(app.input_line_buffer, typed);
-                assert!(app.git_completions.is_empty());
+                assert!(app.git_completion.is_none());
                 app.write_to_pty(b"Z");
                 assert_command_bytes(&mut app, expected.as_bytes());
             }
@@ -575,15 +550,13 @@ mod tests {
             let expected = b"git checkout maZ";
             let mut app = raw_command_app(expected.len());
             app.write_to_pty(b"git checkout ma");
-            app.git_completions = vec!["main".into()].into();
-            app.git_completion_index = Some(0);
-            app.git_completions_visible = true;
+            app.git_completion =
+                crate::app::git_completion::GitCompletionPopup::new(vec!["main".into()]);
             if read_only {
                 app.toggle_focused_pane_read_only();
                 // Exercise the mutation boundary even with a stale visible list.
-                app.git_completions = vec!["main".into()].into();
-                app.git_completion_index = Some(0);
-                app.git_completions_visible = true;
+                app.git_completion =
+                    crate::app::git_completion::GitCompletionPopup::new(vec!["main".into()]);
             } else {
                 app.broadcast = BroadcastState::Armed {
                     tab_id: 0,
@@ -635,9 +608,8 @@ mod tests {
         tab.panes.focused_pane_mut().unwrap().shell_integration =
             ShellIntegrationSupport::Enabled("fish");
         app.write_to_pty(b"git checkout a");
-        app.git_completions = vec!["a'b".into()].into();
-        app.git_completion_index = Some(0);
-        app.git_completions_visible = true;
+        app.git_completion =
+            crate::app::git_completion::GitCompletionPopup::new(vec!["a'b".into()]);
         app.write_to_pty(b"\r");
         app.write_to_pty(b"Z");
         assert_command_bytes(&mut app, expected);
@@ -729,11 +701,10 @@ mod tests {
     }
 
     #[test]
-    fn git_completion_safe_enter_and_unselected_fallback_preserve_exact_bytes() {
-        for (selected, expected) in [
-            (Some(0), b"git checkout ma\x7f\x7fmain\rZ".as_slice()),
-            (None, b"git checkout ma\rZ".as_slice()),
-            (Some(5), b"git checkout ma\rZ".as_slice()),
+    fn git_completion_safe_enter_and_no_popup_fallback_preserve_exact_bytes() {
+        for (shown, expected) in [
+            (true, b"git checkout ma\x7f\x7fmain\rZ".as_slice()),
+            (false, b"git checkout ma\rZ".as_slice()),
         ] {
             let mut app = raw_command_app(expected.len());
             app.tabs
@@ -745,12 +716,12 @@ mod tests {
                 plugin_id: "inert-safe-completion".into(),
             };
             app.write_to_pty(b"git checkout ma");
-            app.git_completions = vec!["main".into()].into();
-            app.git_completion_index = selected;
-            app.git_completions_visible = true;
+            app.git_completion =
+                crate::app::git_completion::GitCompletionPopup::new(vec!["main".into()])
+                    .filter(|_| shown);
             app.write_to_pty(b"\r");
             assert!(app.input_line_buffer.is_empty());
-            assert!(app.git_completions.is_empty());
+            assert!(app.git_completion.is_none());
             app.write_to_pty(b"Z");
             assert_command_bytes(&mut app, expected);
         }
@@ -761,13 +732,11 @@ mod tests {
         let mut app = raw_command_app(1);
         app.toggle_focused_pane_read_only();
         app.input_line_buffer = "stale".into();
-        app.git_completions = vec!["stale".into()].into();
-        app.git_completion_index = Some(0);
-        app.git_completions_visible = true;
+        app.git_completion =
+            crate::app::git_completion::GitCompletionPopup::new(vec!["stale".into()]);
         app.run_custom_command("B");
         assert!(app.input_line_buffer.is_empty());
-        assert!(app.git_completions.is_empty());
-        assert!(!app.git_completions_visible);
+        assert!(app.git_completion.is_none());
         app.toggle_focused_pane_read_only();
         let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
         app.broadcast = BroadcastState::Armed {

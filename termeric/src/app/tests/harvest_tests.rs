@@ -334,15 +334,14 @@ fn harvest_rerun_is_literal_and_reports_only_successful_delivery() {
         alias: None,
     });
     app.input_line_buffer = "old editable input".into();
-    app.git_completions_visible = true;
-    app.git_completions = vec!["unrelated".into()].into();
-    app.git_completion_index = Some(0);
+    app.git_completion =
+        crate::app::git_completion::GitCompletionPopup::new(vec!["unrelated".into()]);
     app.execute_sprout_action(crate::harvest::sprouts::SproutAction::Rerun, Some(entry));
     let bytes = fenced_harvest_capture(&mut app, &captures);
     assert_eq!(bytes[0], b"\x15echo harvest\r");
     assert!(bytes[1..].iter().all(Vec::is_empty));
     assert!(app.input_line_buffer.is_empty());
-    assert!(!app.git_completions_visible);
+    assert!(app.git_completion.is_none());
     assert!(
         app.toasts
             .iter()

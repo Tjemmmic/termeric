@@ -3,6 +3,46 @@
 use super::*;
 use winit::keyboard::{Key, NamedKey};
 
+/// The inline Git branch completion popup. It exists only while it has
+/// suggestions, and its highlighted row is always one of them, so dismissing
+/// it is one assignment and no half-reset state can be written.
+#[derive(Debug, Clone)]
+pub(super) struct GitCompletionPopup {
+    completions: crate::git::BranchCompletions,
+    selected: usize,
+}
+
+impl GitCompletionPopup {
+    /// A popup over `branches` with the first highlighted, or `None` when
+    /// there is nothing to suggest.
+    pub(super) fn new(branches: Vec<String>) -> Option<Self> {
+        (!branches.is_empty()).then(|| Self {
+            completions: branches.into(),
+            selected: 0,
+        })
+    }
+
+    pub(super) fn completions(&self) -> &crate::git::BranchCompletions {
+        &self.completions
+    }
+
+    pub(super) fn selected(&self) -> usize {
+        self.selected
+    }
+
+    pub(super) fn selected_branch(&self) -> &str {
+        &self.completions[self.selected]
+    }
+
+    fn select_next(&mut self) {
+        self.selected = (self.selected + 1).min(self.completions.len() - 1);
+    }
+
+    fn select_previous(&mut self) {
+        self.selected = self.selected.saturating_sub(1);
+    }
+}
+
 impl App {
     pub(super) fn git_completion_has_room(&self) -> bool {
         self.renderer
@@ -11,14 +51,12 @@ impl App {
     }
 
     pub(super) fn dismiss_git_completion_popup(&mut self) {
-        self.git_completions_visible = false;
-        self.git_completions.clear();
-        self.git_completion_index = None;
+        self.git_completion = None;
     }
 
     /// Called for pressed keys after modal/chrome owners and before shortcuts.
     pub(super) fn handle_git_completion_key(&mut self, key: &Key) -> bool {
-        if !self.git_completions_visible {
+        if self.git_completion.is_none() {
             return false;
         }
         if !self.git_completion_has_room() {
@@ -32,10 +70,6 @@ impl App {
         if !matches!(self.broadcast, BroadcastState::Inactive)
             || !self.modifiers.is_empty()
             || self.alt_graph_active
-            || self.git_completions.is_empty()
-            || self
-                .git_completion_index
-                .is_some_and(|index| index >= self.git_completions.len())
         {
             // Shortcuts, broadcast controls, and modified terminal keys keep
             // ownership. Drop the popup before a legacy modified Enter can
@@ -50,20 +84,15 @@ impl App {
                 handled
             }
             Key::Named(NamedKey::ArrowDown) => {
-                let max = self.git_completions.len() - 1;
-                self.git_completion_index = Some(
-                    self.git_completion_index
-                        .map_or(0, |index| index.saturating_add(1).min(max)),
-                );
+                if let Some(popup) = &mut self.git_completion {
+                    popup.select_next();
+                }
                 true
             }
             Key::Named(NamedKey::ArrowUp) => {
-                self.git_completion_index = Some(
-                    self.git_completion_index
-                        .map_or(self.git_completions.len() - 1, |index| {
-                            index.saturating_sub(1)
-                        }),
-                );
+                if let Some(popup) = &mut self.git_completion {
+                    popup.select_previous();
+                }
                 true
             }
             Key::Named(NamedKey::Escape) => {
@@ -82,9 +111,7 @@ mod tests {
     fn completion_app() -> App {
         let mut app = App::new_headless(Config::default()).unwrap();
         app.input_line_buffer = "git checkout ma".into();
-        app.git_completions = vec!["main".into(), "maintenance".into()].into();
-        app.git_completion_index = Some(0);
-        app.git_completions_visible = true;
+        app.git_completion = GitCompletionPopup::new(vec!["main".into(), "maintenance".into()]);
         app
     }
 
@@ -110,9 +137,7 @@ mod tests {
                     !app.handle_git_completion_key(&Key::Named(key)),
                     "{modifiers:?} {key:?} was intercepted"
                 );
-                assert_eq!(app.git_completion_index, None);
-                assert!(!app.git_completions_visible);
-                assert!(app.git_completions.is_empty());
+                assert!(app.git_completion.is_none());
                 assert_eq!(app.input_line_buffer, "git checkout ma");
             }
         }
@@ -145,7 +170,7 @@ mod tests {
                     }
                 }
                 assert!(!app.handle_git_completion_key(&Key::Named(key)));
-                assert!(!app.git_completions_visible);
+                assert!(app.git_completion.is_none());
                 assert_eq!(app.input_line_buffer, "git checkout ma");
                 assert_eq!(app.alt_graph_active, mode == "altgraph");
                 assert_eq!(
@@ -157,40 +182,33 @@ mod tests {
     }
 
     #[test]
-    fn unmodified_navigation_is_bounded_and_stale_popups_fall_through() {
+    fn unmodified_navigation_is_bounded() {
         let mut app = completion_app();
+        let selected = |app: &App| {
+            app.git_completion
+                .as_ref()
+                .map(GitCompletionPopup::selected)
+        };
         for expected in [1, 1] {
             assert!(app.handle_git_completion_key(&Key::Named(NamedKey::ArrowDown)));
-            assert_eq!(app.git_completion_index, Some(expected));
+            assert_eq!(selected(&app), Some(expected));
         }
         for expected in [0, 0] {
             assert!(app.handle_git_completion_key(&Key::Named(NamedKey::ArrowUp)));
-            assert_eq!(app.git_completion_index, Some(expected));
+            assert_eq!(selected(&app), Some(expected));
         }
-        app.git_completion_index = None;
-        assert!(app.handle_git_completion_key(&Key::Named(NamedKey::ArrowUp)));
-        assert_eq!(app.git_completion_index, Some(1));
-        app.git_completion_index = None;
-        assert!(app.handle_git_completion_key(&Key::Named(NamedKey::ArrowDown)));
-        assert_eq!(app.git_completion_index, Some(0));
         assert!(!app.handle_git_completion_key(&Key::Named(NamedKey::Enter)));
-        assert!(app.git_completions_visible);
+        assert!(app.git_completion.is_some());
         assert!(app.handle_git_completion_key(&Key::Named(NamedKey::Escape)));
         assert_eq!(app.input_line_buffer, "git checkout ma");
-        assert!(!app.git_completions_visible);
-        for invalid in [None, Some(usize::MAX)] {
-            let mut app = completion_app();
-            if invalid.is_none() {
-                app.git_completions.clear();
-            }
-            app.git_completion_index = invalid;
-            assert!(!app.handle_git_completion_key(&Key::Named(NamedKey::ArrowDown)));
-            assert!(!app.git_completions_visible);
-            assert_eq!(app.input_line_buffer, "git checkout ma");
-        }
-        let mut app = completion_app();
-        app.git_completion_index = None;
-        assert!(!app.handle_git_completion_key(&Key::Named(NamedKey::Tab)));
-        assert!(!app.git_completions_visible);
+        assert!(app.git_completion.is_none());
+        assert!(!app.handle_git_completion_key(&Key::Named(NamedKey::ArrowDown)));
+    }
+
+    #[test]
+    fn a_popup_needs_suggestions() {
+        assert!(GitCompletionPopup::new(Vec::new()).is_none());
+        let popup = GitCompletionPopup::new(vec!["main".into()]).unwrap();
+        assert_eq!(popup.selected_branch(), "main");
     }
 }

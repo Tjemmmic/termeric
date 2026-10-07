@@ -800,14 +800,11 @@ fn read_only_focused_pane_rejects_keyboard_and_running_gui_control_input() {
     assert!(!app.write_terminal_protocol_input(b"blocked"));
 
     app.input_line_buffer = "stale-shell-state".into();
-    app.git_completions = vec!["stale-branch".into()].into();
-    app.git_completion_index = Some(0);
-    app.git_completions_visible = true;
+    app.git_completion =
+        crate::app::git_completion::GitCompletionPopup::new(vec!["stale-branch".into()]);
     app.write_to_pty(b"more");
     assert!(app.input_line_buffer.is_empty());
-    assert!(app.git_completions.is_empty());
-    assert_eq!(app.git_completion_index, None);
-    assert!(!app.git_completions_visible);
+    assert!(app.git_completion.is_none());
 
     app.handle_ime_event(winit::event::Ime::Preedit("blocked".into(), None));
     assert!(app.ime.preedit().is_none());

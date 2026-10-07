@@ -1329,12 +1329,8 @@ pub struct App {
     input_line_buffer: String,
     /// Git repository watcher (tracks branch, dirty status per tab)
     git_watcher: crate::git::GitWatcher,
-    /// Current git completion candidates
-    git_completions: crate::git::BranchCompletions,
-    /// Selected index in git completion dropdown (None = no selection)
-    git_completion_index: Option<usize>,
-    /// Whether git completion dropdown is visible
-    git_completions_visible: bool,
+    /// The Git branch completion popup, while it is shown
+    git_completion: Option<git_completion::GitCompletionPopup>,
     /// Which tab bar element is currently hovered (for icon animations)
     tab_bar_hover: Option<crate::renderer::TabBarClick>,
     /// Smooth hover animation progress (0.0 = not hovered, 1.0 = fully hovered)
@@ -1657,9 +1653,7 @@ impl App {
             agent_view: agent_view::AgentViewWindow::default(),
             input_line_buffer: String::new(),
             git_watcher: crate::git::GitWatcher::new(git_event_waker()),
-            git_completions: crate::git::BranchCompletions::default(),
-            git_completion_index: None,
-            git_completions_visible: false,
+            git_completion: None,
             tab_bar_hover: None,
             tab_bar_hover_since: Instant::now(),
             plugin_manager: PluginManager::new(),
@@ -2376,20 +2370,14 @@ impl App {
         renderer.set_guardrail(chrome.guardrail);
         renderer.set_tab_bar_hover(self.tab_bar_hover, tab_bar_hover_progress);
         if !renderer.git_completion_fits() {
-            self.git_completions_visible = false;
-            self.git_completions.clear();
-            self.git_completion_index = None;
+            self.git_completion = None;
         }
-        renderer.set_git_completions(
-            if self.git_completions_visible && !self.git_completions.is_empty() {
-                Some(crate::renderer::GitCompletionInfo {
-                    completions: self.git_completions.clone(),
-                    selected_index: self.git_completion_index,
-                })
-            } else {
-                None
-            },
-        );
+        renderer.set_git_completions(self.git_completion.as_ref().map(|popup| {
+            crate::renderer::GitCompletionInfo {
+                completions: popup.completions().clone(),
+                selected_index: Some(popup.selected()),
+            }
+        }));
         renderer.set_bell_intensity(self.bell.visual_intensity());
 
         // Scan visible rows for auto-detected URLs (reuse cached storage)
@@ -3751,9 +3739,7 @@ impl App {
                 self.note_person_typed(b"");
             }
         }
-        self.git_completions_visible = false;
-        self.git_completions.clear();
-        self.git_completion_index = None;
+        self.dismiss_git_completion_popup();
         // Clear any active selection — users expect paste to replace the
         // visual selection state, not leave it dangling.
         self.mouse_state.clear_selection();

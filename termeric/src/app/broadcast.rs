@@ -35,9 +35,7 @@ impl App {
             BroadcastState::Inactive => {
                 self.ime.clear_preedit();
                 self.input_line_buffer.clear();
-                self.git_completions_visible = false;
-                self.git_completions.clear();
-                self.git_completion_index = None;
+                self.dismiss_git_completion_popup();
                 self.toasts.warning(
                     "Broadcast armed for 10 seconds: click panes or focus one and press Space to change targets; press Enter or invoke Toggle Broadcast Input again to confirm",
                 );

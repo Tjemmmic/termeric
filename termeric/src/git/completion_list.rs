@@ -10,16 +10,12 @@ struct CompletionList {
 }
 
 /// Cloning a render snapshot shares names instead of copying every string.
-/// Empty/cleared lists need no allocation. Only whole-list replacement is
+/// Empty lists need no allocation. Only whole-list replacement is
 /// allowed, so cached sizing metadata cannot diverge from the names it sizes.
 #[derive(Debug, Clone, Default)]
 pub struct BranchCompletions(Option<Arc<CompletionList>>);
 
 impl BranchCompletions {
-    pub fn clear(&mut self) {
-        self.0 = None;
-    }
-
     /// Unicode scalar count, matching the dropdown's existing monospace sizing.
     /// This is not a grapheme count or a terminal display-width calculation.
     pub fn max_name_chars(&self) -> usize {
@@ -54,17 +50,11 @@ mod tests {
     use crate::renderer::GitCompletionInfo;
 
     #[test]
-    fn empty_and_cleared_completion_lists_are_empty() {
-        for mut list in [BranchCompletions::default(), Vec::<String>::new().into()] {
+    fn empty_completion_lists_are_empty() {
+        for list in [BranchCompletions::default(), Vec::<String>::new().into()] {
             assert!(list.is_empty());
             assert_eq!(list.max_name_chars(), 0);
-            list.clear();
-            assert!(list.is_empty());
         }
-        let mut list = BranchCompletions::from(vec!["main".into()]);
-        list.clear();
-        assert!(list.is_empty());
-        assert_eq!(list.max_name_chars(), 0);
     }
 
     #[test]
@@ -95,7 +85,7 @@ mod tests {
             selected_index: Some(0),
         };
         assert_eq!(frame.completions.max_name_chars(), 256);
-        list.clear();
+        list = BranchCompletions::default();
         assert!(list.is_empty());
         assert_eq!(frame.completions.len(), super::super::MAX_BRANCH_NAMES);
         list = vec!["new".into()].into();
