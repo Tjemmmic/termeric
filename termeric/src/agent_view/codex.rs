@@ -28,8 +28,8 @@ use super::event::{
 };
 use super::present::PATCH_TOOL;
 use super::protocol::{
-    Exchange, Incoming, Protocol, client_info, failed_turn, finished_turn, incoming, line,
-    method_not_found, plan, request_key, settled, stream_piece, stream_started, text, todo,
+    Exchange, Incoming, Protocol, client_info, content_text, failed_turn, finished_turn, incoming,
+    line, method_not_found, plan, request_key, settled, stream_piece, stream_started, text, todo,
     tool_result, tool_use,
 };
 
@@ -1067,7 +1067,7 @@ impl CodexCodec {
                         .pointer("/error/message")
                         .and_then(Value::as_str)
                         .map(str::to_owned)
-                        .unwrap_or_else(|| mcp_text(item.pointer("/result/content")));
+                        .unwrap_or_else(|| content_text(item.pointer("/result/content")));
                     events.push(tool_result(&id, content, failed));
                 }
                 events
@@ -1286,21 +1286,6 @@ fn skills(result: Option<&Value>) -> Vec<Skill> {
             })
         })
         .collect()
-}
-
-/// The text of an MCP result's content blocks.
-fn mcp_text(content: Option<&Value>) -> String {
-    content
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|block| match block.get("type").and_then(Value::as_str)? {
-            "text" => block.get("text")?.as_str().map(str::to_owned),
-            "image" => Some("[image]".to_owned()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 /// A command as the person would type it: Codex runs commands through the

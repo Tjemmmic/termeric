@@ -179,6 +179,23 @@ pub fn text(value: &Value, key: &str) -> Option<String> {
     value.get(key).and_then(Value::as_str).map(str::to_owned)
 }
 
+/// The text of a tool result's content blocks, in the shape MCP and the
+/// Claude API share: text blocks as written and images as `[image]`, one per
+/// line; other blocks show nothing.
+pub fn content_text(blocks: Option<&Value>) -> String {
+    blocks
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|block| match block.get("type").and_then(Value::as_str)? {
+            "text" => block.get("text")?.as_str().map(str::to_owned),
+            "image" => Some("[image]".to_owned()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// A main-thread message holding one tool call.
 pub fn tool_use(id: &str, name: &str, input: Value) -> AgentEvent {
     AgentEvent::Message {
@@ -376,6 +393,21 @@ mod tests {
                 lines: Vec::new(),
             }
         );
+    }
+
+    #[test]
+    fn content_blocks_read_as_their_text_with_images_named() {
+        let blocks = json!([
+            { "type": "text", "text": "a" },
+            { "type": "image", "data": "…" },
+            { "type": "resource", "resource": {} },
+            { "type": "text", "text": "b" },
+            { "type": "text" },
+            "loose",
+        ]);
+        assert_eq!(content_text(Some(&blocks)), "a\n[image]\nb");
+        assert_eq!(content_text(Some(&json!("not blocks"))), "");
+        assert_eq!(content_text(None), "");
     }
 
     #[test]

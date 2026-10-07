@@ -20,7 +20,7 @@ use super::event::{
     ContentBlock, ContextUsage, Handshake, ModeChoice, ModelChoice, RememberOption, Retry,
     SessionInfo, SlashCommand, StreamDelta, Thread, ToolResult, TurnOutcome,
 };
-use super::protocol::{Exchange, Protocol, line, preview};
+use super::protocol::{Exchange, Protocol, content_text, line, preview};
 
 /// The oldest Claude Code release whose protocol the agent view was built
 /// against.
@@ -616,22 +616,12 @@ fn tool_results(message: &Map<String, Value>) -> Vec<ToolResult> {
     }
 }
 
+/// A tool result's content, which Claude Code writes as plain text or as
+/// content blocks.
 fn result_text(content: Option<&Value>) -> String {
     match content {
         Some(Value::String(text)) => text.clone(),
-        Some(Value::Array(parts)) => parts
-            .iter()
-            .filter_map(|part| {
-                let part = part.as_object()?;
-                match str_field(part, "type")? {
-                    "text" => str_field(part, "text").map(str::to_owned),
-                    "image" => Some("[image]".to_owned()),
-                    _ => None,
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
-        _ => String::new(),
+        blocks => content_text(blocks),
     }
 }
 
