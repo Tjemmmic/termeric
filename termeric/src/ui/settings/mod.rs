@@ -1005,9 +1005,11 @@ impl SettingsPanel {
                     font_options.push(configured.clone());
                 }
             }
+            // Font names match without regard to case, as the merge above
+            // does, so a configured "fira mono" selects "Fira Mono".
             let font_selected = font_options
                 .iter()
-                .position(|n| n == &config.font.family)
+                .position(|name| name.eq_ignore_ascii_case(&config.font.family))
                 .unwrap_or(0);
             let mut items = vec![
                 SettingItem {
@@ -3148,6 +3150,28 @@ mod tests {
             panel.handle_key(SettingsKey::Enter, &config, &registry),
             SettingsAction::SetScrollback(500_000)
         ));
+    }
+
+    #[test]
+    fn the_family_dropdown_selects_the_configured_font_whatever_its_case() {
+        let mut panel = SettingsPanel::new();
+        panel.set_available_fonts(vec!["monospace".into(), "Fira Mono".into()]);
+        let mut config = Config::default();
+        config.font.family = "fira mono".into();
+        panel.select_page(SettingsPage::Font);
+        let entries = panel.build_entries(&config, &default_registry());
+        let family = entries
+            .iter()
+            .find(|entry| entry.label == "Family")
+            .expect("font family row");
+        let SettingKind::Dropdown {
+            options, selected, ..
+        } = &family.kind
+        else {
+            panic!("the family row is a dropdown: {:?}", family.kind);
+        };
+        assert_eq!(options, &["monospace", "Fira Mono"]);
+        assert_eq!(*selected, 1);
     }
 
     #[test]
