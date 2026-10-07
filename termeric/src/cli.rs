@@ -326,10 +326,10 @@ fn parse_collected(
                     env!("CARGO_PKG_VERSION")
                 )));
             }
+            "--separate-process" => plan.separate_process = true,
             // A leading --new-window is a desktop-launch compatibility flag:
             // this invocation already creates a native window. Later uses
             // delimit additional window groups in the same process.
-            "--separate-process" => plan.separate_process = true,
             "--new-window" if index == 0 => current_window(&mut plan).force_new = true,
             "--new-window" => plan.windows.push(WindowLaunch::default()),
             "--quick-access" => {

@@ -1,4 +1,6 @@
-//! Same-user Unix-socket server for GUI inventory requests.
+//! Same-user Unix-socket server for every GUI control request: one
+//! authenticated request and reply per connection, answered by the GUI event
+//! loop.
 
 use super::paths::ControlEndpoint;
 use super::protocol::{self, ClientFrame, Request, Response, ServerFrame};

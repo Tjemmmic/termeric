@@ -146,8 +146,8 @@ pub enum Request {
         domain: String,
         pane: u32,
         tab: u32,
-        /// Exact destination anchor. `None` preserves the domain CLI's
-        /// historical focused-pane behavior.
+        /// Exact destination anchor. `None` anchors on the destination tab's
+        /// focused pane (what `domain move-pane` sends).
         target: Option<u32>,
         direction: SplitDirection,
     },

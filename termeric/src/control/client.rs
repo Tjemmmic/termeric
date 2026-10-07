@@ -1,4 +1,6 @@
-//! Discovery client and safe command-line formatting for GUI inventory.
+//! The client side of every GUI control request: endpoint discovery, one
+//! authenticated exchange per request, checking that a reply answers it, and
+//! safe command-line formatting of the result.
 
 use super::paths::ControlEndpoint;
 use super::protocol::{self, ClientFrame, ProcessInventory, Request, Response, ServerFrame};
