@@ -6,6 +6,64 @@ use super::control_actions::{control_pane, control_running_pane, control_tab_id}
 use super::redraw_scheduler::RedrawReason;
 use super::*;
 
+/// What a completed live-domain change reports to the person.
+fn live_domain_control_message(control: &LiveDomainControl) -> String {
+    match control {
+        LiveDomainControl::SpawnTab { .. } => "Created live-domain tab".to_string(),
+        LiveDomainControl::SplitPane { remote_pane_id, .. } => {
+            format!("Split live-domain pane {remote_pane_id}")
+        }
+        LiveDomainControl::ResizeSplit {
+            remote_split_id,
+            ratio_millis,
+            ..
+        } => format!("Resized live-domain split {remote_split_id} to {ratio_millis}‰"),
+        LiveDomainControl::RenameTab {
+            remote_tab_id,
+            title,
+            ..
+        } => title.as_deref().map_or_else(
+            || format!("Cleared live-domain tab {remote_tab_id} title"),
+            |title| format!("Renamed live-domain tab {remote_tab_id} to {title}"),
+        ),
+        LiveDomainControl::SetTabPinned {
+            remote_tab_id,
+            pinned,
+            ..
+        } => format!(
+            "{} live-domain tab {remote_tab_id}",
+            if *pinned { "Pinned" } else { "Unpinned" }
+        ),
+        LiveDomainControl::MoveTab {
+            remote_tab_id,
+            index,
+            ..
+        } => format!("Moved live-domain tab {remote_tab_id} to position {index}"),
+        LiveDomainControl::SwapPaneNext { remote_pane_id, .. } => {
+            format!("Swapped live-domain pane {remote_pane_id} with its next pane")
+        }
+        LiveDomainControl::BalanceTab { remote_tab_id, .. } => {
+            format!("Balanced live-domain tab {remote_tab_id}")
+        }
+        LiveDomainControl::ApplyPaneLayout {
+            remote_tab_id,
+            preset,
+            ..
+        } => format!("Applied {preset:?} layout to live-domain tab {remote_tab_id}"),
+        LiveDomainControl::MovePane {
+            remote_pane_id,
+            destination_tab_id,
+            ..
+        } => format!("Moved live-domain pane {remote_pane_id} to tab {destination_tab_id}"),
+        LiveDomainControl::ClosePane { remote_pane_id, .. } => {
+            format!("Closed live-domain pane {remote_pane_id}")
+        }
+        LiveDomainControl::CloseTab { remote_tab_id, .. } => {
+            format!("Closed live-domain tab {remote_tab_id}")
+        }
+    }
+}
+
 impl App {
     pub(super) fn persist_live_domain_focus(&self) {
         let route = self
@@ -114,30 +172,41 @@ impl App {
         }
     }
 
+    /// A new live-domain pane beside the active terminal, in its visible
+    /// working directory when `inherit_visible_cwd`.
     pub(super) fn live_domain_spawn_spec(
         &self,
         inherit_visible_cwd: bool,
     ) -> crate::domain::model::SpawnSpec {
-        let (cols, rows, working_directory) = self
-            .active_terminal()
-            .map(|terminal| {
-                (
-                    terminal.grid().cols().min(1_000) as u16,
-                    terminal.grid().rows().min(1_000) as u16,
-                    inherit_visible_cwd
-                        .then(|| crate::tabs::terminal_working_directory(terminal))
-                        .flatten(),
-                )
-            })
-            .unwrap_or((80, 24, None));
-        crate::domain::model::SpawnSpec {
+        let terminal = self.active_terminal();
+        let working_directory = terminal
+            .filter(|_| inherit_visible_cwd)
+            .and_then(crate::tabs::terminal_working_directory);
+        self.live_domain_spawn_spec_sized_like(terminal, working_directory)
+    }
+
+    /// The configured shell as a live-domain pane the size of `terminal`
+    /// (the daemon's default without one), clamped to what the daemon
+    /// accepts.
+    fn live_domain_spawn_spec_sized_like(
+        &self,
+        terminal: Option<&termeric_core::Terminal>,
+        working_directory: Option<String>,
+    ) -> crate::domain::model::SpawnSpec {
+        use crate::domain::model::{MAX_TERMINAL_CELLS_PER_SIDE, SpawnSpec};
+
+        let cells = |count: usize| count.min(usize::from(MAX_TERMINAL_CELLS_PER_SIDE)) as u16;
+        let mut spec = SpawnSpec {
             program: self.config.shell.program.clone(),
             args: self.config.shell.args.clone(),
             working_directory,
-            title: None,
-            cols,
-            rows,
+            ..SpawnSpec::default()
+        };
+        if let Some(terminal) = terminal {
+            spec.cols = cells(terminal.cols());
+            spec.rows = cells(terminal.rows());
         }
+        spec
     }
 
     pub(super) fn control_live_domain_create_tab(
@@ -173,14 +242,7 @@ impl App {
             .get(&PaneId(pane_id))
             .ok_or_else(|| format!("GUI pane {pane_id} does not exist in tab {}", tab.id))?;
         let terminal = &control_pane(tab, pane_id)?.terminal;
-        let spawn = crate::domain::model::SpawnSpec {
-            program: self.config.shell.program.clone(),
-            args: self.config.shell.args.clone(),
-            working_directory: None,
-            title: None,
-            cols: terminal.cols().min(1_000) as u16,
-            rows: terminal.rows().min(1_000) as u16,
-        };
+        let spawn = self.live_domain_spawn_spec_sized_like(Some(terminal), None);
         Ok(Some(LiveDomainControl::SplitPane {
             domain_id: live.domain_id.clone(),
             remote_pane_id,
@@ -601,122 +663,34 @@ impl App {
                 "Live-domain mutation succeeded but GUI reconciliation failed: {error:#}"
             ));
         }
-        {
-            let (changed, message, closed_tab) = match control {
-                LiveDomainControl::SpawnTab { .. } => {
-                    (false, "Created live-domain tab".to_string(), None)
+        let message = live_domain_control_message(&control);
+        let closed = match control {
+            LiveDomainControl::ClosePane {
+                remote_pane_id,
+                local_tab_id,
+                ..
+            } => self.tabs.as_mut().is_some_and(|tabs| {
+                tabs.reconcile_closed_live_domain_pane(local_tab_id, remote_pane_id)
+            }),
+            LiveDomainControl::CloseTab { local_tab_id, .. } => {
+                let closed = self
+                    .tabs
+                    .as_mut()
+                    .is_some_and(|tabs| tabs.close_tab_by_id(local_tab_id));
+                if closed {
+                    self.dispatch_plugin_hook(crate::plugin::Hook::TabClosed {
+                        tab_id: local_tab_id,
+                    });
                 }
-                LiveDomainControl::SplitPane { remote_pane_id, .. } => (
-                    false,
-                    format!("Split live-domain pane {remote_pane_id}"),
-                    None,
-                ),
-                LiveDomainControl::ResizeSplit {
-                    remote_split_id,
-                    ratio_millis,
-                    ..
-                } => (
-                    false,
-                    format!("Resized live-domain split {remote_split_id} to {ratio_millis}‰"),
-                    None,
-                ),
-                LiveDomainControl::RenameTab {
-                    remote_tab_id,
-                    title,
-                    ..
-                } => (
-                    false,
-                    title.map_or_else(
-                        || format!("Cleared live-domain tab {remote_tab_id} title"),
-                        |title| format!("Renamed live-domain tab {remote_tab_id} to {title}"),
-                    ),
-                    None,
-                ),
-                LiveDomainControl::SetTabPinned {
-                    remote_tab_id,
-                    pinned,
-                    ..
-                } => (
-                    false,
-                    format!(
-                        "{} live-domain tab {remote_tab_id}",
-                        if pinned { "Pinned" } else { "Unpinned" }
-                    ),
-                    None,
-                ),
-                LiveDomainControl::MoveTab {
-                    remote_tab_id,
-                    index,
-                    ..
-                } => (
-                    false,
-                    format!("Moved live-domain tab {remote_tab_id} to position {index}"),
-                    None,
-                ),
-                LiveDomainControl::SwapPaneNext { remote_pane_id, .. } => (
-                    false,
-                    format!("Swapped live-domain pane {remote_pane_id} with its next pane"),
-                    None,
-                ),
-                LiveDomainControl::BalanceTab { remote_tab_id, .. } => (
-                    false,
-                    format!("Balanced live-domain tab {remote_tab_id}"),
-                    None,
-                ),
-                LiveDomainControl::ApplyPaneLayout {
-                    remote_tab_id,
-                    preset,
-                    ..
-                } => (
-                    false,
-                    format!("Applied {preset:?} layout to live-domain tab {remote_tab_id}"),
-                    None,
-                ),
-                LiveDomainControl::MovePane {
-                    remote_pane_id,
-                    destination_tab_id,
-                    ..
-                } => (
-                    false,
-                    format!("Moved live-domain pane {remote_pane_id} to tab {destination_tab_id}"),
-                    None,
-                ),
-                LiveDomainControl::ClosePane {
-                    remote_pane_id,
-                    local_tab_id,
-                    ..
-                } => (
-                    self.tabs.as_mut().is_some_and(|tabs| {
-                        tabs.reconcile_closed_live_domain_pane(local_tab_id, remote_pane_id)
-                    }),
-                    format!("Closed live-domain pane {remote_pane_id}"),
-                    None,
-                ),
-                LiveDomainControl::CloseTab {
-                    remote_tab_id,
-                    local_tab_id,
-                    ..
-                } => (
-                    self.tabs
-                        .as_mut()
-                        .is_some_and(|tabs| tabs.close_tab_by_id(local_tab_id)),
-                    format!("Closed live-domain tab {remote_tab_id}"),
-                    Some(local_tab_id),
-                ),
-            };
-            if changed && let Some(tab_id) = closed_tab {
-                self.dispatch_plugin_hook(crate::plugin::Hook::TabClosed { tab_id });
+                closed
             }
-            if changed {
-                self.reconcile_broadcast_state();
-                if let Some(size) = self.window.as_ref().map(|window| window.inner_size()) {
-                    self.sync_terminal_geometry(size.width, size.height);
-                }
-                self.refresh_focused_terminal_surfaces();
-            }
-            self.toasts.success(message);
-            self.request_redraw(RedrawReason::BackgroundTask);
+            _ => false,
+        };
+        if closed {
+            self.sync_after_live_domain_topology();
         }
+        self.toasts.success(message);
+        self.request_redraw(RedrawReason::BackgroundTask);
     }
 
     pub(super) fn handle_live_domain_topology(

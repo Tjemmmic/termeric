@@ -10,6 +10,8 @@ pub const MAX_ATTACHMENTS_PER_PANE: usize = 8;
 pub const MAX_TOPOLOGY_SUBSCRIBERS_PER_DOMAIN: usize = 8;
 pub const MAX_PANE_SCROLLBACK_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_TEXT_RESPONSE_BYTES: usize = 1024 * 1024;
+/// The most columns, and the most rows, a domain terminal may have.
+pub const MAX_TERMINAL_CELLS_PER_SIDE: u16 = 1_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DomainSummary {
@@ -179,8 +181,12 @@ impl SpawnSpec {
     /// directory exists is for the daemon that spawns it to say: with
     /// `--host`, it names a folder on the remote computer.
     pub fn validate(&self) -> anyhow::Result<()> {
-        if self.cols == 0 || self.rows == 0 || self.cols > 1_000 || self.rows > 1_000 {
-            anyhow::bail!("terminal geometry must be between 1x1 and 1000x1000 cells");
+        if !(1..=MAX_TERMINAL_CELLS_PER_SIDE).contains(&self.cols)
+            || !(1..=MAX_TERMINAL_CELLS_PER_SIDE).contains(&self.rows)
+        {
+            anyhow::bail!(
+                "terminal geometry must be between 1x1 and {MAX_TERMINAL_CELLS_PER_SIDE}x{MAX_TERMINAL_CELLS_PER_SIDE} cells"
+            );
         }
         if self.args.len() > 256
             || self.args.iter().any(|argument| argument.contains('\0'))
