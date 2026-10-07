@@ -2,6 +2,7 @@
 
 use super::protocol::{self, ClientFrame, Request, Response, ServerFrame, UploadKind};
 use super::{DomainTopologyEvent, io_util, validate_ssh_destination};
+use crate::deadline_io::{self, Deadline, PollReader};
 use crate::local_socket::SocketPaths;
 use anyhow::Context;
 use std::io::{Read, Write};
@@ -105,12 +106,6 @@ enum DomainCloser {
 
 struct SshChild(Mutex<Option<Child>>);
 
-struct DeadlineReader<'a, R> {
-    stream: &'a mut R,
-    deadline: Instant,
-    alive: Option<&'a AtomicBool>,
-}
-
 struct FocusQueue {
     pending: Mutex<std::collections::HashMap<(super::DomainAuthority, String), u32>>,
     ready: std::sync::Condvar,
@@ -129,37 +124,6 @@ impl Read for DomainStream {
                 .as_mut()
                 .expect("live SSH stream retains stdout")
                 .read(buffer),
-        }
-    }
-}
-
-impl<R: Read + AsRawFd> Read for DeadlineReader<'_, R> {
-    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        loop {
-            if self
-                .alive
-                .is_some_and(|alive| !alive.load(Ordering::Acquire))
-            {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::ConnectionAborted,
-                    "domain subscription cancelled",
-                ));
-            }
-            let remaining = self.deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "domain response deadline elapsed",
-                ));
-            }
-            let mut timeout_millis =
-                remaining.as_millis().max(1).min(libc::c_int::MAX as u128) as libc::c_int;
-            if self.alive.is_some() {
-                timeout_millis = timeout_millis.min(500);
-            }
-            if stdin_ready(self.stream.as_raw_fd(), timeout_millis)? {
-                return self.stream.read(buffer);
-            }
         }
     }
 }
@@ -831,7 +795,7 @@ impl DomainClient {
             let mut stdin = std::io::stdin().lock();
             let mut buffer = vec![0u8; 16 * 1024];
             while alive.load(Ordering::Acquire) {
-                if !stdin_ready(libc::STDIN_FILENO, 250)? {
+                if !deadline_io::readable(libc::STDIN_FILENO, 250)? {
                     continue;
                 }
                 match stdin.read(&mut buffer) {
@@ -1042,7 +1006,9 @@ fn subscribe_topology_stream(
             },
         },
     )?;
-    let Some(initial) = read_frame_while_alive(&mut stream, frame_timeout, alive)? else {
+    let Some(initial) =
+        read_frame_while_alive(&mut stream, Deadline::within(frame_timeout), alive)?
+    else {
         return Ok(());
     };
     let initial = match initial {
@@ -1057,14 +1023,13 @@ fn subscribe_topology_stream(
         return Ok(());
     }
 
-    while alive.load(Ordering::Acquire) {
-        if !stdin_ready(stream.as_raw_fd(), 500)? {
-            continue;
-        }
+    loop {
         // Idle subscriptions have no expiry. Once bytes arrive, one deadline
         // covers the complete header/body and cannot be renewed by trickling.
-        let Some(frame) = read_frame_while_alive(&mut stream, frame_timeout, alive)? else {
-            return Ok(());
+        let Some(frame) =
+            read_frame_while_alive(&mut stream, Deadline::AfterIdle(frame_timeout), alive)?
+        else {
+            break;
         };
         let event = match frame {
             ServerFrame::TopologyChanged { revision, domain } => {
@@ -1089,16 +1054,17 @@ fn subscribe_topology_stream(
 #[cfg(test)]
 mod topology_tests;
 
+/// What a domain response that takes too long fails with.
+const RESPONSE_EXPIRED: &str = "domain response deadline elapsed";
+
 fn read_frame_while_alive<T: serde::de::DeserializeOwned>(
     stream: &mut DomainStream,
-    timeout: Duration,
+    deadline: Deadline,
     alive: &AtomicBool,
 ) -> anyhow::Result<Option<T>> {
-    let result = protocol::read_frame(&mut DeadlineReader {
-        stream,
-        deadline: Instant::now() + timeout,
-        alive: Some(alive),
-    });
+    let result = protocol::read_frame(
+        &mut PollReader::new(stream, deadline, RESPONSE_EXPIRED).while_alive(alive),
+    );
     if !alive.load(Ordering::Acquire) {
         // Discard partial or just-completed input on cancellation. The caller
         // drops this stream; it must not reuse the partially consumed frame.
@@ -1112,11 +1078,11 @@ fn read_frame_with_timeout<T: serde::de::DeserializeOwned>(
     stream: &mut (impl Read + AsRawFd),
     timeout: Duration,
 ) -> anyhow::Result<T> {
-    protocol::read_frame(&mut DeadlineReader {
+    protocol::read_frame(&mut PollReader::new(
         stream,
-        deadline: Instant::now() + timeout,
-        alive: None,
-    })
+        Deadline::within(timeout),
+        RESPONSE_EXPIRED,
+    ))
 }
 
 /// Bridge one authenticated SSH stdio channel to this user's private local
@@ -1296,25 +1262,6 @@ fn terminal_size(descriptor: libc::c_int) -> Option<PtySize> {
             None
         }
     }
-}
-
-fn stdin_ready(descriptor: libc::c_int, timeout_millis: libc::c_int) -> std::io::Result<bool> {
-    let mut descriptor = libc::pollfd {
-        fd: descriptor,
-        events: libc::POLLIN | libc::POLLHUP,
-        revents: 0,
-    };
-    // SAFETY: poll receives one initialized descriptor for the duration of the
-    // call and does not retain its pointer.
-    let result = unsafe { libc::poll(&mut descriptor, 1, timeout_millis) };
-    if result < 0 {
-        let error = std::io::Error::last_os_error();
-        if error.kind() == std::io::ErrorKind::Interrupted {
-            return Ok(false);
-        }
-        return Err(error);
-    }
-    Ok(result > 0)
 }
 
 #[cfg(test)]

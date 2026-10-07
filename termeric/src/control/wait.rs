@@ -3,15 +3,16 @@
 use super::{
     ControlOutput, client,
     paths::ControlEndpoint,
-    protocol::{self, ClientFrame, LaunchState, Request, Response},
+    protocol::{LaunchState, Request, Response},
 };
+use crate::deadline_io::{self, remaining};
 use anyhow::Context;
-use std::io::{self, Read, Write};
-use std::os::unix::{fs::MetadataExt, net::UnixStream};
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
+const EXPIRED: &str = "GUI launch wait timed out; child was not canceled";
 
 pub(super) fn launch_and_wait(
     process_id: u32,
@@ -59,7 +60,7 @@ fn launch_at(
     let exchange_deadline = exchange_deadline(deadline);
     let response = exchange(endpoint, token, identity, &request, exchange_deadline)?;
     client::answer(endpoint.process_id, &request, response)?;
-    remaining(exchange_deadline)?;
+    remaining(exchange_deadline, EXPIRED)?;
     poll_launch(endpoint, token, identity, &id, deadline, json)
 }
 
@@ -126,7 +127,7 @@ fn poll_launch(
     };
     loop {
         let exchange_deadline = exchange_deadline(deadline);
-        remaining(exchange_deadline)?;
+        remaining(exchange_deadline, EXPIRED)?;
         // Check every running reply too: waiting must not conceal wrong
         // identities, unsupported versions, errors, or inconsistent exit state.
         let response = client::answer(
@@ -142,7 +143,7 @@ fn poll_launch(
             _ => None,
         };
         let text = client::print(&query, &response, json)?;
-        remaining(exchange_deadline)?;
+        remaining(exchange_deadline, EXPIRED)?;
         if let Some(exit_code) = exit_code {
             return Ok(ControlOutput {
                 text,
@@ -150,7 +151,7 @@ fn poll_launch(
             });
         }
         let delay = match deadline {
-            Some(deadline) => POLL_INTERVAL.min(remaining(deadline)?),
+            Some(deadline) => POLL_INTERVAL.min(remaining(deadline, EXPIRED)?),
             None => POLL_INTERVAL,
         };
         // This sleeps only the standalone CLI, after its socket has closed.
@@ -193,85 +194,10 @@ fn exchange(
         Ok(())
     };
     check_endpoint()?;
-    let mut stream = DeadlineStream::connect(&endpoint.paths.socket, deadline)?;
-    client::validate_peer(&stream.stream)?;
+    let mut stream = deadline_io::connect_before(&endpoint.paths.socket, deadline, EXPIRED)?;
+    client::validate_peer(&stream)?;
     check_endpoint()?;
-    protocol::write_frame(
-        &mut stream,
-        &ClientFrame {
-            version: protocol::PROTOCOL_VERSION,
-            token: token.to_owned(),
-            request: request.clone(),
-        },
-    )?;
-    client::accept(protocol::read_frame(&mut stream)?)
-}
-
-fn remaining(deadline: Instant) -> io::Result<Duration> {
-    deadline
-        .checked_duration_since(Instant::now())
-        .filter(|duration| !duration.is_zero())
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::TimedOut,
-                "GUI launch wait timed out; child was not canceled",
-            )
-        })
-}
-
-/// Reads and writes share one absolute deadline: each call waits at most for
-/// the time left, so a peer trickling single frame bytes cannot stretch the
-/// exchange. Connecting blocks only while the listener's backlog is full.
-struct DeadlineStream {
-    stream: UnixStream,
-    deadline: Instant,
-}
-
-impl DeadlineStream {
-    fn connect(path: &Path, deadline: Instant) -> io::Result<Self> {
-        remaining(deadline)?;
-        let stream = UnixStream::connect(path)?;
-        remaining(deadline)?;
-        Ok(Self { stream, deadline })
-    }
-}
-
-/// A socket timeout surfaces as `WouldBlock`; retrying re-checks the
-/// deadline, which reports `TimedOut` once it has passed.
-fn retryable(error: &io::Error) -> bool {
-    matches!(
-        error.kind(),
-        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
-    )
-}
-
-impl Read for DeadlineStream {
-    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
-        loop {
-            self.stream
-                .set_read_timeout(Some(remaining(self.deadline)?))?;
-            match self.stream.read(bytes) {
-                Err(error) if retryable(&error) => {}
-                result => return result,
-            }
-        }
-    }
-}
-
-impl Write for DeadlineStream {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        loop {
-            self.stream
-                .set_write_timeout(Some(remaining(self.deadline)?))?;
-            match self.stream.write(bytes) {
-                Err(error) if retryable(&error) => {}
-                result => return result,
-            }
-        }
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
+    client::exchange_before(&mut stream, token, request, deadline, EXPIRED)
 }
 
 #[cfg(test)]
@@ -285,45 +211,6 @@ mod tests {
         }
         for code in [256, 512, u32::MAX] {
             assert_eq!(portable_cli_code(code), 1);
-        }
-    }
-
-    #[test]
-    fn stream_deadline_covers_trickled_frames_and_backpressure() {
-        // Each byte arrives well within a socket timeout, but the frame
-        // header never completes before the shared deadline.
-        let (stream, mut peer) = UnixStream::pair().unwrap();
-        let deadline = Instant::now() + Duration::from_millis(80);
-        let mut stream = DeadlineStream { stream, deadline };
-        let trickle = std::thread::spawn(move || {
-            for _ in 0..3 {
-                std::thread::sleep(Duration::from_millis(30));
-                peer.write_all(&[0]).unwrap();
-            }
-            peer
-        });
-        let mut header = [0; 4];
-        assert_eq!(
-            stream.read_exact(&mut header).unwrap_err().kind(),
-            io::ErrorKind::TimedOut
-        );
-        assert!(Instant::now() >= deadline);
-        drop(trickle.join().unwrap());
-
-        let (stream, _peer) = UnixStream::pair().unwrap();
-        let mut stream = DeadlineStream {
-            stream,
-            deadline: Instant::now() + Duration::from_millis(40),
-        };
-        let chunk = [0; 8192];
-        loop {
-            match stream.write_all(&chunk) {
-                Ok(()) => {}
-                Err(error) => {
-                    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
-                    break;
-                }
-            }
         }
     }
 

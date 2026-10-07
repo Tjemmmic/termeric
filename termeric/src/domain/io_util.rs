@@ -1,15 +1,12 @@
-//! File and socket helpers shared by the domain client, the daemon, and the
-//! directory archive.
+//! File helpers shared by the domain client, the daemon, and the directory
+//! archive.
 
 use super::protocol;
 use anyhow::Context;
 use sha2::{Digest, Sha256};
 use std::fs::{File, Metadata};
-use std::io::{self, Read, Seek, SeekFrom};
-use std::os::fd::{AsRawFd, RawFd};
+use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
-use std::os::unix::net::UnixStream;
-use std::time::{Duration, Instant};
 
 /// Lowercase SHA-256 of the first `bytes` of `file`, leaving its cursor at
 /// `bytes`: the offset an upload resumes from.
@@ -44,78 +41,6 @@ pub(super) fn metadata_unchanged(before: &Metadata, after: &Metadata) -> bool {
         && before.mtime_nsec() == after.mtime_nsec()
         && before.ctime() == after.ctime()
         && before.ctime_nsec() == after.ctime_nsec()
-}
-
-/// One nonblocking send on a socket whose descriptor other threads share.
-/// `MSG_DONTWAIT` applies to this call only: setting `O_NONBLOCK` would change
-/// the concurrent reader's clone too, and a blocking send can keep making
-/// progress past `SO_SNDTIMEO`.
-pub(super) fn send_nonblocking(socket: &UnixStream, bytes: &[u8]) -> io::Result<usize> {
-    // SAFETY: the borrowed socket and byte slice stay live for this call;
-    // send reads at most bytes.len() bytes and retains no pointer.
-    let sent = unsafe {
-        libc::send(
-            socket.as_raw_fd(),
-            bytes.as_ptr().cast(),
-            bytes.len(),
-            libc::MSG_DONTWAIT | libc::MSG_NOSIGNAL,
-        )
-    };
-    if sent < 0 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(sent as usize)
-    }
-}
-
-/// Runs a nonblocking `attempt` to write to `descriptor` until it makes
-/// progress, waiting for writability in between, all before `deadline`.
-/// Readiness, interruption, and partial progress never extend the deadline;
-/// once it passes the error is `TimedOut` with `expired` as its message.
-pub(super) fn write_before(
-    deadline: Instant,
-    descriptor: RawFd,
-    expired: &'static str,
-    mut attempt: impl FnMut() -> io::Result<usize>,
-) -> io::Result<usize> {
-    loop {
-        remaining(deadline, expired)?;
-        match attempt() {
-            Ok(count) => return Ok(count),
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-            Err(error) => return Err(error),
-        }
-        let timeout = remaining(deadline, expired)?
-            .as_millis()
-            .saturating_add(1)
-            .min(libc::c_int::MAX as u128) as libc::c_int;
-        let mut poll = libc::pollfd {
-            fd: descriptor,
-            events: libc::POLLOUT,
-            revents: 0,
-        };
-        // SAFETY: one initialized pollfd for a descriptor the caller keeps
-        // open; the timeout is finite and nonnegative, and poll retains no
-        // pointer.
-        if unsafe { libc::poll(&mut poll, 1, timeout) } < 0 {
-            let error = io::Error::last_os_error();
-            if error.kind() != io::ErrorKind::Interrupted {
-                return Err(error);
-            }
-        }
-        // A HUP or ERR surfaces from the next attempt.
-    }
-}
-
-/// The time left before `deadline`, or `TimedOut` once it has passed.
-pub(super) fn remaining(deadline: Instant, expired: &'static str) -> io::Result<Duration> {
-    let remaining = deadline.saturating_duration_since(Instant::now());
-    if remaining.is_zero() {
-        Err(io::Error::new(io::ErrorKind::TimedOut, expired))
-    } else {
-        Ok(remaining)
-    }
 }
 
 #[cfg(test)]

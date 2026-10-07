@@ -2,10 +2,11 @@
 
 use super::paths::ControlEndpoint;
 use super::protocol::{self, ClientFrame, ProcessInventory, Request, Response, ServerFrame};
+use crate::deadline_io::{Deadline, PollReader, SocketWriter};
 use anyhow::Context;
 use serde::Serialize;
 use std::os::unix::net::UnixStream;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub(super) const IO_TIMEOUT: Duration = Duration::from_secs(12);
 
@@ -1019,6 +1020,31 @@ fn request_within(
         },
     )?;
     accept(protocol::read_frame(&mut stream)?)
+}
+
+/// Sends `request` with `token` on a connected, validated `stream` and reads
+/// the reply, all before `deadline`, so a peer trickling single frame bytes
+/// cannot stretch the exchange; past it, fails with `expired`.
+pub(super) fn exchange_before(
+    stream: &mut UnixStream,
+    token: &str,
+    request: &Request,
+    deadline: Instant,
+    expired: &'static str,
+) -> anyhow::Result<Response> {
+    protocol::write_frame(
+        &mut SocketWriter::new(stream, deadline, expired),
+        &ClientFrame {
+            version: protocol::PROTOCOL_VERSION,
+            token: token.to_owned(),
+            request: request.clone(),
+        },
+    )?;
+    accept(protocol::read_frame(&mut PollReader::new(
+        stream,
+        Deadline::At(deadline),
+        expired,
+    ))?)
 }
 
 /// The reply in `frame` once it is of this protocol version and consistent;

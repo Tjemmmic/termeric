@@ -1,8 +1,6 @@
 //! Bounded writes for complete server frames on local domain connections.
 use super::protocol::{self, ServerFrame};
-use crate::domain::io_util;
-use std::io::Write;
-use std::os::fd::AsRawFd;
+use crate::deadline_io::SocketWriter;
 use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
@@ -12,10 +10,11 @@ pub(super) fn write_server_frame(
 ) -> anyhow::Result<()> {
     let previous = stream.write_timeout()?;
     let result = protocol::write_frame(
-        &mut FrameWriter {
+        &mut SocketWriter::new(
             stream,
-            deadline: Instant::now() + previous.unwrap_or(Duration::from_secs(5)),
-        },
+            Instant::now() + previous.unwrap_or(Duration::from_secs(5)),
+            EXPIRED,
+        ),
         frame,
     );
     if result.is_err() {
@@ -26,31 +25,12 @@ pub(super) fn write_server_frame(
     result
 }
 
-struct FrameWriter<'a> {
-    stream: &'a mut UnixStream,
-    deadline: Instant,
-}
-
 const EXPIRED: &str = "domain server frame write deadline exceeded";
-
-impl Write for FrameWriter<'_> {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        let stream = &*self.stream;
-        io_util::write_before(self.deadline, stream.as_raw_fd(), EXPIRED, || {
-            io_util::send_nonblocking(stream, bytes)
-        })
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        io_util::remaining(self.deadline, EXPIRED)?;
-        self.stream.flush()
-    }
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Read;
+    use std::io::{Read, Write};
     use std::os::fd::AsRawFd;
     use std::thread;
     use std::time::Duration;
@@ -158,12 +138,9 @@ mod tests {
 
     #[test]
     fn expired_frame_writer_emits_no_partial_header() {
-        let (mut server, mut client) = UnixStream::pair().unwrap();
+        let (server, mut client) = UnixStream::pair().unwrap();
         let result = protocol::write_frame(
-            &mut FrameWriter {
-                stream: &mut server,
-                deadline: Instant::now(),
-            },
+            &mut SocketWriter::new(&server, Instant::now(), EXPIRED),
             &ServerFrame::SnapshotComplete,
         );
         assert_eq!(

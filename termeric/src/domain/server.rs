@@ -2,6 +2,7 @@
 
 use super::model::*;
 use super::protocol::{self, ClientFrame, Request, Response, ServerFrame, UploadKind};
+use crate::deadline_io::{Deadline, PollReader};
 use crate::local_socket::{self, SocketPaths, effective_uid};
 use crate::panes::{PaneLayoutPreset, SplitDirection};
 use anyhow::Context;
@@ -523,34 +524,14 @@ fn read_client_frame_with_timeout(
     stream: &mut UnixStream,
     timeout: Duration,
 ) -> anyhow::Result<ClientFrame> {
-    struct FrameReader<'a> {
-        stream: &'a mut UnixStream,
-        deadline: Instant,
-    }
-    impl Read for FrameReader<'_> {
-        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
-            let remaining = self.deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "domain client frame read deadline exceeded",
-                ));
-            }
-            self.stream.set_read_timeout(Some(remaining))?;
-            self.stream.read(bytes)
-        }
-    }
-
-    // A per-read timeout alone can be renewed forever by partial-frame input.
-    // Restore socket policy on both success and failure; an established relay
-    // must not inherit the setup deadline as an idle-disconnect timer.
-    let previous = stream.read_timeout()?;
-    let result = protocol::read_frame(&mut FrameReader {
+    // The deadline covers the whole frame, and leaves the socket's own
+    // timeouts alone: an established relay must not inherit the setup
+    // deadline as an idle-disconnect timer.
+    protocol::read_frame(&mut PollReader::new(
         stream,
-        deadline: Instant::now() + timeout,
-    });
-    stream.set_read_timeout(previous)?;
-    result
+        Deadline::within(timeout),
+        "domain client frame read deadline exceeded",
+    ))
 }
 
 fn handle_client_with_setup_timeout(

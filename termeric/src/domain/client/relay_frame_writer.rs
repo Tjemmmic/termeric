@@ -1,6 +1,6 @@
 //! A complete-frame write budget for the attached relay only, not the bridge.
 use super::DomainWriter;
-use crate::domain::io_util;
+use crate::deadline_io;
 use std::io::Write;
 use std::os::fd::{AsRawFd, RawFd};
 use std::time::{Duration, Instant};
@@ -58,17 +58,17 @@ impl Write for Writer {
             .get_or_insert_with(|| Instant::now() + self.timeout);
         let descriptor = self.descriptor();
         let inner = &mut self.inner;
-        io_util::write_before(deadline, descriptor, EXPIRED, || match inner {
-            DomainWriter::Local(stream) => io_util::send_nonblocking(stream, bytes),
+        deadline_io::write_before(deadline, descriptor, EXPIRED, || match inner {
+            DomainWriter::Local(stream) => deadline_io::send_nonblocking(stream, bytes),
             DomainWriter::Ssh(pipe) => pipe.write(bytes),
         })
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
         if let Some(deadline) = self.deadline {
-            io_util::remaining(deadline, EXPIRED)?;
+            deadline_io::remaining(deadline, EXPIRED)?;
             self.inner.flush()?;
-            io_util::remaining(deadline, EXPIRED)?;
+            deadline_io::remaining(deadline, EXPIRED)?;
             self.deadline = None;
         }
         Ok(())

@@ -13,6 +13,7 @@ mod app;
 mod cli;
 mod config;
 mod control;
+mod deadline_io;
 mod domain;
 mod git;
 mod harvest;

@@ -1,6 +1,7 @@
 //! Scoped, bidirectional forwarding between SSH stdio and the local daemon.
 use super::relay_workers::Completion;
-use super::{DomainCloser, copy_with_flush, stdin_ready};
+use super::{DomainCloser, copy_with_flush};
+use crate::deadline_io::readable;
 use anyhow::Context;
 use std::io::{Read, Write};
 use std::net::Shutdown;
@@ -103,7 +104,7 @@ fn copy_input(
 ) -> std::io::Result<bool> {
     let mut bytes = [0; 16 * 1024];
     while alive.load(Ordering::Acquire) {
-        if !stdin_ready(input.as_raw_fd(), 500)? {
+        if !readable(input.as_raw_fd(), 500)? {
             continue;
         }
         if !alive.load(Ordering::Acquire) {

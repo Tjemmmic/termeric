@@ -1,58 +1,14 @@
 //! Output-worker completion and transport ownership for one attached relay.
 use super::relay_workers::Completion;
 use super::{DomainCloser, ServerFrame, protocol};
+use crate::deadline_io::{Deadline, PollReader};
 use anyhow::Context;
 use std::io::{Read, Write};
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::AsRawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-struct FrameBudget<'a> {
-    descriptor: RawFd,
-    timeout: Duration,
-    deadline: Option<Instant>,
-    alive: &'a AtomicBool,
-}
-
-impl FrameBudget<'_> {
-    fn check(&self) -> std::io::Result<()> {
-        if !self.alive.load(Ordering::Acquire) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::ConnectionAborted,
-                "domain output relay cancelled",
-            ));
-        }
-        if self
-            .deadline
-            .is_some_and(|deadline| Instant::now() >= deadline)
-        {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "domain output frame deadline elapsed",
-            ));
-        }
-        Ok(())
-    }
-
-    fn wait_ready(&mut self) -> std::io::Result<()> {
-        loop {
-            self.check()?;
-            let millis = self.deadline.map_or(500, |deadline| {
-                deadline
-                    .saturating_duration_since(Instant::now())
-                    .as_millis()
-                    .clamp(1, 500) as libc::c_int
-            });
-            if super::stdin_ready(self.descriptor, millis)? {
-                // Idle waits have no expiry. Readiness starts one budget for
-                // the entire frame; later header/body reads never renew it.
-                self.deadline
-                    .get_or_insert_with(|| Instant::now() + self.timeout);
-                return self.check();
-            }
-        }
-    }
-}
+const EXPIRED: &str = "domain output frame deadline elapsed";
 
 // Keep the shared length/JSON validator and avoid buffering or prefetching live
 // bytes. read_exact reports UnexpectedEof for both an empty stream and a cut
@@ -61,7 +17,6 @@ struct FrameRead<'a, R> {
     reader: &'a mut R,
     started: bool,
     eof: bool,
-    budget: Option<FrameBudget<'a>>,
 }
 
 impl<R: Read> Read for FrameRead<'_, R> {
@@ -69,13 +24,24 @@ impl<R: Read> Read for FrameRead<'_, R> {
         if buffer.is_empty() {
             return Ok(0);
         }
-        if let Some(budget) = &mut self.budget {
-            budget.wait_ready()?;
-        }
         let count = self.reader.read(buffer)?;
         self.started |= count != 0;
         self.eof |= count == 0 && !buffer.is_empty();
         Ok(count)
+    }
+}
+
+/// The next frame from `reader`, or `None` at a clean end of stream.
+fn next_frame(reader: &mut impl Read) -> anyhow::Result<Option<ServerFrame>> {
+    let mut frame_reader = FrameRead {
+        reader,
+        started: false,
+        eof: false,
+    };
+    match protocol::read_frame(&mut frame_reader) {
+        Ok(frame) => Ok(Some(frame)),
+        Err(_) if frame_reader.eof && !frame_reader.started => Ok(None),
+        Err(error) => Err(error),
     }
 }
 
@@ -95,8 +61,18 @@ fn run_with_limits(
     closer: &DomainCloser,
     timeout: Duration,
 ) -> anyhow::Result<()> {
-    let descriptor = reader.as_raw_fd();
-    run_inner(reader, output, alive, closer, Some((descriptor, timeout)))
+    run_inner(output, alive, closer, || {
+        // Idle waits have no expiry. Readiness starts one budget for the
+        // entire frame; later header/body reads never renew it.
+        let mut budget =
+            PollReader::new(reader, Deadline::AfterIdle(timeout), EXPIRED).while_alive(alive);
+        let frame = next_frame(&mut budget)?;
+        if frame.is_some() {
+            // Never deliver a frame completed after cancellation or expiry.
+            budget.check()?;
+        }
+        Ok(frame)
+    })
 }
 
 #[cfg(test)]
@@ -106,51 +82,31 @@ fn run_unbounded(
     alive: &AtomicBool,
     closer: &DomainCloser,
 ) -> anyhow::Result<()> {
-    run_inner(reader, output, alive, closer, None)
+    run_inner(output, alive, closer, || next_frame(reader))
 }
 
 fn run_inner(
-    reader: &mut impl Read,
     output: &mut impl Write,
     alive: &AtomicBool,
     closer: &DomainCloser,
-    budget: Option<(RawFd, Duration)>,
+    mut next_frame: impl FnMut() -> anyhow::Result<Option<ServerFrame>>,
 ) -> anyhow::Result<()> {
     let _completion = Completion { alive, closer };
     loop {
-        let mut frame_reader = FrameRead {
-            reader,
-            started: false,
-            eof: false,
-            budget: budget.map(|(descriptor, timeout)| FrameBudget {
-                descriptor,
-                timeout,
-                deadline: None,
-                alive,
-            }),
-        };
-        let frame = protocol::read_frame::<ServerFrame>(&mut frame_reader).and_then(|frame| {
-            if let Some(budget) = &frame_reader.budget {
-                budget.check()?;
-            }
-            Ok(frame)
-        });
-        match frame {
-            Ok(ServerFrame::Output { data, .. }) => {
+        match next_frame() {
+            Ok(Some(ServerFrame::Output { data, .. })) => {
                 output.write_all(&data)?;
                 output.flush()?;
             }
-            Ok(ServerFrame::Closed { exit_message }) => {
+            Ok(Some(ServerFrame::Closed { exit_message })) => {
                 writeln!(output, "\r\n[Termeric domain: {exit_message}]")?;
                 output.flush()?;
                 break;
             }
-            Ok(ServerFrame::Error { message }) => anyhow::bail!("{message}"),
-            Ok(_) => anyhow::bail!("unexpected frame in attached domain stream"),
+            Ok(Some(ServerFrame::Error { message })) => anyhow::bail!("{message}"),
+            Ok(Some(_)) => anyhow::bail!("unexpected frame in attached domain stream"),
+            Ok(None) => break,
             Err(error) => {
-                if frame_reader.eof && !frame_reader.started {
-                    break;
-                }
                 // The worker owner clears liveness before shutting down the
                 // transport. That local teardown can interrupt a partial read;
                 // it is not peer corruption. Decode errors remain errors.

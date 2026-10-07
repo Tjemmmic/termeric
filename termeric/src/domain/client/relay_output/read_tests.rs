@@ -3,6 +3,7 @@ use super::*;
 use std::os::unix::net::UnixStream;
 use std::sync::{Arc, mpsc};
 use std::thread;
+use std::time::Instant;
 
 const BUDGET: Duration = Duration::from_millis(60);
 

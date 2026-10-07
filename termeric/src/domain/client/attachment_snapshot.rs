@@ -1,5 +1,6 @@
 //! Bounded attachment replay before the interactive relay workers start.
 use super::{DomainStream, RESPONSE_TIMEOUT, ServerFrame, read_frame_with_timeout};
+use crate::deadline_io::remaining;
 use anyhow::Context;
 use std::io::Write;
 use std::time::{Duration, Instant};
@@ -8,6 +9,7 @@ use std::time::{Duration, Instant};
 // Give progressing transfers more time than one ordinary response, but never
 // let repeated complete fragments keep attachment initialization alive forever.
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const EXPIRED: &str = "domain attachment snapshot deadline elapsed";
 
 pub(super) fn replay(
     stream: &mut DomainStream,
@@ -28,10 +30,10 @@ fn replay_with_limits(
     output.write_all(text)?;
     output.flush()?;
     loop {
-        let read_budget = frame_timeout.min(remaining(deadline)?);
+        let read_budget = frame_timeout.min(remaining(deadline, EXPIRED)?);
         let frame = read_frame_with_timeout::<ServerFrame>(stream, read_budget)
             .context("read domain attachment snapshot")?;
-        remaining(deadline)?;
+        remaining(deadline, EXPIRED)?;
         match frame {
             ServerFrame::SnapshotOutput { data } => output.write_all(data.as_bytes())?,
             ServerFrame::SnapshotComplete => break,
@@ -42,20 +44,8 @@ fn replay_with_limits(
     output.flush()?;
     // Synchronous output is not cancellable. Detect a late write/flush once it
     // returns, rather than reporting an expired replay as successful.
-    remaining(deadline)?;
+    remaining(deadline, EXPIRED)?;
     Ok(())
-}
-
-fn remaining(deadline: Instant) -> std::io::Result<Duration> {
-    deadline
-        .checked_duration_since(Instant::now())
-        .filter(|remaining| !remaining.is_zero())
-        .ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "domain attachment snapshot deadline elapsed",
-            )
-        })
 }
 
 #[cfg(test)]
