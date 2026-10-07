@@ -40,6 +40,9 @@ const STDERR_TAIL_BYTES: usize = 16 * 1024;
 const TERMINATE_GRACE: Duration = Duration::from_secs(2);
 /// How long to wait for the exit status after stdout closes.
 const EXIT_WAIT: Duration = Duration::from_secs(5);
+/// How long the exit report waits for stderr to close once the agent has
+/// exited or been killed.
+const STDERR_CLOSE_WAIT: Duration = Duration::from_secs(1);
 
 /// Everything needed to start an agent process.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -306,12 +309,18 @@ fn read_output(
         waker();
     }
     let status = wait_for_exit(child, EXIT_WAIT);
-    // stderr may still be draining; give it a moment so the report includes
-    // the agent's last words.
-    thread::sleep(Duration::from_millis(50));
-    let stderr_tail = String::from_utf8_lossy(&stderr.kept_by(Instant::now()).bytes)
-        .trim()
-        .to_owned();
+    if status.is_none() {
+        // Output closed but the process lives on; it cannot be driven.
+        signal_agent_group(child, Signal::Kill);
+    }
+    // The agent's last words may still be on their way through stderr, so
+    // the report waits for it to close. Its group has been signalled by now,
+    // so it usually closes at once; the wait is bounded because a command
+    // that left the group, or ignores the signal, can hold it open.
+    let stderr_tail =
+        String::from_utf8_lossy(&stderr.kept_by(Instant::now() + STDERR_CLOSE_WAIT).bytes)
+            .trim()
+            .to_owned();
     let report = match status {
         Some(status) => ExitReport {
             success: status.success(),
@@ -322,15 +331,11 @@ fn read_output(
             },
             stderr_tail,
         },
-        None => {
-            // Output closed but the process lives on; it cannot be driven.
-            signal_agent_group(child, Signal::Kill);
-            ExitReport {
-                success: false,
-                status: "stopped responding".to_owned(),
-                stderr_tail,
-            }
-        }
+        None => ExitReport {
+            success: false,
+            status: "stopped responding".to_owned(),
+            stderr_tail,
+        },
     };
     let _ = output.send(ProcessOutput::Exited(report));
     waker();
@@ -578,6 +583,63 @@ mod tests {
         assert_eq!(report.stderr_tail, "oops");
         assert!(process.has_exited());
         assert_eq!(process.try_next(), None);
+    }
+
+    fn exit_report(outputs: &[ProcessOutput]) -> &ExitReport {
+        let Some(ProcessOutput::Exited(report)) = outputs.last() else {
+            panic!("{outputs:?}")
+        };
+        report
+    }
+
+    #[test]
+    fn a_crash_reports_what_its_group_writes_to_stderr_as_it_ends() {
+        // The agent exits at once, and a command it started writes the
+        // reason a moment later, ignoring the signal that ends the group.
+        let mut process = AgentProcess::spawn(
+            &shell(
+                "(trap '' TERM; sleep 0.3; echo 'last words' >&2) </dev/null >/dev/null &
+                echo 'first words' >&2; exit 4",
+            ),
+            noop_waker(),
+        )
+        .unwrap();
+        let outputs = collect(&mut process, Duration::from_secs(10));
+        let report = exit_report(&outputs);
+        assert!(report.status.contains('4'), "{}", report.status);
+        assert_eq!(report.stderr_tail, "first words\nlast words");
+    }
+
+    #[test]
+    fn a_command_holding_stderr_open_delays_the_exit_report_only_briefly() {
+        let started = Instant::now();
+        let mut process = AgentProcess::spawn(
+            &shell(
+                "(trap '' TERM; exec sleep 30) </dev/null >/dev/null & echo $!
+                echo 'last words' >&2; exit 4",
+            ),
+            noop_waker(),
+        )
+        .unwrap();
+        let outputs = collect(&mut process, Duration::from_secs(10));
+        let elapsed = started.elapsed();
+        let Some(ProcessOutput::Line(holder)) = outputs.first() else {
+            panic!("{outputs:?}")
+        };
+        let holder: libc::pid_t = holder.parse().unwrap();
+        // SAFETY: the holder still runs, since it ignored the group's SIGTERM
+        // and sleeps until killed, so its id is still its own.
+        unsafe {
+            libc::kill(holder, libc::SIGKILL);
+        }
+        let report = exit_report(&outputs);
+        assert!(report.status.contains('4'), "{}", report.status);
+        assert_eq!(report.stderr_tail, "last words");
+        assert!(elapsed >= STDERR_CLOSE_WAIT, "{elapsed:?}");
+        assert!(
+            elapsed < STDERR_CLOSE_WAIT + Duration::from_secs(4),
+            "{elapsed:?}"
+        );
     }
 
     #[test]
