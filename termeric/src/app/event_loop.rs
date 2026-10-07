@@ -464,8 +464,11 @@ impl App {
         // composer edits with.
         if self.agent_view_has_keyboard() {
             if event.state == winit::event::ElementState::Pressed
-                && (super::agent_view_input::composer_chord(&event.logical_key, self.modifiers)
-                    || !self.run_app_shortcut(&event.logical_key))
+                && (super::agent_view_input::composer_chord(
+                    &event.logical_key,
+                    self.modifiers,
+                    self.alt_graph_active,
+                ) || !self.run_app_shortcut(&event.logical_key))
             {
                 self.handle_agent_view_key(&event.logical_key, event.text.as_deref());
             }

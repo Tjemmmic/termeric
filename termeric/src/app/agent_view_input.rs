@@ -4,6 +4,7 @@ use std::time::Instant;
 
 use winit::keyboard::{Key, NamedKey};
 
+use super::text_field_keys::types_text;
 use super::*;
 use crate::agent_view::present;
 use crate::agent_view::session::{AgentSession, QuestionAnswer};
@@ -619,7 +620,7 @@ impl App {
                     }
                     // Typing jumps back to the composer.
                     _ if text.is_some_and(|text| !text.chars().any(char::is_control))
-                        && !control =>
+                        && types_text(modifiers, self.alt_graph_active) =>
                     {
                         self.focus_agent_composer();
                         return self.handle_agent_view_key(key, text);
@@ -739,12 +740,12 @@ impl App {
             .scene
             .as_ref()
             .is_some_and(|scene| scene.hit_for(&Target::MenuSearch).is_some());
-        let control = self.modifiers.control_key() || self.modifiers.alt_key();
+        let typing = types_text(self.modifiers, self.alt_graph_active);
         // Typing goes to the search even when its field is full and refuses
         // it: a typed space must never fall through and choose an item.
         let typed = text.filter(|text| {
             searchable
-                && !control
+                && typing
                 && !text.is_empty()
                 && !text.chars().any(crate::safe_text::breaks_single_line)
         });
@@ -1145,7 +1146,9 @@ impl App {
             },
             _ => match text {
                 Some(text)
-                    if !control && !text.is_empty() && !text.chars().all(char::is_control) =>
+                    if types_text(modifiers, self.alt_graph_active)
+                        && !text.is_empty()
+                        && !text.chars().all(char::is_control) =>
                 {
                     self.agent_view.state.composer_mut().insert(text);
                     true
@@ -1461,9 +1464,18 @@ impl App {
     }
 }
 
-/// Chords the composer edits with, which global shortcuts must not take
-/// while it has the keyboard.
-pub(super) fn composer_chord(key: &Key, modifiers: winit::keyboard::ModifiersState) -> bool {
+/// Chords the composer edits with, and the keys it types, which global
+/// shortcuts must not take while it has the keyboard.
+pub(super) fn composer_chord(
+    key: &Key,
+    modifiers: winit::keyboard::ModifiersState,
+    alt_graph_active: bool,
+) -> bool {
+    if matches!(key, Key::Character(_) | Key::Named(NamedKey::Space))
+        && types_text(modifiers, alt_graph_active)
+    {
+        return true;
+    }
     let control = modifiers.control_key();
     let others = modifiers.alt_key() || modifiers.super_key();
     if others {
@@ -1502,10 +1514,8 @@ pub(super) fn composer_chord(key: &Key, modifiers: winit::keyboard::ModifiersSta
                 );
             editing && !global
         }
+        // Typing returned above, so Ctrl is held.
         Key::Character(text) => {
-            if !control {
-                return true;
-            }
             let lower = text.to_lowercase();
             if modifiers.shift_key() {
                 lower == "z"
@@ -1527,5 +1537,54 @@ fn menu_kind_of(action: &MenuAction) -> MenuKind {
         | MenuAction::OpenInTerminal
         | MenuAction::CopyConversation
         | MenuAction::HidePanel => MenuKind::More,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_composer_types_by_the_shared_rule_and_keeps_its_ctrl_chords() {
+        let ctrl_alt = ModifiersState::CONTROL | ModifiersState::ALT;
+        // AltGr text is the composer's, kept from global shortcuts, even on
+        // layouts that report Ctrl+Alt with it.
+        assert!(composer_chord(&Key::Character("€".into()), ctrl_alt, true));
+        assert!(!composer_chord(
+            &Key::Character("e".into()),
+            ctrl_alt,
+            false
+        ));
+        assert!(composer_chord(
+            &Key::Character("z".into()),
+            ModifiersState::CONTROL,
+            false
+        ));
+        assert!(!composer_chord(
+            &Key::Character("k".into()),
+            ModifiersState::CONTROL,
+            false
+        ));
+
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.open_agent_view(true);
+        for (modifiers, alt_graph, text) in [
+            (ctrl_alt, true, "€"),
+            // Alt and Super make a chord, which types nothing.
+            (ModifiersState::ALT, false, "x"),
+            (ModifiersState::SUPER, false, "y"),
+            (ModifiersState::SHIFT, false, "!"),
+        ] {
+            app.modifiers = modifiers;
+            app.alt_graph_active = alt_graph;
+            assert!(app.handle_agent_view_key(&Key::Character(text.into()), Some(text)));
+        }
+        assert_eq!(
+            app.agent_view
+                .state
+                .composer()
+                .map(|composer| composer.text()),
+            Some("€!")
+        );
     }
 }
