@@ -298,13 +298,15 @@ impl App {
             .and_then(|size| usize::try_from(size).ok())
             .filter(|size| (1..=MAX_KITTY_UPLOAD_PATHS).contains(size));
         let unsupported = if command.quiet != 0 {
-            Some("quiet transfer modes are not supported")
+            Some("quiet transfer modes are not supported".to_string())
         } else if command.bypass_present {
-            Some("confirmation bypass credentials are not supported")
+            Some("confirmation bypass credentials are not supported".to_string())
         } else if command.transmission_type != KittyFileTransmissionType::Simple {
-            Some("rsync transfer mode is not supported")
+            Some("rsync transfer mode is not supported".to_string())
         } else if expected_paths.is_none() {
-            Some("receive must declare between 1 and 16 paths")
+            Some(format!(
+                "receive must declare between 1 and {MAX_KITTY_UPLOAD_PATHS} paths"
+            ))
         } else if command.compression != termeric_core::KittyFileTransferCompression::None
             || command.file_type != KittyFileTransferType::Regular
             || command.mtime_ns.is_some()
@@ -315,7 +317,7 @@ impl App {
             || !command.file_id.is_empty()
             || !command.data.is_empty()
         {
-            Some("the initial receive command contains unexpected file fields")
+            Some("the initial receive command contains unexpected file fields".to_string())
         } else {
             None
         };
@@ -327,7 +329,7 @@ impl App {
                     &command.id,
                     "",
                     KittyFileTransferStatusCode::Invalid,
-                    reason,
+                    &reason,
                 ),
             );
             return;
@@ -410,7 +412,10 @@ impl App {
             String::new(),
             format!("Session: {}", pending.key.id),
             format!("Origin: {}", describe_origin(pending.key.origin)),
-            format!("Limits: at most {MAX_KITTY_UPLOAD_PATHS} regular files and 64 MiB"),
+            format!(
+                "Limits: at most {MAX_KITTY_UPLOAD_PATHS} regular files and {} MiB",
+                MAX_KITTY_UPLOAD_BYTES / (1024 * 1024)
+            ),
             String::new(),
             "Requested paths:".into(),
         ];
@@ -1047,7 +1052,7 @@ impl App {
                         progress_toast_id,
                         format!(
                             "Receiving remote files: {files} entries, {}",
-                            format_transfer_bytes(bytes)
+                            format_transfer_bytes(bytes, "received")
                         ),
                     );
                 }
@@ -1109,7 +1114,7 @@ impl App {
                 "Sending approved host files: {}/{} files, {}",
                 completion.files,
                 completion.total_files,
-                format_transfer_bytes_sent(completion.bytes)
+                format_transfer_bytes(completion.bytes, "sent")
             ),
         );
     }
@@ -1220,18 +1225,15 @@ impl App {
     }
 }
 
-fn format_transfer_bytes(bytes: u64) -> String {
+/// The bytes moved so far in the largest fitting unit, then `verb`.
+fn format_transfer_bytes(bytes: u64, verb: &str) -> String {
     if bytes >= 1024 * 1024 {
-        format!("{:.1} MiB received", bytes as f64 / (1024.0 * 1024.0))
+        format!("{:.1} MiB {verb}", bytes as f64 / (1024.0 * 1024.0))
     } else if bytes >= 1024 {
-        format!("{:.1} KiB received", bytes as f64 / 1024.0)
+        format!("{:.1} KiB {verb}", bytes as f64 / 1024.0)
     } else {
-        format!("{bytes} bytes received")
+        format!("{bytes} bytes {verb}")
     }
-}
-
-fn format_transfer_bytes_sent(bytes: u64) -> String {
-    format_transfer_bytes(bytes).replace("received", "sent")
 }
 
 /// Whether `command` names one host file for an upload, the only form a

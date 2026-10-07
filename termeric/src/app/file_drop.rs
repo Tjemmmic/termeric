@@ -218,7 +218,10 @@ impl App {
                     }
                     FileUploadSourceKind::Directory => (
                         "directory",
-                        "Size: calculated after confirmation; maximum archive 64 MiB".into(),
+                        format!(
+                            "Size: calculated after confirmation; maximum archive {} MiB",
+                            crate::domain::protocol::MAX_FILE_UPLOAD_BYTES / (1024 * 1024)
+                        ),
                     ),
                 };
                 let lines = vec![

@@ -183,7 +183,10 @@ pub(super) fn run_upload_worker(
             _ => {
                 fail(
                     KittyFileTransferStatusCode::TooLarge,
-                    "approved files exceed the 64 MiB transfer limit".into(),
+                    format!(
+                        "approved files exceed the {} MiB transfer limit",
+                        MAX_KITTY_UPLOAD_BYTES / (1024 * 1024)
+                    ),
                 );
                 return;
             }

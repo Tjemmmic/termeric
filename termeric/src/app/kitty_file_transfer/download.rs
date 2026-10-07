@@ -285,7 +285,7 @@ impl DownloadTransaction {
                 return Err(TransactionError::new(
                     &command.file_id,
                     KittyFileTransferStatusCode::TooLarge,
-                    "transfer exceeds the 64 MiB limit",
+                    transfer_size_limit_message(),
                 ));
             }
         }
@@ -459,7 +459,7 @@ impl DownloadTransaction {
             return Err(TransactionError::new(
                 &file_id,
                 KittyFileTransferStatusCode::TooLarge,
-                "transfer exceeds the 64 MiB limit",
+                transfer_size_limit_message(),
             ));
         }
         if is_last {
@@ -722,6 +722,13 @@ impl DownloadTransaction {
             Ok(absolute)
         }
     }
+}
+
+fn transfer_size_limit_message() -> String {
+    format!(
+        "transfer exceeds the {} MiB limit",
+        MAX_KITTY_DOWNLOAD_BYTES / (1024 * 1024)
+    )
 }
 
 fn validate_destination(path: &Path) -> io::Result<()> {
