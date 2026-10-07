@@ -116,13 +116,8 @@ impl ClaudeCodec {
         Self::default()
     }
 
-    /// The first line to send: asks for models, commands, and the mode.
-    pub fn initialize(&mut self) -> String {
-        self.control_request(RequestKind::Initialize, json!({ "subtype": "initialize" }))
-    }
-
-    /// One line of protocol input for `command`.
-    pub fn encode_command(&mut self, command: &AgentCommand) -> Option<String> {
+    /// The line for `command`, if Claude Code takes it over stream-json.
+    fn command_line(&mut self, command: &AgentCommand) -> Option<String> {
         Some(match command {
             AgentCommand::Prompt(text) => line(&json!({
                 "type": "user",
@@ -186,22 +181,9 @@ impl ClaudeCodec {
         })
     }
 
-    /// A refusal for a control request this host does not handle, so the
-    /// agent never waits on it.
-    pub fn refuse(request_id: &str, reason: &str) -> String {
-        line(&json!({
-            "type": "control_response",
-            "response": {
-                "subtype": "error",
-                "request_id": request_id,
-                "error": reason,
-            },
-        }))
-    }
-
     /// The events one output line carries, plus any reply the agent must
     /// receive immediately (a refusal of a request this host cannot serve).
-    pub fn decode_line(&mut self, text: &str) -> Exchange {
+    fn decode_message(&mut self, text: &str) -> Exchange {
         let mut decoded = Exchange::default();
         let Ok(Value::Object(message)) = serde_json::from_str::<Value>(text) else {
             decoded.events.push(AgentEvent::Unrecognized(preview(text)));
@@ -283,12 +265,12 @@ impl ClaudeCodec {
                 } else {
                     decoded
                         .lines
-                        .push(Self::refuse(request_id, "malformed permission request"));
+                        .push(refusal(request_id, "malformed permission request"));
                 }
             }
             other => {
                 let subtype = other.unwrap_or("unknown");
-                decoded.lines.push(Self::refuse(
+                decoded.lines.push(refusal(
                     request_id,
                     &format!("Termeric does not handle {subtype} requests"),
                 ));
@@ -336,16 +318,17 @@ impl ClaudeCodec {
 }
 
 impl Protocol for ClaudeCodec {
+    /// Asks for models, commands, and the mode.
     fn start(&mut self) -> Vec<String> {
-        vec![self.initialize()]
+        vec![self.control_request(RequestKind::Initialize, json!({ "subtype": "initialize" }))]
     }
 
     fn encode(&mut self, command: &AgentCommand) -> Exchange {
-        Exchange::send(self.encode_command(command).into_iter().collect())
+        Exchange::send(self.command_line(command).into_iter().collect())
     }
 
     fn decode(&mut self, line: &str) -> Exchange {
-        let mut decoded = self.decode_line(line);
+        let mut decoded = self.decode_message(line);
         let mut warnings = Vec::new();
         for event in &decoded.events {
             match event {
@@ -363,13 +346,26 @@ impl Protocol for ClaudeCodec {
                 // Claude Code reports how full the context is only when asked.
                 AgentEvent::TurnFinished(_) => decoded
                     .lines
-                    .extend(self.encode_command(&AgentCommand::QueryContextUsage)),
+                    .extend(self.command_line(&AgentCommand::QueryContextUsage)),
                 _ => {}
             }
         }
         decoded.events.extend(warnings);
         decoded
     }
+}
+
+/// A refusal for a control request this host does not handle, so the agent
+/// never waits on it.
+fn refusal(request_id: &str, reason: &str) -> String {
+    line(&json!({
+        "type": "control_response",
+        "response": {
+            "subtype": "error",
+            "request_id": request_id,
+            "error": reason,
+        },
+    }))
 }
 
 fn str_field<'a>(object: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
@@ -816,7 +812,7 @@ mod tests {
     use super::*;
 
     fn decode(codec: &mut ClaudeCodec, value: Value) -> Exchange {
-        codec.decode_line(&value.to_string())
+        codec.decode(&value.to_string())
     }
 
     fn only_event(codec: &mut ClaudeCodec, value: Value) -> AgentEvent {
@@ -829,6 +825,28 @@ mod tests {
     fn parse(line: &str) -> Value {
         assert!(line.ends_with('\n'));
         serde_json::from_str(line).unwrap()
+    }
+
+    /// The one line `command` sends.
+    fn encoded(codec: &mut ClaudeCodec, command: &AgentCommand) -> String {
+        let mut exchange = codec.encode(command);
+        assert!(exchange.events.is_empty(), "{:?}", exchange.events);
+        assert_eq!(exchange.lines.len(), 1, "{:?}", exchange.lines);
+        exchange.lines.remove(0)
+    }
+
+    /// How a turn ended, from a `result` message, which also asks how full
+    /// the context is: Claude Code reports that only when asked.
+    fn finished(codec: &mut ClaudeCodec, value: Value) -> TurnOutcome {
+        let decoded = decode(codec, value);
+        let [AgentEvent::TurnFinished(outcome)] = decoded.events.as_slice() else {
+            panic!("{:?}", decoded.events)
+        };
+        let [query] = decoded.lines.as_slice() else {
+            panic!("{:?}", decoded.lines)
+        };
+        assert_eq!(parse(query)["request"]["subtype"], "get_context_usage");
+        outcome.clone()
     }
 
     #[test]
@@ -866,7 +884,7 @@ mod tests {
     #[test]
     fn the_handshake_reports_models_commands_and_mode() {
         let mut codec = ClaudeCodec::new();
-        let request = parse(&codec.initialize());
+        let request = parse(&codec.start()[0]);
         assert_eq!(request["type"], "control_request");
         assert_eq!(request["request"]["subtype"], "initialize");
         let id = request["request_id"].as_str().unwrap().to_owned();
@@ -903,25 +921,20 @@ mod tests {
     #[test]
     fn prompts_and_answers_encode_as_the_sdk_does() {
         let mut codec = ClaudeCodec::new();
-        let prompt = parse(
-            &codec
-                .encode_command(&AgentCommand::Prompt("hi".into()))
-                .unwrap(),
-        );
+        let prompt = parse(&encoded(&mut codec, &AgentCommand::Prompt("hi".into())));
         assert_eq!(prompt["type"], "user");
         assert_eq!(prompt["message"]["content"][0]["text"], "hi");
-        let allow = parse(
-            &codec
-                .encode_command(&AgentCommand::Answer {
-                    request_id: "r1".into(),
-                    tool_use_id: Some("t1".into()),
-                    decision: ApprovalDecision::Allow {
-                        input: json!({"command": "ls"}),
-                        remember: Some(json!([{"type": "addRules"}])),
-                    },
-                })
-                .unwrap(),
-        );
+        let allow = parse(&encoded(
+            &mut codec,
+            &AgentCommand::Answer {
+                request_id: "r1".into(),
+                tool_use_id: Some("t1".into()),
+                decision: ApprovalDecision::Allow {
+                    input: json!({"command": "ls"}),
+                    remember: Some(json!([{"type": "addRules"}])),
+                },
+            },
+        ));
         assert_eq!(allow["response"]["request_id"], "r1");
         assert_eq!(allow["response"]["response"]["behavior"], "allow");
         assert_eq!(
@@ -930,36 +943,27 @@ mod tests {
         );
         assert_eq!(allow["response"]["response"]["toolUseID"], "t1");
         assert!(allow["response"]["response"]["updatedPermissions"].is_array());
-        let deny = parse(
-            &codec
-                .encode_command(&AgentCommand::Answer {
-                    request_id: "r2".into(),
-                    tool_use_id: None,
-                    decision: ApprovalDecision::Deny {
-                        message: "no".into(),
-                        interrupt: true,
-                    },
-                })
-                .unwrap(),
-        );
+        let deny = parse(&encoded(
+            &mut codec,
+            &AgentCommand::Answer {
+                request_id: "r2".into(),
+                tool_use_id: None,
+                decision: ApprovalDecision::Deny {
+                    message: "no".into(),
+                    interrupt: true,
+                },
+            },
+        ));
         assert_eq!(deny["response"]["response"]["behavior"], "deny");
         assert_eq!(deny["response"]["response"]["interrupt"], true);
-        let mode = parse(
-            &codec
-                .encode_command(&AgentCommand::SetMode("plan".into()))
-                .unwrap(),
-        );
+        let mode = parse(&encoded(&mut codec, &AgentCommand::SetMode("plan".into())));
         assert_eq!(mode["request"]["mode"], "plan");
     }
 
     #[test]
     fn failed_control_requests_are_reported() {
         let mut codec = ClaudeCodec::new();
-        let request = parse(
-            &codec
-                .encode_command(&AgentCommand::SetModel("nope".into()))
-                .unwrap(),
-        );
+        let request = parse(&encoded(&mut codec, &AgentCommand::SetModel("nope".into())));
         let id = request["request_id"].as_str().unwrap().to_owned();
         let event = only_event(
             &mut codec,
@@ -981,18 +985,14 @@ mod tests {
             }})
         };
         // A refused connection is its own event: nothing else will work.
-        let request = parse(&codec.initialize());
+        let request = parse(&codec.start()[0]);
         let id = request["request_id"].as_str().unwrap().to_owned();
         assert_eq!(
             only_event(&mut codec, failure(&id)),
             AgentEvent::HandshakeFailed("not supported".into())
         );
         // A refused background query is not the person's concern.
-        let request = parse(
-            &codec
-                .encode_command(&AgentCommand::QueryContextUsage)
-                .unwrap(),
-        );
+        let request = parse(&encoded(&mut codec, &AgentCommand::QueryContextUsage));
         let id = request["request_id"].as_str().unwrap().to_owned();
         assert!(decode(&mut codec, failure(&id)).events.is_empty());
     }
@@ -1000,11 +1000,7 @@ mod tests {
     #[test]
     fn context_usage_replies_become_usage_events() {
         let mut codec = ClaudeCodec::new();
-        let request = parse(
-            &codec
-                .encode_command(&AgentCommand::QueryContextUsage)
-                .unwrap(),
-        );
+        let request = parse(&encoded(&mut codec, &AgentCommand::QueryContextUsage));
         let id = request["request_id"].as_str().unwrap().to_owned();
         let event = only_event(
             &mut codec,
@@ -1254,44 +1250,60 @@ mod tests {
     }
 
     #[test]
+    fn a_release_older_than_the_minimum_is_warned_about() {
+        let mut codec = ClaudeCodec::new();
+        let init = |version: &str| {
+            json!({"type": "system", "subtype": "init", "session_id": "s1",
+                "claude_code_version": version})
+        };
+        let old = decode(&mut codec, init("2.0.9"));
+        assert!(matches!(
+            old.events.as_slice(),
+            [AgentEvent::SessionStarted(_), AgentEvent::Warning(warning)]
+                if warning.starts_with("Claude Code 2.0.9 is older")
+        ));
+        assert!(matches!(
+            only_event(&mut codec, init("2.1.0")),
+            AgentEvent::SessionStarted(_)
+        ));
+        // A version it cannot read is not warned about.
+        assert!(matches!(
+            only_event(&mut codec, init("")),
+            AgentEvent::SessionStarted(_)
+        ));
+    }
+
+    #[test]
     fn results_report_success_and_the_reason_for_failure() {
         let mut codec = ClaudeCodec::new();
-        let AgentEvent::TurnFinished(done) = only_event(
+        let done = finished(
             &mut codec,
             json!({"type": "result", "subtype": "success", "is_error": false, "duration_ms": 48000,
                 "total_cost_usd": 0.08, "session_id": "s1", "permission_denials": [{}], "result": "ok"}),
-        ) else {
-            panic!()
-        };
+        );
         assert!(done.success);
         assert_eq!(done.error, None);
         assert_eq!(done.duration, Duration::from_secs(48));
         assert_eq!(done.cost_usd, Some(0.08));
         assert_eq!(done.denials, 1);
-        let AgentEvent::TurnFinished(api_error) = only_event(
+        let api_error = finished(
             &mut codec,
             json!({"type": "result", "subtype": "success", "is_error": true, "result": "API Error: 529"}),
-        ) else {
-            panic!()
-        };
+        );
         assert!(!api_error.success);
         assert_eq!(api_error.error.as_deref(), Some("API Error: 529"));
-        let AgentEvent::TurnFinished(limited) = only_event(
+        let limited = finished(
             &mut codec,
             json!({"type": "result", "subtype": "error_max_turns", "is_error": true, "errors": []}),
-        ) else {
-            panic!()
-        };
+        );
         assert_eq!(
             limited.error.as_deref(),
             Some("The turn reached its step limit")
         );
-        let AgentEvent::TurnFinished(listed) = only_event(
+        let listed = finished(
             &mut codec,
             json!({"type": "result", "subtype": "error_during_execution", "errors": ["a", "b"]}),
-        ) else {
-            panic!()
-        };
+        );
         assert_eq!(listed.error.as_deref(), Some("a; b"));
     }
 
@@ -1420,7 +1432,7 @@ mod tests {
     }
 
     fn only_event_raw(codec: &mut ClaudeCodec, text: &str) -> AgentEvent {
-        let mut decoded = codec.decode_line(text);
+        let mut decoded = codec.decode(text);
         assert_eq!(decoded.events.len(), 1);
         decoded.events.remove(0)
     }
