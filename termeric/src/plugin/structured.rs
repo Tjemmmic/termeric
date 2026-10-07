@@ -54,6 +54,9 @@ const MAX_ACTION_ID_BYTES: usize = 64;
 pub(crate) const SCHEMA_VERSION: u32 = 1;
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const PERSISTENT_REAP_INTERVAL: Duration = Duration::from_millis(100);
+/// How long a discarded handler's pipe thread may take to end once the
+/// handler's group is killed.
+const HANDLER_IO_CLOSE_WAIT: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone)]
 pub struct StructuredHandlerInvocation {
@@ -1073,9 +1076,26 @@ impl Drop for PersistentHandler {
     fn drop(&mut self) {
         terminate_handler(&mut self.child);
         self.requests.take();
-        if let Some(thread) = self.io_thread.take() {
-            let _ = thread.join();
+        let Some(thread) = self.io_thread.take() else {
+            return;
+        };
+        // Killing the group closes the handler's pipes, which ends the
+        // thread at once, unless a command that left the group still holds
+        // them while a request is in flight. That thread is left to end when
+        // the command lets go, rather than holding up the lane until then.
+        let deadline = Instant::now() + HANDLER_IO_CLOSE_WAIT;
+        while !thread.is_finished() {
+            if Instant::now() >= deadline {
+                log::warn!(
+                    "plugin handler {}: a command it started outside its process group holds \
+                     its pipes open; their reader ends when that command closes them",
+                    self.program
+                );
+                return;
+            }
+            thread::sleep(WORKER_POLL_INTERVAL);
         }
+        let _ = thread.join();
     }
 }
 
@@ -1931,6 +1951,47 @@ done"#,
             crate::test_support::process_ends(left),
             "the handler's leftover command {left} still runs"
         );
+    }
+
+    #[test]
+    fn discarding_a_handler_never_waits_on_a_command_that_left_its_group() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("escaped");
+        // A command in a session of its own keeps the handler's output open;
+        // the handler takes the event and never answers.
+        let invocation = persistent_fixture(
+            "escaping-fixture",
+            &format!(
+                "setsid sleep 30 </dev/null 2>/dev/null & echo $! > '{}'\n\
+                 IFS= read -r event\nsleep 30",
+                pid_file.display()
+            ),
+        );
+        let (sender, receiver) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let mut handler = None;
+            let shutdown = AtomicBool::new(false);
+            let generation = AtomicU64::new(1);
+            // The request times out while its response is still being read,
+            // which discards the handler.
+            let result =
+                run_persistent_handler(&mut handler, &invocation, 1, &shutdown, &generation, 1);
+            drop(handler);
+            let _ = sender.send(result);
+        });
+        let result = receiver.recv_timeout(HANDLER_TIMEOUT + Duration::from_secs(5));
+        if let Ok(escaped) = std::fs::read_to_string(&pid_file)
+            && let Ok(escaped) = escaped.trim().parse::<libc::pid_t>()
+        {
+            // SAFETY: kill only sends a signal.
+            unsafe {
+                libc::kill(escaped, libc::SIGKILL);
+            }
+        }
+        let error = result
+            .expect("discarding the handler waited on the command that left its group")
+            .unwrap_err();
+        assert!(error.contains("exceeded"), "{error}");
     }
 
     #[test]
