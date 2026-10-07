@@ -406,9 +406,12 @@ fn write_integration_file(
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("create shell integration directory {}", dir.display()))?;
     let path = dir.join(filename);
-    let current = std::fs::read_to_string(&path).ok();
+    // Anything that is not already this text, including a file too long to
+    // be it, a link, or a FIFO, is replaced. The replacement is atomic
+    // because a shell starting in another window may be sourcing the file.
+    let current = crate::safe_fs::read_text(&path, contents.len()).ok();
     if current.as_deref() != Some(contents) {
-        std::fs::write(&path, contents)
+        crate::safe_fs::atomic_replace(&path, |writer| writer.write_all(contents.as_bytes()))
             .with_context(|| format!("write shell integration file {}", path.display()))?;
     }
     Ok(path)
@@ -504,6 +507,35 @@ mod tests {
         assert_eq!(
             nushell.integration,
             ShellIntegrationSupport::Enabled("nushell")
+        );
+    }
+
+    #[test]
+    fn integration_files_replace_links_and_stale_text_without_writing_through() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let sentinel = temp.path().join("sentinel");
+        std::fs::write(&sentinel, "do-not-replace").unwrap();
+        std::fs::create_dir(temp.path().join("bash")).unwrap();
+        let rc = temp.path().join("bash").join(".bashrc");
+        symlink(&sentinel, &rc).unwrap();
+
+        let written = write_integration_file(temp.path(), "bash", ".bashrc", BASH_RC).unwrap();
+        assert_eq!(written, rc);
+        assert_eq!(
+            std::fs::read_to_string(&sentinel).unwrap(),
+            "do-not-replace"
+        );
+        assert!(std::fs::symlink_metadata(&rc).unwrap().is_file());
+        assert_eq!(std::fs::read_to_string(&rc).unwrap(), BASH_RC);
+
+        // Longer stale text is replaced whole, never left as a tail.
+        std::fs::write(&rc, format!("{BASH_RC}\nstale")).unwrap();
+        write_integration_file(temp.path(), "bash", ".bashrc", BASH_RC).unwrap();
+        assert_eq!(std::fs::read_to_string(&rc).unwrap(), BASH_RC);
+        assert_eq!(
+            std::fs::read_dir(temp.path().join("bash")).unwrap().count(),
+            1
         );
     }
 
