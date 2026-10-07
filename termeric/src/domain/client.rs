@@ -395,24 +395,15 @@ impl DomainClient {
         }
     }
 
-    pub fn for_ssh(destination: String) -> anyhow::Result<Self> {
+    /// The daemon on `destination`, reached through SSH. Without
+    /// `start_server` the remote bridge refuses rather than starting one
+    /// when none is running there.
+    pub fn for_ssh(destination: String, start_server: bool) -> anyhow::Result<Self> {
         validate_ssh_destination(&destination)?;
         Ok(Self {
             endpoint: DomainEndpoint::Ssh {
                 destination,
-                start_server: true,
-            },
-        })
-    }
-
-    /// Like [`Self::for_ssh`], but the remote bridge refuses rather than
-    /// starting a daemon when none is running there.
-    pub fn for_running_ssh(destination: String) -> anyhow::Result<Self> {
-        validate_ssh_destination(&destination)?;
-        Ok(Self {
-            endpoint: DomainEndpoint::Ssh {
-                destination,
-                start_server: false,
+                start_server,
             },
         })
     }
@@ -950,8 +941,9 @@ fn connect_local_within(paths: &SocketPaths, timeout: Duration) -> anyhow::Resul
     Ok(DomainStream::Local(stream))
 }
 
+/// Starts the SSH bridge to `destination`, which [`DomainClient::for_ssh`]
+/// has validated, and negotiates with it.
 fn connect_ssh(destination: &str, start_server: bool) -> anyhow::Result<DomainStream> {
-    validate_ssh_destination(destination)?;
     let mut command = Command::new("ssh");
     command.args([
         "-T",

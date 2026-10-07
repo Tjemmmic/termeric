@@ -68,7 +68,7 @@ impl DomainAuthority {
     pub fn client(&self) -> anyhow::Result<DomainClient> {
         match self {
             Self::Local => DomainClient::connect_or_start(),
-            Self::Ssh { destination } => DomainClient::for_ssh(destination.clone()),
+            Self::Ssh { destination } => DomainClient::for_ssh(destination.clone(), true),
         }
     }
 
@@ -158,89 +158,77 @@ impl DomainCommand {
 }
 
 pub fn execute(command: DomainCommand) -> anyhow::Result<Option<String>> {
-    if let DomainCommand::ProtocolVersion { json } = &command {
-        return if *json {
-            Ok(Some(serde_json::to_string_pretty(&serde_json::json!({
-                "protocol_version": protocol::PROTOCOL_VERSION,
-            }))?))
-        } else {
-            Ok(Some(format!(
-                "Domain protocol version {}",
-                protocol::PROTOCOL_VERSION
-            )))
-        };
-    }
-    if command == DomainCommand::ServerForeground {
-        run_server_foreground()?;
-        return Ok(None);
-    }
-    if let DomainCommand::ProxyStdio { start_server } = command {
-        run_proxy_stdio(start_server)?;
-        return Ok(None);
-    }
-    if let DomainCommand::Hosts { json } = &command {
-        let config = crate::config::Config::load_or_default()?;
-        return if *json {
-            Ok(Some(serde_json::to_string_pretty(
-                &config.domains.ssh_hosts,
-            )?))
-        } else {
-            Ok(Some(format_ssh_hosts(&config.domains.ssh_hosts)))
-        };
-    }
-    if let DomainCommand::Remote {
-        destination,
-        command,
-    } = command
-    {
+    let (client, command) = match command {
+        DomainCommand::ProtocolVersion { json } => {
+            return Ok(Some(if json {
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "protocol_version": protocol::PROTOCOL_VERSION,
+                }))?
+            } else {
+                format!("Domain protocol version {}", protocol::PROTOCOL_VERSION)
+            }));
+        }
+        DomainCommand::ServerForeground => {
+            run_server_foreground()?;
+            return Ok(None);
+        }
+        DomainCommand::ProxyStdio { start_server } => {
+            run_ssh_stdio_bridge(start_server)?;
+            return Ok(None);
+        }
+        DomainCommand::Hosts { json } => {
+            let hosts = crate::config::Config::load_or_default()?.domains.ssh_hosts;
+            return Ok(Some(if json {
+                serde_json::to_string_pretty(&hosts)?
+            } else {
+                format_ssh_hosts(&hosts)
+            }));
+        }
         // Stopping must not start a daemon just to stop it.
-        let client = if command.stops_the_server() {
-            DomainClient::for_running_ssh(destination)?
-        } else {
-            DomainClient::for_ssh(destination)?
-        };
-        return execute_with_client(*command, client);
-    }
-    let client = if command.stops_the_server() {
-        DomainClient::connect_running()?
-            .ok_or_else(|| anyhow::anyhow!(client::NO_SERVER_RUNNING))?
+        DomainCommand::Remote {
+            destination,
+            command,
+        } => {
+            let start_server = !command.stops_the_server();
+            (DomainClient::for_ssh(destination, start_server)?, *command)
+        }
+        command if command.stops_the_server() => (
+            DomainClient::connect_running()?
+                .ok_or_else(|| anyhow::anyhow!(client::NO_SERVER_RUNNING))?,
+            command,
+        ),
+        command => (DomainClient::connect_or_start()?, command),
+    };
+    let (response, json) = match command {
+        DomainCommand::Relay { domain, pane } => {
+            client.relay(domain, pane)?;
+            return Ok(None);
+        }
+        DomainCommand::Upload {
+            domain,
+            pane,
+            source,
+            name,
+            json,
+        } => (
+            client.upload(domain, pane, &source, UploadOptions::named(name))?,
+            json,
+        ),
+        DomainCommand::Request { request, json } => (client.request(request)?, json),
+        // The parser refuses --host for these (`local_only`).
+        local @ (DomainCommand::ServerForeground
+        | DomainCommand::ProxyStdio { .. }
+        | DomainCommand::ProtocolVersion { .. }
+        | DomainCommand::Hosts { .. }
+        | DomainCommand::Remote { .. }) => {
+            unreachable!("{local:?} runs on this computer, not through a domain server")
+        }
+    };
+    Ok(Some(if json {
+        serde_json::to_string_pretty(&response)?
     } else {
-        DomainClient::connect_or_start()?
-    };
-    execute_with_client(command, client)
-}
-
-fn execute_with_client(
-    command: DomainCommand,
-    client: DomainClient,
-) -> anyhow::Result<Option<String>> {
-    if let DomainCommand::Relay { domain, pane } = command {
-        client.relay(domain, pane)?;
-        return Ok(None);
-    }
-    if let DomainCommand::Upload {
-        domain,
-        pane,
-        source,
-        name,
-        json,
-    } = command
-    {
-        let response = client.upload(domain, pane, &source, UploadOptions::named(name))?;
-        return if json {
-            Ok(Some(serde_json::to_string_pretty(&response)?))
-        } else {
-            Ok(Some(format_human(response)))
-        };
-    }
-    let DomainCommand::Request { request, json } = command else {
-        unreachable!("only daemon requests remain once transports and uploads are handled")
-    };
-    let response = client.request(request)?;
-    if json {
-        return Ok(Some(serde_json::to_string_pretty(&response)?));
-    }
-    Ok(Some(format_human(response)))
+        format_human(response)
+    }))
 }
 
 fn format_ssh_hosts(
@@ -259,10 +247,6 @@ fn format_ssh_hosts(
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn run_proxy_stdio(start_server: bool) -> anyhow::Result<()> {
-    run_ssh_stdio_bridge(start_server)
 }
 
 fn run_server_foreground() -> anyhow::Result<()> {
