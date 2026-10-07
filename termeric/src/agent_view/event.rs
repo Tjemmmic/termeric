@@ -84,9 +84,6 @@ pub struct EffortChoice {
     pub description: String,
 }
 
-/// Models offered before an agent has listed its own.
-pub const FALLBACK_MODELS: [&str; 4] = ["default", "sonnet", "opus", "haiku"];
-
 /// What to call a model value: the agent's own name for it when it listed
 /// one, else a readable form of the value.
 pub fn model_name(models: &[ModelChoice], value: &str) -> String {

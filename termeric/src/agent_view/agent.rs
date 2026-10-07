@@ -131,7 +131,7 @@ impl AgentKind {
     /// Models offered before the agent has listed its own.
     pub fn fallback_models(self) -> Vec<ModelChoice> {
         let values: &[&str] = match self {
-            AgentKind::ClaudeCode => &super::event::FALLBACK_MODELS,
+            AgentKind::ClaudeCode => &["default", "sonnet", "opus", "haiku"],
             AgentKind::Codex | AgentKind::OpenCode => &["default"],
         };
         values
