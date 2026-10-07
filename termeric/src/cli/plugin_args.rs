@@ -8,7 +8,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(
     name = "termeric plugin",
-    about = "Install and manage plugins",
+    about = "Install and manage plugins (experimental)",
     after_help = "A plugin is a local directory with a termeric-plugin.toml manifest, which \
 lists the permissions it needs. Each --allow grants one of them, and a plugin can be enabled \
 only once all of them are granted. A permission that acts on windows covers only the window \

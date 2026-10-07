@@ -603,7 +603,7 @@ _termeric_commands() {
     local commands; commands=(
 'domain:Keep terminals running in a background daemon, here or over SSH (experimental)' \
 'control:Script the windows, tabs, and panes of a running Termeric (experimental)' \
-'plugin:Install and manage plugins' \
+'plugin:Install and manage plugins (experimental)' \
 'workspace:List saved workspaces' \
 'mcp:Serve Termeric'\''s agent tools to a coding agent over MCP (experimental)' \
     )

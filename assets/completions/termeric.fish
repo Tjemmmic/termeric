@@ -45,7 +45,7 @@ complete -c termeric -n "__fish_termeric_needs_command" -l tab -d 'Start another
 complete -c termeric -n "__fish_termeric_needs_command" -s V -l version -d 'Print version'
 complete -c termeric -n "__fish_termeric_needs_command" -a "domain" -d 'Keep terminals running in a background daemon, here or over SSH (experimental)'
 complete -c termeric -n "__fish_termeric_needs_command" -a "control" -d 'Script the windows, tabs, and panes of a running Termeric (experimental)'
-complete -c termeric -n "__fish_termeric_needs_command" -a "plugin" -d 'Install and manage plugins'
+complete -c termeric -n "__fish_termeric_needs_command" -a "plugin" -d 'Install and manage plugins (experimental)'
 complete -c termeric -n "__fish_termeric_needs_command" -a "workspace" -d 'List saved workspaces'
 complete -c termeric -n "__fish_termeric_needs_command" -a "mcp" -d 'Serve Termeric\'s agent tools to a coding agent over MCP (experimental)'
 complete -c termeric -n "__fish_termeric_using_subcommand domain; and not __fish_seen_subcommand_from protocol-version hosts list show panes create spawn split resize-split rename-tab pin-tab unpin-tab move-tab swap-pane balance-tab layout-tab move-pane focus close-pane close-tab send get-text upload attach kill stop-server server proxy-stdio relay" -l host -d 'Control the domains on another computer, through SSH' -r

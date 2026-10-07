@@ -1,6 +1,6 @@
 # Termeric
 
-A GPU-accelerated terminal emulator for Linux, written in Rust and themed around roots and rhizomes.
+A GPU-accelerated terminal emulator, written in Rust and themed around roots and rhizomes. Are you Root?
 
 Termeric keeps your shells in tabs, panes, and windows, draws them with your GPU, and understands what your shell and tools are doing: jump between prompts, open links and paths, show images, and keep an eye on coding agents without leaving the terminal.
 
@@ -15,7 +15,7 @@ Termeric keeps your shells in tabs, panes, and windows, draws them with your GPU
 - **Search, keyboard copy mode, and quick-select hints** for links, paths, and hashes
 - **A command palette, a Settings dialog, and rebindable shortcuts**
 - **Coding-agent integration** (experimental, off until you turn it on) for Claude Code, Codex, Gemini CLI, OpenCode, and your own agents
-- **Automation**: launch from the command line, add [plugins](examples/plugins/README.md), and script a running Termeric (experimental)
+- **Automation**: launch from the command line, and (experimental) add [plugins](examples/plugins/README.md) and script a running Termeric
 
 ## Status
 
@@ -27,6 +27,7 @@ These features are experimental, may change between releases, and are labelled s
 - **Harvest**, a visual history of your commands. Off until you turn it on under **Experimental** in Settings.
 - **`termeric control`**, for scripting a running Termeric. Typing into panes stays off until you set `allow_gui_control_input = true` under `[security]`.
 - **`termeric domain`**, live domains: terminals kept running by a background daemon, here or over SSH, that you can detach from and attach to again.
+- **Third-party [plugins](examples/plugins/README.md)** (`termeric plugin`, or the **Plugins** page of Settings). The manifest format, the permissions, and the handler protocol may change between releases.
 
 ## Install
 
@@ -73,7 +74,7 @@ You can run `target/release/termeric` without installing, but two installed file
 Uninstalling never removes your settings or saved data. They live in two folders, or under `$XDG_CONFIG_HOME` and `$XDG_DATA_HOME` if you set those:
 
 | Folder | Contents |
-|---|---|
+| --- | --- |
 | `~/.config/termeric/` | `config.toml` (your settings), `themes/` (custom themes), `plugins.toml` and `plugins/` (installed plugins), `supervisor.md` (agent supervisor rules), `shell-integration/` (generated shell hooks) |
 | `~/.local/share/termeric/` | Saved workspaces and tab snapshots, and agent transcripts and exports |
 

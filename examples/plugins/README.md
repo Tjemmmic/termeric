@@ -11,6 +11,8 @@ A plugin can:
 
 Nothing takes effect until you install the plugin and grant the permissions it asks for.
 
+> **Experimental.** The manifest format, the permissions, and the handler protocol may change between releases, and plugins may need updating when they do.
+
 ## Example plugins
 
 This directory has five example plugins. Each manifest starts with a comment explaining what it does and the exact command that installs it.

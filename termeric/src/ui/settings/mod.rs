@@ -1725,6 +1725,11 @@ impl SettingsPanel {
                 SettingsSection::Plugins,
                 vec![
                     SettingItem {
+                        label: "Status",
+                        value: "Experimental beta".into(),
+                        kind: SettingKind::ReadOnly,
+                    },
+                    SettingItem {
                         label: "Third-party Plugins",
                         value: self.runtime_plugin_summary.clone(),
                         kind: SettingKind::ReadOnly,

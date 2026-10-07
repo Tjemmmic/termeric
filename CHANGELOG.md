@@ -19,9 +19,9 @@ The first release: a developer preview for Linux, on Wayland and X11. Features s
 - A command palette, a Settings dialog, rebindable shortcuts, terminal profiles, and a quick-access drop-down terminal.
 - xterm modified keys and the Kitty keyboard protocol; mouse, focus, and bracketed-paste reporting; synchronized output; and the `xterm-termeric` terminfo entry.
 - Screen reader information, keyboard access to the interface (F6), reduced motion, and a high-contrast mode.
-- Launching windows, tabs, commands, profiles, and workspaces from the command line, and third-party plugins that get only the permissions you grant.
+- Launching windows, tabs, commands, profiles, and workspaces from the command line.
 - A `.deb` package, an Arch PKGBUILD, and a tarball with an `install.sh` for other distributions, each with a manual page and Bash, Zsh, and Fish completions.
-- Experimental: status, change review, and a supervisor for coding agents (Claude Code, Codex, Gemini CLI, OpenCode, and your own), the agent view, and `termeric mcp`, all off until you turn on agent features; controlling a running Termeric from scripts; Harvest; and live domains.
+- Experimental: status, change review, and a supervisor for coding agents (Claude Code, Codex, Gemini CLI, OpenCode, and your own), the agent view, and `termeric mcp`, all off until you turn on agent features; controlling a running Termeric from scripts; third-party plugins that get only the permissions you grant; Harvest; and live domains.
 
 ### Known limitations
 
