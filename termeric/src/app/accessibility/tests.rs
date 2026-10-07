@@ -956,6 +956,37 @@ fn explain_is_not_offered_while_agent_features_are_off() {
 }
 
 #[test]
+fn the_sprout_menu_root_spans_the_window_while_the_menu_stays_clear_of_the_dock() {
+    let mut app = App::new_headless(Config::default().with_agent_features()).unwrap();
+    open_harvest_cellar_fixture(&mut app, 1);
+    let entry = app
+        .harvest
+        .as_ref()
+        .unwrap()
+        .cellar
+        .latest()
+        .unwrap()
+        .clone();
+    let availability = app.sprout_availability_for_entry(&entry);
+    app.harvest
+        .as_mut()
+        .unwrap()
+        .show_sprout_menu(0, 1_000, Some(entry), availability);
+    // The agent dock takes the window's right 400 pixels.
+    let snapshot = app.sprout_accessibility_snapshot(1_000.0, 600.0, 600.0);
+    let bounds = |id: NodeId| {
+        snapshot
+            .nodes
+            .iter()
+            .find(|(node_id, _)| *node_id == id)
+            .and_then(|(_, node)| node.bounds())
+            .unwrap()
+    };
+    assert_eq!(bounds(ROOT), Rect::new(0.0, 0.0, 1_000.0, 600.0));
+    assert!(bounds(SPROUT_DIALOG).x1 <= 600.0);
+}
+
+#[test]
 fn sprout_semantics_are_request_scoped_and_never_invoke_explain_in_tests() {
     let mut app = App::new_headless(Config::default().with_agent_features()).unwrap();
     open_harvest_cellar_fixture(&mut app, 1);

@@ -2958,10 +2958,14 @@ impl App {
         SemanticSnapshot { nodes, focus }
     }
 
+    /// The sprout menu's nodes. The menu stays inside the terminal area,
+    /// whose right edge is `content_right` (clear of the agent dock), while
+    /// the window root covers the whole window.
     fn sprout_accessibility_snapshot(
         &mut self,
         window_width: f32,
         window_height: f32,
+        content_right: f32,
     ) -> SemanticSnapshot {
         let (request_id, row, col, width_chars, actions, selected, command) = self
             .harvest
@@ -3005,17 +3009,12 @@ impl App {
                 )
             })
             .unwrap_or((8.0, 16.0, 8.0, 0.0, 40.0));
-        // The menu stays inside the terminal area, clear of the dock.
-        let window_width = self
-            .renderer
-            .as_ref()
-            .map_or(window_width, |renderer| renderer.content_right());
         let layout = crate::harvest::SproutMenuLayout::calculate(
             row,
             col,
             actions.len(),
             width_chars,
-            window_width,
+            content_right,
             window_height,
             content_left,
             content_top,
@@ -3204,7 +3203,13 @@ impl App {
             ModalLayer::InfoOverlay => self.info_accessibility_snapshot(width, height),
             ModalLayer::DiffReview => self.diff_accessibility_snapshot(width, height),
             ModalLayer::ContextPicker => self.context_accessibility_snapshot(width, height),
-            ModalLayer::SproutMenu => self.sprout_accessibility_snapshot(width, height),
+            ModalLayer::SproutMenu => {
+                let content_right = self
+                    .renderer
+                    .as_ref()
+                    .map_or(width, |renderer| renderer.content_right_for(width));
+                self.sprout_accessibility_snapshot(width, height, content_right)
+            }
             ModalLayer::Cellar => self.cellar_accessibility_snapshot(width, height),
             ModalLayer::DomainPicker => {
                 self.palette_modal_accessibility_snapshot(PaletteModal::Domains, width, height)
