@@ -32,36 +32,32 @@ pub(super) fn launch_and_wait(
     request.canonicalize();
     request.validate().map_err(anyhow::Error::msg)?;
     let result = (|| {
-        let endpoint = discover(process_id)?;
+        let endpoint = client::endpoint_for(process_id)?;
         let token = endpoint.paths.read_token()?;
         let identity = socket_identity(&endpoint.paths.socket)?;
-        launch_at(&endpoint, &token, identity, request, deadline, json)
+        launch_at(&endpoint, &token, identity, &id, request, deadline, json)
     })();
     result.with_context(|| format!(
         "launch or observation failed (process {process_id}, request {id}); no automatic relaunch or cancellation was sent; inspect with `control launch-status {process_id} {id}` or resume with `control wait-launch {process_id} {id}`"
     ))
 }
 
+/// Sends launch `request`, already validated under its request ID `id`,
+/// then waits for the launch to end.
 fn launch_at(
     endpoint: &ControlEndpoint,
     token: &str,
     identity: (u64, u64),
+    id: &str,
     request: Request,
     deadline: Option<Instant>,
     json: bool,
 ) -> anyhow::Result<ControlOutput> {
-    let id = match &request {
-        Request::LaunchTab { request_id, .. } | Request::LaunchWindow { request_id, .. } => {
-            request_id.clone()
-        }
-        _ => anyhow::bail!("wait requires a tab or window command launch"),
-    };
-    request.validate().map_err(anyhow::Error::msg)?;
     let exchange_deadline = exchange_deadline(deadline);
     let response = exchange(endpoint, token, identity, &request, exchange_deadline)?;
     client::answer(endpoint.process_id, &request, response)?;
     remaining(exchange_deadline, EXPIRED)?;
-    poll_launch(endpoint, token, identity, &id, deadline, json)
+    poll_launch(endpoint, token, identity, id, deadline, json)
 }
 
 fn overall_deadline(
@@ -74,13 +70,6 @@ fn overall_deadline(
         anyhow::bail!("invalid wait-launch process ID or timeout");
     }
     Ok(timeout_seconds.map(|seconds| Instant::now() + Duration::from_secs(seconds.into())))
-}
-
-fn discover(process_id: u32) -> anyhow::Result<ControlEndpoint> {
-    ControlEndpoint::discover_all()?
-        .into_iter()
-        .find(|endpoint| endpoint.process_id == process_id)
-        .ok_or_else(|| anyhow::anyhow!("GUI process {process_id} was not found"))
 }
 
 fn exchange_deadline(deadline: Option<Instant>) -> Instant {
@@ -100,7 +89,7 @@ pub(super) fn launch(
     }
     .validate()
     .map_err(anyhow::Error::msg)?;
-    let endpoint = discover(process_id)?;
+    let endpoint = client::endpoint_for(process_id)?;
     let token = endpoint.paths.read_token()?;
     let identity = socket_identity(&endpoint.paths.socket)?;
     poll_launch(

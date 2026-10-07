@@ -18,37 +18,11 @@ struct InventoryCollection {
 }
 
 pub fn list(json: bool) -> anyhow::Result<String> {
-    let mut processes = Vec::new();
-    for endpoint in ControlEndpoint::discover_all()? {
-        match request_inventory(&endpoint) {
-            Ok(inventory) => {
-                if inventory.process_id != endpoint.process_id {
-                    anyhow::bail!(
-                        "GUI control endpoint {} answered for unexpected process {}",
-                        endpoint.process_id,
-                        inventory.process_id
-                    );
-                }
-                processes.push(inventory);
-            }
-            Err(error) if endpoint_is_stale(&error, endpoint.process_id) => {
-                log::debug!(
-                    "Ignoring stale GUI control endpoint for process {}: {error:#}",
-                    endpoint.process_id
-                );
-            }
-            Err(error) => {
-                return Err(error).with_context(|| {
-                    format!(
-                        "query running GUI process {} through {}",
-                        endpoint.process_id,
-                        endpoint.paths.socket.display()
-                    )
-                });
-            }
-        }
-    }
-    processes.sort_by_key(|inventory| inventory.process_id);
+    // Endpoints are discovered in process order, so the list is too.
+    let processes: Vec<_> = live_inventories(ControlEndpoint::discover_all()?)?
+        .into_iter()
+        .map(|(_, inventory)| inventory)
+        .collect();
     if json {
         Ok(serde_json::to_string_pretty(&InventoryCollection {
             schema_version: protocol::JSON_SCHEMA_VERSION,
@@ -70,37 +44,12 @@ fn toggle_existing_quick_access_at(
 ) -> anyhow::Result<Option<String>> {
     let mut targets = Vec::new();
     let mut incomplete_inventory = false;
-    for endpoint in endpoints {
-        match request_inventory(&endpoint) {
-            Ok(inventory) => {
-                if inventory.process_id != endpoint.process_id {
-                    anyhow::bail!(
-                        "GUI control endpoint {} answered for unexpected process {}",
-                        endpoint.process_id,
-                        inventory.process_id
-                    );
-                }
-                incomplete_inventory |= inventory.truncated;
-                for window in inventory.windows {
-                    if window.quick_access {
-                        let visible = !(window.visible && window.focused);
-                        targets.push((endpoint.clone(), window.id, visible));
-                    }
-                }
-            }
-            Err(error) if endpoint_is_stale(&error, endpoint.process_id) => {
-                log::debug!(
-                    "Ignoring stale GUI control endpoint for process {}: {error:#}",
-                    endpoint.process_id
-                );
-            }
-            Err(error) => {
-                return Err(error).with_context(|| {
-                    format!(
-                        "query quick-access state from GUI process {}",
-                        endpoint.process_id
-                    )
-                });
+    for (endpoint, inventory) in live_inventories(endpoints)? {
+        incomplete_inventory |= inventory.truncated;
+        for window in inventory.windows {
+            if window.quick_access {
+                let visible = !(window.visible && window.focused);
+                targets.push((endpoint.clone(), window.id, visible));
             }
         }
     }
@@ -124,9 +73,9 @@ fn toggle_existing_quick_access_at(
         visible: desired_visible,
     };
     // The request ID makes the retry a replay, never a second toggle.
-    let response = match request(&endpoint, &toggle) {
+    let response = match request_within(&endpoint, &toggle, IO_TIMEOUT) {
         Ok(response) => response,
-        Err(first_error) => request(&endpoint, &toggle).with_context(|| {
+        Err(first_error) => request_within(&endpoint, &toggle, IO_TIMEOUT).with_context(|| {
             format!(
                 "quick-access request {request_id} failed twice; first failure: {first_error:#}"
             )
@@ -143,6 +92,45 @@ fn toggle_existing_quick_access_at(
     }
 }
 
+/// The inventory of each of `endpoints` whose process still answers,
+/// skipping endpoints left behind by processes that have exited. Any other
+/// failure, or an answer for another process, is an error.
+fn live_inventories(
+    endpoints: Vec<ControlEndpoint>,
+) -> anyhow::Result<Vec<(ControlEndpoint, ProcessInventory)>> {
+    let mut inventories = Vec::new();
+    for endpoint in endpoints {
+        match request_inventory(&endpoint) {
+            Ok(inventory) => {
+                if inventory.process_id != endpoint.process_id {
+                    anyhow::bail!(
+                        "GUI control endpoint {} answered for unexpected process {}",
+                        endpoint.process_id,
+                        inventory.process_id
+                    );
+                }
+                inventories.push((endpoint, inventory));
+            }
+            Err(error) if endpoint_is_stale(&error, endpoint.process_id) => {
+                log::debug!(
+                    "Ignoring stale GUI control endpoint for process {}: {error:#}",
+                    endpoint.process_id
+                );
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "query running GUI process {} through {}",
+                        endpoint.process_id,
+                        endpoint.paths.socket.display()
+                    )
+                });
+            }
+        }
+    }
+    Ok(inventories)
+}
+
 fn endpoint_is_stale(error: &anyhow::Error, process_id: u32) -> bool {
     error.downcast_ref::<std::io::Error>().is_some_and(|io| {
         matches!(
@@ -153,7 +141,7 @@ fn endpoint_is_stale(error: &anyhow::Error, process_id: u32) -> bool {
 }
 
 fn request_inventory(endpoint: &ControlEndpoint) -> anyhow::Result<ProcessInventory> {
-    match request(endpoint, &Request::Inventory)? {
+    match request_within(endpoint, &Request::Inventory, IO_TIMEOUT)? {
         Response::Inventory(inventory) => Ok(inventory),
         Response::Error { message } => anyhow::bail!(message),
         _ => anyhow::bail!("invalid GUI control inventory response"),
@@ -821,7 +809,8 @@ pub fn running_processes() -> anyhow::Result<Vec<u32>> {
         .collect())
 }
 
-fn endpoint_for(process_id: u32) -> anyhow::Result<ControlEndpoint> {
+/// The endpoint of running GUI process `process_id`.
+pub(super) fn endpoint_for(process_id: u32) -> anyhow::Result<ControlEndpoint> {
     ControlEndpoint::discover_all()?
         .into_iter()
         .find(|endpoint| endpoint.process_id == process_id)
@@ -967,9 +956,8 @@ pub fn join_running(
     activation_token: Option<String>,
     tabs: Vec<protocol::JoinTab>,
 ) -> anyhow::Result<Option<(u32, u64)>> {
-    let mut endpoints = ControlEndpoint::discover_all()?;
-    endpoints.sort_by_key(|endpoint| endpoint.process_id);
-    for endpoint in endpoints {
+    // Discovery lists each process once, in process order.
+    for endpoint in ControlEndpoint::discover_all()? {
         if !process_is_alive(endpoint.process_id) {
             continue;
         }
@@ -981,7 +969,7 @@ pub fn join_running(
             environment: environment.to_owned(),
             tabs: tabs.clone(),
         };
-        let outcome = request(&endpoint, &join)
+        let outcome = request_within(&endpoint, &join, IO_TIMEOUT)
             .and_then(|response| answer(endpoint.process_id, &join, response));
         match outcome {
             Ok(Response::WindowCreated { window_id, .. }) => {
@@ -995,10 +983,6 @@ pub fn join_running(
         }
     }
     Ok(None)
-}
-
-fn request(endpoint: &ControlEndpoint, request: &Request) -> anyhow::Result<Response> {
-    request_within(endpoint, request, IO_TIMEOUT)
 }
 
 /// One exchange on `endpoint`, finished within `timeout`: the GUI's reply,
