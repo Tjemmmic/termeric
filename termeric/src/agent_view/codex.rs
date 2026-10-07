@@ -29,7 +29,8 @@ use super::event::{
 };
 use super::present::PATCH_TOOL;
 use super::protocol::{
-    Exchange, Incoming, Protocol, failed_turn, incoming, line, preview, text, tool_result, tool_use,
+    Exchange, Incoming, Protocol, client_info, failed_turn, finished_turn, incoming, line,
+    method_not_found, request_key, text, tool_result, tool_use,
 };
 
 /// The mode Codex asks in: it reads freely and asks before changing
@@ -288,10 +289,7 @@ impl CodexCodec {
             // the panel offers; the model never sees them.
             (Some(_), None) => {
                 return Exchange {
-                    events: vec![AgentEvent::TurnFinished(TurnOutcome {
-                        success: true,
-                        ..TurnOutcome::default()
-                    })],
+                    events: vec![finished_turn()],
                     lines: Vec::new(),
                 };
             }
@@ -450,10 +448,7 @@ impl CodexCodec {
             // The turn never reached Codex.
             self.turn_requested = false;
             return Exchange {
-                events: vec![AgentEvent::TurnFinished(TurnOutcome {
-                    success: true,
-                    ..TurnOutcome::default()
-                })],
+                events: vec![finished_turn()],
                 lines: Vec::new(),
             };
         }
@@ -654,10 +649,7 @@ impl CodexCodec {
     }
 
     fn decode_request(&mut self, id: Value, method: &str, params: &Value) -> Exchange {
-        let key = match &id {
-            Value::String(id) => format!("codex-{id}"),
-            other => format!("codex-{other}"),
-        };
+        let key = request_key("codex", &id);
         let item = text(params, "itemId");
         let reason = text(params, "reason");
         let from_sub_agent = self.other_thread(params);
@@ -802,10 +794,9 @@ impl CodexCodec {
                 };
             }
             _ => {
-                return Exchange::send(vec![line(&json!({
-                    "id": id,
-                    "error": { "code": -32601, "message": format!("Termeric does not handle {method}") },
-                }))]);
+                return Exchange::send(vec![line(
+                    &json!({ "id": id, "error": method_not_found(method) }),
+                )]);
             }
         };
         self.asked.insert(key, Asked { id, kind });
@@ -949,11 +940,10 @@ impl CodexCodec {
     /// Withdraws a request Codex settled without waiting for an answer, as
     /// when its turn ended.
     fn resolved(&mut self, params: &Value) -> Vec<AgentEvent> {
-        let key = match params.get("requestId") {
-            Some(Value::String(id)) => format!("codex-{id}"),
-            Some(other) => format!("codex-{other}"),
-            None => return Vec::new(),
+        let Some(id) = params.get("requestId") else {
+            return Vec::new();
         };
+        let key = request_key("codex", id);
         if self.asked.remove(&key).is_some() {
             vec![AgentEvent::ApprovalWithdrawn { request_id: key }]
         } else {
@@ -1195,11 +1185,7 @@ impl CodexCodec {
 impl Protocol for CodexCodec {
     fn start(&mut self) -> Vec<String> {
         let params = json!({
-            "clientInfo": {
-                "name": "termeric",
-                "title": "Termeric",
-                "version": env!("CARGO_PKG_VERSION"),
-            },
+            "clientInfo": client_info(),
             "capabilities": { "experimentalApi": false, "requestAttestation": false },
         });
         let mut lines = vec![self.request(Request::Initialize, "initialize", params)];
@@ -1240,21 +1226,15 @@ impl Protocol for CodexCodec {
 
     fn decode(&mut self, line: &str) -> Exchange {
         match incoming(line) {
-            Incoming::Request { id, method, params } => self.decode_request(id, &method, &params),
-            Incoming::Notification { method, params } => Exchange {
+            Ok(Incoming::Request { id, method, params }) => {
+                self.decode_request(id, &method, &params)
+            }
+            Ok(Incoming::Notification { method, params }) => Exchange {
                 events: self.decode_notification(&method, &params),
                 lines: Vec::new(),
             },
-            Incoming::Response { id, message } => self.decode_response(id, &message),
-            Incoming::Stray => Exchange::default(),
-            Incoming::Rejected(error) => {
-                log::warn!("agent view: agent rejected a request it could not parse: {error}");
-                Exchange::default()
-            }
-            Incoming::Unreadable => Exchange {
-                events: vec![AgentEvent::Unrecognized(preview(line))],
-                lines: Vec::new(),
-            },
+            Ok(Incoming::Response { id, message }) => self.decode_response(id, &message),
+            Err(unhandled) => unhandled.exchange(),
         }
     }
 }

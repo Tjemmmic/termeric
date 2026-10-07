@@ -7,7 +7,7 @@
 //! session, transcript, and panel see only agent-neutral events and
 //! commands.
 
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 use super::event::{
     AgentCommand, AgentEvent, AssistantMessage, ContentBlock, Thread, ToolResult, TurnOutcome,
@@ -58,8 +58,9 @@ pub fn preview(text: &str) -> String {
     crate::safe_text::truncate_with_ellipsis(text, 200)
 }
 
-/// One JSON-RPC message from an agent, for the protocols built on JSON-RPC
-/// (Codex's app-server and the Agent Client Protocol).
+/// One JSON-RPC message from an agent for its protocol to handle, for the
+/// protocols built on JSON-RPC (Codex's app-server and the Agent Client
+/// Protocol).
 #[derive(Debug, PartialEq)]
 pub enum Incoming {
     /// A request the agent makes, answered with the same `id`.
@@ -77,23 +78,47 @@ pub enum Incoming {
         id: u64,
         message: Map<String, Value>,
     },
+}
+
+/// A line from a JSON-RPC agent that holds no message for its protocol.
+#[derive(Debug, PartialEq)]
+pub enum Unhandled {
     /// A response to no request the host could have made.
     Stray,
     /// An error response with an `id` of `null`: the agent could not read
     /// one of the host's requests well enough to name it. Holds a preview
     /// of the error.
     Rejected(String),
-    /// Not a JSON object, or one with neither a method nor an id.
-    Unreadable,
+    /// Not a JSON object, or one with neither a method nor an id. Holds a
+    /// preview of the line.
+    Unreadable(String),
+}
+
+impl Unhandled {
+    /// What the line means for the panel: nothing for a stray response,
+    /// and only the log learns of the rest.
+    pub fn exchange(self) -> Exchange {
+        match self {
+            Unhandled::Stray => Exchange::default(),
+            Unhandled::Rejected(error) => {
+                log::warn!("agent view: agent rejected a request it could not parse: {error}");
+                Exchange::default()
+            }
+            Unhandled::Unreadable(preview) => Exchange {
+                events: vec![AgentEvent::Unrecognized(preview)],
+                lines: Vec::new(),
+            },
+        }
+    }
 }
 
 /// Tell `line` apart as a request, notification, or response. An `id` of
 /// `null` counts as absent: JSON-RPC 2.0 allows it, but neither protocol's
 /// requests use it, and on an error response it means the agent could not
 /// read the request it answers.
-pub fn incoming(line: &str) -> Incoming {
+pub fn incoming(line: &str) -> Result<Incoming, Unhandled> {
     let Ok(Value::Object(message)) = serde_json::from_str::<Value>(line) else {
-        return Incoming::Unreadable;
+        return Err(Unhandled::Unreadable(preview(line)));
     };
     let id = message.get("id").filter(|id| !id.is_null()).cloned();
     let method = message
@@ -102,26 +127,50 @@ pub fn incoming(line: &str) -> Incoming {
         .map(str::to_owned);
     let params = || message.get("params").cloned().unwrap_or(Value::Null);
     match (id, method) {
-        (Some(id), Some(method)) => Incoming::Request {
+        (Some(id), Some(method)) => Ok(Incoming::Request {
             id,
             method,
             params: params(),
-        },
-        (None, Some(method)) => Incoming::Notification {
+        }),
+        (None, Some(method)) => Ok(Incoming::Notification {
             method,
             params: params(),
-        },
+        }),
         (Some(id), None) => match id.as_u64() {
-            Some(id) => Incoming::Response { id, message },
-            None => Incoming::Stray,
+            Some(id) => Ok(Incoming::Response { id, message }),
+            None => Err(Unhandled::Stray),
         },
         (None, None) => match message.get("error") {
             Some(error) if message.get("id").is_some_and(Value::is_null) => {
-                Incoming::Rejected(preview(&error.to_string()))
+                Err(Unhandled::Rejected(preview(&error.to_string())))
             }
-            _ => Incoming::Unreadable,
+            _ => Err(Unhandled::Unreadable(preview(line))),
         },
     }
+}
+
+/// The panel's id for a request an agent made: `prefix` and the agent's
+/// own `id` as text.
+pub fn request_key(prefix: &str, id: &Value) -> String {
+    match id {
+        Value::String(id) => format!("{prefix}-{id}"),
+        other => format!("{prefix}-{other}"),
+    }
+}
+
+/// The JSON-RPC error answering a request this host does not handle, so the
+/// agent never waits on it.
+pub fn method_not_found(method: &str) -> Value {
+    json!({ "code": -32601, "message": format!("Termeric does not handle {method}") })
+}
+
+/// How the host names itself when it connects.
+pub fn client_info() -> Value {
+    json!({
+        "name": "termeric",
+        "title": "Termeric",
+        "version": env!("CARGO_PKG_VERSION"),
+    })
 }
 
 /// The text at `key` in `value`, if it is text.
@@ -156,6 +205,15 @@ pub fn tool_result(id: &str, content: String, is_error: bool) -> AgentEvent {
             detail: None,
         },
     }
+}
+
+/// A turn that ended cleanly without the agent hearing of it, as a message
+/// stopped before it was sent.
+pub fn finished_turn() -> AgentEvent {
+    AgentEvent::TurnFinished(TurnOutcome {
+        success: true,
+        ..TurnOutcome::default()
+    })
 }
 
 /// A turn that ended with `error`.
@@ -195,32 +253,34 @@ mod tests {
         let request = incoming(r#"{"id":"q","method":"ask","params":{"a":1}}"#);
         assert_eq!(
             request,
-            Incoming::Request {
+            Ok(Incoming::Request {
                 id: Value::from("q"),
                 method: "ask".into(),
-                params: serde_json::json!({ "a": 1 }),
-            }
+                params: json!({ "a": 1 }),
+            })
         );
         for notification in [r#"{"method":"note"}"#, r#"{"id":null,"method":"note"}"#] {
             assert_eq!(
                 incoming(notification),
-                Incoming::Notification {
+                Ok(Incoming::Notification {
                     method: "note".into(),
                     params: Value::Null,
-                },
+                }),
                 "{notification}"
             );
         }
         assert!(matches!(
             incoming(r#"{"id":7,"result":{}}"#),
-            Incoming::Response { id: 7, .. }
+            Ok(Incoming::Response { id: 7, .. })
         ));
-        assert_eq!(incoming(r#"{"id":"x","result":{}}"#), Incoming::Stray);
+        assert_eq!(incoming(r#"{"id":"x","result":{}}"#), Err(Unhandled::Stray));
         assert_eq!(
             incoming(
                 r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}"#
             ),
-            Incoming::Rejected(r#"{"code":-32700,"message":"Parse error"}"#.into())
+            Err(Unhandled::Rejected(
+                r#"{"code":-32700,"message":"Parse error"}"#.into()
+            ))
         );
         for unreadable in [
             "not json",
@@ -229,7 +289,34 @@ mod tests {
             "{}",
             r#"{"error":{"code":-32700}}"#,
         ] {
-            assert_eq!(incoming(unreadable), Incoming::Unreadable, "{unreadable}");
+            assert_eq!(
+                incoming(unreadable),
+                Err(Unhandled::Unreadable(unreadable.into())),
+                "{unreadable}"
+            );
         }
+    }
+
+    #[test]
+    fn only_unreadable_lines_reach_the_panel_and_none_is_answered() {
+        assert_eq!(Unhandled::Stray.exchange(), Exchange::default());
+        assert_eq!(
+            Unhandled::Rejected("parse error".into()).exchange(),
+            Exchange::default()
+        );
+        assert_eq!(
+            Unhandled::Unreadable("garbage".into()).exchange(),
+            Exchange {
+                events: vec![AgentEvent::Unrecognized("garbage".into())],
+                lines: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn request_keys_read_string_ids_without_quotes() {
+        assert_eq!(request_key("codex", &json!("a1")), "codex-a1");
+        assert_eq!(request_key("acp", &json!(7)), "acp-7");
+        assert_eq!(request_key("acp", &json!(null)), "acp-null");
     }
 }

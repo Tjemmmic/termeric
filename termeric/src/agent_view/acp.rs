@@ -33,7 +33,8 @@ use super::event::{
 };
 use super::present::PATCH_TOOL;
 use super::protocol::{
-    Exchange, Incoming, Protocol, failed_turn, incoming, line, preview, text, tool_result, tool_use,
+    Exchange, Incoming, Protocol, client_info, failed_turn, finished_turn, incoming, line,
+    method_not_found, request_key, text, tool_result, tool_use,
 };
 use crate::safe_text::capitalized;
 
@@ -618,10 +619,7 @@ impl AcpCodec {
         if self.waiting.take().is_some() {
             // The message never reached the agent.
             return Exchange {
-                events: vec![AgentEvent::TurnFinished(TurnOutcome {
-                    success: true,
-                    ..TurnOutcome::default()
-                })],
+                events: vec![finished_turn()],
                 lines: Vec::new(),
             };
         }
@@ -889,10 +887,10 @@ impl AcpCodec {
             return Exchange::send(vec![line(&json!({
                 "jsonrpc": "2.0",
                 "id": id,
-                "error": { "code": -32601, "message": format!("Termeric does not handle {method}") },
+                "error": method_not_found(method),
             }))]);
         }
-        let key = format!("acp-{}", request_key(&id));
+        let key = request_key("acp", &id);
         let options: Vec<(String, String)> = params
             .get("options")
             .and_then(Value::as_array)
@@ -985,10 +983,7 @@ impl AcpCodec {
             // The agent no longer waits for an answer it asked for; the
             // request ends as cancelled.
             "$/cancel_request" => {
-                let Some(key) = params
-                    .get("requestId")
-                    .map(|id| format!("acp-{}", request_key(id)))
-                else {
+                let Some(key) = params.get("requestId").map(|id| request_key("acp", id)) else {
                     return Exchange::default();
                 };
                 let Some(asked) = self.asked.remove(&key) else {
@@ -1200,11 +1195,7 @@ impl Protocol for AcpCodec {
                 "fs": { "readTextFile": false, "writeTextFile": false },
                 "terminal": false,
             },
-            "clientInfo": {
-                "name": "termeric",
-                "title": "Termeric",
-                "version": env!("CARGO_PKG_VERSION"),
-            },
+            "clientInfo": client_info(),
         });
         vec![self.request(Request::Initialize, "initialize", params)]
     }
@@ -1242,18 +1233,14 @@ impl Protocol for AcpCodec {
 
     fn decode(&mut self, line: &str) -> Exchange {
         match incoming(line) {
-            Incoming::Request { id, method, params } => self.decode_request(id, &method, &params),
-            Incoming::Notification { method, params } => self.decode_notification(&method, &params),
-            Incoming::Response { id, message } => self.decode_response(id, &message),
-            Incoming::Stray => Exchange::default(),
-            Incoming::Rejected(error) => {
-                log::warn!("agent view: agent rejected a request it could not parse: {error}");
-                Exchange::default()
+            Ok(Incoming::Request { id, method, params }) => {
+                self.decode_request(id, &method, &params)
             }
-            Incoming::Unreadable => Exchange {
-                events: vec![AgentEvent::Unrecognized(preview(line))],
-                lines: Vec::new(),
-            },
+            Ok(Incoming::Notification { method, params }) => {
+                self.decode_notification(&method, &params)
+            }
+            Ok(Incoming::Response { id, message }) => self.decode_response(id, &message),
+            Err(unhandled) => unhandled.exchange(),
         }
     }
 }
@@ -1269,14 +1256,6 @@ fn is_empty(value: &Value) -> bool {
         Value::Null => true,
         Value::Object(object) => object.is_empty(),
         _ => false,
-    }
-}
-
-/// A request id as text, for keying the question it asks.
-fn request_key(id: &Value) -> String {
-    match id {
-        Value::String(id) => id.clone(),
-        other => other.to_string(),
     }
 }
 
