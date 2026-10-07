@@ -1334,6 +1334,51 @@ fn resolve_home_relative_path(name: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// Open `path` with `flags` (plus close-on-exec) through `openat2`, refusing
+/// a symbolic link anywhere along it, so the descriptor pins exactly the
+/// inode the path named when it was checked.
+fn openat2_no_symlinks(
+    path: &std::path::Path,
+    flags: libc::c_int,
+) -> std::io::Result<std::fs::File> {
+    use std::os::fd::FromRawFd;
+    use std::os::unix::ffi::OsStrExt;
+
+    #[repr(C)]
+    struct OpenHow {
+        flags: u64,
+        mode: u64,
+        resolve: u64,
+    }
+
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "path contains a NUL byte")
+    })?;
+    let how = OpenHow {
+        flags: (flags | libc::O_CLOEXEC) as u64,
+        mode: 0,
+        resolve: libc::RESOLVE_NO_SYMLINKS,
+    };
+    // SAFETY: `path` is a live NUL-terminated CString, `how` points to a
+    // fully initialized `open_how` for the supplied size, and a successful
+    // syscall transfers ownership of one new descriptor to this function.
+    let descriptor = unsafe {
+        libc::syscall(
+            libc::SYS_openat2,
+            libc::AT_FDCWD,
+            path.as_ptr(),
+            &how,
+            std::mem::size_of::<OpenHow>(),
+        )
+    };
+    if descriptor < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: `openat2` returned a new owned descriptor and it has not been
+    // wrapped or closed elsewhere.
+    Ok(unsafe { std::fs::File::from_raw_fd(descriptor as libc::c_int) })
+}
+
 fn start_upload_worker(
     window_key: super::WindowKey,
     token: u64,

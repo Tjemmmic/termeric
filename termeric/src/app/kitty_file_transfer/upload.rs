@@ -3,49 +3,6 @@
 
 use super::*;
 
-pub(super) fn pin_upload_path(path: &std::path::Path) -> std::io::Result<std::fs::File> {
-    use std::ffi::CString;
-    use std::fs::File;
-    use std::os::fd::FromRawFd;
-    use std::os::unix::ffi::OsStrExt;
-    #[repr(C)]
-    struct OpenHow {
-        flags: u64,
-        mode: u64,
-        resolve: u64,
-    }
-
-    let path = CString::new(path.as_os_str().as_bytes()).map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "approved path contains NUL",
-        )
-    })?;
-    let how = OpenHow {
-        flags: (libc::O_PATH | libc::O_CLOEXEC) as u64,
-        mode: 0,
-        resolve: libc::RESOLVE_NO_SYMLINKS,
-    };
-    // SAFETY: `path` is a live NUL-terminated CString, `how` points to a
-    // fully initialized `open_how` for the supplied size, and a successful
-    // syscall transfers ownership of one new descriptor to this function.
-    let descriptor = unsafe {
-        libc::syscall(
-            libc::SYS_openat2,
-            libc::AT_FDCWD,
-            path.as_ptr(),
-            &how,
-            std::mem::size_of::<OpenHow>(),
-        )
-    };
-    if descriptor < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: `openat2` returned a new owned descriptor and it has not been
-    // wrapped or closed elsewhere.
-    Ok(unsafe { File::from_raw_fd(descriptor as libc::c_int) })
-}
-
 pub(super) fn reopen_upload_regular_file(pinned: &std::fs::File) -> std::io::Result<std::fs::File> {
     use std::os::fd::AsRawFd;
     use std::os::unix::fs::MetadataExt;
@@ -169,7 +126,7 @@ pub(super) fn run_upload_worker(
         // Nothing is sent until every path is pinned, so these failures
         // report no progress.
         let mut fail = |code, message: String| delivery.fail(&path.file_id, code, message, 0, 0);
-        let file = match pin_upload_path(&path.path) {
+        let file = match openat2_no_symlinks(&path.path, libc::O_PATH) {
             Ok(file) => file,
             Err(error) => {
                 let code = if error.kind() == std::io::ErrorKind::PermissionDenied {

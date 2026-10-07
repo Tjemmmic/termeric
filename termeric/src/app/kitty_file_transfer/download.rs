@@ -848,41 +848,6 @@ impl Drop for StagedFile {
     }
 }
 
-fn open_pinned_directory(path: &Path) -> io::Result<File> {
-    use std::os::fd::FromRawFd;
-
-    #[repr(C)]
-    struct OpenHow {
-        flags: u64,
-        mode: u64,
-        resolve: u64,
-    }
-
-    let path = CString::new(path.as_os_str().as_bytes())
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL in parent"))?;
-    let how = OpenHow {
-        flags: (libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC) as u64,
-        mode: 0,
-        resolve: libc::RESOLVE_NO_SYMLINKS,
-    };
-    // SAFETY: path and initialized open_how live through the syscall.
-    // Success transfers ownership of one new descriptor to this function.
-    let descriptor = unsafe {
-        libc::syscall(
-            libc::SYS_openat2,
-            libc::AT_FDCWD,
-            path.as_ptr(),
-            &how,
-            std::mem::size_of::<OpenHow>(),
-        )
-    };
-    if descriptor < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: the successful syscall's descriptor has no other owner.
-    Ok(unsafe { File::from_raw_fd(descriptor as _) })
-}
-
 struct StagingDirectory {
     parent: File,
     path: PathBuf,
@@ -892,7 +857,7 @@ impl StagingDirectory {
     fn open(path: &Path) -> io::Result<Self> {
         use std::os::fd::AsRawFd;
 
-        let parent = open_pinned_directory(path)?;
+        let parent = openat2_no_symlinks(path, libc::O_PATH | libc::O_DIRECTORY)?;
         let path = PathBuf::from(format!("/proc/self/fd/{}", parent.as_raw_fd()));
         Ok(Self { parent, path })
     }
@@ -936,7 +901,7 @@ impl PublicationTarget {
         }
         use std::os::fd::AsRawFd;
 
-        let parent = open_pinned_directory(path.parent().unwrap())?;
+        let parent = openat2_no_symlinks(path.parent().unwrap(), libc::O_PATH | libc::O_DIRECTORY)?;
         let original_path = path.to_owned();
         let path = PathBuf::from(format!("/proc/self/fd/{}", parent.as_raw_fd())).join(name);
         Ok(Self {

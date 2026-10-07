@@ -32,7 +32,7 @@ fn upload_read_handle_stays_on_the_pinned_regular_inode() {
         let moved = root.path().join("moved");
         let victim = root.path().join("victim");
         std::fs::write(&path, b"approved bytes").unwrap();
-        let pinned = pin_upload_path(&path).unwrap();
+        let pinned = openat2_no_symlinks(&path, libc::O_PATH).unwrap();
         let identity = pinned.metadata().unwrap();
         std::fs::rename(&path, &moved).unwrap();
         if symbolic {
@@ -76,7 +76,7 @@ fn upload_worker_rejects_nonregular_and_multiply_linked_sources_before_metadata(
             }
             _ => unreachable!(),
         };
-        let pinned = pin_upload_path(&path).unwrap();
+        let pinned = openat2_no_symlinks(&path, libc::O_PATH).unwrap();
         use std::os::fd::AsRawFd;
         // SAFETY: pinned owns a live descriptor; F_GETFL has no third argument.
         let flags = unsafe { libc::fcntl(pinned.as_raw_fd(), libc::F_GETFL) };
