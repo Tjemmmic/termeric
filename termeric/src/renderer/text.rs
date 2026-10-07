@@ -780,25 +780,6 @@ impl TextPipeline {
         });
     }
 
-    /// Queue a complete grapheme cluster at one terminal cell origin.
-    #[cfg(test)]
-    pub fn push_grapheme(&mut self, grapheme: &str, x: f32, y: f32, color: [f32; 4]) {
-        if let Some(character) = grapheme.chars().next()
-            && character.len_utf8() == grapheme.len()
-        {
-            self.push_char(character, x, y, color);
-        } else {
-            self.queued.push(QueuedChar {
-                content: QueuedContent::Grapheme(grapheme.into()),
-                x,
-                y,
-                color,
-                style: FontStyle::default(),
-                clip: None,
-            });
-        }
-    }
-
     /// Queue UI text as one shaping run with terminal-cell advances and an
     /// explicit owning-field clip, including glyph overhangs.
     pub(super) fn push_ui_run(

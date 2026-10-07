@@ -2,6 +2,7 @@
 //! pipelines, run by `test_support::gpu_render_smoke`.
 
 use super::*;
+use termeric_core::CellAttrs;
 
 /// Run one render pass into a fresh `width`×`height` target cleared to
 /// `clear`, then read the target back as tightly packed rows.
@@ -458,6 +459,17 @@ pub(crate) fn headless_ui_text_smoke(device: &Device, queue: &Queue) -> Result<(
     Ok(())
 }
 
+/// The whole of a `width` by `height` render target, for text the terminal
+/// grid would queue with its pane's clip.
+fn target_clip(width: u32, height: u32) -> TextClip {
+    TextClip {
+        left: 0.0,
+        top: 0.0,
+        right: width as f32,
+        bottom: height as f32,
+    }
+}
+
 /// Shape and submit representative multi-scalar terminal graphemes through the
 /// real text atlas/pipeline. The queued-content assertions act as a small
 /// geometry golden: no case may collapse to its first scalar before shaping.
@@ -511,14 +523,20 @@ pub(crate) fn headless_unicode_render_smoke(device: &Device, queue: &Queue) -> R
         "£",
         "·",
     ];
-    for (index, grapheme) in cases.iter().enumerate() {
-        text.push_grapheme(
-            grapheme,
-            8.0 + (index % 16) as f32 * 30.0,
-            8.0 + (index / 16) as f32 * 28.0,
-            [0.92, 0.88, 0.78, 1.0],
-        );
-    }
+    let clip = target_clip(WIDTH, HEIGHT);
+    let push_cases = |text: &mut TextPipeline| {
+        for (index, grapheme) in cases.iter().enumerate() {
+            text.push_styled_grapheme(
+                grapheme,
+                8.0 + (index % 16) as f32 * 30.0,
+                8.0 + (index / 16) as f32 * 28.0,
+                [0.92, 0.88, 0.78, 1.0],
+                glyph_cache::FontStyle::default(),
+                clip,
+            );
+        }
+    };
+    push_cases(&mut text);
     let queued = text.take_queued_since(0);
     anyhow::ensure!(
         queued.len() == cases.len(),
@@ -553,14 +571,7 @@ pub(crate) fn headless_unicode_render_smoke(device: &Device, queue: &Queue) -> R
         "Unicode golden produced no glyph geometry"
     );
 
-    for (index, grapheme) in cases.iter().enumerate() {
-        text.push_grapheme(
-            grapheme,
-            8.0 + (index % 16) as f32 * 30.0,
-            8.0 + (index / 16) as f32 * 28.0,
-            [0.92, 0.88, 0.78, 1.0],
-        );
-    }
+    push_cases(&mut text);
     text.upload(device, queue, &mut glyph_cache);
     render_offscreen(
         device,
@@ -601,7 +612,14 @@ pub(crate) fn headless_color_emoji_render_smoke(device: &Device, queue: &Queue) 
 
     let mut text = TextPipeline::new(device, TextureFormat::Rgba8Unorm, &glyph_cache)?;
     text.resize(queue, 96, 64);
-    text.push_grapheme("😀", 8.0, 8.0, [0.1, 0.9, 0.2, 1.0]);
+    text.push_styled_grapheme(
+        "😀",
+        8.0,
+        8.0,
+        [0.1, 0.9, 0.2, 1.0],
+        glyph_cache::FontStyle::default(),
+        target_clip(96, 64),
+    );
     text.upload(device, queue, &mut glyph_cache);
     let metrics = glyph_cache.atlas_metrics();
     anyhow::ensure!(metrics.color_pages >= 1 && metrics.max_color_pages == 4);

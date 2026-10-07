@@ -89,8 +89,6 @@ use anyhow::Result;
 use std::collections::BTreeMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
-#[cfg(test)]
-use termeric_core::CellAttrs;
 use termeric_core::grid::ColorSpec;
 use termeric_core::{CellContent, CellFlags, Color as TermColor, Grid, Selection};
 use wgpu::*;

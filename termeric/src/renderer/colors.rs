@@ -306,21 +306,6 @@ impl TerminalPalette {
     pub(super) fn default_bg(&self, dynamic: &termeric_core::DynamicColors) -> TermColor {
         dynamic.background().unwrap_or(self.default_bg)
     }
-
-    #[cfg(test)]
-    fn resolve_cell(
-        &self,
-        dynamic: &termeric_core::DynamicColors,
-        cell: &termeric_core::Cell,
-    ) -> (TermColor, TermColor) {
-        let fg = self.resolve(dynamic, cell.fg_spec, cell.fg, self.default_fg(dynamic));
-        let bg = self.resolve(dynamic, cell.bg_spec, cell.bg, self.default_bg(dynamic));
-        if cell.attrs.contains(CellAttrs::INVERSE) {
-            (bg, fg)
-        } else {
-            (fg, bg)
-        }
-    }
 }
 
 #[cfg(test)]
@@ -331,6 +316,22 @@ mod terminal_palette_tests {
         TermColor::rgb(color.r, color.g, color.b)
     }
 
+    /// A cell's foreground and background as the renderer paints them.
+    fn resolve_cell(
+        palette: &TerminalPalette,
+        dynamic: &termeric_core::DynamicColors,
+        cell: &termeric_core::Cell,
+    ) -> (TermColor, TermColor) {
+        let style = super::super::style::ResolvedCellStyle::resolve(
+            palette,
+            dynamic,
+            cell,
+            false,
+            TextBlinkPhases::default(),
+        );
+        (style.foreground, style.background)
+    }
+
     #[test]
     fn terminal_palette_resolves_theme_defaults_and_indexed_colors() {
         let theme = Theme::load_builtin("nord").unwrap();
@@ -339,7 +340,7 @@ mod terminal_palette_tests {
         let mut cell = termeric_core::Cell::with_char('x');
 
         assert_eq!(
-            palette.resolve_cell(&dynamic, &cell),
+            resolve_cell(&palette, &dynamic, &cell),
             (
                 term_color(theme.ui.foreground),
                 term_color(theme.ui.background)
@@ -349,13 +350,13 @@ mod terminal_palette_tests {
         cell.fg_spec = ColorSpec::Indexed(1);
         cell.fg = TermColor::rgb(205, 0, 0);
         assert_eq!(
-            palette.resolve_cell(&dynamic, &cell).0,
+            resolve_cell(&palette, &dynamic, &cell).0,
             term_color(theme.primary.red)
         );
 
         cell.attrs.insert(termeric_core::CellAttrs::INVERSE);
         assert_eq!(
-            palette.resolve_cell(&dynamic, &cell),
+            resolve_cell(&palette, &dynamic, &cell),
             (
                 term_color(theme.ui.background),
                 term_color(theme.primary.red)
@@ -376,14 +377,14 @@ mod terminal_palette_tests {
         let mut cell = termeric_core::Cell::with_char('x');
         cell.fg_spec = ColorSpec::Indexed(1);
         assert_eq!(
-            palette.resolve_cell(terminal.dynamic_colors(), &cell).0,
+            resolve_cell(&palette, terminal.dynamic_colors(), &cell).0,
             override_color
         );
         terminal.apply_dynamic_color(termeric_core::DynamicColorOperation::Reset(
             termeric_core::DynamicColorTarget::Palette(1),
         ));
         assert_eq!(
-            palette.resolve_cell(terminal.dynamic_colors(), &cell).0,
+            resolve_cell(&palette, terminal.dynamic_colors(), &cell).0,
             term_color(theme.primary.red)
         );
     }
