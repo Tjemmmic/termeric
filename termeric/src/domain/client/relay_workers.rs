@@ -86,7 +86,6 @@ mod tests {
     use super::super::{SshChild, relay_output};
     use super::*;
     use std::io::{Read, Write};
-    use std::os::fd::AsRawFd;
     use std::os::unix::net::UnixStream;
     use std::sync::{Mutex, mpsc};
     use std::thread;
@@ -99,21 +98,7 @@ mod tests {
             peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
             let mut reader = client.try_clone().unwrap();
             let mut writer = client.try_clone().unwrap();
-            let capacity: libc::c_int = 4096;
-            // SAFETY: live fixture socket and one initialized c_int option;
-            // only this fixture's send buffer is changed.
-            assert_eq!(
-                unsafe {
-                    libc::setsockopt(
-                        client.as_raw_fd(),
-                        libc::SOL_SOCKET,
-                        libc::SO_SNDBUF,
-                        (&capacity as *const libc::c_int).cast(),
-                        std::mem::size_of_val(&capacity) as libc::socklen_t,
-                    )
-                },
-                0
-            );
+            crate::test_support::shrink_send_buffer(&client, 4096);
             let alive = Arc::new(AtomicBool::new(true));
             let closer = Arc::new(DomainCloser::Local(client));
             let (output_tx, output_done) = mpsc::channel();

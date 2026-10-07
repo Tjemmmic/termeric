@@ -83,24 +83,12 @@ impl Fixture {
     }
 
     fn wait_until_consumed(&self) {
-        let deadline = Instant::now() + Duration::from_secs(2);
-        loop {
-            let mut available: libc::c_int = 0;
-            // SAFETY: FIONREAD writes one c_int and does not read/drain bytes;
-            // this cloned descriptor remains live for the complete fixture.
-            assert_eq!(
-                unsafe { libc::ioctl(self.observer.as_raw_fd(), libc::FIONREAD, &mut available) },
-                0
-            );
-            if available == 0 {
-                return;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "reader never consumed partial bytes"
-            );
-            thread::sleep(Duration::from_millis(1));
-        }
+        assert!(
+            crate::test_support::poll_until(Duration::from_secs(2), || {
+                crate::test_support::unread_bytes(&self.observer) == 0
+            }),
+            "reader never consumed partial bytes"
+        );
     }
 }
 

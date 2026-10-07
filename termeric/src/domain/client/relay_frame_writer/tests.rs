@@ -26,21 +26,7 @@ fn pipe() -> (DomainWriter, File) {
 fn stalled_and_slowly_drained_sockets_cannot_renew_frame_budget() {
     for slow in [false, true] {
         let (client, mut peer) = UnixStream::pair().unwrap();
-        let capacity: libc::c_int = 4096;
-        // SAFETY: live fixture socket and initialized c_int option; only this
-        // test's send-buffer capacity changes.
-        assert_eq!(
-            unsafe {
-                libc::setsockopt(
-                    client.as_raw_fd(),
-                    libc::SOL_SOCKET,
-                    libc::SO_SNDBUF,
-                    (&capacity as *const libc::c_int).cast(),
-                    std::mem::size_of_val(&capacity) as libc::socklen_t,
-                )
-            },
-            0
-        );
+        crate::test_support::shrink_send_buffer(&client, 4096);
         peer.set_read_timeout(Some(Duration::from_millis(10)))
             .unwrap();
         let closer = DomainCloser::Local(client.try_clone().unwrap());

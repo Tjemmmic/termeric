@@ -50,19 +50,7 @@ mod tests {
     #[test]
     fn slowly_drained_frame_cannot_renew_its_write_budget() {
         let (mut server, mut client) = UnixStream::pair().unwrap();
-        let capacity: libc::c_int = 4096;
-        // SAFETY: the descriptor is live and the option points to a valid
-        // c_int for exactly its byte size; this changes only this fixture.
-        let result = unsafe {
-            libc::setsockopt(
-                server.as_raw_fd(),
-                libc::SOL_SOCKET,
-                libc::SO_SNDBUF,
-                (&capacity as *const libc::c_int).cast(),
-                std::mem::size_of_val(&capacity) as libc::socklen_t,
-            )
-        };
-        assert_eq!(result, 0, "{}", std::io::Error::last_os_error());
+        crate::test_support::shrink_send_buffer(&server, 4096);
         // The socket's own timeout is not the frame budget.
         let socket_timeout = Some(Duration::from_secs(30));
         server.set_write_timeout(socket_timeout).unwrap();

@@ -127,7 +127,6 @@ mod tests {
     use super::run_unbounded as run;
     use super::*;
     use std::io::{Cursor, ErrorKind};
-    use std::os::fd::AsRawFd;
     use std::os::unix::net::UnixStream;
     use std::sync::{Arc, mpsc};
     use std::thread;
@@ -402,21 +401,7 @@ mod tests {
     fn relay_output_error_releases_a_writer_blocked_on_the_same_connection() {
         let (client, mut peer) = UnixStream::pair().unwrap();
         peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-        let capacity: libc::c_int = 4096;
-        // SAFETY: live fixture socket; the option points to one initialized
-        // c_int for its exact size and changes only this test's send buffer.
-        assert_eq!(
-            unsafe {
-                libc::setsockopt(
-                    client.as_raw_fd(),
-                    libc::SOL_SOCKET,
-                    libc::SO_SNDBUF,
-                    (&capacity as *const libc::c_int).cast(),
-                    std::mem::size_of_val(&capacity) as libc::socklen_t,
-                )
-            },
-            0
-        );
+        crate::test_support::shrink_send_buffer(&client, 4096);
         let mut reader = client.try_clone().unwrap();
         let mut writer = client.try_clone().unwrap();
         let closer = Arc::new(DomainCloser::Local(client));

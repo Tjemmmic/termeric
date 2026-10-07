@@ -105,6 +105,32 @@ pub(crate) fn process_ends(process_id: libc::pid_t) -> bool {
     poll_until(Duration::from_secs(5), || !process_is_alive(process_id))
 }
 
+/// Shrinks `socket`'s send buffer to about `bytes` (the kernel doubles the
+/// request), so a test can fill it, and block a writer, with little data.
+pub(crate) fn shrink_send_buffer(socket: &impl std::os::fd::AsRawFd, bytes: libc::c_int) {
+    // SAFETY: the descriptor is live and the option points to one c_int for
+    // exactly its size; only this socket's buffer changes.
+    let result = unsafe {
+        libc::setsockopt(
+            socket.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_SNDBUF,
+            (&bytes as *const libc::c_int).cast(),
+            std::mem::size_of_val(&bytes) as libc::socklen_t,
+        )
+    };
+    assert_eq!(result, 0, "{}", std::io::Error::last_os_error());
+}
+
+/// How many bytes wait unread on `socket`, without reading any.
+pub(crate) fn unread_bytes(socket: &impl std::os::fd::AsRawFd) -> usize {
+    let mut available: libc::c_int = 0;
+    // SAFETY: FIONREAD writes one c_int and neither reads nor drains bytes.
+    let result = unsafe { libc::ioctl(socket.as_raw_fd(), libc::FIONREAD, &mut available) };
+    assert_eq!(result, 0, "{}", std::io::Error::last_os_error());
+    usize::try_from(available).expect("FIONREAD reports a count")
+}
+
 /// Run `step` until it returns true or `timeout` passes, pausing briefly
 /// between tries. Returns whether it succeeded.
 pub(crate) fn poll_until(timeout: Duration, mut step: impl FnMut() -> bool) -> bool {

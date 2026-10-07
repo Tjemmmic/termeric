@@ -3,7 +3,6 @@ use super::*;
 use std::os::unix::net::UnixStream;
 use std::sync::{Arc, mpsc};
 use std::thread;
-use std::time::Instant;
 
 const BUDGET: Duration = Duration::from_millis(60);
 
@@ -109,26 +108,14 @@ fn cancellation_releases_idle_and_partial_reads_without_transport_shutdown() {
             rx.recv_timeout(Duration::from_millis(30)),
             Err(mpsc::RecvTimeoutError::Timeout)
         ));
-        if prefix != 0 {
-            let deadline = Instant::now() + Duration::from_secs(2);
-            loop {
-                let mut available: libc::c_int = 0;
-                // SAFETY: live cloned socket and one initialized c_int; this
-                // observes pending bytes without consuming or modifying them.
-                assert_eq!(
-                    unsafe { libc::ioctl(observer.as_raw_fd(), libc::FIONREAD, &mut available) },
-                    0
-                );
-                if available == 0 {
-                    break;
-                }
-                if Instant::now() >= deadline {
-                    let _ = peer.shutdown(std::net::Shutdown::Both);
-                    worker.join().unwrap();
-                    panic!("fixture did not consume the partial frame");
-                }
-                thread::yield_now();
-            }
+        if prefix != 0
+            && !crate::test_support::poll_until(Duration::from_secs(2), || {
+                crate::test_support::unread_bytes(&observer) == 0
+            })
+        {
+            let _ = peer.shutdown(std::net::Shutdown::Both);
+            worker.join().unwrap();
+            panic!("fixture did not consume the partial frame");
         }
         alive.store(false, Ordering::Release);
         let stopped = rx.recv_timeout(Duration::from_secs(2));

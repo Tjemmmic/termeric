@@ -114,11 +114,10 @@ mod tests {
             (LaunchState::Running {}, false)
         );
         handle.write_all(b"\n").unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        while observer.poll().unwrap().exit.is_none() {
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+        assert!(crate::test_support::poll_until(
+            std::time::Duration::from_secs(2),
+            || observer.poll().unwrap().exit.is_some()
+        ));
         ledger.prepare(&"f".repeat(32)).unwrap();
         ledger.record(&"f".repeat(32), observer);
         assert_eq!(ledger.entries.len(), MAX_LAUNCH_RECORDS);

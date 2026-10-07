@@ -483,20 +483,12 @@ pub fn run_foreground(
     prepare_socket_path(&paths)?;
     let listener = local_socket::bind_private(&paths.socket, "local domain socket")?;
 
-    let shutdown = Arc::new(AtomicBool::new(false));
-    let state = Arc::new(Mutex::new(ServerState {
-        domains: HashMap::new(),
+    let state = Arc::new(Mutex::new(ServerState::new(
         allow_screen_checksum_reports,
         xterm_keyboard_type,
-        shutdown: Arc::clone(&shutdown),
-        wake_socket: Some(paths.socket.clone()),
-        next_attachment: AtomicU64::new(1),
-        next_topology_subscription: AtomicU64::new(1),
-        active_uploads: 0,
-        upload_ids_in_flight: HashMap::new(),
-        upload_records: HashMap::new(),
-        upload_janitor_running: false,
-    }));
+        Some(paths.socket.clone()),
+    )));
+    let shutdown = Arc::clone(&state.lock().unwrap().shutdown);
     log::info!(
         "Local terminal domain server listening at {}",
         paths.socket.display()
@@ -2506,6 +2498,28 @@ fn normalize_relay_pixel_extent(
 }
 
 impl ServerState {
+    /// A daemon with no domains or uploads yet. Stopping it connects to
+    /// `wake_socket`, when it has one, to wake its accept loop.
+    fn new(
+        allow_screen_checksum_reports: bool,
+        xterm_keyboard_type: XtermKeyboardType,
+        wake_socket: Option<std::path::PathBuf>,
+    ) -> Self {
+        Self {
+            domains: HashMap::new(),
+            allow_screen_checksum_reports,
+            xterm_keyboard_type,
+            shutdown: Arc::new(AtomicBool::new(false)),
+            wake_socket,
+            next_attachment: AtomicU64::new(1),
+            next_topology_subscription: AtomicU64::new(1),
+            active_uploads: 0,
+            upload_ids_in_flight: HashMap::new(),
+            upload_records: HashMap::new(),
+            upload_janitor_running: false,
+        }
+    }
+
     fn pane_count(&self) -> usize {
         self.domains.values().map(DomainRuntime::pane_count).sum()
     }
@@ -2714,6 +2728,7 @@ mod topology_lifecycle_tests;
 
 #[cfg(test)]
 mod tests {
+    use super::test_support::empty_state;
     use super::*;
     use std::os::unix::net::UnixListener;
 
@@ -2791,15 +2806,7 @@ mod tests {
             kind: UploadKind::File,
         };
         let state = Arc::new(Mutex::new(ServerState {
-            domains: HashMap::new(),
-            allow_screen_checksum_reports: false,
-            xterm_keyboard_type: XtermKeyboardType::Normal,
-            shutdown: Arc::new(AtomicBool::new(false)),
-            wake_socket: None,
-            next_attachment: AtomicU64::new(1),
-            next_topology_subscription: AtomicU64::new(1),
             active_uploads: 1,
-            upload_ids_in_flight: HashMap::new(),
             upload_records: HashMap::from([
                 (
                     "11111111111111111111111111111111".into(),
@@ -2845,7 +2852,7 @@ mod tests {
                     },
                 ),
             ]),
-            upload_janitor_running: false,
+            ..ServerState::new(false, XtermKeyboardType::Normal, None)
         }));
 
         {
@@ -3145,22 +3152,6 @@ mod tests {
             enabled.terminal.xterm_keyboard_type(),
             XtermKeyboardType::Vt220
         );
-    }
-
-    fn empty_state() -> SharedState {
-        Arc::new(Mutex::new(ServerState {
-            domains: HashMap::new(),
-            allow_screen_checksum_reports: false,
-            xterm_keyboard_type: XtermKeyboardType::Normal,
-            shutdown: Arc::new(AtomicBool::new(false)),
-            wake_socket: None,
-            next_attachment: AtomicU64::new(1),
-            next_topology_subscription: AtomicU64::new(1),
-            active_uploads: 0,
-            upload_ids_in_flight: HashMap::new(),
-            upload_records: HashMap::new(),
-            upload_janitor_running: false,
-        }))
     }
 
     /// Run `request` while this thread holds the state lock, as a stalled
@@ -3495,6 +3486,26 @@ mod tests {
             })
         }
 
+        /// A new authenticated connection that has sent `request`: one of
+        /// the requests that stream (uploads, attachments, subscriptions).
+        fn open(&self, request: Request) -> UnixStream {
+            let mut stream = UnixStream::connect(&self.paths.socket).unwrap();
+            protocol::write_frame(
+                &mut stream,
+                &ClientFrame::Hello {
+                    version: protocol::PROTOCOL_VERSION,
+                    token: self.paths.read_token().unwrap(),
+                },
+            )
+            .unwrap();
+            assert!(matches!(
+                protocol::read_frame::<ServerFrame>(&mut stream).unwrap(),
+                ServerFrame::Hello { .. }
+            ));
+            protocol::write_frame(&mut stream, &ClientFrame::Request { request }).unwrap();
+            stream
+        }
+
         /// Wait until the domain's shell has reported its directory.
         fn wait_for_root(&self) {
             assert!(crate::test_support::poll_until(
@@ -3572,7 +3583,6 @@ mod tests {
             return;
         };
         let temporary = &fixture.temporary;
-        let paths = &fixture.paths;
         let reported_cwd = &fixture.reported_cwd;
         let client = &fixture.client;
         let domain_id = &fixture.domain_id;
@@ -3750,33 +3760,14 @@ mod tests {
         // private staging file remains bounded and can be resumed only by the
         // exact authenticated upload identity and immutable descriptor.
         let resumable_id = "11111111111111111111111111111111";
-        let mut partial = UnixStream::connect(&paths.socket).unwrap();
-        protocol::write_frame(
-            &mut partial,
-            &ClientFrame::Hello {
-                version: protocol::PROTOCOL_VERSION,
-                token: paths.read_token().unwrap(),
-            },
-        )
-        .unwrap();
-        assert!(matches!(
-            protocol::read_frame::<ServerFrame>(&mut partial).unwrap(),
-            ServerFrame::Hello { .. }
-        ));
-        protocol::write_frame(
-            &mut partial,
-            &ClientFrame::Request {
-                request: Request::UploadFile {
-                    domain: domain_id.clone(),
-                    pane: 0,
-                    name: "partial.bin".into(),
-                    total_bytes: 10,
-                    upload_id: resumable_id.into(),
-                    kind: UploadKind::File,
-                },
-            },
-        )
-        .unwrap();
+        let mut partial = fixture.open(Request::UploadFile {
+            domain: domain_id.clone(),
+            pane: 0,
+            name: "partial.bin".into(),
+            total_bytes: 10,
+            upload_id: resumable_id.into(),
+            kind: UploadKind::File,
+        });
         assert!(matches!(
             protocol::read_frame::<ServerFrame>(&mut partial).unwrap(),
             ServerFrame::Response {
@@ -3897,34 +3888,14 @@ mod tests {
         let Some(fixture) = DaemonFixture::start() else {
             return;
         };
-        let paths = &fixture.paths;
         let reported_cwd = &fixture.reported_cwd;
         let client = &fixture.client;
         let domain_id = &fixture.domain_id;
         // A topology subscription receives an atomic initial snapshot, then
         // strictly increasing whole-domain revisions on structural changes.
-        let mut topology = UnixStream::connect(&paths.socket).unwrap();
-        protocol::write_frame(
-            &mut topology,
-            &ClientFrame::Hello {
-                version: protocol::PROTOCOL_VERSION,
-                token: paths.read_token().unwrap(),
-            },
-        )
-        .unwrap();
-        assert!(matches!(
-            protocol::read_frame::<ServerFrame>(&mut topology).unwrap(),
-            ServerFrame::Hello { .. }
-        ));
-        protocol::write_frame(
-            &mut topology,
-            &ClientFrame::Request {
-                request: Request::SubscribeTopology {
-                    domain: domain_id.clone(),
-                },
-            },
-        )
-        .unwrap();
+        let mut topology = fixture.open(Request::SubscribeTopology {
+            domain: domain_id.clone(),
+        });
         assert!(matches!(
             protocol::read_frame::<ServerFrame>(&mut topology).unwrap(),
             ServerFrame::Response {
@@ -4158,29 +4129,10 @@ mod tests {
         ));
 
         // A detached streaming client does not own or terminate the PTY.
-        let mut attached = UnixStream::connect(&paths.socket).unwrap();
-        protocol::write_frame(
-            &mut attached,
-            &ClientFrame::Hello {
-                version: protocol::PROTOCOL_VERSION,
-                token: paths.read_token().unwrap(),
-            },
-        )
-        .unwrap();
-        assert!(matches!(
-            protocol::read_frame::<ServerFrame>(&mut attached).unwrap(),
-            ServerFrame::Hello { .. }
-        ));
-        protocol::write_frame(
-            &mut attached,
-            &ClientFrame::Request {
-                request: Request::Attach {
-                    domain: domain_id.clone(),
-                    pane: 0,
-                },
-            },
-        )
-        .unwrap();
+        let mut attached = fixture.open(Request::Attach {
+            domain: domain_id.clone(),
+            pane: 0,
+        });
         assert!(matches!(
             protocol::read_frame::<ServerFrame>(&mut attached).unwrap(),
             ServerFrame::Response {
@@ -4200,29 +4152,10 @@ mod tests {
 
         // Daemon-owned closure repairs layout/focus and tells every attached
         // relay why its stream ended.
-        let mut closing_attachment = UnixStream::connect(&paths.socket).unwrap();
-        protocol::write_frame(
-            &mut closing_attachment,
-            &ClientFrame::Hello {
-                version: protocol::PROTOCOL_VERSION,
-                token: paths.read_token().unwrap(),
-            },
-        )
-        .unwrap();
-        assert!(matches!(
-            protocol::read_frame::<ServerFrame>(&mut closing_attachment).unwrap(),
-            ServerFrame::Hello { .. }
-        ));
-        protocol::write_frame(
-            &mut closing_attachment,
-            &ClientFrame::Request {
-                request: Request::Attach {
-                    domain: domain_id.clone(),
-                    pane: 1,
-                },
-            },
-        )
-        .unwrap();
+        let mut closing_attachment = fixture.open(Request::Attach {
+            domain: domain_id.clone(),
+            pane: 1,
+        });
         let ServerFrame::Response {
             response: Response::Attached { sequence, .. },
         } = protocol::read_frame::<ServerFrame>(&mut closing_attachment).unwrap()
@@ -4390,29 +4323,10 @@ mod tests {
                 domain
             } if domain.active_tab == 0 && domain.tabs[0].panes.len() == 2
         ));
-        let mut moving_attachment = UnixStream::connect(&paths.socket).unwrap();
-        protocol::write_frame(
-            &mut moving_attachment,
-            &ClientFrame::Hello {
-                version: protocol::PROTOCOL_VERSION,
-                token: paths.read_token().unwrap(),
-            },
-        )
-        .unwrap();
-        assert!(matches!(
-            protocol::read_frame::<ServerFrame>(&mut moving_attachment).unwrap(),
-            ServerFrame::Hello { .. }
-        ));
-        protocol::write_frame(
-            &mut moving_attachment,
-            &ClientFrame::Request {
-                request: Request::Attach {
-                    domain: domain_id.clone(),
-                    pane: 3,
-                },
-            },
-        )
-        .unwrap();
+        let mut moving_attachment = fixture.open(Request::Attach {
+            domain: domain_id.clone(),
+            pane: 3,
+        });
         assert!(matches!(
             protocol::read_frame::<ServerFrame>(&mut moving_attachment).unwrap(),
             ServerFrame::Response {
@@ -4736,20 +4650,7 @@ mod tests {
 
     #[test]
     fn slow_subscriber_is_evicted_while_high_output_stays_memory_bounded() {
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let state = Arc::new(Mutex::new(ServerState {
-            domains: HashMap::new(),
-            allow_screen_checksum_reports: false,
-            xterm_keyboard_type: XtermKeyboardType::Normal,
-            shutdown,
-            wake_socket: None,
-            next_attachment: AtomicU64::new(1),
-            next_topology_subscription: AtomicU64::new(1),
-            active_uploads: 0,
-            upload_ids_in_flight: HashMap::new(),
-            upload_records: HashMap::new(),
-            upload_janitor_running: false,
-        }));
+        let state = empty_state();
         let Response::Domain { domain } = create_domain(
             &state,
             "load".into(),
@@ -4923,20 +4824,7 @@ mod tests {
 
     #[test]
     fn exited_nonfinal_tab_is_pruned_and_published_to_topology_subscribers() {
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let state = Arc::new(Mutex::new(ServerState {
-            domains: HashMap::new(),
-            allow_screen_checksum_reports: false,
-            xterm_keyboard_type: XtermKeyboardType::Normal,
-            shutdown,
-            wake_socket: None,
-            next_attachment: AtomicU64::new(1),
-            next_topology_subscription: AtomicU64::new(1),
-            active_uploads: 0,
-            upload_ids_in_flight: HashMap::new(),
-            upload_records: HashMap::new(),
-            upload_janitor_running: false,
-        }));
+        let state = empty_state();
         let Response::Domain { domain } = create_domain(
             &state,
             "exit-cleanup".into(),
