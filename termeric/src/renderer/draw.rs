@@ -3,6 +3,7 @@
 
 use super::Renderer;
 use super::text::TextClip;
+use crate::ui::agents_panel::AgentRowState;
 use crate::ui::color::{scale_alpha, with_alpha};
 use crate::ui::constants::*;
 use crate::ui::geometry::Bounds;
@@ -86,6 +87,59 @@ impl Renderer {
                 radius + spread,
             );
         }
+    }
+
+    /// A round status dot of `diameter` centred on `center`, on whole
+    /// pixels, filled with `fill`. With `ring_surface` it is a ring instead:
+    /// its middle is punched out in the surface it sits on.
+    pub(super) fn push_status_dot(
+        &mut self,
+        center: [f32; 2],
+        diameter: f32,
+        fill: [f32; 4],
+        ring_surface: Option<[f32; 4]>,
+    ) {
+        let diameter = diameter.round();
+        let (left, top) = (
+            (center[0] - diameter / 2.0).round(),
+            (center[1] - diameter / 2.0).round(),
+        );
+        self.rect_pipeline
+            .push_rounded_rect(left, top, diameter, diameter, fill, diameter / 2.0);
+        if let Some(surface) = ring_surface {
+            let inner = (diameter - self.px(1.5) * 2.0).max(1.0);
+            let inset = (diameter - inner) / 2.0;
+            self.rect_pipeline.push_rounded_rect(
+                left + inset,
+                top + inset,
+                inner,
+                inner,
+                surface,
+                inner / 2.0,
+            );
+        }
+    }
+
+    /// The dot an agent's status shows, alike on its tab and its Agents
+    /// panel row: a ring in the `neutral` text color while it works or
+    /// idles (neither asks anything of the person), the theme's warning
+    /// color while it needs the person, success when done, error when it
+    /// failed, all at `neutral`'s alpha. Nothing while its status is
+    /// unknown. Returns the fill and whether it is a ring.
+    pub(super) fn agent_status_dot(
+        &self,
+        state: AgentRowState,
+        neutral: [f32; 4],
+    ) -> Option<([f32; 4], bool)> {
+        let alpha = neutral[3];
+        Some(match state {
+            AgentRowState::Unknown => return None,
+            AgentRowState::Idle => (scale_alpha(neutral, 0.5), true),
+            AgentRowState::Working => (neutral, true),
+            AgentRowState::NeedsYou => (with_alpha(self.ui.warning, alpha), false),
+            AgentRowState::Done => (with_alpha(self.ui.success, alpha), false),
+            AgentRowState::Failed => (with_alpha(self.ui.error, alpha), false),
+        })
     }
 
     /// An accent line `thickness` logical pixels tall along a card's top

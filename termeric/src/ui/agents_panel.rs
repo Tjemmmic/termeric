@@ -32,6 +32,19 @@ pub enum AgentRowState {
     Failed,
 }
 
+impl From<crate::agents::AgentBadge> for AgentRowState {
+    /// A tab's badge shows the state of the agent it summarizes.
+    fn from(badge: crate::agents::AgentBadge) -> Self {
+        use crate::agents::AgentBadge;
+        match badge {
+            AgentBadge::Working => Self::Working,
+            AgentBadge::NeedsYou => Self::NeedsYou,
+            AgentBadge::Done => Self::Done,
+            AgentBadge::Failed => Self::Failed,
+        }
+    }
+}
+
 /// One agent, as the panel shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentRow {

@@ -847,28 +847,13 @@ impl Renderer {
         let stroke = chrome.stroke() * 0.8;
         match status {
             TabStatus::BroadcastActive | TabStatus::BroadcastArmed => {
-                let dot = (size * 0.66).round();
-                let dot_color = with_alpha(self.ui.warning, color[3]);
-                self.rect_pipeline.push_rounded_rect(
-                    (cx - dot / 2.0).round(),
-                    (cy - dot / 2.0).round(),
-                    dot,
-                    dot,
-                    dot_color,
-                    dot / 2.0,
+                // Armed but idle: a ring rather than a filled dot.
+                self.push_status_dot(
+                    [cx, cy],
+                    size * 0.66,
+                    with_alpha(self.ui.warning, color[3]),
+                    (status == TabStatus::BroadcastArmed).then_some(surface),
                 );
-                if status == TabStatus::BroadcastArmed {
-                    // Armed but idle: a ring rather than a filled dot.
-                    let inner = (dot - stroke * 2.0).max(1.0);
-                    self.rect_pipeline.push_rounded_rect(
-                        cx - inner / 2.0,
-                        cy - inner / 2.0,
-                        inner,
-                        inner,
-                        surface,
-                        inner / 2.0,
-                    );
-                }
             }
             TabStatus::ReadOnly => {
                 // Padlock: a body with a shackle above it.
@@ -921,33 +906,8 @@ impl Renderer {
                     .push_line(cx, y + head, cx, y + size, stroke, color);
             }
             TabStatus::Agent(badge) => {
-                let dot = (size * 0.66).round();
-                let (left, top) = ((cx - dot / 2.0).round(), (cy - dot / 2.0).round());
-                let fill = match badge {
-                    // Working is a neutral ring: it asks nothing of the person.
-                    AgentBadge::Working => color,
-                    AgentBadge::NeedsYou => self.ui.warning,
-                    AgentBadge::Failed => self.ui.error,
-                    AgentBadge::Done => self.ui.success,
-                };
-                self.rect_pipeline.push_rounded_rect(
-                    left,
-                    top,
-                    dot,
-                    dot,
-                    with_alpha(fill, color[3]),
-                    dot / 2.0,
-                );
-                if badge == AgentBadge::Working {
-                    let inner = (dot - stroke * 2.0).max(1.0);
-                    self.rect_pipeline.push_rounded_rect(
-                        cx - inner / 2.0,
-                        cy - inner / 2.0,
-                        inner,
-                        inner,
-                        surface,
-                        inner / 2.0,
-                    );
+                if let Some((fill, ring)) = self.agent_status_dot(badge.into(), color) {
+                    self.push_status_dot([cx, cy], size * 0.66, fill, ring.then_some(surface));
                 }
             }
         }

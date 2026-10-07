@@ -269,7 +269,7 @@ impl Renderer {
         window_width: f32,
         window_height: f32,
     ) {
-        use crate::ui::agents_panel::{AgentRowState, AgentsControl, AgentsPanelLayout};
+        use crate::ui::agents_panel::{AgentsControl, AgentsPanelLayout};
 
         let anim = info.animation;
         if anim <= 0.0 {
@@ -357,31 +357,14 @@ impl Renderer {
                 self.ui.menu_bg
             };
             let top = row.y + (row.height - line * 2.0) / 2.0;
-            // The tab badge's dot: a ring while working, the theme's colors
-            // for a request, a result, or a failure.
-            let fill = match row_info.state {
-                AgentRowState::Unknown => None,
-                AgentRowState::Idle => Some(with_alpha(dim, 0.5)),
-                AgentRowState::Working => Some(text),
-                AgentRowState::NeedsYou => Some(self.ui.warning),
-                AgentRowState::Done => Some(self.ui.success),
-                AgentRowState::Failed => Some(self.ui.error),
-            };
-            let (dot_x, dot_y) = ((title_x).round(), (top + (line - dot) / 2.0).round());
-            if let Some(fill) = fill {
-                self.rect_pipeline
-                    .push_rounded_rect(dot_x, dot_y, dot, dot, fill, dot / 2.0);
-                if matches!(row_info.state, AgentRowState::Working | AgentRowState::Idle) {
-                    let inner = (dot - self.px(1.5) * 2.0).max(1.0);
-                    self.rect_pipeline.push_rounded_rect(
-                        dot_x + (dot - inner) / 2.0,
-                        dot_y + (dot - inner) / 2.0,
-                        inner,
-                        inner,
-                        surface,
-                        inner / 2.0,
-                    );
-                }
+            // The tab badge's dot, beside the name's line.
+            if let Some((fill, ring)) = self.agent_status_dot(row_info.state, text) {
+                self.push_status_dot(
+                    [title_x.round() + dot / 2.0, top + line / 2.0],
+                    dot,
+                    fill,
+                    ring.then_some(surface),
+                );
             }
             let name_x = title_x + dot + self.px(8.0);
             let right = row.x + row.width - padding;
