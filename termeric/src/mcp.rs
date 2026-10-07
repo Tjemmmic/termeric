@@ -216,38 +216,43 @@ fn tool_result(text: String, structured: Option<Value>, is_error: bool) -> Value
     result
 }
 
-/// The schema of a tool addressed to one pane, with `extra` arguments given
-/// as (name, schema, required).
-fn pane_schema(extra: &[(&str, Value, bool)]) -> Value {
-    let mut properties = json!({
-        "window_id": {"type": "integer", "minimum": 1, "description": "From list_agents."},
-        "tab_id": {"type": "integer", "minimum": 0, "description": "From list_agents."},
-        "pane_id": {"type": "integer", "minimum": 0, "description": "From list_agents."},
-    });
-    let mut required = vec!["window_id", "tab_id", "pane_id"];
+/// The schema of a tool whose arguments are the `base` properties, of which
+/// `required` must be given, then `extra` ones given as (name, schema,
+/// required).
+fn schema(mut base: Value, required: &[&str], extra: &[(&str, Value, bool)]) -> Value {
+    let mut required = required.to_vec();
     for (name, schema, is_required) in extra {
-        properties[*name] = schema.clone();
+        base[*name] = schema.clone();
         if *is_required {
             required.push(name);
         }
     }
-    json!({"type": "object", "properties": properties, "required": required})
+    json!({"type": "object", "properties": base, "required": required})
+}
+
+/// The schema of a tool addressed to one pane.
+fn pane_schema(extra: &[(&str, Value, bool)]) -> Value {
+    schema(
+        json!({
+            "window_id": {"type": "integer", "minimum": 1, "description": "From list_agents."},
+            "tab_id": {"type": "integer", "minimum": 0, "description": "From list_agents."},
+            "pane_id": {"type": "integer", "minimum": 0, "description": "From list_agents."},
+        }),
+        &["window_id", "tab_id", "pane_id"],
+        extra,
+    )
 }
 
 /// The schema of a tool addressed to one agent view session.
 fn session_schema(extra: &[(&str, Value, bool)]) -> Value {
-    let mut properties = json!({
-        "window_id": {"type": "integer", "minimum": 1, "description": "From list_agents."},
-        "session_id": {"type": "integer", "minimum": 1, "description": "From list_agents."},
-    });
-    let mut required = vec!["window_id", "session_id"];
-    for (name, schema, is_required) in extra {
-        properties[*name] = schema.clone();
-        if *is_required {
-            required.push(name);
-        }
-    }
-    json!({"type": "object", "properties": properties, "required": required})
+    schema(
+        json!({
+            "window_id": {"type": "integer", "minimum": 1, "description": "From list_agents."},
+            "session_id": {"type": "integer", "minimum": 1, "description": "From list_agents."},
+        }),
+        &["window_id", "session_id"],
+        extra,
+    )
 }
 
 /// The names of every tool the server offers.
@@ -340,6 +345,13 @@ fn tools() -> Value {
             "annotations": {"readOnlyHint": false, "destructiveHint": false},
         },
     ])
+}
+
+fn string<'a>(arguments: &'a Value, name: &str) -> Result<&'a str> {
+    arguments
+        .get(name)
+        .and_then(Value::as_str)
+        .with_context(|| format!("`{name}` must be a string"))
 }
 
 fn integer<T: TryFrom<u64>>(arguments: &Value, name: &str) -> Result<T> {
@@ -450,14 +462,8 @@ impl<B: Backend> Server<B> {
                 Ok((text, None))
             })(),
             "send_to_agent" => (|| {
-                let text = arguments
-                    .get("text")
-                    .and_then(Value::as_str)
-                    .context("`text` must be a string")?;
-                let agent_id = arguments
-                    .get("agent_id")
-                    .and_then(Value::as_str)
-                    .context("`agent_id` must be a string")?;
+                let text = string(&arguments, "text")?;
+                let agent_id = string(&arguments, "agent_id")?;
                 let (window_id, tab_id, pane_id) = (
                     integer(&arguments, "window_id")?,
                     integer(&arguments, "tab_id")?,
@@ -493,18 +499,12 @@ impl<B: Backend> Server<B> {
                 Ok((text, None))
             })(),
             "answer_approval" => (|| {
-                let approval_id = arguments
-                    .get("approval_id")
-                    .and_then(Value::as_str)
-                    .context("`approval_id` must be a string")?;
+                let approval_id = string(&arguments, "approval_id")?;
                 let allow = arguments
                     .get("allow")
                     .and_then(Value::as_bool)
                     .context("`allow` must be true or false")?;
-                let reason = arguments
-                    .get("reason")
-                    .and_then(Value::as_str)
-                    .context("`reason` must be a string")?;
+                let reason = string(&arguments, "reason")?;
                 let answered = self.backend.answer_approval(
                     integer(&arguments, "window_id")?,
                     integer(&arguments, "session_id")?,
@@ -524,10 +524,7 @@ impl<B: Backend> Server<B> {
                 Ok((text, None))
             })(),
             "send_to_session" => (|| {
-                let text = arguments
-                    .get("text")
-                    .and_then(Value::as_str)
-                    .context("`text` must be a string")?;
+                let text = string(&arguments, "text")?;
                 let (window_id, session_id) = (
                     integer(&arguments, "window_id")?,
                     integer(&arguments, "session_id")?,
