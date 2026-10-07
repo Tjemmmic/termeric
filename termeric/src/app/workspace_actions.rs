@@ -383,12 +383,6 @@ impl App {
         if pane.closed {
             return Err(format!("GUI pane {pane_id} in tab {tab_id} is closed"));
         }
-        if manager.pane_count() >= crate::control::protocol::MAX_PANES_PER_TAB {
-            return Err(format!(
-                "GUI tab pane limit of {} reached",
-                crate::control::protocol::MAX_PANES_PER_TAB
-            ));
-        }
         manager.set_cwd_mode(self.config.panes.cwd);
         let new_id = manager.split_target(target, direction).map_err(|error| {
             format!("Could not split pane {pane_id} {direction_name}: {error:#}")

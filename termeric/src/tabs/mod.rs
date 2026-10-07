@@ -513,7 +513,8 @@ impl TabManager {
                 .remove(&source_local);
             let destination_local = destination
                 .panes
-                .attach(pane, crate::panes::SplitDirection::Vertical);
+                .attach(pane, crate::panes::SplitDirection::Vertical)
+                .context("live-domain relay could not join its destination tab")?;
             destination
                 .live_domain
                 .as_mut()
@@ -2322,6 +2323,58 @@ mod tests {
                 .any(|warning| warning.starts_with("tab 4 pane 3 cwd")),
             "{warnings:?}"
         );
+    }
+
+    #[test]
+    fn a_tab_holds_as_many_panes_as_a_workspace_saves_and_no_more() {
+        use crate::panes::MAX_PANES_PER_TAB;
+        let shell = crate::test_support::sleeping_shell();
+        let mut manager = TabManager::for_test(shell.clone());
+        manager.new_tab().unwrap();
+        let mut other = TabManager::for_test(shell.clone());
+        other.new_tab().unwrap();
+        let other_panes =
+            other
+                .active_tab_mut()
+                .unwrap()
+                .panes_for_test(shell.clone(), 800.0, 160.0, 10.0, 20.0);
+        other_panes.split(SplitDirection::Vertical).unwrap();
+        let moved = other_panes.detach_focused().unwrap();
+        let tab = manager.active_tab_mut().unwrap();
+        let panes = tab.panes_for_test(shell.clone(), 6_400.0, 6_400.0, 10.0, 20.0);
+        for index in 1..MAX_PANES_PER_TAB {
+            panes
+                .split(if index % 2 == 0 {
+                    SplitDirection::Horizontal
+                } else {
+                    SplitDirection::Vertical
+                })
+                .unwrap();
+            panes.balance();
+        }
+        assert_eq!(panes.pane_count(), MAX_PANES_PER_TAB);
+
+        // Neither a split, by key or by control request, nor a pane moved in
+        // from another tab goes past it.
+        let focused = panes.focused_id();
+        assert!(panes.split(SplitDirection::Vertical).is_err());
+        assert!(
+            panes
+                .split_target(focused, SplitDirection::Vertical)
+                .is_err()
+        );
+        assert!(panes.validate_attach_target(focused).is_err());
+        assert!(panes.attach(moved, SplitDirection::Vertical).is_err());
+        assert_eq!(panes.pane_count(), MAX_PANES_PER_TAB);
+        assert_eq!(panes.focused_id(), focused);
+
+        // The full tab saves, as a workspace and as a closed tab.
+        let tab = manager.active_tab().unwrap();
+        tab.capture_workspace_tab(0, false)
+            .unwrap()
+            .validate()
+            .unwrap();
+        tab.closed_tab_snapshot(false).unwrap().validate().unwrap();
     }
 
     #[test]

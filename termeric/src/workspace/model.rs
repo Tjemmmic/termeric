@@ -1,11 +1,10 @@
-use crate::panes::SplitDirection;
+use crate::panes::{MAX_PANES_PER_TAB, SplitDirection};
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 pub const WORKSPACE_SCHEMA_VERSION: u32 = 3;
 pub const MAX_WORKSPACE_TABS: usize = 64;
-pub const MAX_WORKSPACE_PANES_PER_TAB: usize = 64;
 /// The longest tab or pane title a workspace keeps, in characters.
 pub const MAX_WORKSPACE_TITLE_CHARS: usize = 256;
 /// The longest workspace name, in characters.
@@ -139,11 +138,11 @@ impl WorkspaceTabSnapshot {
         }) {
             anyhow::bail!("workspace tab {} user title is invalid", self.id);
         }
-        if self.panes.is_empty() || self.panes.len() > MAX_WORKSPACE_PANES_PER_TAB {
+        if self.panes.is_empty() || self.panes.len() > MAX_PANES_PER_TAB {
             anyhow::bail!(
                 "workspace tab {} must contain between 1 and {} panes",
                 self.id,
-                MAX_WORKSPACE_PANES_PER_TAB
+                MAX_PANES_PER_TAB
             );
         }
         let mut pane_ids = HashSet::new();
@@ -252,12 +251,12 @@ pub enum WorkspacePaneLayout {
 
 impl WorkspacePaneLayout {
     fn validate_and_collect(&self, leaves: &mut Vec<u32>, depth: usize) -> anyhow::Result<()> {
-        if depth >= MAX_WORKSPACE_PANES_PER_TAB {
+        if depth >= MAX_PANES_PER_TAB {
             anyhow::bail!("workspace pane layout exceeds the supported nesting depth");
         }
         match self {
             Self::Pane { pane } => {
-                if leaves.len() >= MAX_WORKSPACE_PANES_PER_TAB {
+                if leaves.len() >= MAX_PANES_PER_TAB {
                     anyhow::bail!("workspace pane layout has too many leaves");
                 }
                 leaves.push(*pane);

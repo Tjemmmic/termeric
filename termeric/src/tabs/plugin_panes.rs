@@ -24,9 +24,7 @@ impl TabManager {
         if self.origin_read_only(origin) != Some(false) {
             anyhow::bail!("target pane is read-only");
         }
-        if tab.panes.pane_count() >= crate::workspace::MAX_WORKSPACE_PANES_PER_TAB {
-            anyhow::bail!("workspace pane limit reached");
-        }
+        tab.panes.ensure_room_for_pane()?;
         tab.panes.split_geometry(target.pane_id, direction)
     }
 

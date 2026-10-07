@@ -9,6 +9,14 @@ pub use tree::{PaneId, PaneTree, SplitDirection};
 pub const PANE_DIVIDER_THICKNESS: f32 = 4.0;
 pub const PANE_DIVIDER_HIT_MARGIN: f32 = 8.0;
 
+/// The most panes one tab holds, however they are added. It is what a
+/// workspace saves, so every tab can be saved and restored; the control
+/// protocol's limit is this one.
+pub const MAX_PANES_PER_TAB: usize = 64;
+
+// A live-domain tab shows every pane of its daemon, so they must all fit.
+const _: () = assert!(crate::domain::model::MAX_DAEMON_PANES <= MAX_PANES_PER_TAB);
+
 use crate::config::ShellConfig;
 use crate::session::terminal_state::DiffWatch;
 use crate::terminal::events::{MAX_FORWARDED_TERMINAL_EVENTS_PER_POLL, drain_terminal_events};
@@ -751,6 +759,10 @@ impl PaneManager {
             self.panes.len() == 1 && self.panes.contains_key(&PaneId(0)),
             "a live-domain layout is adopted only by a tab's first relay"
         );
+        anyhow::ensure!(
+            snapshot.panes.len() <= MAX_PANES_PER_TAB,
+            "a tab holds at most {MAX_PANES_PER_TAB} panes"
+        );
         let mut remote_panes = snapshot.panes.clone();
         remote_panes.sort_by_key(|pane| pane.id);
         let primary = remote_panes
@@ -815,6 +827,10 @@ impl PaneManager {
         if snapshot.panes.is_empty() {
             anyhow::bail!("live domain tab has no panes");
         }
+        anyhow::ensure!(
+            snapshot.panes.len() <= MAX_PANES_PER_TAB,
+            "a tab holds at most {MAX_PANES_PER_TAB} panes"
+        );
         let remote_ids: std::collections::HashSet<u32> =
             snapshot.panes.iter().map(|pane| pane.id).collect();
         if remote_ids.len() != snapshot.panes.len() {
@@ -1044,6 +1060,7 @@ impl PaneManager {
         direction: SplitDirection,
         launch: Option<&LocalPaneLaunch>,
     ) -> anyhow::Result<PaneId> {
+        self.ensure_room_for_pane()?;
         if !self.tree.has_split_capacity() {
             anyhow::bail!("divider ID space exhausted");
         }
@@ -1583,7 +1600,12 @@ impl PaneManager {
 
     /// Attach an existing live PTY beside the focused pane under a new stable,
     /// tab-local ID. No process or reader thread is recreated.
-    pub(crate) fn attach(&mut self, mut pane: Pane, direction: SplitDirection) -> PaneId {
+    pub(crate) fn attach(
+        &mut self,
+        mut pane: Pane,
+        direction: SplitDirection,
+    ) -> anyhow::Result<PaneId> {
+        self.ensure_room_for_pane()?;
         let id = PaneId(self.next_id);
         self.next_id = self.next_id.saturating_add(1);
         pane.id = id;
@@ -1596,7 +1618,17 @@ impl PaneManager {
         self.zoomed = None;
         self.navigation_memory.clear();
         self.recalculate_sizes();
-        id
+        Ok(id)
+    }
+
+    /// Fails when the tab already holds [`MAX_PANES_PER_TAB`] panes. Every
+    /// way a pane is added asks this first.
+    pub(crate) fn ensure_room_for_pane(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.panes.len() < MAX_PANES_PER_TAB,
+            "a tab holds at most {MAX_PANES_PER_TAB} panes"
+        );
+        Ok(())
     }
 
     /// Validate an exact destination anchor and stable-ID allocation without
@@ -1609,12 +1641,7 @@ impl PaneManager {
         if target_pane.closed {
             anyhow::bail!("destination pane {} is closed", target.0);
         }
-        if self.panes.len() >= crate::control::protocol::MAX_PANES_PER_TAB {
-            anyhow::bail!(
-                "GUI tab pane limit of {} reached",
-                crate::control::protocol::MAX_PANES_PER_TAB
-            );
-        }
+        self.ensure_room_for_pane()?;
         if self.next_id.checked_add(1).is_none() || self.panes.contains_key(&PaneId(self.next_id)) {
             anyhow::bail!("destination tab exhausted its stable pane ID space");
         }
@@ -2380,14 +2407,16 @@ mod tests {
             source.focus(selected);
             let child = source.get_pane(selected).unwrap().pty.child_id();
             let pane = source.detach_focused().unwrap();
-            let attached = destination.attach(
-                pane,
-                if state & 1 == 0 {
-                    SplitDirection::Horizontal
-                } else {
-                    SplitDirection::Vertical
-                },
-            );
+            let attached = destination
+                .attach(
+                    pane,
+                    if state & 1 == 0 {
+                        SplitDirection::Horizontal
+                    } else {
+                        SplitDirection::Vertical
+                    },
+                )
+                .unwrap();
             assert_eq!(
                 destination.get_pane(attached).unwrap().pty.child_id(),
                 child
@@ -2402,14 +2431,16 @@ mod tests {
             destination.focus(selected);
             let child = destination.get_pane(selected).unwrap().pty.child_id();
             let pane = destination.detach_focused().unwrap();
-            let attached = source.attach(
-                pane,
-                if state & 1 == 0 {
-                    SplitDirection::Horizontal
-                } else {
-                    SplitDirection::Vertical
-                },
-            );
+            let attached = source
+                .attach(
+                    pane,
+                    if state & 1 == 0 {
+                        SplitDirection::Horizontal
+                    } else {
+                        SplitDirection::Vertical
+                    },
+                )
+                .unwrap();
             assert_eq!(source.get_pane(attached).unwrap().pty.child_id(), child);
             assert_manager_invariants(&source);
             assert_manager_invariants(&destination);
@@ -2627,7 +2658,7 @@ mod tests {
         assert_eq!(source.pane_count(), 1);
 
         let mut destination = make();
-        let target = destination.attach(pane, SplitDirection::Vertical);
+        let target = destination.attach(pane, SplitDirection::Vertical).unwrap();
         assert_eq!(destination.get_pane(target).unwrap().pty.child_id(), child);
         assert_eq!(destination.focused_id(), target);
         assert_eq!(destination.pane_count(), 2);
