@@ -897,33 +897,18 @@ impl DeclarativePlugin {
             return Ok(environment);
         }
         #[derive(Serialize)]
-        struct TerminalSize {
-            columns: usize,
-            rows: usize,
-        }
-        #[derive(Serialize)]
         struct LaunchContext<'a> {
             schema_version: u32,
             plugin_id: &'a str,
             profile_id: &'a str,
-            active_working_directory: Option<&'a str>,
-            tab_count: usize,
-            active_tab_index: usize,
-            active_tab_id: Option<usize>,
-            terminal: TerminalSize,
+            #[serde(flatten)]
+            workspace: WorkspaceContext<'a>,
         }
         let value = serde_json::to_string(&LaunchContext {
             schema_version: ENVIRONMENT_DOCUMENT_SCHEMA_VERSION,
             plugin_id: &self.manifest.id,
             profile_id,
-            active_working_directory: context.cwd.as_deref(),
-            tab_count: context.tab_count,
-            active_tab_index: context.active_tab,
-            active_tab_id: context.active_tab_id,
-            terminal: TerminalSize {
-                columns: context.terminal_size.0,
-                rows: context.terminal_size.1,
-            },
+            workspace: WorkspaceContext::of(context),
         })?;
         if value.len() > MAX_STRUCTURED_CONTEXT_BYTES {
             bail!("structured plugin launch context exceeds {MAX_STRUCTURED_CONTEXT_BYTES} bytes");
@@ -1051,16 +1036,8 @@ impl DeclarativePlugin {
                 .expect("validated plugin settings serialize to JSON")
         });
         if self.grants.contains(Capability::WorkspaceQuery) {
-            envelope["context"] = serde_json::json!({
-                "active_working_directory": context.cwd,
-                "tab_count": context.tab_count,
-                "active_tab_index": context.active_tab,
-                "active_tab_id": context.active_tab_id,
-                "terminal": {
-                    "columns": context.terminal_size.0,
-                    "rows": context.terminal_size.1,
-                },
-            });
+            envelope["context"] = serde_json::to_value(WorkspaceContext::of(context))
+                .expect("a workspace context serializes to JSON");
         }
         let max_event_bytes = MAX_PERSISTENT_SOURCE_EVENT_BYTES;
         let event_json = match if kind == StructuredEventKind::CommandCompleted {
@@ -1844,6 +1821,39 @@ fn validate_grants(manifest: &PluginManifest, grants: &PluginPermissions) -> Res
         );
     }
     Ok(())
+}
+
+/// The origin window as a plugin granted `workspace-query` sees it: in its
+/// launch context and in each event's `context`, as
+/// `examples/plugins/README.md` documents both.
+#[derive(Serialize)]
+struct WorkspaceContext<'a> {
+    active_working_directory: Option<&'a str>,
+    tab_count: usize,
+    active_tab_index: usize,
+    active_tab_id: Option<usize>,
+    terminal: TerminalSize,
+}
+
+#[derive(Serialize)]
+struct TerminalSize {
+    columns: usize,
+    rows: usize,
+}
+
+impl<'a> WorkspaceContext<'a> {
+    fn of(context: &'a PluginContext) -> Self {
+        Self {
+            active_working_directory: context.cwd.as_deref(),
+            tab_count: context.tab_count,
+            active_tab_index: context.active_tab,
+            active_tab_id: context.active_tab_id,
+            terminal: TerminalSize {
+                columns: context.terminal_size.0,
+                rows: context.terminal_size.1,
+            },
+        }
+    }
 }
 
 fn encode_command_event(mut envelope: serde_json::Value, max_event_bytes: usize) -> Result<String> {
@@ -3023,6 +3033,11 @@ events = ["command-invoked"]
         assert_eq!(value["active_tab_id"], 12);
         assert_eq!(value["terminal"]["columns"], 132);
         assert_eq!(value["terminal"]["rows"], 43);
+        // The documented plugin API, field for field and in its order.
+        assert_eq!(
+            context_json,
+            r#"{"schema_version":1,"plugin_id":"sample-tools","profile_id":"default","active_working_directory":"/workspace/fixture","tab_count":4,"active_tab_index":2,"active_tab_id":12,"terminal":{"columns":132,"rows":43}}"#
+        );
         assert!(context_json.len() <= MAX_STRUCTURED_CONTEXT_BYTES);
 
         let response = plugin.on_hook(
@@ -3159,6 +3174,14 @@ events = ["command-invoked"]
             "/workspace/project"
         );
         assert_eq!(value["context"]["terminal"]["columns"], 120);
+        // The documented plugin API, field for field.
+        assert!(
+            invocation.event_json.contains(
+                r#""context":{"active_tab_id":19,"active_tab_index":4,"active_working_directory":"/workspace/project","tab_count":5,"terminal":{"columns":120,"rows":36}}"#
+            ),
+            "{}",
+            invocation.event_json
+        );
         assert!(invocation.event_json.len() <= MAX_PERSISTENT_SOURCE_EVENT_BYTES);
         assert!(!invocation.event_json.contains("command"));
 
