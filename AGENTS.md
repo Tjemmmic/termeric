@@ -148,7 +148,7 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `overlays.rs` | Info overlay, diff review, context picker, guardrail confirmation |
 | `toasts.rs` | Toast cards |
 | `git.rs` | Git completion dropdown |
-| `harvest.rs` | Harvest indicators, cellar, sprout menu, `sprout_menu_hit_test()` |
+| `harvest.rs` | Harvest indicators, cellar, sprout menu |
 | `agent_view.rs` | Draws the agent view scene; dock width and `content_right()` |
 
 `build_*` entry points are `pub(super)`; helpers used only inside their own file stay private. Hit tests called from `app/` (`mouse.rs`, `event_loop.rs`, `tab_drag.rs`) are `pub`.

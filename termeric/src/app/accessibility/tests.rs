@@ -757,7 +757,7 @@ fn open_harvest_cellar_fixture(app: &mut App, count: usize) {
 fn root_cellar_is_bounded_modal_command_history_with_shared_actions() {
     let mut app = App::new_headless(Config::default()).unwrap();
     open_harvest_cellar_fixture(&mut app, 30);
-    let layout = app.cellar_accessibility_layout();
+    let layout = app.cellar_layout().unwrap();
     let snapshot = app.accessibility_snapshot();
     let node = |id| {
         &snapshot
@@ -956,7 +956,7 @@ fn explain_is_not_offered_while_agent_features_are_off() {
 }
 
 #[test]
-fn the_sprout_menu_root_spans_the_window_while_the_menu_stays_clear_of_the_dock() {
+fn the_sprout_menu_nodes_sit_where_the_menu_is_drawn_inside_the_window() {
     let mut app = App::new_headless(Config::default().with_agent_features()).unwrap();
     open_harvest_cellar_fixture(&mut app, 1);
     let entry = app
@@ -972,8 +972,8 @@ fn the_sprout_menu_root_spans_the_window_while_the_menu_stays_clear_of_the_dock(
         .as_mut()
         .unwrap()
         .show_sprout_menu(0, 1_000, Some(entry), availability);
-    // The agent dock takes the window's right 400 pixels.
-    let snapshot = app.sprout_accessibility_snapshot(1_000.0, 600.0, 600.0);
+    let layout = app.sprout_menu_layout().unwrap();
+    let snapshot = app.sprout_accessibility_snapshot(1_000.0, 600.0);
     let bounds = |id: NodeId| {
         snapshot
             .nodes
@@ -983,7 +983,9 @@ fn the_sprout_menu_root_spans_the_window_while_the_menu_stays_clear_of_the_dock(
             .unwrap()
     };
     assert_eq!(bounds(ROOT), Rect::new(0.0, 0.0, 1_000.0, 600.0));
-    assert!(bounds(SPROUT_DIALOG).x1 <= 600.0);
+    assert_eq!(bounds(SPROUT_DIALOG), bounds_rect(layout.panel));
+    // A menu opened far right is pulled back inside the terminal area.
+    assert!(layout.panel.right() <= app.ui_metrics().width);
 }
 
 #[test]

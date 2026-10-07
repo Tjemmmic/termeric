@@ -30,36 +30,49 @@ fn harvest_explain_context(
 }
 
 impl App {
-    /// Run a sprout-menu action against the terminal that produced it.
-    pub(super) fn harvest_cellar_layout(&self) -> Option<crate::harvest::CellarLayout> {
-        let harvest = self.harvest.as_ref()?;
-        if !harvest.cellar.is_expanded() {
-            return None;
-        }
-        let renderer = self.renderer.as_ref()?;
-        let (window_width, window_height) = renderer.window_size();
-        let preview = crate::harvest::CellarLayout::calculate(
-            window_width as f32,
-            window_height as f32,
-            renderer.cell_width(),
-            renderer.cell_height(),
-            harvest.cellar.animation.progress(),
-            std::iter::empty(),
+    /// The Root Cellar's geometry, shared by drawing, pointer hits, and
+    /// accessibility; it fits the cellar's viewport to the window first.
+    pub(super) fn cellar_layout(&mut self) -> Option<crate::harvest::CellarLayout> {
+        let metrics = self.ui_metrics();
+        let harvest = self.harvest.as_mut()?;
+        Some(harvest.cellar.layout(
+            metrics.width,
+            metrics.height,
+            metrics.cell_width,
+            metrics.cell_height,
+        ))
+    }
+
+    /// The sprout menu's geometry, shared by drawing, pointer hits, and
+    /// accessibility. The menu stays inside the terminal area, clear of the
+    /// tab rail and the agent dock.
+    pub(super) fn sprout_menu_layout(&self) -> Option<crate::harvest::SproutMenuLayout> {
+        let menu = self.harvest.as_ref()?.sprout_menu.as_ref()?;
+        let metrics = self.ui_metrics();
+        // A headless window has no tab rail or dock.
+        let (padding, content_left, content_top, content_right) = self.renderer.as_ref().map_or(
+            (self.config.window.padding as f32, 0.0, 0.0, metrics.width),
+            |renderer| {
+                (
+                    renderer.padding(),
+                    renderer.tab_bar_width(),
+                    renderer.content_top(),
+                    renderer.content_right(),
+                )
+            },
         );
-        let visible_ids = harvest
-            .cellar
-            .entries()
-            .skip(harvest.cellar.scroll)
-            .take(preview.max_visible)
-            .map(|entry| entry.id)
-            .collect::<Vec<_>>();
-        Some(crate::harvest::CellarLayout::calculate(
-            window_width as f32,
-            window_height as f32,
-            renderer.cell_width(),
-            renderer.cell_height(),
-            harvest.cellar.animation.progress(),
-            visible_ids,
+        Some(crate::harvest::SproutMenuLayout::calculate(
+            menu.row,
+            menu.col,
+            menu.actions.len(),
+            menu.width(),
+            content_right,
+            metrics.height,
+            content_left,
+            content_top,
+            padding,
+            metrics.cell_width,
+            metrics.cell_height,
         ))
     }
 

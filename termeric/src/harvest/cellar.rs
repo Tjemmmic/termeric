@@ -365,6 +365,7 @@ impl RootCellar {
     }
 
     /// Get all entries
+    #[cfg(test)]
     pub fn entries(&self) -> impl Iterator<Item = &CommandEntry> {
         self.entries.iter()
     }
@@ -472,6 +473,36 @@ impl RootCellar {
     pub fn set_viewport_rows(&mut self, rows: usize) {
         self.viewport_rows = rows.max(1);
         self.clamp_viewport();
+    }
+
+    /// The panel's geometry in a window of this size. The list is measured
+    /// first so the viewport, and with it the scroll position, fits the rows
+    /// the panel has room for before the visible entries are placed.
+    pub fn layout(
+        &mut self,
+        window_width: f32,
+        window_height: f32,
+        cell_width: f32,
+        cell_height: f32,
+    ) -> CellarLayout {
+        let progress = self.animation.progress();
+        let empty = CellarLayout::calculate(
+            window_width,
+            window_height,
+            cell_width,
+            cell_height,
+            progress,
+            std::iter::empty(),
+        );
+        self.set_viewport_rows(empty.max_visible);
+        CellarLayout::calculate(
+            window_width,
+            window_height,
+            cell_width,
+            cell_height,
+            progress,
+            self.visible_entries().map(|entry| entry.id),
+        )
     }
 
     pub fn visible_entries(&self) -> impl Iterator<Item = &CommandEntry> {
@@ -839,6 +870,32 @@ mod tests {
             CellarAction::Close
         );
         assert_eq!(layout.hit_test(799.0, 599.0, true), CellarAction::Close);
+    }
+
+    #[test]
+    fn layout_fits_the_viewport_to_the_window_before_placing_rows() {
+        let mut cellar = RootCellar::new();
+        for row in 0..30 {
+            cellar.add(CommandEntry::new(row, Some(0)));
+        }
+        cellar.set_viewport_rows(2);
+        cellar.scroll_by(isize::MAX);
+        assert_eq!(cellar.scroll, 28);
+
+        // A taller window shows more rows, so the scroll position that showed
+        // the last two no longer fits; the rows placed follow the clamped one.
+        let layout = cellar.layout(800.0, 600.0, 8.0, 16.0);
+        assert!(layout.max_visible > 2);
+        let expected = cellar
+            .entries()
+            .skip(30 - layout.max_visible)
+            .map(|entry| entry.id)
+            .collect::<Vec<_>>();
+        assert_eq!(cellar.scroll, 30 - layout.max_visible);
+        assert_eq!(
+            layout.rows.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            expected
+        );
     }
 
     #[test]

@@ -675,20 +675,8 @@ impl App {
                 && button == winit::event::MouseButton::Left
             {
                 let hit = self.last_cursor_pos.and_then(|pos| {
-                    let renderer = self.renderer.as_ref()?;
-                    let menu = self.harvest.as_ref()?.sprout_menu.as_ref()?;
-                    let (_, window_height) = renderer.window_size();
-                    let info = super::sprout_menu_render_info(
-                        menu,
-                        renderer.padding(),
-                        renderer.cell_width(),
-                        renderer.cell_height(),
-                        renderer.tab_bar_width(),
-                        renderer.content_top(),
-                        renderer.content_right(),
-                        window_height as f32,
-                    );
-                    crate::renderer::sprout_menu_hit_test(&info, pos.0 as f32, pos.1 as f32)
+                    self.sprout_menu_layout()?
+                        .hit_test(pos.0 as f32, pos.1 as f32)
                 });
                 let selected = hit.and_then(|index| {
                     let menu = self.harvest.as_ref()?.sprout_menu.as_ref()?;
@@ -713,7 +701,7 @@ impl App {
             if state == winit::event::ElementState::Pressed
                 && button == winit::event::MouseButton::Left
                 && let Some(pos) = self.last_cursor_pos
-                && let Some(layout) = self.harvest_cellar_layout()
+                && let Some(layout) = self.cellar_layout()
             {
                 let action = layout.hit_test(pos.0 as f32, pos.1 as f32, true);
                 self.apply_cellar_action(action);

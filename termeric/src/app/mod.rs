@@ -2342,7 +2342,7 @@ impl App {
         }
         let metrics = self.ui_metrics();
         let (chrome, animating) = self.build_chrome(&metrics, reduced_motion);
-        let harvest_render_info = self.harvest_frame_info(&metrics, reduced_motion);
+        let harvest_render_info = self.harvest_frame_info(reduced_motion);
 
         let tab_drag = self.tab_drag_visual(Instant::now());
         let Some(renderer) = &mut self.renderer else {
@@ -4052,31 +4052,10 @@ fn command_keystrokes(command: &str) -> [Vec<u8>; 3] {
     ]
 }
 
-/// `window_width` is the right edge of the terminal area, which the menu
-/// stays inside.
 fn sprout_menu_render_info(
     menu: &crate::harvest::SproutMenu,
-    padding: f32,
-    cell_width: f32,
-    cell_height: f32,
-    content_left: f32,
-    content_top: f32,
-    window_width: f32,
-    window_height: f32,
+    layout: crate::harvest::SproutMenuLayout,
 ) -> SproutMenuRenderInfo {
-    let layout = crate::harvest::SproutMenuLayout::calculate(
-        menu.row,
-        menu.col,
-        menu.actions.len(),
-        menu.width(),
-        window_width,
-        window_height,
-        content_left,
-        content_top,
-        padding,
-        cell_width,
-        cell_height,
-    );
     SproutMenuRenderInfo {
         actions: menu
             .actions

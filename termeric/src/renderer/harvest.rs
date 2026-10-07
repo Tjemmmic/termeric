@@ -13,12 +13,6 @@ use crate::ui::color::{scale_alpha, with_alpha};
 use crate::ui::constants::BORDER_WIDTH;
 use crate::ui::icon::Icon;
 
-/// Return the sprout action row under a pointer. Geometry intentionally uses
-/// the same padding and item-height math as `build_sprout_menu`.
-pub fn sprout_menu_hit_test(menu: &SproutMenuRenderInfo, x: f32, y: f32) -> Option<usize> {
-    menu.layout.hit_test(x, y)
-}
-
 impl Renderer {
     /// Draw growth indicators beside the rows their commands started on.
     ///
@@ -332,28 +326,5 @@ mod tests {
             health_marker(&ui, CommandHealth::Running),
             ('\u{25CB}', ui.menu_text_dim)
         );
-    }
-
-    #[test]
-    fn sprout_hit_test_matches_rendered_rows() {
-        let menu = SproutMenuRenderInfo {
-            actions: vec![("Copy".into(), 'c', true), ("Run".into(), 'r', false)],
-            selected: 0,
-            opacity: 1.0,
-            layout: crate::harvest::SproutMenuLayout::calculate(
-                0, 0, 2, 10, 400.0, 300.0, 0.0, 20.0, 10.0, 10.0, 10.0,
-            ),
-        };
-        let first = menu.layout.rows[0];
-        let second = menu.layout.rows[1];
-        assert_eq!(
-            sprout_menu_hit_test(&menu, first.x + 1.0, first.y + 1.0),
-            Some(0)
-        );
-        assert_eq!(
-            sprout_menu_hit_test(&menu, second.x + 1.0, second.y + 1.0),
-            Some(1)
-        );
-        assert_eq!(sprout_menu_hit_test(&menu, 1.0, 1.0), None);
     }
 }

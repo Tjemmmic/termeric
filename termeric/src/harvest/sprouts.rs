@@ -399,6 +399,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_hit_test_finds_the_drawn_rows() {
+        let layout =
+            SproutMenuLayout::calculate(0, 0, 2, 10, 400.0, 300.0, 0.0, 20.0, 10.0, 10.0, 10.0);
+        let first = layout.rows[0];
+        let second = layout.rows[1];
+        assert_eq!(layout.hit_test(first.x + 1.0, first.y + 1.0), Some(0));
+        assert_eq!(layout.hit_test(second.x + 1.0, second.y + 1.0), Some(1));
+        assert_eq!(layout.hit_test(1.0, 1.0), None);
+    }
+
+    #[test]
     fn truncated_command_affordances_refuse_rerun_and_disclose_partial_copy_and_explain() {
         let availability = SproutAvailability {
             command_available: true,

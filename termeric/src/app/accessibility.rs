@@ -1009,10 +1009,8 @@ impl App {
             return;
         };
         let visible = self
-            .cellar_accessibility_layout()
-            .rows
-            .iter()
-            .any(|(entry_id, _)| *entry_id == id);
+            .cellar_layout()
+            .is_some_and(|layout| layout.rows.iter().any(|(entry_id, _)| *entry_id == id));
         if !visible {
             return;
         }
@@ -2689,74 +2687,32 @@ impl App {
         }
     }
 
-    fn cellar_accessibility_layout(&mut self) -> crate::harvest::CellarLayout {
-        let UiMetrics {
-            width,
-            height,
-            cell_width,
-            cell_height,
-            ..
-        } = self.ui_metrics();
-        let animation = self
-            .harvest
-            .as_ref()
-            .map_or(1.0, |harvest| harvest.cellar.animation.progress());
-        let preview = crate::harvest::CellarLayout::calculate(
-            width,
-            height,
-            cell_width,
-            cell_height,
-            animation,
-            std::iter::empty(),
-        );
-        if let Some(harvest) = &mut self.harvest {
-            harvest.cellar.set_viewport_rows(preview.max_visible);
-        }
-        let ids = self
-            .harvest
-            .as_ref()
-            .map(|harvest| {
-                harvest
-                    .cellar
-                    .visible_entries()
-                    .map(|entry| entry.id)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        crate::harvest::CellarLayout::calculate(
-            width,
-            height,
-            cell_width,
-            cell_height,
-            animation,
-            ids,
-        )
-    }
-
     fn cellar_accessibility_snapshot(
         &mut self,
         window_width: f32,
         window_height: f32,
     ) -> SemanticSnapshot {
-        let layout = self.cellar_accessibility_layout();
-        let (entries, selected, total, evicted, scroll, healthy) =
-            self.harvest.as_ref().map_or_else(
-                || (Vec::new(), None, 0, 0, 0, 0),
-                |harvest| {
-                    (
-                        harvest
-                            .cellar
-                            .visible_entries()
-                            .cloned()
-                            .collect::<Vec<_>>(),
-                        harvest.cellar.selected_id(),
-                        harvest.cellar.len(),
-                        harvest.cellar.evicted_commands(),
-                        harvest.cellar.scroll,
-                        (harvest.cellar.success_rate() * 100.0).round() as usize,
-                    )
-                },
-            );
+        let layout = self
+            .cellar_layout()
+            .expect("the Cellar layer is open only while Harvest is on");
+        let (entries, selected, total, evicted, scroll, healthy) = self
+            .harvest
+            .as_ref()
+            .map(|harvest| {
+                (
+                    harvest
+                        .cellar
+                        .visible_entries()
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                    harvest.cellar.selected_id(),
+                    harvest.cellar.len(),
+                    harvest.cellar.evicted_commands(),
+                    harvest.cellar.scroll,
+                    (harvest.cellar.success_rate() * 100.0).round() as usize,
+                )
+            })
+            .expect("the Cellar layer is open only while Harvest is on");
         let targets = entries
             .iter()
             .map(|entry| HarvestSemanticTarget::CellarEntry(entry.id))
@@ -2881,25 +2837,23 @@ impl App {
         SemanticSnapshot { nodes, focus }
     }
 
-    /// The sprout menu's nodes. The menu stays inside the terminal area,
-    /// whose right edge is `content_right` (clear of the agent dock), while
-    /// the window root covers the whole window.
+    /// The sprout menu's nodes, placed where the menu is drawn, while the
+    /// window root covers the whole window.
     fn sprout_accessibility_snapshot(
         &mut self,
         window_width: f32,
         window_height: f32,
-        content_right: f32,
     ) -> SemanticSnapshot {
-        let (request_id, row, col, width_chars, actions, selected, command) = self
+        let layout = self
+            .sprout_menu_layout()
+            .expect("the sprout menu layer is open only while its menu is");
+        let (request_id, actions, selected, command) = self
             .harvest
             .as_ref()
             .and_then(|harvest| harvest.sprout_menu.as_ref())
             .map(|menu| {
                 (
                     menu.request_id,
-                    menu.row,
-                    menu.col,
-                    menu.width(),
                     menu.actions
                         .iter()
                         .map(|action| {
@@ -2919,32 +2873,6 @@ impl App {
                 )
             })
             .unwrap();
-        let (cell_width, cell_height, padding, content_left, content_top) = self
-            .renderer
-            .as_ref()
-            .map(|renderer| {
-                (
-                    renderer.cell_width(),
-                    renderer.cell_height(),
-                    renderer.padding(),
-                    renderer.tab_bar_width(),
-                    renderer.content_top(),
-                )
-            })
-            .unwrap_or((8.0, 16.0, 8.0, 0.0, 40.0));
-        let layout = crate::harvest::SproutMenuLayout::calculate(
-            row,
-            col,
-            actions.len(),
-            width_chars,
-            content_right,
-            window_height,
-            content_left,
-            content_top,
-            padding,
-            cell_width,
-            cell_height,
-        );
         let targets = actions
             .iter()
             .map(|(action, _, _, _)| HarvestSemanticTarget::SproutAction {
@@ -3126,13 +3054,7 @@ impl App {
             ModalLayer::InfoOverlay => self.info_accessibility_snapshot(width, height),
             ModalLayer::DiffReview => self.diff_accessibility_snapshot(width, height),
             ModalLayer::ContextPicker => self.context_accessibility_snapshot(width, height),
-            ModalLayer::SproutMenu => {
-                let content_right = self
-                    .renderer
-                    .as_ref()
-                    .map_or(width, |renderer| renderer.content_right_for(width));
-                self.sprout_accessibility_snapshot(width, height, content_right)
-            }
+            ModalLayer::SproutMenu => self.sprout_accessibility_snapshot(width, height),
             ModalLayer::Cellar => self.cellar_accessibility_snapshot(width, height),
             ModalLayer::DomainPicker => {
                 self.palette_modal_accessibility_snapshot(PaletteModal::Domains, width, height)

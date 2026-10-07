@@ -353,38 +353,14 @@ impl App {
 
     /// Build Harvest geometry once, then share it with painting, pointer
     /// hit-testing, and accessibility.
-    pub(super) fn harvest_frame_info(
-        &mut self,
-        metrics: &UiMetrics,
-        reduced_motion: bool,
-    ) -> Option<HarvestRenderInfo> {
-        let cellar_layout = self.harvest.as_mut().and_then(|harvest| {
-            if !harvest.cellar.is_visible() {
-                return None;
-            }
-            let preview = crate::harvest::CellarLayout::calculate(
-                metrics.width,
-                metrics.height,
-                metrics.cell_width,
-                metrics.cell_height,
-                harvest.cellar.animation.progress(),
-                std::iter::empty(),
-            );
-            harvest.cellar.set_viewport_rows(preview.max_visible);
-            let visible_ids = harvest
-                .cellar
-                .visible_entries()
-                .map(|entry| entry.id)
-                .collect::<Vec<_>>();
-            Some(crate::harvest::CellarLayout::calculate(
-                metrics.width,
-                metrics.height,
-                metrics.cell_width,
-                metrics.cell_height,
-                harvest.cellar.animation.progress(),
-                visible_ids,
-            ))
-        });
+    pub(super) fn harvest_frame_info(&mut self, reduced_motion: bool) -> Option<HarvestRenderInfo> {
+        let cellar_layout = self
+            .harvest
+            .as_ref()
+            .is_some_and(|harvest| harvest.cellar.is_visible())
+            .then(|| self.cellar_layout())
+            .flatten();
+        let sprout_menu_layout = self.sprout_menu_layout();
         let renderer = self.renderer.as_ref()?;
         let harvest = self.harvest.as_ref()?;
         let indicators = self.harvest_indicator_infos(
@@ -413,18 +389,11 @@ impl App {
             selected_id: harvest.cellar.selected_id(),
             layout,
         });
-        let sprout_menu = harvest.sprout_menu.as_ref().map(|menu| {
-            sprout_menu_render_info(
-                menu,
-                renderer.padding(),
-                metrics.cell_width,
-                metrics.cell_height,
-                renderer.tab_bar_width(),
-                renderer.content_top(),
-                renderer.content_right(),
-                metrics.height,
-            )
-        });
+        let sprout_menu = harvest
+            .sprout_menu
+            .as_ref()
+            .zip(sprout_menu_layout)
+            .map(|(menu, layout)| sprout_menu_render_info(menu, layout));
         Some(HarvestRenderInfo {
             indicators,
             cellar,

@@ -34,7 +34,6 @@ mod harvest;
 #[cfg(test)]
 mod headless_tests;
 mod icons;
-pub use harvest::sprout_menu_hit_test;
 mod overlays;
 mod palette;
 mod panels;
