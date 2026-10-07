@@ -2,7 +2,7 @@
 
 use super::paths::ControlEndpoint;
 use super::protocol::{self, ClientFrame, ProcessInventory, Request, Response, ServerFrame};
-use crate::deadline_io::{Deadline, PollReader, SocketWriter};
+use crate::deadline_io::{self, Deadline, PollReader, SocketWriter};
 use anyhow::Context;
 use serde::Serialize;
 use std::os::unix::net::UnixStream;
@@ -998,28 +998,21 @@ fn request(endpoint: &ControlEndpoint, request: &Request) -> anyhow::Result<Resp
     request_within(endpoint, request, IO_TIMEOUT)
 }
 
-/// One exchange on `endpoint`: the GUI's reply, checked to be of this
-/// protocol version and consistent, though it may be a refusal.
+/// One exchange on `endpoint`, finished within `timeout`: the GUI's reply,
+/// checked to be of this protocol version and consistent, though it may be
+/// a refusal.
 fn request_within(
     endpoint: &ControlEndpoint,
     request: &Request,
     timeout: Duration,
 ) -> anyhow::Result<Response> {
+    const EXPIRED: &str = "GUI control request timed out";
     let token = endpoint.paths.read_token()?;
-    let mut stream = UnixStream::connect(&endpoint.paths.socket)
+    let deadline = Instant::now() + timeout;
+    let mut stream = deadline_io::connect_before(&endpoint.paths.socket, deadline, EXPIRED)
         .with_context(|| format!("connect to {}", endpoint.paths.socket.display()))?;
-    stream.set_read_timeout(Some(timeout))?;
-    stream.set_write_timeout(Some(timeout))?;
     validate_peer(&stream)?;
-    protocol::write_frame(
-        &mut stream,
-        &ClientFrame {
-            version: protocol::PROTOCOL_VERSION,
-            token,
-            request: request.clone(),
-        },
-    )?;
-    accept(protocol::read_frame(&mut stream)?)
+    exchange_before(&mut stream, &token, request, deadline, EXPIRED)
 }
 
 /// Sends `request` with `token` on a connected, validated `stream` and reads
@@ -1312,6 +1305,45 @@ mod tests {
                 .is_some_and(|text| text.contains("now hidden"))
         );
         server.join().unwrap();
+    }
+
+    #[test]
+    fn a_trickled_reply_cannot_renew_the_request_deadline() {
+        use std::io::Write;
+        let temp = tempfile::tempdir().unwrap();
+        let endpoint =
+            ControlEndpoint::from_directory(temp.path().join("runtime"), std::process::id())
+                .unwrap();
+        endpoint.paths.load_or_create_token().unwrap();
+        let listener = UnixListener::bind(&endpoint.paths.socket).unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            protocol::read_frame::<ClientFrame>(&mut stream).unwrap();
+            let mut reply = Vec::new();
+            protocol::write_frame(
+                &mut reply,
+                &ServerFrame::new(Response::AgentEventRecorded {
+                    process_id: std::process::id(),
+                }),
+            )
+            .unwrap();
+            // Each byte arrives well within any per-read timeout.
+            for byte in reply {
+                thread::sleep(Duration::from_millis(20));
+                if stream.write_all(&[byte]).is_err() {
+                    return;
+                }
+            }
+        });
+        let error =
+            request_within(&endpoint, &Request::Inventory, Duration::from_millis(100)).unwrap_err();
+        server.join().unwrap();
+        assert!(
+            error
+                .chain()
+                .any(|cause| cause.to_string() == "GUI control request timed out"),
+            "{error:#}"
+        );
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 use super::protocol::{self, ClientFrame, Request, Response, ServerFrame, UploadKind};
 use super::{DomainTopologyEvent, io_util, validate_ssh_destination};
-use crate::deadline_io::{self, Deadline, PollReader};
+use crate::deadline_io::{self, Deadline, PollReader, SocketWriter};
 use crate::local_socket::SocketPaths;
 use anyhow::Context;
 use std::io::{Read, Write};
@@ -908,25 +908,34 @@ fn generate_upload_id() -> anyhow::Result<String> {
 }
 
 fn connect_local(paths: &SocketPaths) -> anyhow::Result<DomainStream> {
+    connect_local_within(paths, Duration::from_secs(3))
+}
+
+fn connect_local_within(paths: &SocketPaths, timeout: Duration) -> anyhow::Result<DomainStream> {
+    const EXPIRED: &str = "local domain negotiation deadline elapsed";
     let token = paths.read_token()?;
     let mut stream = UnixStream::connect(&paths.socket)
         .with_context(|| format!("connect to local domain server {}", paths.socket.display()))?;
-    stream.set_read_timeout(Some(Duration::from_secs(3)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(3)))?;
+    // One budget covers the whole negotiation, so a server trickling bytes
+    // cannot stretch it.
+    let deadline = Instant::now() + timeout;
     protocol::write_frame(
-        &mut stream,
+        &mut SocketWriter::new(&stream, deadline, EXPIRED),
         &ClientFrame::Hello {
             version: protocol::PROTOCOL_VERSION,
             token,
         },
     )?;
-    match protocol::read_frame::<ServerFrame>(&mut stream)? {
+    let reply = protocol::read_frame::<ServerFrame>(&mut PollReader::new(
+        &mut stream,
+        Deadline::At(deadline),
+        EXPIRED,
+    ))?;
+    match reply {
         ServerFrame::Hello { version } if version == protocol::PROTOCOL_VERSION => {}
         ServerFrame::Error { message } => anyhow::bail!("{message}"),
         frame => anyhow::bail!("invalid domain negotiation response {frame:?}"),
     }
-    stream.set_read_timeout(None)?;
-    stream.set_write_timeout(None)?;
     Ok(DomainStream::Local(stream))
 }
 
@@ -1313,6 +1322,43 @@ mod tests {
         paths.load_or_create_token().unwrap();
         drop(UnixListener::bind(&paths.socket).unwrap());
         assert!(!client.connect_if_running().unwrap());
+    }
+
+    #[test]
+    fn a_trickled_negotiation_reply_cannot_renew_the_local_deadline() {
+        let temporary = tempfile::tempdir().unwrap();
+        let paths = crate::domain::paths::in_directory(temporary.path().join("runtime")).unwrap();
+        paths.load_or_create_token().unwrap();
+        let listener = UnixListener::bind(&paths.socket).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            protocol::read_frame::<ClientFrame>(&mut stream).unwrap();
+            let mut reply = Vec::new();
+            protocol::write_frame(
+                &mut reply,
+                &ServerFrame::Hello {
+                    version: protocol::PROTOCOL_VERSION,
+                },
+            )
+            .unwrap();
+            // Each byte arrives well within any per-read timeout.
+            for byte in reply {
+                std::thread::sleep(Duration::from_millis(20));
+                if stream.write_all(&[byte]).is_err() {
+                    return;
+                }
+            }
+        });
+        let error = super::connect_local_within(&paths, Duration::from_millis(100))
+            .err()
+            .expect("a trickled reply completed the negotiation");
+        server.join().unwrap();
+        assert!(
+            error
+                .chain()
+                .any(|cause| cause.to_string() == "local domain negotiation deadline elapsed"),
+            "{error:#}"
+        );
     }
 
     #[test]
