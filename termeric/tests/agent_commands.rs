@@ -1,42 +1,29 @@
-//! The commands agents run, executed as agents run them against a private
-//! fake GUI endpoint: the `agent-event` hook, which reports to the GUI that
-//! owns its terminal and otherwise stays silent and succeeds, and the `mcp`
-//! server.
+//! The commands agents run, run as agents run them: the `agent-event` hook,
+//! which reports to the Termeric window process that owns its terminal and
+//! otherwise stays silent and succeeds, and the `mcp` server.
+//!
+//! The test plays that window process: it holds the control socket a GUI
+//! with this test's process ID would, and answers in the GUI control
+//! protocol. Termeric is binary-only, so tests can't import its protocol
+//! types; the requests and replies are spelled out as JSON here, which also
+//! pins their wire format.
 
+mod common;
+
+use common::{GUI_TOKEN, StandInGui};
 use serde_json::{Value, json};
-use std::fs;
-use std::io::{Read, Write};
-use std::os::unix::{fs::PermissionsExt, net::UnixListener};
+use std::io::Write;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-const TOKEN: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+/// The GUI control protocol version every request and reply carries.
 const VERSION: u32 = 1;
 
-/// A private runtime directory holding a fake GUI endpoint for this process.
-struct Gui {
-    root: tempfile::TempDir,
-    listener: UnixListener,
-}
+type Gui = StandInGui;
 
 impl Gui {
-    fn new() -> Self {
-        let root = tempfile::tempdir().unwrap();
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
-        let directory = root.path().join("termeric");
-        fs::create_dir(&directory).unwrap();
-        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
-        let stem = format!("gui-v1-{}", std::process::id());
-        let socket = directory.join(format!("{stem}.sock"));
-        let listener = UnixListener::bind(&socket).unwrap();
-        listener.set_nonblocking(true).unwrap();
-        fs::set_permissions(socket, fs::Permissions::from_mode(0o600)).unwrap();
-        let token = directory.join(format!("{stem}.token"));
-        fs::write(&token, TOKEN).unwrap();
-        fs::set_permissions(&token, fs::Permissions::from_mode(0o600)).unwrap();
-        Self { root, listener }
-    }
-
+    /// An identity naming a terminal in this test's process, as Termeric
+    /// gives each terminal's programs in `TERMERIC_TERMINAL_ID`.
     fn terminal_id(&self) -> String {
         format!("{}.00ff00ff00ff00ff00ff00ff00ff00ff", std::process::id())
     }
@@ -67,44 +54,18 @@ impl Gui {
         (output, started.elapsed())
     }
 
-    /// Accept one request, answer it with a frame holding `reply` (or not at
-    /// all), and return what was asked.
+    /// Accept one request, answer it with `reply` as the GUI would (or not
+    /// at all), and return what was asked.
     fn serve(&self, reply: Option<Value>) -> Value {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let mut stream = loop {
-            match self.listener.accept() {
-                Ok((stream, _)) => break stream,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    assert!(Instant::now() < deadline, "the hook never reported");
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                Err(error) => panic!("accept failed: {error}"),
-            }
-        };
-        stream.set_nonblocking(false).unwrap();
-        let mut size = [0; 4];
-        stream.read_exact(&mut size).unwrap();
-        let mut payload = vec![0; u32::from_be_bytes(size) as usize];
-        stream.read_exact(&mut payload).unwrap();
+        let mut stream = self.accept("the hook never reported");
+        let request = common::read_frame(&mut stream);
         if let Some(reply) = reply {
-            let frame = json!({"version": VERSION, "response": reply});
-            let bytes = serde_json::to_vec(&frame).unwrap();
-            stream
-                .write_all(&(bytes.len() as u32).to_be_bytes())
-                .unwrap();
-            stream.write_all(&bytes).unwrap();
+            common::write_frame(&mut stream, &json!({"version": VERSION, "response": reply}));
         } else {
             // Hold the connection open without answering.
             std::thread::sleep(Duration::from_secs(3));
         }
-        serde_json::from_slice(&payload).unwrap()
-    }
-
-    fn nothing_requested(&self) {
-        assert!(matches!(
-            self.listener.accept(),
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
-        ));
+        request
     }
 }
 
@@ -132,7 +93,7 @@ fn a_finished_turn_reaches_the_gui_that_owns_the_terminal() {
     assert_silent_success(&output);
     assert_eq!(
         request,
-        json!({"version": VERSION, "token": TOKEN, "request": {
+        json!({"version": VERSION, "token": GUI_TOKEN, "request": {
             "operation": "agent_event",
             "terminal_id": id,
             "agent_id": "claude-code",
@@ -247,7 +208,7 @@ fn the_mcp_server_speaks_json_rpc_over_stdio_to_the_terminals_gui() {
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
         request,
-        json!({"version": VERSION, "token": TOKEN,
+        json!({"version": VERSION, "token": GUI_TOKEN,
                "request": {"operation": "list_agents", "supervisor": null}})
     );
     let replies: Vec<Value> = String::from_utf8(output.stdout)

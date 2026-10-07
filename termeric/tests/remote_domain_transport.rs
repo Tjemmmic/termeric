@@ -1,6 +1,5 @@
 use std::ffi::OsString;
 use std::fs;
-use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -285,44 +284,6 @@ fn local_stop_server_without_a_daemon_starts_nothing() {
             pending.push(path);
         }
     }
-}
-
-#[test]
-fn stdio_bridge_rejects_daemon_tokens_before_opening_a_socket() {
-    let binary = env!("CARGO_BIN_EXE_termeric");
-    let mut child = Command::new(binary)
-        .args(["domain", "proxy-stdio"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let payload = serde_json::to_vec(&serde_json::json!({
-        "type": "hello",
-        "version": 1,
-        "token": "must-not-cross-ssh"
-    }))
-    .unwrap();
-    let mut stdin = child.stdin.take().unwrap();
-    stdin
-        .write_all(&(payload.len() as u32).to_be_bytes())
-        .unwrap();
-    stdin.write_all(&payload).unwrap();
-    drop(stdin);
-    let output = child.wait_with_output().unwrap();
-    assert!(output.status.success());
-    assert!(output.stdout.len() >= 4);
-    let length = u32::from_be_bytes(output.stdout[..4].try_into().unwrap()) as usize;
-    let response: serde_json::Value =
-        serde_json::from_slice(&output.stdout[4..4 + length]).unwrap();
-    assert_eq!(response["type"], "error");
-    assert!(
-        response["message"]
-            .as_str()
-            .unwrap()
-            .contains("does not accept daemon tokens")
-    );
-    assert!(!String::from_utf8_lossy(&output.stdout).contains("must-not-cross-ssh"));
 }
 
 #[test]

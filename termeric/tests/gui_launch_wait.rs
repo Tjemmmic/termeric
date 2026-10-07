@@ -1,49 +1,23 @@
-//! `termeric control launch-tab`, `launch-window`, and `wait-launch` against a
-//! fake GUI control socket.
+//! `termeric control launch-tab`, `launch-window`, and `wait-launch`, with
+//! the test answering as the GUI process they talk to.
 
+mod common;
+
+use common::{GUI_TOKEN as TOKEN, StandInGui};
 use serde_json::{Value, json};
 use std::fs;
 use std::io::{Read, Write};
-use std::os::unix::{
-    fs::PermissionsExt,
-    net::{UnixListener, UnixStream},
-};
-use std::path::PathBuf;
+use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 const ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-const TOKEN: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const VERSION: u32 = 1;
 
-struct Fixture {
-    root: tempfile::TempDir,
-    listener: UnixListener,
-    token: PathBuf,
-}
+type Fixture = StandInGui;
 
 impl Fixture {
-    fn new() -> Self {
-        let root = tempfile::tempdir().unwrap();
-        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
-        let directory = root.path().join("termeric");
-        fs::create_dir(&directory).unwrap();
-        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
-        let stem = format!("gui-v1-{}", std::process::id());
-        let socket = directory.join(format!("{stem}.sock"));
-        let token = directory.join(format!("{stem}.token"));
-        let listener = UnixListener::bind(&socket).unwrap();
-        listener.set_nonblocking(true).unwrap();
-        fs::set_permissions(socket, fs::Permissions::from_mode(0o600)).unwrap();
-        fs::write(&token, TOKEN).unwrap();
-        fs::set_permissions(&token, fs::Permissions::from_mode(0o600)).unwrap();
-        Self {
-            root,
-            listener,
-            token,
-        }
-    }
-
     fn run(&self, verb: &str, options: &[&str], serve: impl FnOnce(&Self) + Send) -> Output {
         self.run_with_input(verb, options, Stdio::null(), serve)
     }
@@ -106,37 +80,15 @@ impl Fixture {
     }
 
     fn read_request(&self) -> (UnixStream, Value) {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let mut stream = loop {
-            match self.listener.accept() {
-                Ok((stream, _)) => break stream,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    assert!(Instant::now() < deadline, "CLI did not query endpoint");
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                Err(error) => panic!("accept failed: {error}"),
-            }
-        };
+        let mut stream = self.accept("CLI did not query endpoint");
         stream
             .set_read_timeout(Some(Duration::from_secs(3)))
             .unwrap();
         stream
             .set_write_timeout(Some(Duration::from_secs(3)))
             .unwrap();
-        let mut size = [0; 4];
-        stream.read_exact(&mut size).unwrap();
-        let size = u32::from_be_bytes(size) as usize;
-        assert!(size < 4096);
-        let mut payload = vec![0; size];
-        stream.read_exact(&mut payload).unwrap();
-        let request: Value = serde_json::from_slice(&payload).unwrap();
+        let request = common::read_frame(&mut stream);
         (stream, request)
-    }
-
-    fn no_more_requests(&self) {
-        assert!(
-            matches!(self.listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
-        );
     }
 }
 
@@ -259,7 +211,7 @@ fn stdin_environment_reaches_both_launch_targets_without_argv_or_output_exposure
                 );
                 assert!(!String::from_utf8_lossy(&output.stdout).contains(secret));
                 assert!(!String::from_utf8_lossy(&output.stderr).contains(secret));
-                fixture.no_more_requests();
+                fixture.nothing_requested();
             }
         }
     }
@@ -291,7 +243,7 @@ fn invalid_stdin_environment_is_redacted_and_never_sent() {
             assert!(!output.status.success());
             assert!(output.stdout.is_empty());
             assert!(!String::from_utf8_lossy(&output.stderr).contains(marker));
-            fixture.no_more_requests();
+            fixture.nothing_requested();
         }
         for flags in [
             vec!["--env-stdin", "--env-stdin"],
@@ -310,7 +262,7 @@ fn invalid_stdin_environment_is_redacted_and_never_sent() {
             assert!(!output.status.success());
             assert!(output.stdout.is_empty());
             assert!(!String::from_utf8_lossy(&output.stderr).contains(marker));
-            fixture.no_more_requests();
+            fixture.nothing_requested();
         }
     }
 }
@@ -331,7 +283,7 @@ fn stdin_environment_requires_eof_and_times_out_before_contact() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("input timed out before launch"));
     assert!(start.elapsed() >= Duration::from_secs(5));
     assert!(start.elapsed() < Duration::from_secs(7));
-    fixture.no_more_requests();
+    fixture.nothing_requested();
 }
 
 fn assert_launch(request: &Value, verb: &str) {
@@ -379,7 +331,7 @@ fn background_tab_launch_preserves_wire_mode_and_wait_behavior() {
         } else {
             assert_eq!(result["tab_id"], 3);
         }
-        fixture.no_more_requests();
+        fixture.nothing_requested();
     }
     for (verb, flags) in [
         ("launch-tab", vec!["--background", "--background"]),
@@ -390,7 +342,7 @@ fn background_tab_launch_preserves_wire_mode_and_wait_behavior() {
         options.extend(["--", "/bin/true"]);
         let output = fixture.run(verb, &options, |_| {});
         assert!(!output.status.success());
-        fixture.no_more_requests();
+        fixture.nothing_requested();
     }
 }
 
@@ -445,7 +397,7 @@ fn combined_launch_wait_preserves_exit_and_final_only_output() {
             let value: Value = serde_json::from_slice(&output.stdout).unwrap();
             assert_eq!(value["launch_request_id"], ID);
             assert_eq!(value["state"]["exit_code"], code);
-            fixture.no_more_requests();
+            fixture.nothing_requested();
         }
     }
 }
@@ -478,7 +430,7 @@ fn combined_wait_lost_ack_keeps_generated_recovery_id_without_retry() {
         assert!(error.contains("control launch-status"));
         assert!(error.contains("control wait-launch"));
         assert!(!error.contains(TOKEN));
-        fixture.no_more_requests();
+        fixture.nothing_requested();
     }
 }
 
@@ -513,7 +465,7 @@ fn combined_wait_preserves_generated_id_through_success() {
     let result: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(result["state"]["exit_code"], 0);
     assert_ne!(result["launch_request_id"], "0".repeat(32));
-    fixture.no_more_requests();
+    fixture.nothing_requested();
 }
 
 #[test]
@@ -531,7 +483,7 @@ fn combined_wait_invalid_options_never_contact_endpoint() {
             let output = fixture.run(verb, &options, |_| {});
             assert!(!output.status.success());
             assert!(output.stdout.is_empty());
-            fixture.no_more_requests();
+            fixture.nothing_requested();
         }
     }
 }
@@ -567,7 +519,7 @@ fn combined_wait_refuses_wrong_acknowledgement_before_polling() {
             assert!(!output.status.success());
             assert!(output.stdout.is_empty());
             assert!(String::from_utf8_lossy(&output.stderr).contains(ID));
-            fixture.no_more_requests();
+            fixture.nothing_requested();
         }
     }
 }
@@ -609,7 +561,7 @@ fn combined_deadline_covers_launch_and_observation_without_cancellation() {
         assert!(error.contains(ID));
         assert!(started.elapsed() >= Duration::from_secs(1));
         assert!(started.elapsed() < Duration::from_millis(1500));
-        fixture.no_more_requests();
+        fixture.nothing_requested();
     }
 }
 
@@ -640,7 +592,7 @@ fn combined_wait_pins_endpoint_across_launch_acknowledgement() {
         assert!(!output.status.success());
         assert!(output.stdout.is_empty());
         assert!(String::from_utf8_lossy(&output.stderr).contains("endpoint changed"));
-        fixture.no_more_requests();
+        fixture.nothing_requested();
     }
 }
 
@@ -666,7 +618,7 @@ fn non_wait_launches_keep_their_original_output() {
         assert_eq!(value["request_id"], ID);
         assert_eq!(value["tab_id"], 3);
         assert!(value.get("state").is_none());
-        fixture.no_more_requests();
+        fixture.nothing_requested();
     }
 }
 
@@ -679,12 +631,7 @@ fn response(state: Value) -> Value {
 /// frame's response.
 fn send(mut stream: UnixStream, mut reply: Value) {
     let version = reply.as_object_mut().unwrap().remove("version").unwrap();
-    let frame = json!({"version": version, "response": reply});
-    let bytes = serde_json::to_vec(&frame).unwrap();
-    stream
-        .write_all(&(bytes.len() as u32).to_be_bytes())
-        .unwrap();
-    stream.write_all(&bytes).unwrap();
+    common::write_frame(&mut stream, &json!({"version": version, "response": reply}));
 }
 
 #[test]
@@ -773,7 +720,7 @@ fn wait_refuses_invalid_or_unavailable_results() {
             assert!(!output.status.success());
             assert!(output.stdout.is_empty());
             assert!(!String::from_utf8_lossy(&output.stderr).contains(TOKEN));
-            fixture.no_more_requests();
+            fixture.nothing_requested();
         }
     }
     let fixture = Fixture::new();

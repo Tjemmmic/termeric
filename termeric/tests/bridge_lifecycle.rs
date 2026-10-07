@@ -1,6 +1,9 @@
 //! Executable bridge acceptance with a private real daemon, no SSH or providers.
 
-use serde_json::{Value, json};
+mod common;
+
+use common::{frame, read_frames};
+use serde_json::json;
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
@@ -123,29 +126,6 @@ impl Fixture {
     }
 }
 
-fn frame(value: Value) -> Vec<u8> {
-    let payload = serde_json::to_vec(&value).unwrap();
-    [
-        (payload.len() as u32).to_be_bytes().as_slice(),
-        payload.as_slice(),
-    ]
-    .concat()
-}
-
-fn decode(mut wire: &[u8]) -> Vec<Value> {
-    let mut frames = Vec::new();
-    while !wire.is_empty() {
-        assert!(wire.len() >= 4, "truncated stdout frame header");
-        let length = u32::from_be_bytes(wire[..4].try_into().unwrap()) as usize;
-        assert!((1..=4 * 1024 * 1024).contains(&length));
-        wire = &wire[4..];
-        assert!(wire.len() >= length, "truncated stdout payload");
-        frames.push(serde_json::from_slice(&wire[..length]).unwrap());
-        wire = &wire[length..];
-    }
-    frames
-}
-
 fn assert_no_token(output: &Output, token_path: &Path) {
     let token = fs::read(token_path).unwrap();
     assert!(!token.is_empty());
@@ -162,8 +142,8 @@ fn real_bridge_handles_coalesced_request_with_closed_or_still_open_stdin() {
     let fixture = Fixture::new();
     let _server = fixture.server();
     let wire = [
-        frame(json!({"type":"hello", "version":VERSION, "token":""})),
-        frame(json!({"type":"request", "request":{"command":"list_domains"}})),
+        frame(&json!({"type":"hello", "version":VERSION, "token":""})),
+        frame(&json!({"type":"request", "request":{"command":"list_domains"}})),
     ]
     .concat();
     for close_input in [true, false] {
@@ -174,7 +154,7 @@ fn real_bridge_handles_coalesced_request_with_closed_or_still_open_stdin() {
             String::from_utf8_lossy(&output.stderr)
         );
         assert_eq!(
-            decode(&output.stdout),
+            read_frames(&output.stdout),
             vec![
                 json!({"type":"hello", "version":VERSION}),
                 json!({"type":"response", "response":{"result":"domains", "domains":[]}}),
@@ -201,9 +181,9 @@ fn real_bridge_rejects_invalid_negotiation_without_starting_a_daemon() {
         ),
     ] {
         let fixture = Fixture::new();
-        let output = fixture.bridge(&frame(hello), true);
+        let output = fixture.bridge(&frame(&hello), true);
         assert!(output.status.success());
-        let frames = decode(&output.stdout);
+        let frames = read_frames(&output.stdout);
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0]["type"], "error");
         assert!(frames[0]["message"].as_str().unwrap().contains(expected));
