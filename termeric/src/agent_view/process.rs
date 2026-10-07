@@ -9,7 +9,7 @@
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
@@ -119,31 +119,14 @@ impl AgentProcess {
         let process_id = child.id();
         let child = Arc::new(Mutex::new(child));
         let stopped = Arc::new(AtomicBool::new(false));
-
-        let (input, input_queue) = mpsc::sync_channel::<String>(INPUT_CAPACITY);
-        thread::Builder::new()
-            .name("agent-view-input".into())
-            .spawn(move || write_input(stdin, input_queue))?;
-
-        let stderr =
-            StderrCapture::start(stderr, Keep::Last(STDERR_TAIL_BYTES), "agent-view-stderr")?;
-
-        let (output_sender, output) = mpsc::sync_channel(OUTPUT_CAPACITY);
-        let reader_child = Arc::clone(&child);
-        let reader_stopped = Arc::clone(&stopped);
-        thread::Builder::new()
-            .name("agent-view-output".into())
-            .spawn(move || {
-                read_output(
-                    stdout,
-                    &output_sender,
-                    &waker,
-                    &reader_child,
-                    &reader_stopped,
-                    stderr,
-                );
-            })?;
-
+        let (input, output) = match serve_pipes(stdin, stdout, stderr, waker, &child, &stopped) {
+            Ok(pipes) => pipes,
+            Err(error) => {
+                // Nothing would read its output or reap it.
+                abandon(&child);
+                return Err(error);
+            }
+        };
         Ok(Self {
             child,
             process_id,
@@ -250,7 +233,53 @@ impl Drop for AgentProcess {
     }
 }
 
-fn write_input(mut stdin: std::process::ChildStdin, queue: Receiver<String>) {
+/// Starts the threads that serve the agent's pipes: one writes the input
+/// queued for it, one keeps the end of its stderr, and one reads its output
+/// lines and finally reaps it. Returns the input queue and the output.
+fn serve_pipes(
+    stdin: ChildStdin,
+    stdout: ChildStdout,
+    stderr: ChildStderr,
+    waker: Waker,
+    child: &Arc<Mutex<Child>>,
+    stopped: &Arc<AtomicBool>,
+) -> std::io::Result<(SyncSender<String>, Receiver<ProcessOutput>)> {
+    let (input, input_queue) = mpsc::sync_channel::<String>(INPUT_CAPACITY);
+    thread::Builder::new()
+        .name("agent-view-input".into())
+        .spawn(move || write_input(stdin, input_queue))?;
+
+    let stderr = StderrCapture::start(stderr, Keep::Last(STDERR_TAIL_BYTES), "agent-view-stderr")?;
+
+    let (output_sender, output) = mpsc::sync_channel(OUTPUT_CAPACITY);
+    let reader_child = Arc::clone(child);
+    let reader_stopped = Arc::clone(stopped);
+    thread::Builder::new()
+        .name("agent-view-output".into())
+        .spawn(move || {
+            read_output(
+                stdout,
+                &output_sender,
+                &waker,
+                &reader_child,
+                &reader_stopped,
+                stderr,
+            );
+        })?;
+    Ok((input, output))
+}
+
+/// Kills an agent that cannot be served, and everything in its group, and
+/// reaps it. SIGKILL cannot be caught, so it exits at once; the wait is
+/// bounded all the same, as it holds up the thread that started the agent.
+fn abandon(child: &Mutex<Child>) {
+    signal_agent_group(child, Signal::Kill);
+    if wait_for_exit(child, EXIT_WAIT).is_none() {
+        log::warn!("agent view: an agent that could not be served did not exit when killed");
+    }
+}
+
+fn write_input(mut stdin: ChildStdin, queue: Receiver<String>) {
     // Ends when the sender is dropped (input closed) or the agent stops
     // reading; dropping `stdin` then gives the agent end-of-file.
     for line in queue {
@@ -293,7 +322,7 @@ fn next_output(
 }
 
 fn read_output(
-    stdout: std::process::ChildStdout,
+    stdout: ChildStdout,
     output: &SyncSender<ProcessOutput>,
     waker: &Waker,
     child: &Mutex<Child>,
@@ -660,6 +689,28 @@ mod tests {
         assert_eq!(
             process.send("x\n".into()),
             Err((SendError::Closed, "x\n".into()))
+        );
+    }
+
+    #[test]
+    fn an_agent_that_cannot_be_served_is_killed_with_its_group_and_reaped() {
+        // Both ignore SIGTERM, so only a kill ends them.
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "trap '' TERM; sleep 30 & echo $!; wait"]);
+        let crate::process_group::PipedChild { child, stdout, .. } =
+            crate::process_group::spawn_piped(&mut command).unwrap();
+        let mut line = String::new();
+        BufReader::new(stdout).read_line(&mut line).unwrap();
+        let started: libc::pid_t = line.trim().parse().unwrap();
+        let child = Mutex::new(child);
+        abandon(&child);
+        assert_eq!(
+            crate::process_group::leader_state(&child.lock().unwrap()),
+            crate::process_group::Leader::Reaped
+        );
+        assert!(
+            crate::test_support::process_ends(started),
+            "the command the agent started, {started}, still runs"
         );
     }
 
