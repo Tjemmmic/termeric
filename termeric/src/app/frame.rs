@@ -296,7 +296,9 @@ impl App {
     }
 
     /// The focused pane's growth indicators that are still shown, each
-    /// beside its row of that pane as `placement` places it.
+    /// beside its row of that pane as `placement` places it. An indicator
+    /// follows its row as the pane scrolls back, and is left out while that
+    /// row is scrolled out of view.
     pub(super) fn harvest_indicator_infos(
         &self,
         placement: crate::renderer::PanePlacement,
@@ -317,18 +319,37 @@ impl App {
         else {
             return Vec::new();
         };
+        let Some(pane) = tab.focused_pane() else {
+            return Vec::new();
+        };
         let lone = tab.panes.pane_count() == 1;
-        self.harvest_indicators()
+        // The grid the pane draws, so markers sit on the rows it shows.
+        let grid = pane.terminal.presentation_grid();
+        let scroll_offset = grid.scroll_offset();
+        let (_, pane_rows) = crate::renderer::PanePlacement::pane_cells(
+            rect,
+            lone,
+            (grid.cols(), grid.rows()),
+            cell_size,
+        );
+        let shown_rows = pane_rows.min(grid.rows());
+        pane.harvest
+            .indicators
             .iter()
             .filter(|indicator| !indicator.is_finished())
-            .map(|indicator| IndicatorRenderInfo {
-                cell: placement.row_marker(rect, lone, indicator.prompt_row, cell_size),
-                phase: indicator.phase,
-                opacity: if reduced_motion {
-                    1.0
-                } else {
-                    indicator.opacity()
-                },
+            .filter_map(|indicator| {
+                // Prompt rows count from the live screen's top; scrolling
+                // back moves that screen down by the scroll offset.
+                let row = indicator.prompt_row.checked_add(scroll_offset)?;
+                (row < shown_rows).then(|| IndicatorRenderInfo {
+                    cell: placement.row_marker(rect, lone, row, cell_size),
+                    phase: indicator.phase,
+                    opacity: if reduced_motion {
+                        1.0
+                    } else {
+                        indicator.opacity()
+                    },
+                })
             })
             .collect()
     }

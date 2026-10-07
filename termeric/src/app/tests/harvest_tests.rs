@@ -709,3 +709,54 @@ fn growth_indicators_sit_beside_their_row_of_the_focused_split_pane() {
             .is_empty()
     );
 }
+
+#[test]
+fn growth_indicators_follow_their_row_into_scrollback() {
+    let (mut app, _directory, _, _) = harvest_rerun_capture_fixture_in(false);
+    let focused = app.active_panes().focused_id();
+    let rect = app.active_panes().calculate_layout()[&focused];
+    let pane = app.active_panes_mut().get_pane_mut(focused).unwrap();
+    pane.terminal.process(b"history\r\n".repeat(80).as_slice());
+    pane.harvest
+        .indicators
+        .push(crate::harvest::GrowthIndicator::new(7, 2));
+    let rows = pane.terminal.grid().rows();
+    let placement = crate::renderer::PanePlacement {
+        left: 0.0,
+        top: 30.0,
+        right: 800.0,
+        bottom: 510.0,
+        padding: 8.0,
+    };
+    let cell = (10.0, 20.0);
+    let scroll_to = |app: &mut App, offset: usize| {
+        app.active_panes_mut()
+            .get_pane_mut(focused)
+            .unwrap()
+            .terminal
+            .grid_mut()
+            .set_scroll_offset(offset);
+    };
+    let marker_rows = |app: &App| -> Vec<f32> {
+        app.harvest_indicator_infos(placement, cell, true)
+            .iter()
+            .map(|indicator| indicator.cell.y)
+            .collect()
+    };
+
+    // Scrolled back three rows, the prompt's row is drawn three rows lower,
+    // and the marker goes with it.
+    scroll_to(&mut app, 3);
+    assert_eq!(
+        marker_rows(&app),
+        vec![placement.row_marker(rect, true, 5, cell).y]
+    );
+    // Scrolled until the row leaves the bottom of the pane, it shows nowhere.
+    scroll_to(&mut app, rows - 2);
+    assert!(marker_rows(&app).is_empty());
+    scroll_to(&mut app, 0);
+    assert_eq!(
+        marker_rows(&app),
+        vec![placement.row_marker(rect, true, 2, cell).y]
+    );
+}
