@@ -94,9 +94,12 @@ fn is_session_id(id: &str) -> bool {
 /// A conversation's title: one Claude Code or the person gave it, else its
 /// first prompt. A log with neither holds no conversation.
 fn title_of(path: &Path) -> Option<String> {
-    let mut file = std::fs::File::open(path).ok()?;
-    let length = file.metadata().ok()?.len();
-    if let Some(title) = read_tail(&mut file, length).and_then(|tail| named_title(&tail)) {
+    // The folder was listed a moment ago, and anything may stand in a log's
+    // place by now.
+    let mut file = crate::agents::transcript::open_log(path)?;
+    if let Some(title) = crate::agents::transcript::tail_lines(&mut file, TAIL_BYTES)
+        .and_then(|tail| named_title(&tail))
+    {
         return Some(earlier_title(&title));
     }
     file.seek(SeekFrom::Start(0)).ok()?;
@@ -107,21 +110,6 @@ fn title_of(path: &Path) -> Option<String> {
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .find_map(|entry| first_prompt(&entry))
         .map(|prompt| earlier_title(&prompt))
-}
-
-fn read_tail(file: &mut std::fs::File, length: u64) -> Option<String> {
-    let start = length.saturating_sub(TAIL_BYTES);
-    file.seek(SeekFrom::Start(start)).ok()?;
-    let mut tail = Vec::new();
-    file.take(TAIL_BYTES).read_to_end(&mut tail).ok()?;
-    let text = String::from_utf8_lossy(&tail).into_owned();
-    // The first line was cut by the seek.
-    Some(if start > 0 {
-        text.split_once('\n')
-            .map_or(String::new(), |(_, rest)| rest.to_owned())
-    } else {
-        text
-    })
 }
 
 /// The last title in `text`: a person's own name wins over Claude's.
@@ -256,6 +244,23 @@ mod tests {
         );
         assert_eq!(past_conversations_in(folder.path(), 1).len(), 1);
         assert!(past_conversations_in(&folder.path().join("missing"), 5).is_empty());
+    }
+
+    #[test]
+    fn a_pipe_in_place_of_a_log_is_skipped_without_waiting() {
+        let folder = tempfile::tempdir().unwrap();
+        let pipe = folder.path().join("piped.jsonl");
+        let name = std::ffi::CString::new(pipe.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: `name` is a valid NUL-terminated string for the call.
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        // A log replaced by a pipe after the folder was listed: opening it
+        // as a plain file would wait for a writer that never comes.
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || sender.send(title_of(&pipe)));
+        let title = receiver
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("reading the log's title waited on the pipe");
+        assert_eq!(title, None);
     }
 
     #[test]

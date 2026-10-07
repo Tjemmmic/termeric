@@ -5,6 +5,7 @@
 //! forgiving. It reads only the end of the file, skips any line it does not
 //! understand, and gives up rather than guessing.
 
+use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
@@ -16,36 +17,41 @@ const TAIL_BYTES: u64 = 4 * 1024 * 1024;
 
 /// The most recent complete answer in the log at `path`.
 pub fn last_response(path: &Path) -> Option<String> {
-    let mut file = open_without_waiting(path)?;
-    let metadata = file.metadata().ok()?;
-    // The path comes from the agent's report; anything but a regular file,
-    // such as a pipe, could make the read wait forever.
-    if !metadata.is_file() {
-        return None;
-    }
-    let length = metadata.len();
-    let start = length.saturating_sub(TAIL_BYTES);
-    file.seek(SeekFrom::Start(start)).ok()?;
-    let mut bytes = Vec::new();
-    file.take(TAIL_BYTES).read_to_end(&mut bytes).ok()?;
-    let text = String::from_utf8_lossy(&bytes);
-    let mut lines = text.lines();
-    if start > 0 {
-        // The first line was cut by the seek.
-        lines.next();
-    }
-    lines
+    let mut file = open_log(path)?;
+    tail_lines(&mut file, TAIL_BYTES)?
+        .lines()
         .rev()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .find_map(|entry| response_in(&entry))
 }
 
-/// Opens `path` for reading without waiting for a writer, as opening a named
-/// pipe otherwise would.
-fn open_without_waiting(path: &Path) -> Option<std::fs::File> {
-    let mut options = std::fs::OpenOptions::new();
-    options.read(true).custom_flags(libc::O_NONBLOCK);
-    options.open(path).ok()
+/// Opens an agent's log at `path` for reading, if it is a regular file.
+/// Agents name their logs, and anything else in their place, such as a
+/// named pipe, could make the open or a read wait forever, so the open does
+/// not wait for a writer.
+pub fn open_log(path: &Path) -> Option<File> {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+        .ok()?;
+    file.metadata().ok()?.is_file().then_some(file)
+}
+
+/// The whole lines among the last `bytes` of `file`: a line the cut began
+/// inside is left out.
+pub fn tail_lines(file: &mut File, bytes: u64) -> Option<String> {
+    let start = file.metadata().ok()?.len().saturating_sub(bytes);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut tail = Vec::new();
+    file.take(bytes).read_to_end(&mut tail).ok()?;
+    let text = String::from_utf8_lossy(&tail);
+    Some(if start == 0 {
+        text.into_owned()
+    } else {
+        text.split_once('\n')
+            .map_or_else(String::new, |(_, rest)| rest.to_owned())
+    })
 }
 
 /// The answer an entry records, in either agent's log shape.
@@ -122,6 +128,19 @@ mod tests {
         let file = log(&[r#"{"type":"assistant","message":{"content":"plain string"}}"#]);
         assert_eq!(last_response(file.path()), None);
         assert_eq!(last_response(Path::new("/definitely/missing.jsonl")), None);
+    }
+
+    #[test]
+    fn tails_leave_out_the_line_the_cut_began_inside() {
+        let file = log(&["first", "second", "third"]);
+        let mut opened = open_log(file.path()).unwrap();
+        assert_eq!(
+            tail_lines(&mut opened, 64).as_deref(),
+            Some("first\nsecond\nthird\n")
+        );
+        // "ond\nthird\n": the cut fell inside "second".
+        assert_eq!(tail_lines(&mut opened, 10).as_deref(), Some("third\n"));
+        assert_eq!(tail_lines(&mut opened, 3).as_deref(), Some(""));
     }
 
     #[test]
