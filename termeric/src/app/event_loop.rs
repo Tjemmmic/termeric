@@ -611,7 +611,10 @@ impl App {
         // geometry as keyboard, rendering, and accessibility.
         if self.modal_layer_on_top(ModalLayer::InfoOverlay) {
             if state == winit::event::ElementState::Pressed
-                && button == winit::event::MouseButton::Left
+                && matches!(
+                    button,
+                    winit::event::MouseButton::Left | winit::event::MouseButton::Middle
+                )
             {
                 if let (Some(pos), Some(renderer)) = (self.last_cursor_pos, &self.renderer) {
                     use crate::ui::info_overlay::InfoOverlayLayout;
@@ -628,55 +631,26 @@ impl App {
                     );
 
                     let (mx, my) = (pos.0 as f32, pos.1 as f32);
-                    let request_id = self.info_overlay.request_id();
-                    let action = if layout.copy_button.contains(mx, my) {
-                        self.info_overlay.set_focus(
-                            request_id,
-                            Some(crate::ui::info_overlay::InfoOverlayFocus::Copy),
-                        );
-                        crate::ui::info_overlay::InfoOverlayAction::Copy { request_id }
+                    let press = if layout.copy_button.contains(mx, my) {
+                        super::info_overlay::InfoOverlayPress::CopyButton
                     } else if layout.continue_button.contains(mx, my) {
-                        if self.info_overlay.has_input() {
-                            crate::ui::info_overlay::InfoOverlayAction::SubmitInput { request_id }
-                        } else {
-                            crate::ui::info_overlay::InfoOverlayAction::Dismiss { request_id }
-                        }
+                        super::info_overlay::InfoOverlayPress::ContinueButton
                     } else if let Some(line) = layout.content_row_at(
                         mx,
                         my,
                         self.info_overlay.scroll_offset(),
                         self.info_overlay.lines().len(),
                     ) {
-                        if self
-                            .info_overlay
-                            .input_info(request_id)
-                            .is_some_and(|input| input.source_line == line)
-                        {
-                            self.info_overlay.set_focus(
-                                request_id,
-                                Some(crate::ui::info_overlay::InfoOverlayFocus::Input),
-                            );
-                            let column = self.info_overlay.horizontal_offset().saturating_add(
-                                ((mx - layout.content.x) / layout.char_scale)
-                                    .floor()
-                                    .max(0.0) as usize,
-                            );
-                            self.info_overlay
-                                .set_input_cursor_from_column(request_id, column);
-                            crate::ui::info_overlay::InfoOverlayAction::None
-                        } else {
-                            self.info_overlay.choice_at_line(request_id, line).map_or(
-                                crate::ui::info_overlay::InfoOverlayAction::None,
-                                |choice| crate::ui::info_overlay::InfoOverlayAction::Choose {
-                                    request_id,
-                                    choice_id: choice.id.clone(),
-                                },
-                            )
-                        }
+                        let column = self.info_overlay.horizontal_offset().saturating_add(
+                            ((mx - layout.content.x) / layout.char_scale)
+                                .floor()
+                                .max(0.0) as usize,
+                        );
+                        super::info_overlay::InfoOverlayPress::Line { line, column }
                     } else {
-                        crate::ui::info_overlay::InfoOverlayAction::None
+                        super::info_overlay::InfoOverlayPress::Elsewhere
                     };
-                    self.apply_info_overlay_action(action);
+                    self.press_info_overlay(button, press);
                     self.request_redraw(RedrawReason::PointerInput);
                 }
             }

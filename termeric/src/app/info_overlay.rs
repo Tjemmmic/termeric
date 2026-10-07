@@ -2,7 +2,22 @@
 //! back to the flow that opened the overlay.
 
 use super::text_field_keys::{FieldKey, types_text};
+use super::text_target::TextTarget;
 use super::*;
+
+/// Where a pointer press landed on the info overlay.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum InfoOverlayPress {
+    CopyButton,
+    ContinueButton,
+    /// Content line `line`, at text column `column` (the horizontal scroll
+    /// included).
+    Line {
+        line: usize,
+        column: usize,
+    },
+    Elsewhere,
+}
 
 impl App {
     /// Keys for the info overlay: focus, its text field, scrolling, copy, and choice shortcuts.
@@ -110,6 +125,61 @@ impl App {
         };
         self.apply_info_overlay_action(action);
         self.request_redraw(RedrawReason::KeyboardInput);
+    }
+
+    /// A primary or middle press on the info overlay. The primary button
+    /// works its buttons, choices, and text field. The middle button on the
+    /// text field focuses it at the press and pastes the primary selection
+    /// there, as on the find box's query; anywhere else it does nothing.
+    pub(super) fn press_info_overlay(
+        &mut self,
+        button: winit::event::MouseButton,
+        press: InfoOverlayPress,
+    ) {
+        use crate::ui::info_overlay::{InfoOverlayAction, InfoOverlayFocus};
+        use winit::event::MouseButton;
+        let request_id = self.info_overlay.request_id();
+        let primary = button == MouseButton::Left;
+        let action = match press {
+            InfoOverlayPress::CopyButton if primary => {
+                self.info_overlay
+                    .set_focus(request_id, Some(InfoOverlayFocus::Copy));
+                InfoOverlayAction::Copy { request_id }
+            }
+            InfoOverlayPress::ContinueButton if primary => {
+                if self.info_overlay.has_input() {
+                    InfoOverlayAction::SubmitInput { request_id }
+                } else {
+                    InfoOverlayAction::Dismiss { request_id }
+                }
+            }
+            InfoOverlayPress::Line { line, column }
+                if self
+                    .info_overlay
+                    .input_info(request_id)
+                    .is_some_and(|input| input.source_line == line) =>
+            {
+                self.info_overlay
+                    .set_focus(request_id, Some(InfoOverlayFocus::Input));
+                self.info_overlay
+                    .set_input_cursor_from_column(request_id, column);
+                if button == MouseButton::Middle {
+                    self.paste_primary_into_field(TextTarget::InfoOverlayInput);
+                }
+                InfoOverlayAction::None
+            }
+            InfoOverlayPress::Line { line, .. } if primary => {
+                self.info_overlay.choice_at_line(request_id, line).map_or(
+                    InfoOverlayAction::None,
+                    |choice| InfoOverlayAction::Choose {
+                        request_id,
+                        choice_id: choice.id.clone(),
+                    },
+                )
+            }
+            _ => InfoOverlayAction::None,
+        };
+        self.apply_info_overlay_action(action);
     }
 
     pub(super) fn apply_info_overlay_action(
@@ -232,5 +302,75 @@ impl App {
             }
             InfoOverlayAction::None => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::info_overlay::{InfoOverlayChoice, InfoOverlayFocus};
+    use winit::event::MouseButton;
+
+    const LABEL: &str = "Value: ";
+
+    /// A font-editor-style field holding `value`, with an Unset choice
+    /// (Ctrl+D) on the line below it.
+    fn show_field(app: &mut App, value: &str) -> u64 {
+        app.info_overlay.show_input(
+            "Font feature",
+            vec![LABEL.into(), "Unset".into()],
+            0,
+            LABEL,
+            value,
+            64,
+            vec![InfoOverlayChoice {
+                id: "unset".into(),
+                label: "Unset".into(),
+                source_line: 1,
+                shortcut: None,
+            }],
+        )
+    }
+
+    #[test]
+    fn a_middle_press_on_the_field_pastes_the_primary_selection_where_it_landed() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        let (clipboard, memory) = super::super::clipboard::Clipboard::in_memory();
+        memory.lock().unwrap().primary = Some("ginger".into());
+        app.clipboard = clipboard;
+        let request = show_field(&mut app, "ab");
+        app.info_overlay
+            .set_focus(request, Some(InfoOverlayFocus::Copy));
+        let column = LABEL.chars().count() + 1;
+
+        app.press_info_overlay(
+            MouseButton::Middle,
+            InfoOverlayPress::Line { line: 0, column },
+        );
+        assert!(app.info_overlay.input_focused());
+        assert_eq!(app.info_overlay.input_value(request), Some("agingerb"));
+
+        // The same limits as a keyboard paste: nothing that breaks the line.
+        memory.lock().unwrap().primary = Some("one\ntwo".into());
+        app.press_info_overlay(
+            MouseButton::Middle,
+            InfoOverlayPress::Line { line: 0, column },
+        );
+        assert_eq!(app.info_overlay.input_value(request), Some("agingerb"));
+
+        // Anywhere but the field, the middle button does nothing at all.
+        memory.lock().unwrap().primary = Some("ginger".into());
+        for press in [
+            InfoOverlayPress::Line { line: 1, column: 0 },
+            InfoOverlayPress::CopyButton,
+            InfoOverlayPress::ContinueButton,
+            InfoOverlayPress::Elsewhere,
+        ] {
+            app.press_info_overlay(MouseButton::Middle, press);
+        }
+        assert!(app.info_overlay.is_awaiting(request));
+        assert!(app.info_overlay.input_focused());
+        assert_eq!(app.info_overlay.input_value(request), Some("agingerb"));
+        assert_eq!(memory.lock().unwrap().clipboard, None);
     }
 }
