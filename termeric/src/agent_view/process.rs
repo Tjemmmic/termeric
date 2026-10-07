@@ -6,7 +6,6 @@
 //! stderr for error reports. The reader wakes the event loop after each line;
 //! the panel drains lines with [`AgentProcess::try_next`].
 
-use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
@@ -19,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use crate::line_reader::read_bounded_line;
 use crate::process_group::{PipedChild, Signal};
+use crate::stderr_capture::{Keep, StderrCapture};
 
 use super::event::ExitReport;
 
@@ -116,17 +116,14 @@ impl AgentProcess {
         let process_id = child.id();
         let child = Arc::new(Mutex::new(child));
         let stopped = Arc::new(AtomicBool::new(false));
-        let stderr_tail = Arc::new(Mutex::new(VecDeque::new()));
 
         let (input, input_queue) = mpsc::sync_channel::<String>(INPUT_CAPACITY);
         thread::Builder::new()
             .name("agent-view-input".into())
             .spawn(move || write_input(stdin, input_queue))?;
 
-        let tail = Arc::clone(&stderr_tail);
-        thread::Builder::new()
-            .name("agent-view-stderr".into())
-            .spawn(move || keep_tail(stderr, &tail))?;
+        let stderr =
+            StderrCapture::start(stderr, Keep::Last(STDERR_TAIL_BYTES), "agent-view-stderr")?;
 
         let (output_sender, output) = mpsc::sync_channel(OUTPUT_CAPACITY);
         let reader_child = Arc::clone(&child);
@@ -140,7 +137,7 @@ impl AgentProcess {
                     &waker,
                     &reader_child,
                     &reader_stopped,
-                    &stderr_tail,
+                    stderr,
                 );
             })?;
 
@@ -292,29 +289,13 @@ fn next_output(
     }
 }
 
-fn keep_tail(stderr: std::process::ChildStderr, tail: &Mutex<VecDeque<u8>>) {
-    let mut stderr = stderr;
-    let mut buffer = [0; 4096];
-    loop {
-        match stderr.read(&mut buffer) {
-            Ok(0) | Err(_) => break,
-            Ok(read) => {
-                let Ok(mut tail) = tail.lock() else { break };
-                tail.extend(&buffer[..read]);
-                let excess = tail.len().saturating_sub(STDERR_TAIL_BYTES);
-                tail.drain(..excess);
-            }
-        }
-    }
-}
-
 fn read_output(
     stdout: std::process::ChildStdout,
     output: &SyncSender<ProcessOutput>,
     waker: &Waker,
     child: &Mutex<Child>,
     stopped: &AtomicBool,
-    stderr_tail: &Mutex<VecDeque<u8>>,
+    mut stderr: StderrCapture,
 ) {
     let mut reader = BufReader::with_capacity(64 * 1024, stdout);
     let mut line = Vec::new();
@@ -328,13 +309,9 @@ fn read_output(
     // stderr may still be draining; give it a moment so the report includes
     // the agent's last words.
     thread::sleep(Duration::from_millis(50));
-    let stderr_tail = stderr_tail
-        .lock()
-        .map(|tail| {
-            let bytes: Vec<u8> = tail.iter().copied().collect();
-            String::from_utf8_lossy(&bytes).trim().to_owned()
-        })
-        .unwrap_or_default();
+    let stderr_tail = String::from_utf8_lossy(&stderr.kept_by(Instant::now()).bytes)
+        .trim()
+        .to_owned();
     let report = match status {
         Some(status) => ExitReport {
             success: status.success(),

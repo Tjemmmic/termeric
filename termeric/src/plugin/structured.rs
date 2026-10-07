@@ -13,9 +13,10 @@ use crate::agents::AgentConfig;
 use crate::line_reader::read_bounded_line;
 use crate::panes::PaneLayoutPreset;
 use crate::process_group::PipedChild;
+use crate::stderr_capture::{Keep, StderrCapture};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
@@ -41,7 +42,7 @@ const MAX_TERMINAL_INPUT_BYTES: usize = 8 * 1024;
 const PERSISTENT_PROTOCOL_RESERVE_BYTES: usize = 64;
 const HANDLER_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_OUTPUT_BYTES: u64 = 64 * 1024;
-const MAX_ERROR_BYTES: u64 = 4 * 1024;
+const MAX_ERROR_BYTES: usize = 4 * 1024;
 const MAX_ACTIONS: usize = 8;
 const MAX_MESSAGE_BYTES: usize = 512;
 const MAX_TITLE_BYTES: usize = 128;
@@ -884,8 +885,7 @@ struct PersistentHandler {
     child: Child,
     requests: Option<SyncSender<PersistentRequest>>,
     io_thread: Option<JoinHandle<()>>,
-    stderr: Arc<Mutex<BoundedStderr>>,
-    stderr_thread: Option<JoinHandle<()>>,
+    stderr: StderrCapture,
 }
 
 #[derive(Debug)]
@@ -894,23 +894,28 @@ struct PersistentRequest {
     response: SyncSender<Result<(Vec<u8>, bool), String>>,
 }
 
-#[derive(Debug, Default)]
-struct BoundedStderr {
-    bytes: Vec<u8>,
-    truncated: bool,
-}
-
 impl PersistentHandler {
     fn spawn(invocation: &StructuredHandlerInvocation) -> Result<Self, String> {
         // Its own group, so a handler that is ended takes the commands it
         // started with it, and none of them keeps its pipes open.
         let PipedChild {
-            child,
+            mut child,
             mut stdin,
             stdout,
             stderr: stderr_stream,
         } = crate::process_group::spawn_piped(&mut handler_command(invocation))
             .map_err(|error| bounded_error(&format!("handler launch failed: {error}")))?;
+        let stderr = match StderrCapture::start(
+            stderr_stream,
+            Keep::First(MAX_ERROR_BYTES),
+            "plugin-handler-stderr",
+        ) {
+            Ok(stderr) => stderr,
+            Err(error) => {
+                terminate_handler(&mut child);
+                return Err(bounded_error(&format!("handler launch failed: {error}")));
+            }
+        };
         let (request_sender, request_receiver) = sync_channel::<PersistentRequest>(1);
         let io_thread = thread::spawn(move || {
             let mut stdout = BufReader::new(stdout);
@@ -934,11 +939,6 @@ impl PersistentHandler {
                 }
             }
         });
-        let stderr = Arc::new(Mutex::new(BoundedStderr::default()));
-        let stderr_target = Arc::clone(&stderr);
-        let stderr_thread = thread::spawn(move || {
-            drain_persistent_stderr(stderr_stream, &stderr_target);
-        });
         Ok(Self {
             program: invocation.program.clone(),
             args: invocation.args.clone(),
@@ -947,7 +947,6 @@ impl PersistentHandler {
             requests: Some(request_sender),
             io_thread: Some(io_thread),
             stderr,
-            stderr_thread: Some(stderr_thread),
         })
     }
 
@@ -1058,21 +1057,10 @@ impl PersistentHandler {
     /// The handler's exit status and the start of its standard error. The
     /// stderr reader gets until `deadline` to reach end of file, so what the
     /// handler wrote just before exiting is included. Reaping the handler
-    /// already killed its process group, so no descendant still holds the
-    /// pipe and keeps the reader from finishing.
+    /// already killed its process group, so only a command that left the
+    /// group can still hold the pipe, and the deadline bounds that wait.
     fn exit_error(&mut self, status: std::process::ExitStatus, deadline: Instant) -> String {
-        while self
-            .stderr_thread
-            .as_ref()
-            .is_some_and(|reader| !reader.is_finished())
-            && Instant::now() < deadline
-        {
-            thread::sleep(WORKER_POLL_INTERVAL);
-        }
-        if let Some(reader) = self.stderr_thread.take_if(|reader| reader.is_finished()) {
-            let _ = reader.join();
-        }
-        let stderr = self.stderr.lock().unwrap();
+        let stderr = self.stderr.kept_by(deadline);
         let mut detail = String::from_utf8_lossy(&stderr.bytes).into_owned();
         if stderr.truncated {
             detail.push('…');
@@ -1086,9 +1074,6 @@ impl Drop for PersistentHandler {
         terminate_handler(&mut self.child);
         self.requests.take();
         if let Some(thread) = self.io_thread.take() {
-            let _ = thread.join();
-        }
-        if let Some(thread) = self.stderr_thread.take() {
             let _ = thread.join();
         }
     }
@@ -1193,21 +1178,6 @@ fn read_response_line(reader: &mut impl BufRead) -> std::io::Result<Option<(Vec<
         bytes.pop();
     }
     Ok(Some((bytes, read.oversized)))
-}
-
-fn drain_persistent_stderr(mut stream: impl Read, target: &Mutex<BoundedStderr>) {
-    let mut buffer = [0_u8; 1024];
-    loop {
-        let read = match stream.read(&mut buffer) {
-            Ok(0) | Err(_) => return,
-            Ok(read) => read,
-        };
-        let mut target = target.lock().unwrap();
-        let remaining = (MAX_ERROR_BYTES as usize).saturating_sub(target.bytes.len());
-        let retained = read.min(remaining);
-        target.bytes.extend_from_slice(&buffer[..retained]);
-        target.truncated |= retained < read;
-    }
 }
 
 /// Kill a handler and its process group, so timed-out descendants neither
@@ -2019,22 +1989,6 @@ done"#,
         assert!(error.contains("exit status: 7"), "{error}");
         assert!(error.contains("died reading"), "{error}");
         assert!(handler.is_none());
-    }
-
-    #[test]
-    fn handler_stderr_keeps_only_its_first_four_kib() {
-        let stderr = Mutex::new(BoundedStderr::default());
-        let written = vec![b'e'; MAX_ERROR_BYTES as usize + 1_500];
-        drain_persistent_stderr(Cursor::new(written), &stderr);
-        let stderr = stderr.into_inner().unwrap();
-        assert_eq!(stderr.bytes.len(), MAX_ERROR_BYTES as usize);
-        assert!(stderr.truncated);
-
-        let stderr = Mutex::new(BoundedStderr::default());
-        drain_persistent_stderr(Cursor::new(vec![b'e'; MAX_ERROR_BYTES as usize]), &stderr);
-        let stderr = stderr.into_inner().unwrap();
-        assert_eq!(stderr.bytes.len(), MAX_ERROR_BYTES as usize);
-        assert!(!stderr.truncated);
     }
 
     #[test]

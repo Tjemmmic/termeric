@@ -29,6 +29,7 @@ mod safe_fs;
 mod safe_text;
 mod serial;
 mod session;
+mod stderr_capture;
 mod tabs;
 mod terminal;
 #[cfg(test)]
