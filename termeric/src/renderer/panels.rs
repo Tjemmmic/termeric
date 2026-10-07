@@ -539,21 +539,13 @@ impl Renderer {
         offset: usize,
         color: [f32; 4],
     ) {
-        if visible == 0 || visible >= total {
-            return;
-        }
-        let track_height = visible as f32 * row_height;
-        let thumb_height = (track_height * visible as f32 / total as f32).max(self.px(24.0));
-        let travel = (track_height - thumb_height).max(0.0);
-        let thumb_top = list_top + travel * offset as f32 / (total - visible) as f32;
-        self.rect_pipeline.push_rounded_rect(
-            panel.x + panel.width - self.px(6.0),
-            thumb_top,
+        let track = Bounds::new(
+            panel.right() - self.px(6.0),
+            list_top,
             self.px(3.0),
-            thumb_height,
-            color,
-            self.px(1.5),
+            visible as f32 * row_height,
         );
+        self.draw_scroll_thumb(track, visible, total, offset, color);
     }
 
     /// Scrim over the terminal beside a side panel, the panel surface, and

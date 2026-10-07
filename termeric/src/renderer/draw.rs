@@ -101,35 +101,59 @@ impl Renderer {
         );
     }
 
-    /// A vertical scrollbar track and thumb for `visible` of `total` items
-    /// scrolled by `offset`; nothing while everything fits.
+    /// A card's vertical scrollbar: a faint track and an accent thumb for
+    /// `visible` of `total` rows with `offset` scrolled past at the top;
+    /// nothing while everything fits.
     pub(super) fn draw_scrollbar(
         &mut self,
-        x: f32,
-        y: f32,
-        height: f32,
-        total: usize,
+        track: Bounds,
         visible: usize,
+        total: usize,
         offset: usize,
         anim: f32,
-        width: f32,
     ) {
-        if total <= visible || visible == 0 {
+        if visible == 0 || total <= visible {
             return;
         }
-        let track_color = with_alpha(self.ui.palette_border, 0.15 * anim);
-        self.rect_pipeline
-            .push_rounded_rect(x, y, width, height, track_color, 2.0);
+        self.rect_pipeline.push_rounded_rect(
+            track.x,
+            track.y,
+            track.width,
+            track.height,
+            with_alpha(self.ui.palette_border, 0.15 * anim),
+            track.width / 2.0,
+        );
+        self.draw_scroll_thumb(
+            track,
+            visible,
+            total,
+            offset,
+            with_alpha(self.ui.palette_accent, 0.5 * anim),
+        );
+    }
 
-        let thumb_height = (height * visible as f32 / total as f32)
-            .max(self.cell_height())
-            .min(height);
-        let max_scroll = total - visible;
-        let scroll_fraction = offset as f32 / max_scroll as f32;
-        let thumb_y = y + scroll_fraction * (height - thumb_height);
-        let thumb_color = with_alpha(self.ui.palette_accent, 0.5 * anim);
-        self.rect_pipeline
-            .push_rounded_rect(x, thumb_y, width, thumb_height, thumb_color, 2.0);
+    /// The rounded thumb every scrollbar draws along `track`, for `visible`
+    /// of `total` rows with `offset` scrolled past at the top; nothing
+    /// while everything fits.
+    pub(super) fn draw_scroll_thumb(
+        &mut self,
+        track: Bounds,
+        visible: usize,
+        total: usize,
+        offset: usize,
+        color: [f32; 4],
+    ) {
+        let min_height = self.px(MIN_SCROLL_THUMB_HEIGHT);
+        if let Some(thumb) = scroll_thumb(track, visible, total, offset, min_height) {
+            self.rect_pipeline.push_rounded_rect(
+                thumb.x,
+                thumb.y,
+                thumb.width,
+                thumb.height,
+                color,
+                thumb.width / 2.0,
+            );
+        }
     }
 
     /// A dialog button in the accent color, its label centred in the UI
@@ -212,5 +236,63 @@ impl Renderer {
             self.px(BUTTON_CORNER_RADIUS),
             self.px(2.0),
         );
+    }
+}
+
+/// Where a scrollbar's thumb sits along `track` for `visible` of `total`
+/// rows with `offset` scrolled past at the top: its share of the track, at
+/// least `min_height` (to stay findable in long scrollback) and on whole
+/// pixels. None while everything fits.
+pub(super) fn scroll_thumb(
+    track: Bounds,
+    visible: usize,
+    total: usize,
+    offset: usize,
+    min_height: f32,
+) -> Option<Bounds> {
+    if visible == 0 || total <= visible || track.height <= 0.0 {
+        return None;
+    }
+    let max_offset = total - visible;
+    let height = (track.height * visible as f32 / total as f32)
+        .max(min_height)
+        .round()
+        .min(track.height);
+    let travel = track.height - height;
+    let y = track.y + travel * offset.min(max_offset) as f32 / max_offset as f32;
+    Some(Bounds::new(track.x, y.round(), track.width, height))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_scroll_thumb_spans_its_share_and_travels_the_whole_track() {
+        let track = Bounds::new(10.0, 100.0, 4.0, 200.0);
+        assert_eq!(scroll_thumb(track, 10, 10, 0, 24.0), None);
+        assert_eq!(scroll_thumb(track, 0, 10, 0, 24.0), None);
+
+        // A quarter of the rows is a quarter of the track, from its top to
+        // its bottom as the offset runs to the last row.
+        let top = scroll_thumb(track, 10, 40, 0, 24.0).unwrap();
+        assert_eq!(top, Bounds::new(10.0, 100.0, 4.0, 50.0));
+        let bottom = scroll_thumb(track, 10, 40, 30, 24.0).unwrap();
+        assert_eq!(bottom.bottom(), track.bottom());
+        let middle = scroll_thumb(track, 10, 40, 15, 24.0).unwrap();
+        assert_eq!(middle.y, 175.0);
+        // An offset past the end stays at the end.
+        assert_eq!(scroll_thumb(track, 10, 40, 99, 24.0), Some(bottom));
+    }
+
+    #[test]
+    fn a_scroll_thumb_keeps_its_minimum_and_whole_pixels() {
+        let track = Bounds::new(0.0, 0.5, 3.0, 300.0);
+        let thumb = scroll_thumb(track, 1, 10_000, 1, 24.0).unwrap();
+        assert_eq!(thumb.height, 24.0);
+        assert_eq!(thumb.y, thumb.y.round());
+        // A track shorter than the minimum is filled, never overrun.
+        let short = Bounds::new(0.0, 0.0, 3.0, 20.0);
+        assert_eq!(scroll_thumb(short, 1, 3, 0, 24.0).unwrap().height, 20.0);
     }
 }

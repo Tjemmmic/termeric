@@ -188,27 +188,18 @@ impl Renderer {
         }
 
         // ── Scrollbar: a thin thumb only while results overflow ──
-        let visible_count = layout.visible_count;
-        if info.total_entries > visible_count && visible_count > 0 {
-            let track_x = panel_x + panel_width - padding * 0.5 - scrollbar_width;
-            let track_h = layout.list_height;
-            let thumb_h =
-                (track_h * visible_count as f32 / info.total_entries as f32).max(self.px(24.0));
-            let max_scroll = info.total_entries.saturating_sub(visible_count);
-            let fraction = if max_scroll > 0 {
-                info.scroll_offset as f32 / max_scroll as f32
-            } else {
-                0.0
-            };
-            self.rect_pipeline.push_rounded_rect(
-                track_x,
-                list_y + fraction * (track_h - thumb_h),
+        self.draw_scroll_thumb(
+            Bounds::new(
+                panel_x + panel_width - padding * 0.5 - scrollbar_width,
+                list_y,
                 scrollbar_width,
-                thumb_h,
-                fade(self.ui.menu_text_dim, 0.6),
-                scrollbar_width / 2.0,
-            );
-        }
+                layout.list_height,
+            ),
+            layout.visible_count,
+            info.total_entries,
+            info.scroll_offset,
+            fade(self.ui.menu_text_dim, 0.6),
+        );
 
         // ── Footer: result count, or pending/error status ──
         let footer_y = (panel_y + panel_height - layout.footer_height - padding * 0.5).round();

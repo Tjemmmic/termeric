@@ -5,6 +5,7 @@ use super::Renderer;
 use crate::input::keybindings::BindableAction;
 use crate::ui::color::scale_alpha;
 use crate::ui::constants::BUTTON_CORNER_RADIUS;
+use crate::ui::geometry::Bounds;
 use crate::ui::shortcuts_panel::{ShortcutsPanelInfo, ShortcutsPanelLayout};
 
 impl Renderer {
@@ -187,27 +188,18 @@ impl Renderer {
         }
 
         // ── Scrollbar: a thin thumb only while rows overflow ──
-        let rows_that_fit = layout.rows_that_fit;
-        if info.total_rows > rows_that_fit && rows_that_fit > 0 {
-            let track_x = panel_x + panel_width - padding * 0.5 - scrollbar_width;
-            let track_h = layout.list_height;
-            let thumb_h =
-                (track_h * rows_that_fit as f32 / info.total_rows as f32).max(self.px(24.0));
-            let max_scroll = info.total_rows.saturating_sub(rows_that_fit);
-            let fraction = if max_scroll > 0 {
-                info.scroll_offset as f32 / max_scroll as f32
-            } else {
-                0.0
-            };
-            self.rect_pipeline.push_rounded_rect(
-                track_x,
-                list_y + fraction * (track_h - thumb_h),
+        self.draw_scroll_thumb(
+            Bounds::new(
+                panel_x + panel_width - padding * 0.5 - scrollbar_width,
+                list_y,
                 scrollbar_width,
-                thumb_h,
-                fade(self.ui.menu_text_dim, 0.6),
-                scrollbar_width / 2.0,
-            );
-        }
+                layout.list_height,
+            ),
+            layout.rows_that_fit,
+            info.total_rows,
+            info.scroll_offset,
+            fade(self.ui.menu_text_dim, 0.6),
+        );
 
         // ── Footer: count on the left, one plain instruction on the right ──
         let footer_y = (panel_y + panel_height - layout.footer_height - padding * 0.5).round();

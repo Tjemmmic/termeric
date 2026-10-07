@@ -181,14 +181,11 @@ impl Renderer {
         }
 
         self.draw_scrollbar(
-            layout.scrollbar.x,
-            layout.scrollbar.y,
-            layout.scrollbar.height,
-            cellar.total_entries,
+            layout.scrollbar,
             layout.max_visible,
+            cellar.total_entries,
             cellar.scroll,
             anim,
-            4.0,
         );
     }
 

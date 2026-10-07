@@ -4,6 +4,7 @@
 use super::Renderer;
 use crate::ui::color::scale_alpha;
 use crate::ui::constants::*;
+use crate::ui::geometry::Bounds;
 use crate::ui::icon::Icon;
 use crate::ui::settings::{
     SettingKind, SettingsControl, SettingsModalLayout, SettingsPage, SettingsPanelInfo,
@@ -327,23 +328,19 @@ impl Renderer {
         }
 
         // ── Scrollbar: a thin thumb only while rows overflow ──
-        let total = info.entries.len();
-        let rows = layout.rows_that_fit;
-        if total > rows && rows > 0 {
-            let track_h = rows as f32 * layout.row_height;
-            let thumb_h = (track_h * rows as f32 / total as f32).max(self.px(24.0));
-            let max_scroll = total - rows;
-            let fraction = info.scroll_offset.min(max_scroll) as f32 / max_scroll as f32;
-            let width = self.px(layout.scrollbar_width);
-            self.rect_pipeline.push_rounded_rect(
-                panel_x + panel_width - padding * 0.5 - width,
-                layout.list_y + fraction * (track_h - thumb_h),
-                width,
-                thumb_h,
-                fade(self.ui.menu_text_dim, 0.6),
-                width / 2.0,
-            );
-        }
+        let scrollbar_width = self.px(layout.scrollbar_width);
+        self.draw_scroll_thumb(
+            Bounds::new(
+                panel_x + panel_width - padding * 0.5 - scrollbar_width,
+                layout.list_y,
+                scrollbar_width,
+                layout.rows_that_fit as f32 * layout.row_height,
+            ),
+            layout.rows_that_fit,
+            info.entries.len(),
+            info.scroll_offset,
+            fade(self.ui.menu_text_dim, 0.6),
+        );
 
         // ── Footer: save status and Save ──
         let footer_y = layout.footer_y.round();

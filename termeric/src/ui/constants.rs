@@ -18,6 +18,9 @@ pub const BUTTON_CORNER_RADIUS: f32 = 6.0;
 /// Standard border width for UI elements.
 pub const BORDER_WIDTH: f32 = 1.0;
 
+/// The shortest a scrollbar's thumb gets, however long the list it scrolls.
+pub const MIN_SCROLL_THUMB_HEIGHT: f32 = 24.0;
+
 /// Filter fields with a leading magnifier: the icon's centre and the start
 /// of the query text, in terminal cell widths from the field's left edge.
 pub const FILTER_ICON_CENTER_CELLS: f32 = 1.3;

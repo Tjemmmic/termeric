@@ -1,7 +1,6 @@
 //! A terminal grid's rows, cursor, and scrollbar, cached row by row.
 
 use super::*;
-use crate::ui::geometry::Bounds;
 
 fn hash_text_clip<H: Hasher>(clip: TextClip, hasher: &mut H) {
     clip.left.to_bits().hash(hasher);
@@ -369,45 +368,24 @@ impl Renderer {
         if let Some(scrollbar) = scrollbar {
             let scrollback_len = grid.scrollback_len();
             let visible_rows = pane_rows.min(grid.rows());
-            let total_rows = scrollback_len + visible_rows;
-            let Bounds {
-                x: scrollbar_x,
-                y: scrollbar_top,
-                width: scrollbar_width,
-                height: scrollbar_height,
-            } = scrollbar.track;
+            let track = scrollbar.track;
             let (track_color, thumb_color) = pane_scrollbar_colors(&self.ui);
             self.rect_pipeline.push_rounded_rect(
-                scrollbar_x,
-                scrollbar_top,
-                scrollbar_width,
-                scrollbar_height,
+                track.x,
+                track.y,
+                track.width,
+                track.height,
                 track_color,
-                3.0,
+                track.width / 2.0,
             );
-
-            // Minimum thumb size of 32px keeps it targetable on HiDPI
-            // displays even when scrollback vastly exceeds the viewport.
-            let thumb_ratio = (visible_rows as f32) / (total_rows as f32);
-            let thumb_height = (scrollbar_height * thumb_ratio)
-                .max(32.0)
-                .min(scrollbar_height);
-            let max_offset = scrollback_len;
-            let scroll_fraction = if max_offset > 0 {
-                scroll_offset as f32 / max_offset as f32
-            } else {
-                0.0
-            };
-            let thumb_travel = scrollbar_height - thumb_height;
-            let thumb_y = scrollbar_top + thumb_travel * (1.0 - scroll_fraction);
-
-            self.rect_pipeline.push_rounded_rect(
-                scrollbar_x,
-                thumb_y,
-                scrollbar_width,
-                thumb_height,
+            // The scroll offset counts up from the live screen at the
+            // bottom; the thumb counts rows scrolled past at the top.
+            self.draw_scroll_thumb(
+                track,
+                visible_rows,
+                scrollback_len + visible_rows,
+                scrollback_len.saturating_sub(scroll_offset),
                 thumb_color,
-                3.0,
             );
         }
     }

@@ -10,6 +10,7 @@ use super::icons::draw_icon;
 use super::types::*;
 use crate::ui::color::{mix, scale_alpha, with_alpha};
 use crate::ui::constants::*;
+use crate::ui::geometry::Bounds;
 use crate::ui::icon::Icon;
 
 impl Renderer {
@@ -179,14 +180,11 @@ impl Renderer {
         }
 
         self.draw_scrollbar(
-            layout.scrollbar_x,
-            layout.content.y,
-            layout.content.height,
-            info.total_lines,
+            card_scrollbar_track(layout.scrollbar_x, layout.content),
             layout.rows_that_fit,
+            info.total_lines,
             info.scroll_offset,
             anim,
-            4.0,
         );
 
         self.draw_faded_separator(
@@ -376,14 +374,11 @@ impl Renderer {
         let copy_hovered = info.awaiting && layout.copy_button.contains(mouse_x, mouse_y);
         let done_hovered = info.awaiting && layout.done_button.contains(mouse_x, mouse_y);
         self.draw_scrollbar(
-            layout.scrollbar_x,
-            layout.content.y,
-            layout.content.height,
-            info.total_rows,
+            card_scrollbar_track(layout.scrollbar_x, layout.content),
             layout.rows_that_fit,
+            info.total_rows,
             info.scroll_offset,
             anim,
-            4.0,
         );
         for (button, label) in [
             (layout.stage_button, "Stage"),
@@ -613,14 +608,11 @@ impl Renderer {
         let primary_hovered = primary_enabled && layout.primary_button.contains(mouse_x, mouse_y);
         if snapshot.phase == ContextPickerPhase::Sources {
             self.draw_scrollbar(
-                layout.scrollbar_x,
-                layout.content.y,
-                layout.content.height,
-                snapshot.sources.len(),
+                card_scrollbar_track(layout.scrollbar_x, layout.content),
                 layout.visible_count,
+                snapshot.sources.len(),
                 snapshot.scroll_offset,
                 anim,
-                4.0,
             );
         }
         self.draw_button(
@@ -789,4 +781,10 @@ impl Renderer {
             anim,
         );
     }
+}
+
+/// A card's scrollbar track: the 4px strip its layout reserves at
+/// `scrollbar_x`, beside its content rows.
+fn card_scrollbar_track(scrollbar_x: f32, content: Bounds) -> Bounds {
+    Bounds::new(scrollbar_x, content.y, 4.0, content.height)
 }
