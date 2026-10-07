@@ -239,24 +239,7 @@ fn third_party_command_suffixes_do_not_invoke_builtin_ai_actions() {
 pub(super) fn kitty_capture_command(
     action: termeric_core::KittyFileTransferAction,
 ) -> termeric_core::KittyFileTransferCommand {
-    termeric_core::KittyFileTransferCommand {
-        action,
-        compression: termeric_core::KittyFileTransferCompression::None,
-        file_type: termeric_core::KittyFileTransferType::Regular,
-        transmission_type: termeric_core::KittyFileTransmissionType::Simple,
-        id: "capture-session".into(),
-        file_id: String::new(),
-        quiet: 0,
-        mtime_ns: None,
-        permissions: None,
-        size: None,
-        name: None,
-        status: None,
-        parent: None,
-        data: Box::default(),
-        bypass_present: false,
-        reply_uses_8bit_controls: false,
-    }
+    super::kitty_file_transfer::test_transfer_command(action, "capture-session")
 }
 
 use crate::config::ShellConfig;

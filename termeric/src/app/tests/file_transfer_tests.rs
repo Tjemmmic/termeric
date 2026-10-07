@@ -234,22 +234,11 @@ fn c_cancels_the_live_domain_upload_confirmation_instead_of_copying_it() {
 
 fn kitty_send_request(id: &str) -> termeric_core::KittyFileTransferCommand {
     termeric_core::KittyFileTransferCommand {
-        action: termeric_core::KittyFileTransferAction::Send,
-        compression: termeric_core::KittyFileTransferCompression::None,
-        file_type: termeric_core::KittyFileTransferType::Regular,
-        transmission_type: termeric_core::KittyFileTransmissionType::Simple,
-        id: id.into(),
-        file_id: String::new(),
-        quiet: 0,
-        mtime_ns: None,
-        permissions: None,
-        size: None,
-        name: None,
-        status: None,
-        parent: None,
-        data: Box::default(),
-        bypass_present: false,
         reply_uses_8bit_controls: true,
+        ..super::super::kitty_file_transfer::test_transfer_command(
+            termeric_core::KittyFileTransferAction::Send,
+            id,
+        )
     }
 }
 
@@ -478,22 +467,11 @@ fn kitty_upload_collects_exact_paths_before_request_scoped_consent() {
     };
     let command =
         |action, file_id: &str, name: Option<&str>, size| termeric_core::KittyFileTransferCommand {
-            action,
-            compression: termeric_core::KittyFileTransferCompression::None,
-            file_type: termeric_core::KittyFileTransferType::Regular,
-            transmission_type: termeric_core::KittyFileTransmissionType::Simple,
-            id: "upload-1".into(),
             file_id: file_id.into(),
-            quiet: 0,
-            mtime_ns: None,
-            permissions: None,
             size,
             name: name.map(str::to_owned),
-            status: None,
-            parent: None,
-            data: Box::default(),
-            bypass_present: false,
             reply_uses_8bit_controls: true,
+            ..super::super::kitty_file_transfer::test_transfer_command(action, "upload-1")
         };
 
     app.handle_terminal_event(RoutedTerminalEvent {

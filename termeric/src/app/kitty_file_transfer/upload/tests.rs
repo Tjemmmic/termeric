@@ -2,22 +2,10 @@ use super::*;
 
 fn request(session: &str, file_id: &str, name: &str) -> KittyFileTransferCommand {
     KittyFileTransferCommand {
-        action: KittyFileTransferAction::File,
-        compression: termeric_core::KittyFileTransferCompression::None,
-        file_type: KittyFileTransferType::Regular,
-        transmission_type: KittyFileTransmissionType::Simple,
-        id: session.into(),
         file_id: file_id.into(),
-        quiet: 0,
-        mtime_ns: None,
-        permissions: None,
-        size: None,
         name: Some(name.into()),
-        status: None,
-        parent: None,
-        data: Box::default(),
-        bypass_present: false,
         reply_uses_8bit_controls: true,
+        ..test_transfer_command(KittyFileTransferAction::File, session)
     }
 }
 

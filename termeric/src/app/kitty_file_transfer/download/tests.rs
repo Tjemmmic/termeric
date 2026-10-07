@@ -163,17 +163,12 @@ fn command(
 ) -> KittyFileTransferCommand {
     let is_metadata = action == KittyFileTransferAction::File;
     KittyFileTransferCommand {
-        action,
-        compression: termeric_core::KittyFileTransferCompression::None,
         file_type: if is_metadata {
             file_type
         } else {
             KittyFileTransferType::Regular
         },
-        transmission_type: KittyFileTransmissionType::Simple,
-        id: "session".into(),
         file_id: file_id.into(),
-        quiet: 0,
         mtime_ns: is_metadata.then_some(1_700_000_000_123_456_789),
         permissions: is_metadata.then_some(if file_type == KittyFileTransferType::Directory {
             0o750
@@ -183,10 +178,8 @@ fn command(
         size: is_metadata.then(|| path.map_or(0, |_| data.len() as i64)),
         name: path.map(|path| path.to_string_lossy().into_owned()),
         status: is_metadata.then(|| file_id.into()),
-        parent: None,
         data: data.into(),
-        bypass_present: false,
-        reply_uses_8bit_controls: false,
+        ..test_transfer_command(action, "session")
     }
 }
 

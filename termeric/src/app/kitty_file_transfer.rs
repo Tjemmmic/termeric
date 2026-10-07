@@ -1253,6 +1253,33 @@ fn is_upload_path_request(command: &KittyFileTransferCommand) -> bool {
         && command.data.is_empty()
 }
 
+/// A command for transfer `id` with every per-file field empty, for tests to
+/// fill in with struct update syntax.
+#[cfg(test)]
+pub(super) fn test_transfer_command(
+    action: KittyFileTransferAction,
+    id: &str,
+) -> KittyFileTransferCommand {
+    KittyFileTransferCommand {
+        action,
+        compression: termeric_core::KittyFileTransferCompression::None,
+        file_type: KittyFileTransferType::Regular,
+        transmission_type: KittyFileTransmissionType::Simple,
+        id: id.into(),
+        file_id: String::new(),
+        quiet: 0,
+        mtime_ns: None,
+        permissions: None,
+        size: None,
+        name: None,
+        status: None,
+        parent: None,
+        data: Box::default(),
+        bypass_present: false,
+        reply_uses_8bit_controls: false,
+    }
+}
+
 fn describe_origin(origin: TerminalIdentity) -> String {
     format!("tab {}, pane {}", origin.tab_id, origin.pane_id.0)
 }
