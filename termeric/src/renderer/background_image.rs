@@ -5,7 +5,7 @@ use std::sync::Arc;
 use termeric_core::{ImageId, StoredImage};
 
 use super::Renderer;
-use super::image::ImageKey;
+use super::image::{ImageKey, ImageQuad};
 use crate::config::BackgroundImageFit;
 
 mod load;
@@ -15,18 +15,6 @@ pub(crate) use load::{
 };
 
 const BACKGROUND_IMAGE_KEY: ImageKey = (0, ImageId(0));
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct BackgroundGeometry {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-    pub u_min: f32,
-    pub v_min: f32,
-    pub u_max: f32,
-    pub v_max: f32,
-}
 
 pub(super) struct BackgroundImageState {
     image: Option<StoredImage>,
@@ -50,7 +38,7 @@ pub(super) fn background_geometry(
     fit: BackgroundImageFit,
     image_size: (u32, u32),
     viewport: (f32, f32, f32, f32),
-) -> Option<BackgroundGeometry> {
+) -> Option<ImageQuad> {
     let (image_width, image_height) = (image_size.0 as f32, image_size.1 as f32);
     let (viewport_x, viewport_y, viewport_width, viewport_height) = viewport;
     if image_width <= 0.0 || image_height <= 0.0 || viewport_width <= 0.0 || viewport_height <= 0.0
@@ -58,7 +46,7 @@ pub(super) fn background_geometry(
         return None;
     }
 
-    let full = |x, y, width, height| BackgroundGeometry {
+    let full = |x, y, width, height| ImageQuad {
         x,
         y,
         width,
@@ -95,7 +83,7 @@ pub(super) fn background_geometry(
                 let inset = (1.0 - visible) * 0.5;
                 (0.0, inset, 1.0, 1.0 - inset)
             };
-            BackgroundGeometry {
+            ImageQuad {
                 x: viewport_x,
                 y: viewport_y,
                 width: viewport_width,
@@ -111,7 +99,7 @@ pub(super) fn background_geometry(
             let height = image_height.min(viewport_height);
             let u_visible = width / image_width;
             let v_visible = height / image_height;
-            BackgroundGeometry {
+            ImageQuad {
                 x: viewport_x + (viewport_width - width) * 0.5,
                 y: viewport_y + (viewport_height - height) * 0.5,
                 width,
@@ -212,19 +200,7 @@ impl BackgroundImageState {
             return;
         };
         pipeline.upload_image(device, queue, BACKGROUND_IMAGE_KEY, image);
-        pipeline.push_image(
-            BACKGROUND_IMAGE_KEY,
-            geometry.x,
-            geometry.y,
-            geometry.width,
-            geometry.height,
-            geometry.u_min,
-            geometry.v_min,
-            geometry.u_max,
-            geometry.v_max,
-            self.opacity,
-            -1,
-        );
+        pipeline.push_image(BACKGROUND_IMAGE_KEY, geometry, self.opacity, -1);
     }
 }
 

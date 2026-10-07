@@ -212,21 +212,9 @@ pub(super) fn render_headless_image_state(
             8.0,
             HEADLESS_IMAGE_CELL_HEIGHT as f32,
             scroll_offset,
-            Some((HEADLESS_IMAGE_WIDTH as f32, HEADLESS_IMAGE_HEIGHT as f32)),
+            (HEADLESS_IMAGE_WIDTH as f32, HEADLESS_IMAGE_HEIGHT as f32),
         ) {
-            pipeline.push_image(
-                key,
-                geometry.x,
-                geometry.y,
-                geometry.width,
-                geometry.height,
-                geometry.u_min,
-                geometry.v_min,
-                geometry.u_max,
-                geometry.v_max,
-                1.0,
-                presentation.placement.z_index,
-            );
+            pipeline.push_image(key, geometry, 1.0, presentation.placement.z_index);
         }
     }
     pipeline.upload(device, queue);
@@ -373,14 +361,16 @@ pub(crate) fn headless_theme_color_fidelity_smoke(device: &Device, queue: &Queue
     images.upload_image(device, queue, key, &image);
     images.push_image(
         key,
-        16.0,
-        0.0,
-        16.0,
-        HEIGHT as f32,
-        0.0,
-        0.0,
-        1.0,
-        1.0,
+        super::image::ImageQuad {
+            x: 16.0,
+            y: 0.0,
+            width: 16.0,
+            height: HEIGHT as f32,
+            u_min: 0.0,
+            v_min: 0.0,
+            u_max: 1.0,
+            v_max: 1.0,
+        },
         1.0,
         0,
     );

@@ -218,7 +218,7 @@ impl Renderer {
                 bounds.x,
                 bounds.y,
                 pane.grid.scroll_offset(),
-                Some(viewport),
+                viewport,
             );
         }
     }
@@ -230,7 +230,7 @@ impl Renderer {
         origin_x: f32,
         origin_y: f32,
         scroll_offset: usize,
-        viewport: Option<(f32, f32)>,
+        viewport: (f32, f32),
     ) {
         for presentation in images {
             let placement = &presentation.placement;
@@ -248,14 +248,7 @@ impl Renderer {
             ) {
                 self.image_pipeline.push_image(
                     key,
-                    origin_x + geometry.x,
-                    origin_y + geometry.y,
-                    geometry.width,
-                    geometry.height,
-                    geometry.u_min,
-                    geometry.v_min,
-                    geometry.u_max,
-                    geometry.v_max,
+                    geometry.offset(origin_x, origin_y),
                     1.0,
                     placement.z_index,
                 );

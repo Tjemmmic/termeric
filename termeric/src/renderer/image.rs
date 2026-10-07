@@ -8,8 +8,11 @@ use wgpu::*;
 
 use super::buffer::GrowableBuffer;
 
+/// An image as drawn: the rectangle it fills, in pixels, and the part of
+/// its texture that fills it. Terminal graphics and the background image
+/// are both queued as one.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct PlacementGeometry {
+pub(super) struct ImageQuad {
     pub x: f32,
     pub y: f32,
     pub width: f32,
@@ -20,14 +23,58 @@ pub(super) struct PlacementGeometry {
     pub v_max: f32,
 }
 
+impl ImageQuad {
+    /// The part of this quad inside the viewport from the origin to
+    /// `viewport`'s width and height, its texture coordinates cut by the
+    /// same fractions; None when nothing of it is left.
+    pub(super) fn clipped(self, viewport: (f32, f32)) -> Option<Self> {
+        if self.width <= 0.0 || self.height <= 0.0 {
+            return None;
+        }
+        let left = self.x.max(0.0);
+        let top = self.y.max(0.0);
+        let right = (self.x + self.width).min(viewport.0);
+        let bottom = (self.y + self.height).min(viewport.1);
+        if right <= left || bottom <= top {
+            return None;
+        }
+        let u_span = self.u_max - self.u_min;
+        let v_span = self.v_max - self.v_min;
+        let u_at = |x: f32| self.u_min + u_span * (x - self.x) / self.width;
+        let v_at = |y: f32| self.v_min + v_span * (y - self.y) / self.height;
+        Some(Self {
+            x: left,
+            y: top,
+            width: right - left,
+            height: bottom - top,
+            u_min: u_at(left),
+            v_min: v_at(top),
+            u_max: u_at(right),
+            v_max: v_at(bottom),
+        })
+    }
+
+    /// This quad moved by `(dx, dy)`.
+    pub(super) fn offset(self, dx: f32, dy: f32) -> Self {
+        Self {
+            x: self.x + dx,
+            y: self.y + dy,
+            ..self
+        }
+    }
+}
+
+/// Where a terminal image placement is drawn in a grid scrolled by
+/// `scroll_offset`, clipped to `viewport`, the grid's drawn width and
+/// height.
 pub(super) fn placement_geometry(
     placement: &termeric_core::ImagePlacement,
     image: &StoredImage,
     cell_width: f32,
     cell_height: f32,
     scroll_offset: usize,
-    viewport: Option<(f32, f32)>,
-) -> Option<PlacementGeometry> {
+    viewport: (f32, f32),
+) -> Option<ImageQuad> {
     let source_x = placement.source_x.min(image.width);
     let source_y = placement.source_y.min(image.height);
     let source_width = placement
@@ -69,50 +116,29 @@ pub(super) fn placement_geometry(
             (None, None) => (source_width as f32, source_height as f32),
         },
     };
-    if width <= 0.0 || height <= 0.0 {
-        return None;
+    ImageQuad {
+        x,
+        y,
+        width,
+        height,
+        u_min: source_x as f32 / image.width as f32,
+        v_min: source_y as f32 / image.height as f32,
+        u_max: (source_x + source_width) as f32 / image.width as f32,
+        v_max: (source_y + source_height) as f32 / image.height as f32,
     }
-    let (visible_x, visible_y, clipped_width, clipped_height) = viewport
-        .map(|(viewport_width, viewport_height)| {
-            let visible_x = x.max(0.0);
-            let visible_y = y.max(0.0);
-            let right = (x + width).min(viewport_width);
-            let bottom = (y + height).min(viewport_height);
-            (
-                visible_x,
-                visible_y,
-                (right - visible_x).max(0.0),
-                (bottom - visible_y).max(0.0),
-            )
-        })
-        .unwrap_or((x, y, width, height));
-    if clipped_width <= 0.0 || clipped_height <= 0.0 {
-        return None;
-    }
-    Some(PlacementGeometry {
-        x: visible_x,
-        y: visible_y,
-        width: clipped_width,
-        height: clipped_height,
-        u_min: (source_x as f32 + source_width as f32 * (visible_x - x) / width)
-            / image.width as f32,
-        v_min: (source_y as f32 + source_height as f32 * (visible_y - y) / height)
-            / image.height as f32,
-        u_max: (source_x as f32 + source_width as f32 * ((visible_x - x) + clipped_width) / width)
-            / image.width as f32,
-        v_max: (source_y as f32
-            + source_height as f32 * ((visible_y - y) + clipped_height) / height)
-            / image.height as f32,
-    })
+    .clipped(viewport)
 }
 
+/// Where a presented image is drawn, as [`placement_geometry`] places
+/// one, or by the pixel rectangle and texture coordinates a frozen
+/// synchronized-output capture recorded for it.
 pub(super) fn presentation_geometry(
     presentation: &PresentationImage,
     cell_width: f32,
     cell_height: f32,
     scroll_offset: usize,
-    viewport: Option<(f32, f32)>,
-) -> Option<PlacementGeometry> {
+    viewport: (f32, f32),
+) -> Option<ImageQuad> {
     let (pixel_rect, source_uv) = match (presentation.pixel_rect, presentation.source_uv) {
         (Some(pixel_rect), Some(source_uv)) => (pixel_rect, source_uv),
         (None, None) => {
@@ -128,43 +154,18 @@ pub(super) fn presentation_geometry(
         _ => return None,
     };
     let placement = &presentation.placement;
-    let x = placement.col as f32 * cell_width + pixel_rect[0];
     let visual_row = placement.row.saturating_add(scroll_offset as i64);
-    let y = visual_row as f32 * cell_height + pixel_rect[1];
-    let width = pixel_rect[2];
-    let height = pixel_rect[3];
-    if width <= 0.0 || height <= 0.0 {
-        return None;
+    ImageQuad {
+        x: placement.col as f32 * cell_width + pixel_rect[0],
+        y: visual_row as f32 * cell_height + pixel_rect[1],
+        width: pixel_rect[2],
+        height: pixel_rect[3],
+        u_min: source_uv[0],
+        v_min: source_uv[1],
+        u_max: source_uv[2],
+        v_max: source_uv[3],
     }
-    let (visible_x, visible_y, clipped_width, clipped_height) = viewport
-        .map(|(viewport_width, viewport_height)| {
-            let visible_x = x.max(0.0);
-            let visible_y = y.max(0.0);
-            let right = (x + width).min(viewport_width);
-            let bottom = (y + height).min(viewport_height);
-            (
-                visible_x,
-                visible_y,
-                (right - visible_x).max(0.0),
-                (bottom - visible_y).max(0.0),
-            )
-        })
-        .unwrap_or((x, y, width, height));
-    if clipped_width <= 0.0 || clipped_height <= 0.0 {
-        return None;
-    }
-    let u_span = source_uv[2] - source_uv[0];
-    let v_span = source_uv[3] - source_uv[1];
-    Some(PlacementGeometry {
-        x: visible_x,
-        y: visible_y,
-        width: clipped_width,
-        height: clipped_height,
-        u_min: source_uv[0] + u_span * (visible_x - x) / width,
-        v_min: source_uv[1] + v_span * (visible_y - y) / height,
-        u_max: source_uv[0] + u_span * ((visible_x - x) + clipped_width) / width,
-        v_max: source_uv[1] + v_span * ((visible_y - y) + clipped_height) / height,
-    })
+    .clipped(viewport)
 }
 
 /// Image IDs are terminal-local, so the GPU cache key must include the owning
@@ -208,14 +209,7 @@ pub struct ImagePipeline {
 /// Instance of an image to render
 struct ImageInstance {
     image_key: ImageKey,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    u_min: f32,
-    v_min: f32,
-    u_max: f32,
-    v_max: f32,
+    quad: ImageQuad,
     z_index: i32,
     opacity: f32,
 }
@@ -440,31 +434,18 @@ impl ImagePipeline {
         );
     }
 
-    /// Queue an image for rendering
-    pub fn push_image(
+    /// Queue `quad` of the image `image_key` for rendering, faded by
+    /// `opacity` and stacked by `z_index` (below text when negative).
+    pub(super) fn push_image(
         &mut self,
         image_key: ImageKey,
-        x: f32,
-        y: f32,
-        width: f32,
-        height: f32,
-        u_min: f32,
-        v_min: f32,
-        u_max: f32,
-        v_max: f32,
+        quad: ImageQuad,
         opacity: f32,
         z_index: i32,
     ) {
         self.instances.push(ImageInstance {
             image_key,
-            x,
-            y,
-            width,
-            height,
-            u_min,
-            v_min,
-            u_max,
-            v_max,
+            quad,
             opacity: opacity.clamp(0.0, 1.0),
             z_index,
         });
@@ -483,10 +464,16 @@ impl ImagePipeline {
         self.indices.clear();
 
         for instance in &self.instances {
-            let x = instance.x;
-            let y = instance.y;
-            let w = instance.width;
-            let h = instance.height;
+            let ImageQuad {
+                x,
+                y,
+                width: w,
+                height: h,
+                u_min,
+                v_min,
+                u_max,
+                v_max,
+            } = instance.quad;
 
             let Ok(base_idx) = u16::try_from(self.vertices.len()) else {
                 log::warn!("Too many image placements for the u16 index buffer");
@@ -496,22 +483,22 @@ impl ImagePipeline {
             // Four corners
             self.vertices.push(ImageVertex {
                 position: [x, y],
-                tex_coords: [instance.u_min, instance.v_min],
+                tex_coords: [u_min, v_min],
                 opacity: instance.opacity,
             });
             self.vertices.push(ImageVertex {
                 position: [x + w, y],
-                tex_coords: [instance.u_max, instance.v_min],
+                tex_coords: [u_max, v_min],
                 opacity: instance.opacity,
             });
             self.vertices.push(ImageVertex {
                 position: [x + w, y + h],
-                tex_coords: [instance.u_max, instance.v_max],
+                tex_coords: [u_max, v_max],
                 opacity: instance.opacity,
             });
             self.vertices.push(ImageVertex {
                 position: [x, y + h],
-                tex_coords: [instance.u_min, instance.v_max],
+                tex_coords: [u_min, v_max],
                 opacity: instance.opacity,
             });
 
@@ -622,7 +609,7 @@ mod tests {
     fn rendered_images(
         terminal: &termeric_core::Terminal,
         cell: (f32, f32),
-    ) -> Vec<(ImageId, Option<PlacementGeometry>)> {
+    ) -> Vec<(ImageId, Option<ImageQuad>)> {
         let grid = terminal.presentation_grid();
         terminal
             .presentation_images()
@@ -635,7 +622,7 @@ mod tests {
                         cell.0,
                         cell.1,
                         grid.scroll_offset(),
-                        Some((grid.cols() as f32 * cell.0, grid.rows() as f32 * cell.1)),
+                        (grid.cols() as f32 * cell.0, grid.rows() as f32 * cell.1),
                     ),
                 )
             })
@@ -794,7 +781,7 @@ mod tests {
             .find(|p| p.placement.image_id == ImageId(7))
             .unwrap();
         assert_eq!(parent.placement.row, -1);
-        let geometry = presentation_geometry(parent, 10.0, 20.0, 0, Some((80.0, 40.0))).unwrap();
+        let geometry = presentation_geometry(parent, 10.0, 20.0, 0, (80.0, 40.0)).unwrap();
         assert_eq!(
             (geometry.y, geometry.height, geometry.v_min),
             (0.0, 20.0, 0.5)
@@ -1026,8 +1013,7 @@ mod tests {
             pixel_height: None,
             z_index: -1,
         };
-        let geometry =
-            placement_geometry(&placement, &image, 10.0, 20.0, 0, Some((50.0, 40.0))).unwrap();
+        let geometry = placement_geometry(&placement, &image, 10.0, 20.0, 0, (50.0, 40.0)).unwrap();
         assert_eq!((geometry.x, geometry.y), (23.0, 24.0));
         assert_eq!((geometry.width, geometry.height), (27.0, 16.0));
         assert!((geometry.u_min - 0.1).abs() < f32::EPSILON);
@@ -1038,15 +1024,8 @@ mod tests {
         let mut history_placement = placement.clone();
         history_placement.row = -1;
         history_placement.y_offset = 0;
-        let history = placement_geometry(
-            &history_placement,
-            &image,
-            10.0,
-            20.0,
-            1,
-            Some((100.0, 100.0)),
-        )
-        .unwrap();
+        let history =
+            placement_geometry(&history_placement, &image, 10.0, 20.0, 1, (100.0, 100.0)).unwrap();
         assert_eq!(history.y, 0.0);
     }
 
@@ -1082,8 +1061,7 @@ mod tests {
             pixel_rect: Some([2.0, 3.0, 8.0, 10.0]),
             source_uv: Some([0.25, 0.1, 0.75, 0.9]),
         };
-        let geometry =
-            presentation_geometry(&presentation, 10.0, 20.0, 0, Some((16.0, 8.0))).unwrap();
+        let geometry = presentation_geometry(&presentation, 10.0, 20.0, 0, (16.0, 8.0)).unwrap();
         assert_eq!((geometry.x, geometry.y), (12.0, 3.0));
         assert_eq!((geometry.width, geometry.height), (4.0, 5.0));
         assert!((geometry.u_min - 0.25).abs() < f32::EPSILON);
@@ -1124,12 +1102,37 @@ mod tests {
             pixel_rect: Some([-10.0, 0.0, 20.0, 10.0]),
             source_uv: Some([0.0, 0.0, 1.0, 1.0]),
         };
-        let geometry =
-            presentation_geometry(&presentation, 10.0, 10.0, 0, Some((80.0, 40.0))).unwrap();
+        let geometry = presentation_geometry(&presentation, 10.0, 10.0, 0, (80.0, 40.0)).unwrap();
         assert_eq!((geometry.x, geometry.y), (0.0, 10.0));
         assert_eq!((geometry.width, geometry.height), (10.0, 10.0));
         assert!((geometry.u_min - 0.5).abs() < f32::EPSILON);
         assert!((geometry.u_max - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn clipping_a_quad_cuts_its_texture_by_the_same_fractions() {
+        let quad = ImageQuad {
+            x: -10.0,
+            y: 5.0,
+            width: 40.0,
+            height: 20.0,
+            u_min: 0.2,
+            v_min: 0.0,
+            u_max: 0.6,
+            v_max: 1.0,
+        };
+        // A quarter is cut on the left, another on the right, and the
+        // bottom half below the viewport.
+        let clipped = quad.clipped((20.0, 15.0)).unwrap();
+        assert_eq!(
+            (clipped.x, clipped.y, clipped.width, clipped.height),
+            (0.0, 5.0, 20.0, 10.0)
+        );
+        assert!((clipped.u_min - 0.3).abs() < 1e-6);
+        assert!((clipped.u_max - 0.5).abs() < 1e-6);
+        assert_eq!((clipped.v_min, clipped.v_max), (0.0, 0.5));
+        assert_eq!(quad.clipped((20.0, 5.0)), None);
+        assert_eq!(quad.offset(3.0, 4.0).x, -7.0);
     }
 
     #[test]
@@ -1160,14 +1163,13 @@ mod tests {
             z_index: 0,
         };
 
-        let exact = placement_geometry(&placement, &image, 10.0, 20.0, 0, None).unwrap();
+        let exact = placement_geometry(&placement, &image, 10.0, 20.0, 0, (100.0, 100.0)).unwrap();
         assert_eq!(
             (exact.x, exact.y, exact.width, exact.height),
             (10.0, 20.0, 4.0, 6.0)
         );
 
-        let clipped =
-            placement_geometry(&placement, &image, 10.0, 20.0, 0, Some((12.0, 24.0))).unwrap();
+        let clipped = placement_geometry(&placement, &image, 10.0, 20.0, 0, (12.0, 24.0)).unwrap();
         assert_eq!((clipped.width, clipped.height), (2.0, 4.0));
         assert!((clipped.u_max - 0.5).abs() < f32::EPSILON);
         assert!((clipped.v_max - (4.0 / 6.0)).abs() < 0.0001);
