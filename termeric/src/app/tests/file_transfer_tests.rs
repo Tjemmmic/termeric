@@ -130,6 +130,9 @@ fn live_domain_drop_requires_request_scoped_confirmation_without_reading_content
         ..Config::default()
     };
     let mut app = App::new_headless_with_tabs(config);
+    // Each dismissed confirmation must be gone before the next request,
+    // without waiting out its fade.
+    app.info_overlay.set_reduced_motion(true);
     app.live_domain_authority = Some(crate::domain::DomainAuthority::Local);
     app.tabs
         .as_mut()
@@ -159,8 +162,6 @@ fn live_domain_drop_requires_request_scoped_confirmation_without_reading_content
     });
     assert!(app.pending_file_upload().is_none());
     assert!(app.active_file_upload.is_none());
-    std::thread::sleep(Duration::from_millis(250));
-    app.info_overlay.update_animation();
 
     assert!(app.handle_dropped_path(&source));
     let second_request = app.info_overlay.request_id();
@@ -180,8 +181,6 @@ fn live_domain_drop_requires_request_scoped_confirmation_without_reading_content
     assert!(app.active_file_upload.is_none());
     assert!(latest_toast(&app).is_some_and(|message| message.contains("native window")));
 
-    std::thread::sleep(Duration::from_millis(250));
-    app.info_overlay.update_animation();
     let directory = temp.path().join("project λ");
     std::fs::create_dir(&directory).unwrap();
     assert!(app.handle_dropped_path(&directory));
@@ -374,6 +373,9 @@ fn kitty_download_consent_is_request_scoped_and_terminal_type_gated() {
         ..Config::default()
     };
     let mut app = App::new_headless_with_tabs(config);
+    // Each dismissed confirmation must be gone before the next request,
+    // without waiting out its fade.
+    app.info_overlay.set_reduced_motion(true);
     let tab_id = app.tabs.as_ref().unwrap().active_tab_id().unwrap();
     let origin = TerminalEventOrigin {
         tab_id,
@@ -418,8 +420,6 @@ fn kitty_download_consent_is_request_scoped_and_terminal_type_gated() {
     assert!(app.kitty_file_transfers.pending.is_none());
     assert!(app.kitty_file_transfers.active.is_empty());
 
-    std::thread::sleep(Duration::from_millis(250));
-    app.info_overlay.update_animation();
     let mut stale_request = request.clone();
     stale_request.id = "download-stale".into();
     app.handle_terminal_event(RoutedTerminalEvent {
@@ -431,8 +431,6 @@ fn kitty_download_consent_is_request_scoped_and_terminal_type_gated() {
     assert!(app.prune_stale_kitty_file_transfers());
     assert!(app.kitty_file_transfers.pending.is_none());
     app.info_overlay.dismiss(replacement);
-    std::thread::sleep(Duration::from_millis(250));
-    app.info_overlay.update_animation();
 
     app.tabs
         .as_mut()
