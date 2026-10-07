@@ -79,15 +79,9 @@ impl Renderer {
         match color {
             ExtraCursorColor::Unset | ExtraCursorColor::Special => fallback,
             ExtraCursorColor::Rgb(color) => color.to_f32_array(),
-            ExtraCursorColor::Indexed(index) => dynamic_colors
-                .palette(index)
-                .unwrap_or_else(|| {
-                    if index < 16 {
-                        self.terminal_palette.ansi[index as usize]
-                    } else {
-                        termeric_core::ansi::color_256(index)
-                    }
-                })
+            ExtraCursorColor::Indexed(index) => self
+                .terminal_palette
+                .indexed(dynamic_colors, index, termeric_core::ansi::color_256(index))
                 .to_f32_array(),
         }
     }

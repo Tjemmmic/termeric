@@ -288,15 +288,27 @@ impl TerminalPalette {
     ) -> TermColor {
         match spec {
             ColorSpec::Default => default,
-            ColorSpec::Indexed(index) => dynamic.palette(index).unwrap_or_else(|| {
-                if index < 16 {
-                    self.ansi[index as usize]
-                } else {
-                    resolved
-                }
-            }),
+            ColorSpec::Indexed(index) => self.indexed(dynamic, index, resolved),
             ColorSpec::TrueColor(_) => resolved,
         }
+    }
+
+    /// Indexed color `index`: the terminal's own override when it set one,
+    /// else the theme's ANSI color for the first sixteen, else `extended`,
+    /// the 256-color value the caller already has for it.
+    pub(super) fn indexed(
+        &self,
+        dynamic: &termeric_core::DynamicColors,
+        index: u8,
+        extended: TermColor,
+    ) -> TermColor {
+        dynamic.palette(index).unwrap_or_else(|| {
+            if index < 16 {
+                self.ansi[index as usize]
+            } else {
+                extended
+            }
+        })
     }
 
     pub(super) fn default_fg(&self, dynamic: &termeric_core::DynamicColors) -> TermColor {
