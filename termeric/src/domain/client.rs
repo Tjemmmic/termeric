@@ -237,15 +237,24 @@ impl DomainCloser {
     }
 }
 
+/// How long a closing SSH transport may take to exit by itself, and how
+/// often to look. Its pipes are closed by then, so OpenSSH normally exits at
+/// once after telling the remote bridge; a little patience lets it end that
+/// session cleanly, while a hung connection is killed rather than holding
+/// up the relay or upload that is closing it.
+const SSH_EXIT_GRACE: Duration = Duration::from_millis(100);
+const SSH_EXIT_POLL: Duration = Duration::from_millis(10);
+
 impl SshChild {
     fn close(&self) {
         let Some(mut child) = self.0.lock().unwrap().take() else {
             return;
         };
-        for _ in 0..10 {
+        let deadline = Instant::now() + SSH_EXIT_GRACE;
+        while Instant::now() < deadline {
             match child.try_wait() {
                 Ok(Some(_)) => return,
-                Ok(None) => thread::sleep(Duration::from_millis(10)),
+                Ok(None) => thread::sleep(SSH_EXIT_POLL),
                 Err(_) => break,
             }
         }

@@ -42,6 +42,11 @@ const ATTACH_QUEUE_CAPACITY: usize = 64;
 // reconnects and receives a new atomic snapshot.
 const TOPOLOGY_QUEUE_CAPACITY: usize = 1;
 const ATTACH_SNAPSHOT_BYTES: usize = 512 * 1024;
+/// The room an attach snapshot keeps for what it replays besides the rows,
+/// extra cursors, and user-defined keys: the reset in front, and the modes,
+/// keyboard settings, and cursor position after, which together stay well
+/// under this.
+const SNAPSHOT_STATE_RESERVE: usize = 512;
 /// The longest text one paste request takes: once bracketed, it still fits
 /// the one pane input write every request is bounded to.
 const MAX_PASTE_TEXT_BYTES: usize =
@@ -2100,18 +2105,19 @@ fn attachment_input_loop(
 fn terminal_snapshot(terminal: &Terminal, max_bytes: usize) -> Vec<u8> {
     let multiple_cursors = terminal
         .extra_cursors()
-        .replay(max_bytes.saturating_sub(512));
+        .replay(max_bytes.saturating_sub(SNAPSHOT_STATE_RESERVE));
     let user_defined_keys = user_defined_keys_snapshot(terminal);
-    let user_defined_keys = if user_defined_keys.len() <= max_bytes.saturating_sub(512) {
-        user_defined_keys
-    } else {
-        Vec::new()
-    };
+    let user_defined_keys =
+        if user_defined_keys.len() <= max_bytes.saturating_sub(SNAPSHOT_STATE_RESERVE) {
+            user_defined_keys
+        } else {
+            Vec::new()
+        };
     let lines = terminal.grid().styled_lines();
     let mut selected = Vec::new();
     let mut bytes = 0usize;
     let content_budget = max_bytes
-        .saturating_sub(512)
+        .saturating_sub(SNAPSHOT_STATE_RESERVE)
         .saturating_sub(user_defined_keys.len())
         .saturating_sub(multiple_cursors.len());
     for line in lines.into_iter().rev() {
@@ -2236,7 +2242,7 @@ fn terminal_snapshot(terminal: &Terminal, max_bytes: usize) -> Vec<u8> {
     let cursor = terminal.grid().cursor();
     snapshot.extend_from_slice(format!("\x1b[{};{}H", cursor.row + 1, cursor.col + 1).as_bytes());
     snapshot.extend_from_slice(&multiple_cursors);
-    debug_assert!(snapshot.len() <= max_bytes || max_bytes < 512);
+    debug_assert!(snapshot.len() <= max_bytes || max_bytes < SNAPSHOT_STATE_RESERVE);
     snapshot
 }
 

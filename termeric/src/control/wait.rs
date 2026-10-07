@@ -84,7 +84,7 @@ fn discover(process_id: u32) -> anyhow::Result<ControlEndpoint> {
 }
 
 fn exchange_deadline(deadline: Option<Instant>) -> Instant {
-    let exchange = Instant::now() + client::IO_TIMEOUT;
+    let exchange = Instant::now() + super::IO_TIMEOUT;
     deadline.map_or(exchange, |deadline| deadline.min(exchange))
 }
 

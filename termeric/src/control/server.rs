@@ -4,6 +4,7 @@
 
 use super::paths::ControlEndpoint;
 use super::protocol::{self, ClientFrame, Request, Response, ServerFrame};
+use super::{EVENT_LOOP_TIMEOUT, IO_TIMEOUT};
 use crate::app::AppEvent;
 use crate::local_socket::{self, OwnedFile};
 use anyhow::Context;
@@ -14,12 +15,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 use winit::event_loop::EventLoopProxy;
 
 const MAX_CLIENTS: usize = 16;
-const IO_TIMEOUT: Duration = Duration::from_secs(12);
-const EVENT_LOOP_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct ControlServer {
     endpoint: ControlEndpoint,

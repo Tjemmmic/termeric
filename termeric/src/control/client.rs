@@ -2,6 +2,7 @@
 //! authenticated exchange per request, checking that a reply answers it, and
 //! safe command-line formatting of the result.
 
+use super::IO_TIMEOUT;
 use super::paths::ControlEndpoint;
 use super::protocol::{self, ClientFrame, ProcessInventory, Request, Response, ServerFrame};
 use crate::deadline_io::{self, Deadline, PollReader, SocketWriter};
@@ -9,8 +10,6 @@ use anyhow::Context;
 use serde::Serialize;
 use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
-
-pub(super) const IO_TIMEOUT: Duration = Duration::from_secs(12);
 
 #[derive(Serialize)]
 struct InventoryCollection {

@@ -7,6 +7,7 @@
 //! clipboard data and plugin/provider credentials stay hidden.
 
 use std::os::unix::ffi::OsStringExt as _;
+use std::time::Duration;
 
 mod environment_input;
 pub(crate) mod launches;
@@ -53,6 +54,14 @@ pub enum ControlCommand {
         json: bool,
     },
 }
+
+/// How long the GUI event loop has to answer one control request.
+const EVENT_LOOP_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long one control exchange may take on the socket, on either side.
+/// It outlasts the event loop's answer, so a GUI that is slow to answer is
+/// reported as such by the server rather than as a client timeout.
+const IO_TIMEOUT: Duration = Duration::from_secs(12);
+const _: () = assert!(IO_TIMEOUT.as_millis() > EVENT_LOOP_TIMEOUT.as_millis());
 
 /// The longest a launch wait may be told to wait, in seconds: one day.
 pub const MAX_WAIT_SECONDS: u32 = 86_400;
