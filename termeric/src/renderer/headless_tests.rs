@@ -1,5 +1,5 @@
 //! Headless GPU smokes of the real atlas, text, rectangle, and image
-//! pipelines, run by `test_support::gpu_render_smoke`.
+//! pipelines, run by `gpu_render_smoke` below.
 
 use super::*;
 use termeric_core::CellAttrs;
@@ -293,7 +293,7 @@ fn expected_headless_image_state(source_row_offset: u32, visible_rows: u32) -> V
 /// and after terminal scrolling. Every pixel row must be present in the first
 /// frame; scrolling must clip it once and restoring scrollback must reveal the
 /// complete image again without incrementally discovering rows.
-pub(crate) fn headless_image_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
+fn headless_image_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
     let mut pipeline = ImagePipeline::new(device, TextureFormat::Rgba8Unorm)?;
     pipeline.resize(queue, HEADLESS_IMAGE_WIDTH, HEADLESS_IMAGE_HEIGHT);
     let image = headless_image_fixture();
@@ -319,7 +319,7 @@ pub(crate) fn headless_image_render_smoke(device: &Device, queue: &Queue) -> Res
 /// case: rendering through an sRGB view or sampling an sRGB-decoding texture
 /// lightens every mid-tone (Turnip's `#18151A` background presents as
 /// `#56515A`), which fails the exact comparisons below.
-pub(crate) fn headless_theme_color_fidelity_smoke(device: &Device, queue: &Queue) -> Result<()> {
+fn headless_theme_color_fidelity_smoke(device: &Device, queue: &Queue) -> Result<()> {
     use crate::config::theme::Color as ThemeColor;
 
     const WIDTH: u32 = 64;
@@ -402,7 +402,7 @@ pub(crate) fn headless_theme_color_fidelity_smoke(device: &Device, queue: &Queue
 
 /// Chrome labels shape in the desktop's UI face through the shared atlas,
 /// measure consistently with what is drawn, and land on whole pixels.
-pub(crate) fn headless_ui_text_smoke(device: &Device, queue: &Queue) -> Result<()> {
+fn headless_ui_text_smoke(device: &Device, queue: &Queue) -> Result<()> {
     let mut glyph_cache = GlyphCache::for_test(device, queue, 16.0, false)?;
     let size = physical_font_size(ui_text::UI_LABEL_POINTS, 1.0);
     let metrics = glyph_cache.ui_font_metrics(size);
@@ -454,7 +454,7 @@ fn target_clip(width: u32, height: u32) -> TextClip {
 /// Shape and submit representative multi-scalar terminal graphemes through the
 /// real text atlas/pipeline. The queued-content assertions act as a small
 /// geometry golden: no case may collapse to its first scalar before shaping.
-pub(crate) fn headless_unicode_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
+fn headless_unicode_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
     const FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
     const WIDTH: u32 = 512;
     const HEIGHT: u32 = 96;
@@ -566,7 +566,7 @@ pub(crate) fn headless_unicode_render_smoke(device: &Device, queue: &Queue) -> R
 
 /// Load a real COLR/CBDT emoji font and carry its RGBA pixels through the
 /// dedicated atlas, vertex flag, bind group, and shader compilation path.
-pub(crate) fn headless_color_emoji_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
+fn headless_color_emoji_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
     let font_path = [
         "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
         "/usr/share/fonts/noto/NotoColorEmoji.ttf",
@@ -609,7 +609,7 @@ pub(crate) fn headless_color_emoji_render_smoke(device: &Device, queue: &Queue) 
 /// Force the real raster/text path beyond a tiny multi-page atlas. Every
 /// scalar must still produce visible geometry, even when all frame-safe pages
 /// are pinned and the permanent replacement glyph is required.
-pub(crate) fn headless_glyph_atlas_stress_smoke(device: &Device, queue: &Queue) -> Result<()> {
+fn headless_glyph_atlas_stress_smoke(device: &Device, queue: &Queue) -> Result<()> {
     const FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
     const GLYPHS: usize = 2_048;
     let mut glyph_cache = GlyphCache::for_test(device, queue, 18.0, false)?;
@@ -875,10 +875,7 @@ fn render_queued_text_snapshot(
 /// smoke's visual baseline. The bundled test font removes host font discovery
 /// from the baseline while retaining Termeric's real atlas, shaping, upload,
 /// shader, blending, and GPU readback paths.
-pub(crate) fn headless_gui_visual_snapshot(
-    device: &Device,
-    queue: &Queue,
-) -> Result<(Vec<u8>, u32, u32)> {
+fn headless_gui_visual_snapshot(device: &Device, queue: &Queue) -> Result<(Vec<u8>, u32, u32)> {
     const WIDTH: u32 = 256;
     const HEIGHT: u32 = 64;
     const FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
@@ -902,7 +899,7 @@ pub(crate) fn headless_gui_visual_snapshot(
 
 /// Render deterministic enabled/disabled ligature snapshots through the real
 /// atlas and GPU pipeline, and verify unchanged frames reuse shaped runs.
-pub(crate) fn headless_ligature_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
+fn headless_ligature_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
     const FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
     let mut glyph_cache = GlyphCache::for_test(device, queue, 16.0, true)?;
     glyph_cache.install_test_font(
@@ -1047,7 +1044,7 @@ pub(crate) fn headless_ligature_render_smoke(device: &Device, queue: &Queue) -> 
 /// pipelines. The assertions are a portable geometry golden: they verify face
 /// requests, foreground suppression, decoration primitive counts, and pane
 /// clipping without depending on platform-specific font pixels.
-pub(crate) fn headless_sgr_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
+fn headless_sgr_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
     const FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
     const WIDTH: u32 = 256;
     const HEIGHT: u32 = 128;
@@ -1216,10 +1213,7 @@ pub(crate) fn headless_sgr_render_smoke(device: &Device, queue: &Queue) -> Resul
     Ok(())
 }
 
-pub(crate) fn headless_palette_input_smoke(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-) -> anyhow::Result<()> {
+fn headless_palette_input_smoke(device: &wgpu::Device, queue: &wgpu::Queue) -> anyhow::Result<()> {
     use super::{GlyphCache, TextPipeline, text::TextClip};
     use crate::ui::command_palette::PaletteLayout;
     let mut glyphs = GlyphCache::for_test(device, queue, 16.0, false)?;
@@ -1346,5 +1340,221 @@ mod headless_image_readback_tests {
                 .to_string()
                 .contains("painted outside the expected scrolled image footprint")
         );
+    }
+}
+
+#[test]
+#[ignore = "needs a GPU or Mesa's software Vulkan: cargo test -p termeric -- --ignored gpu_render_smoke"]
+fn gpu_render_smoke() {
+    let instance_descriptor = wgpu::InstanceDescriptor::from_env_or_default();
+    let enabled_backends = instance_descriptor.backends;
+    let instance = wgpu::Instance::new(&instance_descriptor);
+    let require_hardware = std::env::var("TERMERIC_GPU_SMOKE_HARDWARE").as_deref() == Ok("1");
+    let adapter = discover_adapter(
+        &instance,
+        enabled_backends,
+        None,
+        wgpu::PowerPreference::LowPower,
+        !require_hardware,
+    )
+    .unwrap_or_else(|| {
+        let available = instance
+            .enumerate_adapters(enabled_backends)
+            .into_iter()
+            .map(|adapter| {
+                let info = adapter.get_info();
+                format!("{:?}/{:?}/{:?}", info.name, info.backend, info.device_type)
+            })
+            .collect::<Vec<_>>();
+        if require_hardware {
+            panic!(
+                "TERMERIC_GPU_SMOKE_HARDWARE=1 but no headless hardware adapter was found; \
+                 enabled backends={enabled_backends:?}; enumerated adapters={available:?}"
+            );
+        }
+        panic!(
+            "no WGPU software fallback adapter was found; \
+             enabled backends={enabled_backends:?}; enumerated adapters={available:?}. \
+             Install a WGPU-compatible CPU implementation such as Mesa llvmpipe/lavapipe \
+             (mesa-vulkan-drivers on Debian/Ubuntu)"
+        );
+    });
+    let adapter_info = adapter.get_info();
+    if require_hardware {
+        assert_ne!(
+            adapter_info.device_type,
+            wgpu::DeviceType::Cpu,
+            "hardware smoke selected a CPU adapter: {adapter_info:?}"
+        );
+    } else {
+        assert_eq!(
+            adapter_info.device_type,
+            wgpu::DeviceType::Cpu,
+            "software smoke selected a non-CPU adapter: {adapter_info:?}"
+        );
+    }
+    eprintln!("GPU render smoke adapter: {adapter_info:?}");
+    let (device, queue) = pollster::block_on(adapter.request_device(
+        &wgpu::DeviceDescriptor {
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::downlevel_defaults(),
+            memory_hints: wgpu::MemoryHints::default(),
+            label: Some("Termeric headless smoke device"),
+        },
+        None,
+    ))
+    .expect("headless GPU device request failed");
+    headless_unicode_render_smoke(&device, &queue).expect("Unicode grapheme render smoke failed");
+    headless_ui_text_smoke(&device, &queue).expect("UI text smoke failed");
+    headless_color_emoji_render_smoke(&device, &queue).expect("color emoji render smoke failed");
+    headless_glyph_atlas_stress_smoke(&device, &queue)
+        .expect("paged glyph atlas stress smoke failed");
+    headless_sgr_render_smoke(&device, &queue).expect("SGR attribute render smoke failed");
+    headless_ligature_render_smoke(&device, &queue).expect("ligature render smoke failed");
+    headless_palette_input_smoke(&device, &queue).expect("palette input geometry smoke failed");
+    headless_image_render_smoke(&device, &queue).expect("Kitty graphics render smoke failed");
+    headless_theme_color_fidelity_smoke(&device, &queue)
+        .expect("theme color fidelity smoke failed");
+    super::background_image::headless_background_render_smoke(&device, &queue)
+        .expect("background image render smoke failed");
+    let (pixels, width, height) =
+        headless_gui_visual_snapshot(&device, &queue).expect("GUI visual baseline render failed");
+    if let Some(output) = std::env::var_os("TERMERIC_GUI_VISUAL_OUTPUT") {
+        let output = std::path::PathBuf::from(output);
+        if let Some(parent) = output.parent() {
+            std::fs::create_dir_all(parent).expect("create GUI visual artifact directory");
+        }
+        ::image::save_buffer(&output, &pixels, width, height, ::image::ColorType::Rgba8)
+            .expect("save GUI visual artifact");
+    }
+    let signature = VisualSignature::of(&pixels, width, height);
+    let baseline = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/renderer/visual_baseline.json"
+    );
+    if std::env::var("TERMERIC_GUI_VISUAL_UPDATE").as_deref() == Ok("1") {
+        let json = serde_json::to_string_pretty(&signature).unwrap();
+        std::fs::write(baseline, json + "\n").expect("write the visual baseline");
+    }
+    let expected: VisualSignature =
+        serde_json::from_str(&std::fs::read_to_string(baseline).unwrap()).unwrap();
+    let differences = signature.differences(&expected);
+    assert!(
+        differences.is_empty(),
+        "GUI visual regression: {differences:?}; if the change is intended, rerun with \
+         TERMERIC_GUI_VISUAL_UPDATE=1"
+    );
+}
+
+/// Where ink falls in a rendered frame, coarse enough to ignore
+/// antialiasing: the frame is shrunk to 128×32 and compared by how much is
+/// inked, its bounds, its mean color, and its row and column profiles.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct VisualSignature {
+    normalized_size: [u32; 2],
+    ink_pixels: usize,
+    ink_bbox: [u32; 4],
+    mean_ink_rgb: [f64; 3],
+    row_ink: Vec<u32>,
+    column_ink: Vec<u32>,
+}
+
+impl VisualSignature {
+    const SIZE: [u32; 2] = [128, 32];
+
+    fn of(rgba: &[u8], width: u32, height: u32) -> Self {
+        let image = ::image::RgbaImage::from_raw(width, height, rgba.to_vec())
+            .expect("frame pixels match its size");
+        let [columns, rows] = Self::SIZE;
+        let small = ::image::imageops::resize(
+            &image,
+            columns,
+            rows,
+            ::image::imageops::FilterType::Triangle,
+        );
+        let mut signature = Self {
+            normalized_size: Self::SIZE,
+            ink_pixels: 0,
+            ink_bbox: [u32::MAX, u32::MAX, 0, 0],
+            mean_ink_rgb: [0.0; 3],
+            row_ink: vec![0; rows as usize],
+            column_ink: vec![0; columns as usize],
+        };
+        for (x, y, pixel) in small.enumerate_pixels() {
+            let [red, green, blue, _] = pixel.0;
+            if red.max(green).max(blue) <= 8 {
+                continue;
+            }
+            signature.ink_pixels += 1;
+            let [left, top, right, bottom] = &mut signature.ink_bbox;
+            (*left, *top, *right, *bottom) = (
+                (*left).min(x),
+                (*top).min(y),
+                (*right).max(x),
+                (*bottom).max(y),
+            );
+            for (sum, channel) in signature.mean_ink_rgb.iter_mut().zip([red, green, blue]) {
+                *sum += f64::from(channel);
+            }
+            signature.row_ink[y as usize] += 1;
+            signature.column_ink[x as usize] += 1;
+        }
+        assert!(signature.ink_pixels > 0, "the frame has no visible pixels");
+        for sum in &mut signature.mean_ink_rgb {
+            *sum /= signature.ink_pixels as f64;
+        }
+        signature
+    }
+
+    fn differences(&self, expected: &Self) -> Vec<String> {
+        let mut differences = Vec::new();
+        let ink_change = self.ink_pixels.abs_diff(expected.ink_pixels) as f64
+            / expected.ink_pixels.max(1) as f64;
+        if ink_change > 0.12 {
+            differences.push(format!(
+                "inked pixels {} vs {}",
+                self.ink_pixels, expected.ink_pixels
+            ));
+        }
+        if self
+            .ink_bbox
+            .iter()
+            .zip(expected.ink_bbox)
+            .any(|(actual, expected)| actual.abs_diff(expected) > 4)
+        {
+            differences.push(format!(
+                "ink bounds {:?} vs {:?}",
+                self.ink_bbox, expected.ink_bbox
+            ));
+        }
+        if self
+            .mean_ink_rgb
+            .iter()
+            .zip(expected.mean_ink_rgb)
+            .any(|(actual, expected)| (actual - expected).abs() > 20.0)
+        {
+            differences.push(format!(
+                "mean ink color {:?} vs {:?}",
+                self.mean_ink_rgb, expected.mean_ink_rgb
+            ));
+        }
+        let profile_distance = |actual: &[u32], expected: &[u32]| {
+            let total: u32 = actual
+                .iter()
+                .zip(expected)
+                .map(|(a, e)| a.abs_diff(*e))
+                .sum();
+            f64::from(total) / f64::from(expected.iter().sum::<u32>().max(1))
+        };
+        for (name, actual, expected) in [
+            ("row", &self.row_ink, &expected.row_ink),
+            ("column", &self.column_ink, &expected.column_ink),
+        ] {
+            let distance = profile_distance(actual, expected);
+            if distance > 0.18 {
+                differences.push(format!("{name} ink profile moved by {distance:.3}"));
+            }
+        }
+        differences
     }
 }

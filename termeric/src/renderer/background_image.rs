@@ -194,7 +194,7 @@ impl BackgroundImageState {
 #[cfg(test)]
 mod gpu_tests;
 #[cfg(test)]
-pub(crate) use gpu_tests::headless_background_render_smoke;
+pub(super) use gpu_tests::headless_background_render_smoke;
 
 #[cfg(test)]
 mod tests {

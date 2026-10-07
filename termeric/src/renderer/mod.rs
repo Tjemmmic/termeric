@@ -50,8 +50,6 @@ mod ui_text;
 pub use popup_menu::PopupMenuInfo;
 pub use types::*;
 
-#[cfg(test)]
-pub(crate) use background_image::headless_background_render_smoke;
 pub(crate) use background_image::{
     BackgroundImageStamp, DecodedBackgroundImage, load_background_image,
     resolve_background_image_path,
@@ -68,13 +66,6 @@ pub(crate) use device::discover_adapter;
 pub(crate) use device::{RendererDeviceFailure, RendererDiagnostics, RendererFailureCallback};
 use device::{request_adapter_device, select_adapter};
 use grid::{cursor_cell_geometry, draws_char, draws_grapheme, gliding_cursor_origin};
-#[cfg(test)]
-pub(crate) use headless_tests::{
-    headless_color_emoji_render_smoke, headless_glyph_atlas_stress_smoke,
-    headless_gui_visual_snapshot, headless_image_render_smoke, headless_ligature_render_smoke,
-    headless_palette_input_smoke, headless_sgr_render_smoke, headless_theme_color_fidelity_smoke,
-    headless_ui_text_smoke, headless_unicode_render_smoke,
-};
 
 use image::{ImagePipeline, presentation_geometry};
 
