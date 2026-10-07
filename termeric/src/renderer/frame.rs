@@ -327,6 +327,12 @@ impl Renderer {
                 (cell_width, cell_height),
             );
             let pane_width = bounds.width.max(0.0);
+            let scrollbar = placement.pane_scrollbar(
+                pane.rect,
+                lone_pane,
+                pane.grid,
+                (cell_width, cell_height),
+            );
 
             self.build_pane_grid(
                 pane.grid,
@@ -348,6 +354,7 @@ impl Renderer {
                 pane.url_cache,
                 window_height,
                 pane_width,
+                scrollbar,
             );
             if let Some(copy_mode) = pane.copy_mode {
                 self.build_copy_mode_overlay(

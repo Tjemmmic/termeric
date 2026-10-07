@@ -37,6 +37,7 @@ impl Renderer {
         url_cache: &UrlCache,
         window_height: f32,
         pane_width: f32,
+        scrollbar: Option<PaneScrollbar>,
     ) {
         let cell_width = self.cell_width();
         let cell_height = self.cell_height();
@@ -364,17 +365,9 @@ impl Renderer {
             }
         }
 
-        // The scrollbar, where the pointer finds it too.
-        let scrollback_len = grid.scrollback_len();
-        if let Some(scrollbar) = PaneScrollbar::of_pane(
-            Bounds::new(
-                offset_x,
-                offset_y,
-                pane_width,
-                pane_rows as f32 * cell_height,
-            ),
-            scrollback_len > 0,
-        ) {
+        // The scrollbar, placed where the pointer finds and drags it.
+        if let Some(scrollbar) = scrollbar {
+            let scrollback_len = grid.scrollback_len();
             let visible_rows = pane_rows.min(grid.rows());
             let total_rows = scrollback_len + visible_rows;
             let Bounds {

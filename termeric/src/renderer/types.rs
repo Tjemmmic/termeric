@@ -363,8 +363,9 @@ impl PaneScrollbar {
     const MIN_HEIGHT: f32 = 20.0;
 
     /// The scrollbar of a pane whose shown rows cover `rows_area`, when it
-    /// has scrollback and room to draw one.
-    pub fn of_pane(rows_area: Bounds, has_scrollback: bool) -> Option<Self> {
+    /// has scrollback and room to draw one. Callers go through
+    /// [`PanePlacement::pane_scrollbar`], so drawing, hits, and drags agree.
+    fn of_pane(rows_area: Bounds, has_scrollback: bool) -> Option<Self> {
         if !has_scrollback || rows_area.height <= Self::MIN_HEIGHT {
             return None;
         }

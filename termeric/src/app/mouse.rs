@@ -1748,38 +1748,42 @@ impl App {
 
     /// Map a vertical mouse position to a scroll offset and apply it
     pub(super) fn scroll_to_scrollbar_position(&mut self, y: f64) {
-        if !self.reconcile_scrollbar_drag() {
-            return;
-        }
         let Some(renderer) = &self.renderer else {
             return;
         };
-        let padding = renderer.padding();
-        let (_, window_height) = renderer.window_size();
-        let content_top = renderer.content_top();
-        let scrollbar_top = content_top + padding;
-        let scrollbar_bottom = window_height as f32 - padding;
-        let (scrollbar_top, scrollbar_bottom) = self
-            .tabs
-            .as_ref()
-            .and_then(TabManager::active_tab)
-            .and_then(|tab| tab.split_panes())
-            .and_then(|panes| panes.calculate_layout().get(&panes.focused_id()).copied())
-            .map(|rect| (content_top + rect.y, content_top + rect.y + rect.height))
-            .unwrap_or((scrollbar_top, scrollbar_bottom));
-        let scrollbar_height = scrollbar_bottom - scrollbar_top;
+        let placement = self.pointer_pane_placement(renderer.content_top(), renderer.padding());
+        let cell_size = renderer.cell_size();
+        self.drag_scrollbar_to(placement, cell_size, y as f32);
+    }
 
-        if scrollbar_height <= 0.0 {
+    /// Scroll the dragged pane to `y` along the scrollbar track it is drawn
+    /// with: the track's top is the oldest scrollback, its bottom the live
+    /// screen.
+    fn drag_scrollbar_to(&mut self, placement: PanePlacement, cell_size: (f32, f32), y: f32) {
+        if !self.reconcile_scrollbar_drag() {
             return;
         }
+        let Some(track) = self
+            .focused_pane_scrollbar(placement, cell_size)
+            .map(|scrollbar| scrollbar.track)
+        else {
+            return;
+        };
+        let from_top = ((y - track.y) / track.height).clamp(0.0, 1.0);
+        self.apply_scrollbar_drag_fraction(1.0 - from_top);
+    }
 
-        // Fraction from top (0.0=top, 1.0=bottom)
-        let fraction = ((y as f32 - scrollbar_top) / scrollbar_height).clamp(0.0, 1.0);
-
-        // Invert: top of scrollbar = max scroll, bottom = 0 scroll
-        let scroll_fraction = 1.0 - fraction;
-
-        self.apply_scrollbar_drag_fraction(scroll_fraction);
+    /// The scrollbar of the active tab's focused pane, as it is drawn.
+    fn focused_pane_scrollbar(
+        &self,
+        placement: PanePlacement,
+        cell_size: (f32, f32),
+    ) -> Option<crate::renderer::PaneScrollbar> {
+        let tab = self.tabs.as_ref()?.active_tab()?;
+        let rect = *tab.panes.calculate_layout().get(&tab.panes.focused_id())?;
+        let lone = tab.panes.pane_count() == 1;
+        let grid = tab.focused_terminal()?.grid();
+        placement.pane_scrollbar(rect, lone, grid, cell_size)
     }
 }
 
@@ -2513,6 +2517,50 @@ mod tests {
             focused,
             b"\x1b[<35;2;2M\x1b[<0;2;2M\x1b[<32;2;2M",
         );
+    }
+
+    #[test]
+    fn dragging_a_scrollbar_follows_the_track_it_is_drawn_with() {
+        use crate::app::tests::harvest_rerun_capture_fixture_in;
+        let placement = PanePlacement {
+            left: 0.0,
+            top: 30.0,
+            right: 800.0,
+            bottom: 600.0,
+            padding: 12.0,
+        };
+        let cell = (10.0, 20.0);
+        for split in [false, true] {
+            let (mut app, _directory, _, _) = harvest_rerun_capture_fixture_in(split);
+            let focused = app.active_panes().focused_id();
+            app.active_panes_mut()
+                .get_pane_mut(focused)
+                .unwrap()
+                .terminal
+                .process(b"history\r\n".repeat(80).as_slice());
+            let scrollback = app
+                .active_panes()
+                .get_pane(focused)
+                .unwrap()
+                .terminal
+                .grid()
+                .scrollback_len();
+            assert!(scrollback > 0);
+            let track = app
+                .focused_pane_scrollbar(placement, cell)
+                .expect("a pane with scrollback draws a scrollbar")
+                .track;
+            app.begin_scrollbar_drag();
+
+            // The track's top is the oldest scrollback, its bottom the live
+            // screen, and its middle half way.
+            app.drag_scrollbar_to(placement, cell, track.y);
+            assert_eq!(pane_scroll_offset(&app, focused), scrollback, "{split}");
+            app.drag_scrollbar_to(placement, cell, track.bottom());
+            assert_eq!(pane_scroll_offset(&app, focused), 0, "{split}");
+            app.drag_scrollbar_to(placement, cell, track.y + track.height / 2.0);
+            assert_eq!(pane_scroll_offset(&app, focused), scrollback / 2, "{split}");
+        }
     }
 
     #[test]
