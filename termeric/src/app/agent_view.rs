@@ -556,6 +556,7 @@ impl App {
             let told = window.told.entry(session.id()).or_default();
             let transcript = session.transcript();
             let control_id = session.id().control_id();
+            let agent = session.agent();
             let title = session.title();
             let pending: HashSet<String> = transcript
                 .approvals()
@@ -566,6 +567,7 @@ impl App {
                 if told.approvals.insert(approval.request_id.clone()) {
                     events.push(SessionEvent::Approval {
                         session: control_id,
+                        agent,
                         title: title.clone(),
                         approval_id: approval.request_id.clone(),
                         request: crate::agent_view::present::approval_text(approval, session.cwd()),
@@ -598,6 +600,7 @@ impl App {
                     .map(|decision| decision.allowed);
                 events.push(SessionEvent::SuggestionSettled {
                     session: control_id,
+                    agent,
                     title: title.clone(),
                     approval_id,
                     suggested_allow,
@@ -618,11 +621,13 @@ impl App {
                     events.push(match &end.outcome.error {
                         Some(error) => SessionEvent::Failed {
                             session: control_id,
+                            agent,
                             title: title.clone(),
                             error: error.clone(),
                         },
                         None => SessionEvent::Finished {
                             session: control_id,
+                            agent,
                             title: title.clone(),
                             answer: transcript.last_answer().map(str::to_owned),
                         },
@@ -1601,9 +1606,18 @@ mod tests {
     /// A window with one session, started by `prompt`, waiting for approval
     /// `r1` to run `command`.
     fn app_with_session_waiting_on(prompt: &str, command: &str) -> (App, SessionId) {
+        app_with_agent_waiting_on(AgentKind::ClaudeCode, prompt, command)
+    }
+
+    /// Like [`app_with_session_waiting_on`], with a session of `agent`.
+    fn app_with_agent_waiting_on(
+        agent: AgentKind,
+        prompt: &str,
+        command: &str,
+    ) -> (App, SessionId) {
         let mut app =
             App::new_headless(crate::config::Config::default().with_agent_features()).unwrap();
-        let mut transcript = Transcript::new("Claude Code", "default");
+        let mut transcript = Transcript::new(agent.name(), "default");
         transcript.apply(AgentEvent::Ready(Handshake::default()));
         transcript.push_user(prompt.into(), Vec::new());
         transcript.apply(AgentEvent::ApprovalRequested(ApprovalRequest {
@@ -1617,7 +1631,7 @@ mod tests {
             remember: None,
             from_sub_agent: false,
         }));
-        let session = AgentSession::detached(PathBuf::from("/work"), transcript);
+        let session = AgentSession::detached_agent(agent, PathBuf::from("/work"), transcript);
         let id = session.id();
         app.agent_view.sessions.push(session);
         (app, id)
@@ -1952,6 +1966,18 @@ mod tests {
         let session = app.agent_view.session_mut(id).unwrap();
         session.deny("r1", None, DecidedBy::Person, false);
         assert!(app.agent_view_supervisor_events().is_empty());
+    }
+
+    #[test]
+    fn the_supervisor_hears_which_agent_each_session_runs() {
+        use crate::agents::supervisor::{SessionEvent, session_message};
+        let (mut app, _) = app_with_agent_waiting_on(AgentKind::Codex, "Run the tests", "ls");
+        let events = app.agent_view_supervisor_events();
+        let [event @ SessionEvent::Approval { agent, .. }] = events.as_slice() else {
+            panic!("expected one approval event, got {events:?}");
+        };
+        assert_eq!(*agent, AgentKind::Codex);
+        assert!(session_message(2, event).starts_with("Termeric: Codex in the agent view"));
     }
 
     #[test]

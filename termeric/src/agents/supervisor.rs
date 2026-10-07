@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use super::{AgentActivity, AgentStatus};
+use crate::agent_view::agent::AgentKind;
 
 /// How much a supervisor may do.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -281,23 +282,27 @@ pub enum SessionEvent {
     /// It waits for an answer to one approval request.
     Approval {
         session: u64,
+        agent: AgentKind,
         title: String,
         approval_id: String,
         request: String,
     },
     Finished {
         session: u64,
+        agent: AgentKind,
         title: String,
         answer: Option<String>,
     },
     Failed {
         session: u64,
+        agent: AgentKind,
         title: String,
         error: String,
     },
     /// An approval the supervisor suggested an answer for was settled.
     SuggestionSettled {
         session: u64,
+        agent: AgentKind,
         title: String,
         approval_id: String,
         suggested_allow: bool,
@@ -310,14 +315,16 @@ pub enum SessionEvent {
 /// What the supervisor is told about an agent view session.
 pub fn session_message(window_id: u64, event: &SessionEvent) -> String {
     let first_line = |text: &str| crate::safe_text::first_line_truncated(text, QUOTE_CHARS);
-    let (session, title, what) = match event {
+    let (session, agent, title, what) = match event {
         SessionEvent::Approval {
             session,
+            agent,
             title,
             approval_id,
             request,
         } => (
             session,
+            agent,
             title,
             format!(
                 "asks: {}. Decide with answer_approval (approval_id {approval_id}), \
@@ -327,10 +334,12 @@ pub fn session_message(window_id: u64, event: &SessionEvent) -> String {
         ),
         SessionEvent::Finished {
             session,
+            agent,
             title,
             answer,
         } => (
             session,
+            agent,
             title,
             match answer {
                 Some(answer) => format!("finished. Its answer begins: {}", first_line(answer)),
@@ -339,15 +348,18 @@ pub fn session_message(window_id: u64, event: &SessionEvent) -> String {
         ),
         SessionEvent::Failed {
             session,
+            agent,
             title,
             error,
         } => (
             session,
+            agent,
             title,
             format!("stopped with an error: {}", first_line(error)),
         ),
         SessionEvent::SuggestionSettled {
             session,
+            agent,
             title,
             approval_id,
             suggested_allow,
@@ -360,6 +372,7 @@ pub fn session_message(window_id: u64, event: &SessionEvent) -> String {
             };
             (
                 session,
+                agent,
                 title,
                 match allowed {
                     Some(allowed) => format!(
@@ -375,8 +388,9 @@ pub fn session_message(window_id: u64, event: &SessionEvent) -> String {
         }
     };
     format!(
-        "Termeric: Claude Code in the agent view (window {window_id}, session {session}, \
-         \"{}\") {what}",
+        "Termeric: {} in the agent view (window {window_id}, session {session}, \"{}\") \
+         {what}",
+        agent.name(),
         first_line(title)
     )
 }
@@ -530,6 +544,7 @@ mod tests {
             2,
             &SessionEvent::Approval {
                 session: 7,
+                agent: AgentKind::ClaudeCode,
                 title: "Fix the build".into(),
                 approval_id: "req-1".into(),
                 request: "Run cargo test\nsecond line".into(),
@@ -545,16 +560,22 @@ mod tests {
             2,
             &SessionEvent::Finished {
                 session: 7,
+                agent: AgentKind::Codex,
                 title: "Fix".into(),
                 answer: Some("\nAll green.".into()),
             },
         );
-        assert!(finished.ends_with("finished. Its answer begins: All green."));
+        assert_eq!(
+            finished,
+            "Termeric: Codex in the agent view (window 2, session 7, \"Fix\") finished. Its \
+             answer begins: All green."
+        );
         let settled = |allowed| {
             session_message(
                 2,
                 &SessionEvent::SuggestionSettled {
                     session: 7,
+                    agent: AgentKind::OpenCode,
                     title: "Fix".into(),
                     approval_id: "req-1".into(),
                     suggested_allow: true,
@@ -566,6 +587,7 @@ mod tests {
             settled(Some(false))
                 .ends_with("had approval req-1 denied by the person; you suggested allowing.")
         );
+        assert!(settled(None).starts_with("Termeric: OpenCode in the agent view"));
         assert!(settled(None).contains("withdrew approval req-1 before anyone answered"));
     }
     use crate::agents::AgentReport;
