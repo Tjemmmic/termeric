@@ -1,23 +1,9 @@
 //! One shared frame-write transaction for attached input and resize producers.
+use super::relay_workers::StopRelay;
 use super::{ClientFrame, DomainCloser, protocol};
 use std::io::Write;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-
-struct FailedFrame<'a> {
-    alive: &'a AtomicBool,
-    closer: &'a DomainCloser,
-    armed: bool,
-}
-
-impl Drop for FailedFrame<'_> {
-    fn drop(&mut self) {
-        if self.armed {
-            self.alive.store(false, Ordering::Release);
-            self.closer.close();
-        }
-    }
-}
 
 /// Returns false when the relay has already stopped; never retries a frame.
 pub(super) fn send(
@@ -43,14 +29,10 @@ pub(super) fn send(
         return Ok(false);
     }
     // Declared after the lock guard: on panic it closes before unlocking, too.
-    let mut failure = FailedFrame {
-        alive,
-        closer,
-        armed: true,
-    };
+    let mut failure = StopRelay::new(alive, closer);
     match protocol::write_frame(&mut *writer, frame) {
         Ok(()) => {
-            failure.armed = false;
+            failure.disarm();
             Ok(true)
         }
         Err(error) => {

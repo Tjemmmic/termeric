@@ -4,16 +4,36 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 
-pub(super) struct Completion<'a> {
-    pub(super) alive: &'a AtomicBool,
-    pub(super) closer: &'a DomainCloser,
+/// Stops the relay and closes its transport when dropped, unless disarmed
+/// first, so any early return, error, or unwind ends the other workers too.
+pub(super) struct StopRelay<'a> {
+    alive: &'a AtomicBool,
+    closer: &'a DomainCloser,
+    armed: bool,
 }
 
-impl Drop for Completion<'_> {
+impl<'a> StopRelay<'a> {
+    pub(super) fn new(alive: &'a AtomicBool, closer: &'a DomainCloser) -> Self {
+        Self {
+            alive,
+            closer,
+            armed: true,
+        }
+    }
+
+    /// Lets the relay go on after this guard drops.
+    pub(super) fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for StopRelay<'_> {
     fn drop(&mut self) {
-        self.alive.store(false, Ordering::Release);
-        // Never take the writer mutex: closing first wakes blocked writers.
-        self.closer.close();
+        if self.armed {
+            self.alive.store(false, Ordering::Release);
+            // Never take the writer mutex: closing first wakes blocked writers.
+            self.closer.close();
+        }
     }
 }
 

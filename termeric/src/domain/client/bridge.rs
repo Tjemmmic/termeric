@@ -1,5 +1,5 @@
 //! Scoped, bidirectional forwarding between SSH stdio and the local daemon.
-use super::relay_workers::Completion;
+use super::relay_workers::StopRelay;
 use super::{DomainCloser, copy_with_flush};
 use crate::deadline_io::readable;
 use anyhow::Context;
@@ -9,21 +9,6 @@ use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
-
-struct InputFailure<'a> {
-    alive: &'a AtomicBool,
-    closer: &'a DomainCloser,
-    armed: bool,
-}
-
-impl Drop for InputFailure<'_> {
-    fn drop(&mut self) {
-        if self.armed {
-            self.alive.store(false, Ordering::Release);
-            self.closer.close();
-        }
-    }
-}
 
 pub(super) fn run<I: Read + AsRawFd>(
     mut stream: UnixStream,
@@ -36,18 +21,11 @@ pub(super) fn run<I: Read + AsRawFd>(
     thread::scope(|scope| -> anyhow::Result<()> {
         // This guard drops before scope joins on every exit, including spawn
         // failure and output panic, waking socket writes and cancelling input.
-        let completion = Completion {
-            alive: &alive,
-            closer: &closer,
-        };
+        let completion = StopRelay::new(&alive, &closer);
         let input_worker = thread::Builder::new()
             .name("termeric-domain-ssh-input".into())
             .spawn_scoped(scope, || -> anyhow::Result<()> {
-                let mut failure = InputFailure {
-                    alive: &alive,
-                    closer: &closer,
-                    armed: true,
-                };
+                let mut failure = StopRelay::new(&alive, &closer);
                 let mut input = input();
                 match copy_input(&mut input, &mut writer, &alive) {
                     Ok(true) => {
@@ -59,7 +37,7 @@ pub(super) fn run<I: Read + AsRawFd>(
                         writer
                             .shutdown(Shutdown::Write)
                             .context("half-close SSH bridge input")?;
-                        failure.armed = false;
+                        failure.disarm();
                         Ok(())
                     }
                     Ok(false) => Ok(()),

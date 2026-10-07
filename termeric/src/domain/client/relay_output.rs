@@ -1,5 +1,5 @@
 //! Output-worker completion and transport ownership for one attached relay.
-use super::relay_workers::Completion;
+use super::relay_workers::StopRelay;
 use super::{DomainCloser, ServerFrame, protocol};
 use crate::deadline_io::{Deadline, PollReader};
 use anyhow::Context;
@@ -91,7 +91,7 @@ fn run_inner(
     closer: &DomainCloser,
     mut next_frame: impl FnMut() -> anyhow::Result<Option<ServerFrame>>,
 ) -> anyhow::Result<()> {
-    let _completion = Completion { alive, closer };
+    let _completion = StopRelay::new(alive, closer);
     loop {
         match next_frame() {
             Ok(Some(ServerFrame::Output { data, .. })) => {

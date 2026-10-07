@@ -1,5 +1,5 @@
 //! Resize publication for one attached relay, sharing its transport lifetime.
-use super::relay_workers::Completion;
+use super::relay_workers::StopRelay;
 use super::{ClientFrame, DomainCloser, relay_write};
 use anyhow::Context;
 use std::io::Write;
@@ -14,7 +14,7 @@ pub(super) fn run(
     mut size: impl FnMut() -> Option<PtySize>,
     mut wait: impl FnMut(),
 ) -> anyhow::Result<()> {
-    let _completion = Completion { alive, closer };
+    let _completion = StopRelay::new(alive, closer);
     let mut previous = None;
     while alive.load(Ordering::Acquire) {
         if let Some(size) = size()
