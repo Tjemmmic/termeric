@@ -211,7 +211,7 @@ enum DomainArgs {
         #[arg(value_parser = domain_id)]
         domain: String,
         /// Window size in physical pixels
-        #[arg(long, value_name = "WIDTHxHEIGHT", value_parser = window_geometry)]
+        #[arg(long, value_name = "WIDTHxHEIGHT", value_parser = super::parse_geometry)]
         geometry: Option<(u32, u32)>,
         /// Window application ID
         #[arg(long, alias = "class", value_name = "NAME", value_parser = app_id)]
@@ -581,12 +581,19 @@ fn text_bytes(value: &str) -> Result<usize, String> {
         })
 }
 
+/// `--size COLSxROWS`, within what a domain terminal may be.
 fn cell_geometry(value: &str) -> anyhow::Result<(u16, u16)> {
-    super::parse_cell_geometry(value)
-}
-
-fn window_geometry(value: &str) -> anyhow::Result<(u32, u32)> {
-    super::parse_geometry(value)
+    use anyhow::Context;
+    const MAX: u16 = model::MAX_TERMINAL_CELLS_PER_SIDE;
+    let (cols, rows) = value
+        .split_once(['x', 'X'])
+        .context("--size expects COLSxROWS")?;
+    let cols: u16 = cols.parse().context("invalid --size columns")?;
+    let rows: u16 = rows.parse().context("invalid --size rows")?;
+    if !(1..=MAX).contains(&cols) || !(1..=MAX).contains(&rows) {
+        anyhow::bail!("--size must be between 1x1 and {MAX}x{MAX} cells");
+    }
+    Ok((cols, rows))
 }
 
 fn app_id(value: &str) -> anyhow::Result<String> {
