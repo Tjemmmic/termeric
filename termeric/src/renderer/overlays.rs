@@ -59,14 +59,11 @@ impl Renderer {
             with_alpha(self.ui.palette_border, 0.3 * anim),
         );
 
-        // ── Outer glow accent line at top ──
-        let glow_color = with_alpha(self.ui.palette_accent, 0.2 * anim);
-        self.rect_pipeline.push_rect(
-            card_x + 24.0,
-            card_y,
-            (card_width - 48.0).max(1.0),
+        // ── Accent line along the top, clear of the corners ──
+        self.draw_card_accent(
+            layout.card,
+            with_alpha(self.ui.palette_accent, 0.2 * anim),
             2.0,
-            glow_color,
         );
 
         // ── Title — centered, accent ──
@@ -300,22 +297,14 @@ impl Renderer {
         let card_x = layout.card.x;
         let card_y = layout.card.y;
         let card_width = layout.card.width;
-        let card_height = layout.card.height;
         let padding = layout.padding;
 
-        let card_bg = with_alpha(self.ui.palette_bg, anim);
-        self.rect_pipeline.push_rounded_rect(
-            card_x,
-            card_y,
-            card_width,
-            card_height,
-            card_bg,
-            self.px(CARD_CORNER_RADIUS),
+        self.draw_card_shadow(layout.card, 0.08 * anim, 3);
+        self.draw_card(
+            layout.card,
+            with_alpha(self.ui.palette_bg, anim),
+            with_alpha(self.ui.palette_border, 0.4 * anim),
         );
-
-        let border = with_alpha(self.ui.palette_border, 0.4 * anim);
-        self.rect_pipeline
-            .push_rounded_rect(card_x, card_y, card_width, 1.0, border, 0.0);
 
         let label_size = self.ui_label_px();
         self.push_ui_label(
@@ -472,24 +461,14 @@ impl Renderer {
         let card_x = layout.card.x;
         let card_y = layout.card.y;
         let card_width = layout.card.width;
-        let card_height = layout.card.height;
         let padding = layout.padding;
 
-        // Card background
-        let card_bg = with_alpha(self.ui.palette_bg, anim);
-        self.rect_pipeline.push_rounded_rect(
-            card_x,
-            card_y,
-            card_width,
-            card_height,
-            card_bg,
-            self.px(CARD_CORNER_RADIUS),
+        self.draw_card_shadow(layout.card, 0.08 * anim, 3);
+        self.draw_card(
+            layout.card,
+            with_alpha(self.ui.palette_bg, anim),
+            with_alpha(self.ui.palette_border, 0.4 * anim),
         );
-
-        // Card border
-        let border = with_alpha(self.ui.palette_border, 0.4 * anim);
-        self.rect_pipeline
-            .push_rounded_rect(card_x, card_y, card_width, 1.0, border, 0.0);
 
         // Title
         let title_y = card_y + padding;
@@ -695,9 +674,8 @@ impl Renderer {
         self.draw_card_shadow(card, 0.06 * anim, 2);
         self.draw_card(card, card_bg, border_color);
 
-        // severity-colored top accent bar
-        self.rect_pipeline
-            .push_rect(card.x, card.y, card.width, 3.0, border_color);
+        // Severity-colored accent line along the top, clear of the corners.
+        self.draw_card_accent(card, border_color, 3.0);
 
         let title_y = card.y + padding;
         self.push_ui_label_centered(

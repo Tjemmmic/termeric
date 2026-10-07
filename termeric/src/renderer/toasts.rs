@@ -2,7 +2,6 @@
 
 use super::Renderer;
 use crate::ui::color::{scale_rgb, with_alpha};
-use crate::ui::constants::{BORDER_WIDTH, CARD_CORNER_RADIUS};
 use crate::ui::toast::{ToastInfo, ToastPlacement, ToastSeverity, toast_at, toast_layout};
 
 impl Renderer {
@@ -79,26 +78,8 @@ impl Renderer {
             // modal overlays.
             let bg = with_alpha(scale_rgb(self.ui.palette_bg, 0.95), 0.97 * opacity);
 
-            // Drop shadow
-            self.rect_pipeline.push_rounded_rect(
-                x + 2.0,
-                y + 3.0,
-                w,
-                row_h,
-                [0.0, 0.0, 0.0, 0.25 * opacity],
-                self.px(CARD_CORNER_RADIUS),
-            );
-            self.rect_pipeline
-                .push_rounded_rect(x, y, w, row_h, bg, self.px(CARD_CORNER_RADIUS));
-            self.rect_pipeline.push_rounded_outline(
-                x,
-                y,
-                w,
-                row_h,
-                border_color,
-                self.px(CARD_CORNER_RADIUS),
-                self.px(BORDER_WIDTH),
-            );
+            self.draw_card_shadow(placement.rect, 0.2 * opacity, 2);
+            self.draw_card(placement.rect, bg, border_color);
             // Left accent bar (severity indicator)
             self.rect_pipeline.push_rounded_rect(
                 x + 3.0,

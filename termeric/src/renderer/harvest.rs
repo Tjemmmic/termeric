@@ -211,7 +211,7 @@ impl Renderer {
 
         // Card shadow + background
         let panel = menu.layout.panel;
-        self.draw_card_shadow(panel, 0.2, 2);
+        self.draw_card_shadow(panel, 0.2 * anim, 2);
         self.draw_card(panel, bg, border);
 
         // Action items

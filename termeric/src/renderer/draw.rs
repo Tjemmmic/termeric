@@ -88,6 +88,24 @@ impl Renderer {
         }
     }
 
+    /// An accent line `thickness` logical pixels tall along a card's top
+    /// edge, inset past its rounded corners so it never overhangs them.
+    pub(super) fn draw_card_accent(&mut self, card: Bounds, color: [f32; 4], thickness: f32) {
+        let inset = self.px(CARD_CORNER_RADIUS) * 2.0;
+        let thickness = self.px(thickness);
+        let width = card.width - inset * 2.0;
+        if width > 0.0 {
+            self.rect_pipeline.push_rounded_rect(
+                card.x + inset,
+                card.y,
+                width,
+                thickness,
+                color,
+                thickness / 2.0,
+            );
+        }
+    }
+
     /// A rounded card surface with a hairline border.
     pub(super) fn draw_card(&mut self, card: Bounds, background: [f32; 4], border: [f32; 4]) {
         let radius = self.px(CARD_CORNER_RADIUS);
