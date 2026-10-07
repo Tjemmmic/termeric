@@ -1267,7 +1267,7 @@ fn a_displaced_agent_shortcut_is_noted_only_while_agent_features_are_on() {
 #[test]
 fn settings_lists_the_themes_directory_when_it_opens_not_as_it_draws() {
     let mut app = App::new_headless(Config::default()).unwrap();
-    let themes_dir = Config::themes_dir();
+    let themes_dir = Config::themes_dir().expect("test builds have a configuration directory");
     std::fs::create_dir_all(&themes_dir).unwrap();
     let theme_path = themes_dir.join("settings-opening-probe.toml");
     std::fs::write(&theme_path, custom_theme("Settings Opening Probe")).unwrap();
