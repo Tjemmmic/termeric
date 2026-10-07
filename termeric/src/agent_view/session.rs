@@ -205,24 +205,42 @@ impl AgentSession {
             }
             None => (None, None),
         };
-        let mut session = Self {
+        let mut session = Self::new(options.agent, options.cwd, program, transcript, waker);
+        session.title = title;
+        session.model = options.model;
+        session.effort = options.effort;
+        session.auto_approve =
+            options.auto_approve && options.allow_bypass && options.agent.offers_auto_approve();
+        session.resumed = resume.clone();
+        session.allow_bypass = options.allow_bypass;
+        session.launch(resume)?;
+        Ok(session)
+    }
+
+    /// A session with nothing chosen and no process yet.
+    fn new(
+        agent: AgentKind,
+        cwd: PathBuf,
+        program: AgentProgram,
+        transcript: Transcript,
+        waker: Waker,
+    ) -> Self {
+        Self {
             id: SessionId::next(),
-            agent: options.agent,
-            title,
-            cwd: options.cwd,
+            agent,
+            title: None,
+            cwd,
             program,
             program_path: None,
-            model: options.model,
-            effort: options.effort,
-            auto_approve: options.auto_approve
-                && options.allow_bypass
-                && options.agent.offers_auto_approve(),
+            model: None,
+            effort: None,
+            auto_approve: false,
             process: None,
             closing: false,
             relaunch_on_exit: false,
             handed_off: false,
-            resumed: resume.clone(),
-            allow_bypass: options.allow_bypass,
+            resumed: None,
+            allow_bypass: false,
             launched_with_bypass: false,
             mode_after_turn: None,
             protocol: None,
@@ -235,9 +253,7 @@ impl AgentSession {
             updated: false,
             waker,
             last_change: Instant::now(),
-        };
-        session.launch(resume)?;
-        Ok(session)
+        }
     }
 
     fn launch(&mut self, resume: Option<String>) -> Result<(), StartError> {
@@ -297,39 +313,12 @@ impl AgentSession {
     /// Like [`AgentSession::detached`], for another agent.
     #[cfg(test)]
     pub fn detached_agent(agent: AgentKind, cwd: PathBuf, transcript: Transcript) -> Self {
-        Self {
-            id: SessionId::next(),
-            agent,
-            title: None,
-            cwd,
-            program: AgentProgram {
-                program: "/nonexistent/termeric-test-agent".into(),
-                args: Vec::new(),
-                env: Vec::new(),
-            },
-            program_path: None,
-            model: None,
-            effort: None,
-            auto_approve: false,
-            process: None,
-            closing: false,
-            relaunch_on_exit: false,
-            handed_off: false,
-            resumed: None,
-            allow_bypass: false,
-            launched_with_bypass: false,
-            mode_after_turn: None,
-            protocol: None,
-            transcript,
-            backlog: VecDeque::new(),
-            handshake_deadline: None,
-            mode_after_plan: None,
-            queued: VecDeque::new(),
-            earlier: None,
-            updated: false,
-            waker: std::sync::Arc::new(|| {}),
-            last_change: Instant::now(),
-        }
+        let program = AgentProgram {
+            program: "/nonexistent/termeric-test-agent".into(),
+            args: Vec::new(),
+            env: Vec::new(),
+        };
+        Self::new(agent, cwd, program, transcript, std::sync::Arc::new(|| {}))
     }
 
     pub fn id(&self) -> SessionId {
