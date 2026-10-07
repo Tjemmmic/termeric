@@ -4,17 +4,29 @@ use crate::deadline_io::SocketWriter;
 use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
+/// The complete-frame write budget for negotiation replies.
+pub(super) const NEGOTIATION_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+/// The complete-frame write budget for every later frame. Streaming queues
+/// also enforce capacity.
+const FRAME_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Writes `frame` within the server's complete-frame budget.
 pub(super) fn write_server_frame(
     stream: &mut UnixStream,
     frame: &ServerFrame,
 ) -> anyhow::Result<()> {
-    let previous = stream.write_timeout()?;
+    write_server_frame_within(stream, frame, FRAME_WRITE_TIMEOUT)
+}
+
+/// Writes `frame` within `budget`, which covers the whole frame however
+/// slowly the peer drains it.
+pub(super) fn write_server_frame_within(
+    stream: &mut UnixStream,
+    frame: &ServerFrame,
+    budget: Duration,
+) -> anyhow::Result<()> {
     let result = protocol::write_frame(
-        &mut SocketWriter::new(
-            stream,
-            Instant::now() + previous.unwrap_or(Duration::from_secs(5)),
-            EXPIRED,
-        ),
+        &mut SocketWriter::new(stream, Instant::now() + budget, EXPIRED),
         frame,
     );
     if result.is_err() {
@@ -51,8 +63,9 @@ mod tests {
             )
         };
         assert_eq!(result, 0, "{}", std::io::Error::last_os_error());
-        let timeout = Some(Duration::from_millis(250));
-        server.set_write_timeout(timeout).unwrap();
+        // The socket's own timeout is not the frame budget.
+        let socket_timeout = Some(Duration::from_secs(30));
+        server.set_write_timeout(socket_timeout).unwrap();
         client
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
@@ -71,8 +84,8 @@ mod tests {
         let frame = ServerFrame::SnapshotOutput {
             data: "x".repeat(1024 * 1024),
         };
-        let result = write_server_frame(&mut server, &frame);
-        assert_eq!(server.write_timeout().unwrap(), timeout);
+        let result = write_server_frame_within(&mut server, &frame, Duration::from_millis(250));
+        assert_eq!(server.write_timeout().unwrap(), socket_timeout);
         assert!(
             server
                 .write_all(b"must-not-follow-a-partial-frame")
@@ -93,7 +106,7 @@ mod tests {
     }
 
     #[test]
-    fn complete_frames_preserve_wire_bytes_and_restore_socket_policy() {
+    fn complete_frames_preserve_wire_bytes_and_leave_socket_policy_alone() {
         for timeout in [None, Some(Duration::from_secs(3))] {
             let (mut server, mut client) = UnixStream::pair().unwrap();
             server.set_write_timeout(timeout).unwrap();
@@ -127,7 +140,7 @@ mod tests {
     }
 
     #[test]
-    fn disconnected_peer_failure_restores_socket_policy() {
+    fn disconnected_peer_failure_leaves_socket_policy_alone() {
         let (mut server, client) = UnixStream::pair().unwrap();
         let previous = Some(Duration::from_secs(3));
         server.set_write_timeout(previous).unwrap();

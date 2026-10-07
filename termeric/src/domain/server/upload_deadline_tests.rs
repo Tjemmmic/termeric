@@ -11,10 +11,6 @@ fn start(
     timeout: Duration,
 ) -> (UnixStream, thread::JoinHandle<anyhow::Result<Response>>) {
     let (mut server, mut client) = UnixStream::pair().unwrap();
-    server.set_read_timeout(Some(timeout)).unwrap();
-    server
-        .set_write_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
     client
         .set_read_timeout(Some(Duration::from_secs(2)))
         .unwrap();
@@ -32,6 +28,7 @@ fn start(
             total,
             UPLOAD,
             UploadKind::File,
+            timeout,
         )
     });
     assert!(

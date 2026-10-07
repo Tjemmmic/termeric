@@ -22,7 +22,7 @@ use termeric_core::term::{TerminalMode, XtermKeyboardType};
 use termeric_core::{Pty, Terminal, TerminalEvent};
 
 mod frame_io;
-use frame_io::write_server_frame;
+use frame_io::{NEGOTIATION_WRITE_TIMEOUT, write_server_frame, write_server_frame_within};
 
 const MAX_CLIENTS: usize = 64;
 const MAX_CONCURRENT_UPLOADS: usize = 4;
@@ -540,31 +540,31 @@ fn handle_client_with_setup_timeout(
     state: SharedState,
     setup_timeout: Duration,
 ) -> anyhow::Result<()> {
-    stream.set_write_timeout(Some(Duration::from_secs(10)))?;
     local_socket::same_user_peer(&stream, "domain peer")?;
     if let Err(message) = validate_hello(
         read_client_frame_with_timeout(&mut stream, setup_timeout)?,
         expected_token,
     ) {
-        write_server_frame(&mut stream, &ServerFrame::Error { message })?;
+        write_server_frame_within(
+            &mut stream,
+            &ServerFrame::Error { message },
+            NEGOTIATION_WRITE_TIMEOUT,
+        )?;
         return Ok(());
     }
-    write_server_frame(
+    write_server_frame_within(
         &mut stream,
         &ServerFrame::Hello {
             version: protocol::PROTOCOL_VERSION,
         },
+        NEGOTIATION_WRITE_TIMEOUT,
     )?;
-    // The server-frame writer uses this as one complete-frame budget and
-    // preserves it between sends. Streaming queues also enforce capacity.
-    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
 
     let ClientFrame::Request { request } =
         read_client_frame_with_timeout(&mut stream, setup_timeout)?
     else {
         anyhow::bail!("expected one domain request after negotiation");
     };
-    stream.set_read_timeout(None)?;
     if let Request::Attach { domain, pane } = request {
         return serve_attachment(stream, state, domain, pane);
     }
@@ -653,7 +653,6 @@ fn serve_file_upload(
     upload_id: String,
     kind: UploadKind,
 ) -> anyhow::Result<()> {
-    stream.set_read_timeout(Some(UPLOAD_FRAME_TIMEOUT))?;
     let result = receive_file_upload(
         &mut stream,
         state,
@@ -663,6 +662,7 @@ fn serve_file_upload(
         total_bytes,
         &upload_id,
         kind,
+        UPLOAD_FRAME_TIMEOUT,
     );
     match result {
         Ok(response) => write_server_frame(&mut stream, &ServerFrame::Response { response }),
@@ -675,11 +675,7 @@ fn serve_file_upload(
     }
 }
 
-fn read_upload_frame(stream: &mut UnixStream) -> anyhow::Result<ClientFrame> {
-    let timeout = stream.read_timeout()?.unwrap_or(UPLOAD_FRAME_TIMEOUT);
-    read_client_frame_with_timeout(stream, timeout)
-}
-
+/// Receives one upload's chunks and commit, each frame within `frame_timeout`.
 fn receive_file_upload(
     stream: &mut UnixStream,
     state: SharedState,
@@ -689,6 +685,7 @@ fn receive_file_upload(
     total_bytes: u64,
     upload_id: &str,
     kind: UploadKind,
+    frame_timeout: Duration,
 ) -> anyhow::Result<Response> {
     validate_id("domain id", domain_id)?;
     protocol::validate_upload_name(name)?;
@@ -936,7 +933,7 @@ fn receive_file_upload(
     }
 
     while offset < total_bytes {
-        let frame = match read_upload_frame(stream) {
+        let frame = match read_client_frame_with_timeout(stream, frame_timeout) {
             Ok(frame) => frame,
             Err(error) => {
                 temporary.preserve();
@@ -968,7 +965,7 @@ fn receive_file_upload(
             .context("write temporary upload")?;
         offset += data.len() as u64;
     }
-    let final_frame = match read_upload_frame(stream) {
+    let final_frame = match read_client_frame_with_timeout(stream, frame_timeout) {
         Ok(frame) => frame,
         Err(error) => {
             temporary.preserve();

@@ -84,7 +84,7 @@ fn partial_setup_header_and_payload_cannot_renew_the_deadline() {
 }
 
 #[test]
-fn complete_setup_frame_restores_the_previous_socket_timeout() {
+fn complete_setup_frame_leaves_the_socket_timeout_alone() {
     let (mut server, mut client) = UnixStream::pair().unwrap();
     let previous = Some(Duration::from_secs(3));
     server.set_read_timeout(previous).unwrap();
@@ -218,9 +218,6 @@ fn subscribe(
     thread::JoinHandle<()>,
 ) {
     let (server, mut client) = UnixStream::pair().unwrap();
-    server
-        .set_write_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
     client
         .set_read_timeout(Some(Duration::from_secs(2)))
         .unwrap();
