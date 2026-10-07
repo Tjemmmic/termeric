@@ -1,3 +1,4 @@
+use super::terminal::append_accessible_cell;
 use super::*;
 use termeric_core::CellContent;
 

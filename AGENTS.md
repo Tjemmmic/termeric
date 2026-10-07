@@ -62,6 +62,7 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | Module | Purpose |
 |--------|---------|
 | `app/` | `Application` (multi-window handler), per-window `App`, event handlers, input routing, and action handlers split by feature |
+| `app/accessibility/` | The AccessKit tree: node IDs, registries, updates, action dispatch, and the ordinary tree in `mod.rs`; F6 chrome focus (`chrome.rs`), terminal text (`terminal.rs`), and each group of surfaces' nodes beside its action handlers (`dialogs.rs`, `panels.rs`, `palette.rs`, `harvest.rs`, `overlays.rs`) |
 | `renderer/` | wgpu rendering (see below) |
 | `ui/` | UI component state: animation, command palette, settings, panels, pickers, popup menus, toasts, text input and layout |
 | `ui/animation.rs` | `OverlayAnimation` and `PanelAnimation` state machines, `ease_out_cubic` |
