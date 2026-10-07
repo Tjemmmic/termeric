@@ -312,7 +312,7 @@ impl SettingsModalLayout {
         } else {
             0
         };
-        let dd_height = visible_options as f32 * option_h + 8.0;
+        let dd_height = visible_options as f32 * option_h + DROPDOWN_OPTION_INSET * 2.0;
 
         let min_dd_width = (max_option_chars as f32 + 4.0) * self.cell_width;
         let remaining = self.content_x + self.content_width - self.value_x;
@@ -326,6 +326,9 @@ impl SettingsModalLayout {
         })
     }
 }
+
+/// Space between a dropdown's edge and its option rows.
+const DROPDOWN_OPTION_INSET: f32 = 4.0;
 
 /// Dropdown overlay rectangle derived from `SettingsModalLayout`.
 #[derive(Debug, Clone, Copy)]
@@ -369,18 +372,26 @@ fn open_dropdown(
 }
 
 impl DropdownRect {
-    /// Which option index does a y-coordinate fall into, if any.
+    /// Where the `visible_index`th shown option is drawn, for painting,
+    /// pointer hits, and accessibility alike.
+    pub fn option_bounds(&self, visible_index: usize) -> Bounds {
+        Bounds::new(
+            self.bounds.x + DROPDOWN_OPTION_INSET,
+            self.bounds.y + DROPDOWN_OPTION_INSET + visible_index as f32 * self.option_height,
+            self.bounds.width - DROPDOWN_OPTION_INSET * 2.0,
+            self.option_height,
+        )
+    }
+
+    /// The option whose row band a y-coordinate falls in, if any. The band
+    /// spans the dropdown's full width, so its side insets still pick the row.
     pub fn option_at(&self, y: f32) -> Option<usize> {
-        let inner_y = y - self.bounds.y - 4.0;
-        if inner_y < 0.0 {
-            return None;
-        }
-        let visible_index = (inner_y / self.option_height) as usize;
-        if visible_index < self.visible_options {
-            Some(self.first_option + visible_index)
-        } else {
-            None
-        }
+        (0..self.visible_options)
+            .find(|&visible_index| {
+                let row = self.option_bounds(visible_index);
+                y >= row.y && y < row.bottom()
+            })
+            .map(|visible_index| self.first_option + visible_index)
     }
 }
 

@@ -444,14 +444,14 @@ impl Renderer {
             .take(rect.visible_options)
             .enumerate()
         {
-            let option_y = rect.bounds.y + 4.0 + visible_index as f32 * rect.option_height;
+            let row = rect.option_bounds(visible_index);
             let highlighted = index == info.dropdown_highlight;
             if highlighted || info.dropdown_hovered == Some(index) {
                 self.rect_pipeline.push_rounded_rect(
-                    rect.bounds.x + 4.0,
-                    option_y,
-                    rect.bounds.width - 8.0,
-                    rect.option_height,
+                    row.x,
+                    row.y,
+                    row.width,
+                    row.height,
                     if highlighted {
                         fade(self.ui.menu_highlight)
                     } else {
@@ -463,8 +463,8 @@ impl Renderer {
             self.push_ui_label(
                 option,
                 rect.bounds.x + cell_width * 1.2,
-                option_y,
-                rect.option_height,
+                row.y,
+                row.height,
                 rect.bounds.width - cell_width * 2.4,
                 size,
                 fade(self.ui.menu_text),

@@ -4647,14 +4647,7 @@ impl App {
                     option.set_label(value.clone());
                     option.set_selected(index == info.dropdown_highlight);
                     option.add_action(Action::Click);
-                    option.set_bounds(rect(
-                        dropdown_rect.bounds.x + 4.0,
-                        dropdown_rect.bounds.y
-                            + 4.0
-                            + visible_index as f32 * dropdown_rect.option_height,
-                        dropdown_rect.bounds.width - 8.0,
-                        dropdown_rect.option_height,
-                    ));
+                    option.set_bounds(bounds_rect(dropdown_rect.option_bounds(visible_index)));
                     nodes.push((option_id, option));
                     option_nodes.push(option_id);
                 }
