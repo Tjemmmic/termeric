@@ -1,6 +1,7 @@
 //! Local daemon that owns live PTYs independently of GUI processes.
 
 use super::io_util;
+use super::layout::take_split_id;
 use super::model::*;
 use super::protocol::{self, ClientFrame, Request, Response, ServerFrame, UploadKind};
 use crate::deadline_io::{Deadline, PollReader};
@@ -786,9 +787,8 @@ fn receive_file_upload(
             if pane.closed {
                 anyhow::bail!("pane is closed");
             }
-            let cwd = crate::tabs::terminal_working_directory(&pane.terminal)
-                .or_else(|| pane.pty.child_id().and_then(crate::tabs::get_process_cwd))
-                .or_else(|| pane.requested_cwd.clone())
+            let cwd = pane
+                .working_directory()
                 .context("focused pane has no known working directory")?;
             let directory = std::path::PathBuf::from(cwd);
             if !directory.is_absolute() || !directory.is_dir() {
@@ -1066,25 +1066,12 @@ fn process_request(state: &SharedState, request: Request) -> anyhow::Result<Resp
             domains.sort_by(|left, right| left.id.cmp(&right.id));
             Ok(Response::Domains { domains })
         }
-        Request::ListPanes { domain } => {
-            validate_id("domain id", &domain)?;
-            let state = state.lock().unwrap();
-            let domain = state.domains.get(&domain).context("domain not found")?;
-            Ok(Response::Panes {
-                panes: domain.pane_snapshots(),
-            })
-        }
-        Request::Describe { domain } => {
-            validate_id("domain id", &domain)?;
-            let state = state.lock().unwrap();
-            Ok(Response::Domain {
-                domain: state
-                    .domains
-                    .get(&domain)
-                    .context("domain not found")?
-                    .snapshot(),
-            })
-        }
+        Request::ListPanes { domain } => Ok(Response::Panes {
+            panes: state.lock().unwrap().domain(&domain)?.pane_snapshots(),
+        }),
+        Request::Describe { domain } => Ok(Response::Domain {
+            domain: state.lock().unwrap().domain(&domain)?.snapshot(),
+        }),
         Request::CreateDomain { name, spawn } => create_domain(state, name, spawn),
         Request::SpawnTab { domain, spawn } => spawn_tab(state, &domain, spawn),
         Request::SplitPane {
@@ -1122,23 +1109,15 @@ fn process_request(state: &SharedState, request: Request) -> anyhow::Result<Resp
             direction,
         } => move_domain_pane(state, &domain, pane, tab, target, direction),
         Request::FocusPane { domain, pane } => {
-            validate_id("domain id", &domain)?;
             let mut state = state.lock().unwrap();
-            let domain = state.domains.get_mut(&domain).context("domain not found")?;
-            let tab_id = domain
+            let domain = state.domain_mut(&domain)?;
+            let tab = domain
                 .tabs
-                .iter()
+                .iter_mut()
                 .find(|tab| tab.panes.contains_key(&pane))
-                .map(|tab| tab.id)
                 .context("pane not found")?;
-            let changed = domain.active_tab != tab_id
-                || domain
-                    .tabs
-                    .iter()
-                    .find(|tab| tab.id == tab_id)
-                    .is_some_and(|tab| tab.focused_pane != pane);
-            if changed {
-                let tab = domain.tabs.iter_mut().find(|tab| tab.id == tab_id).unwrap();
+            let tab_id = tab.id;
+            if domain.active_tab != tab_id || tab.focused_pane != pane {
                 tab.focused_pane = pane;
                 tab.refresh_title();
                 domain.active_tab = tab_id;
@@ -1300,10 +1279,7 @@ fn spawn_tab(state: &SharedState, domain_id: &str, spawn: SpawnSpec) -> anyhow::
         }
         let allow_screen_checksum_reports = state_guard.allow_screen_checksum_reports;
         let xterm_keyboard_type = state_guard.xterm_keyboard_type;
-        let domain = state_guard
-            .domains
-            .get_mut(domain_id)
-            .context("domain not found")?;
+        let domain = state_guard.domain_mut(domain_id)?;
         let pane_id = domain.next_pane;
         let tab_id = domain.next_tab;
         let (pane, reader) = PaneRuntime::spawn(
@@ -1364,18 +1340,8 @@ fn split_pane(
 ) -> anyhow::Result<Response> {
     validate_id("domain id", domain_id)?;
     if spawn.working_directory.is_none() {
-        let state_guard = state.lock().unwrap();
-        let pane = state_guard
-            .domains
-            .get(domain_id)
-            .context("domain not found")?
-            .tabs
-            .iter()
-            .find_map(|tab| tab.panes.get(&pane_id))
-            .context("pane not found")?;
-        spawn.working_directory = crate::tabs::terminal_working_directory(&pane.terminal)
-            .or_else(|| pane.pty.child_id().and_then(crate::tabs::get_process_cwd))
-            .or_else(|| pane.requested_cwd.clone());
+        spawn.working_directory =
+            find_pane(&state.lock().unwrap(), domain_id, pane_id)?.working_directory();
     }
     spawn.validate()?;
     check_working_directory(&spawn)?;
@@ -1386,10 +1352,7 @@ fn split_pane(
         }
         let allow_screen_checksum_reports = state_guard.allow_screen_checksum_reports;
         let xterm_keyboard_type = state_guard.xterm_keyboard_type;
-        let domain = state_guard
-            .domains
-            .get_mut(domain_id)
-            .context("domain not found")?;
+        let domain = state_guard.domain_mut(domain_id)?;
         if !domain
             .tabs
             .iter()
@@ -1398,7 +1361,8 @@ fn split_pane(
             anyhow::bail!("pane not found");
         }
         let new_id = domain.next_pane;
-        let split_id = domain.next_split;
+        let mut next_split = domain.next_split;
+        let split_id = take_split_id(&mut next_split)?;
         let (new_pane, reader) = PaneRuntime::spawn(
             new_id,
             &spawn,
@@ -1422,7 +1386,7 @@ fn split_pane(
         tab.refresh_title();
         domain.active_tab = tab.id;
         domain.next_pane += 1;
-        domain.next_split = domain.next_split.wrapping_add(1);
+        domain.next_split = next_split;
         (new_id, reader, tab_id, old_layout, old_focus, old_active)
     };
     if let Err(error) =
@@ -1452,31 +1416,39 @@ fn split_pane(
     Ok(Response::Domain { domain: snapshot })
 }
 
+/// Runs `edit` on domain `domain_id` under the state lock and answers with
+/// the domain as it then is. An `edit` that reports a change publishes the
+/// new topology; one that fails must leave the domain as it found it.
+fn with_domain_mut(
+    state: &SharedState,
+    domain_id: &str,
+    edit: impl FnOnce(&mut DomainRuntime) -> anyhow::Result<bool>,
+) -> anyhow::Result<Response> {
+    let mut state = state.lock().unwrap();
+    let domain = state.domain_mut(domain_id)?;
+    if edit(domain)? {
+        domain.publish_topology();
+    }
+    Ok(Response::Domain {
+        domain: domain.snapshot(),
+    })
+}
+
 fn resize_domain_split(
     state: &SharedState,
     domain_id: &str,
     split_id: u32,
     ratio_millis: u16,
 ) -> anyhow::Result<Response> {
-    validate_id("domain id", domain_id)?;
     if !(100..=900).contains(&ratio_millis) {
         anyhow::bail!("split ratio must be between 100 and 900 thousandths");
     }
-    let mut state = state.lock().unwrap();
-    let domain = state
-        .domains
-        .get_mut(domain_id)
-        .context("domain not found")?;
-    let changed = domain
-        .tabs
-        .iter_mut()
-        .find_map(|tab| tab.layout.resize_split(split_id, ratio_millis))
-        .context("split not found")?;
-    if changed {
-        domain.publish_topology();
-    }
-    Ok(Response::Domain {
-        domain: domain.snapshot(),
+    with_domain_mut(state, domain_id, |domain| {
+        domain
+            .tabs
+            .iter_mut()
+            .find_map(|tab| tab.layout.resize_split(split_id, ratio_millis))
+            .context("split not found")
     })
 }
 
@@ -1486,29 +1458,18 @@ fn rename_domain_tab(
     tab_id: u32,
     title: Option<String>,
 ) -> anyhow::Result<Response> {
-    validate_id("domain id", domain_id)?;
     let title = title.filter(|title| !title.trim().is_empty());
     if let Some(title) = &title {
         validate_name("tab title", title)?;
     }
-    let mut state = state.lock().unwrap();
-    let domain = state
-        .domains
-        .get_mut(domain_id)
-        .context("domain not found")?;
-    let tab = domain
-        .tabs
-        .iter_mut()
-        .find(|tab| tab.id == tab_id)
-        .context("tab not found")?;
-    let changed = tab.user_title != title;
-    if changed {
-        tab.user_title = title;
-        tab.refresh_title();
-        domain.publish_topology();
-    }
-    Ok(Response::Domain {
-        domain: domain.snapshot(),
+    with_domain_mut(state, domain_id, |domain| {
+        let tab = domain.tab_mut(tab_id)?;
+        let changed = tab.user_title != title;
+        if changed {
+            tab.user_title = title;
+            tab.refresh_title();
+        }
+        Ok(changed)
     })
 }
 
@@ -1518,26 +1479,16 @@ fn set_domain_tab_pinned(
     tab_id: u32,
     pinned: bool,
 ) -> anyhow::Result<Response> {
-    validate_id("domain id", domain_id)?;
-    let mut state = state.lock().unwrap();
-    let domain = state
-        .domains
-        .get_mut(domain_id)
-        .context("domain not found")?;
-    let index = domain
-        .tabs
-        .iter()
-        .position(|tab| tab.id == tab_id)
-        .context("tab not found")?;
-    if domain.tabs[index].pinned != pinned {
+    with_domain_mut(state, domain_id, |domain| {
+        let index = domain.tab_index(tab_id)?;
+        if domain.tabs[index].pinned == pinned {
+            return Ok(false);
+        }
         let mut tab = domain.tabs.remove(index);
         tab.pinned = pinned;
         let boundary = domain.tabs.iter().take_while(|tab| tab.pinned).count();
         domain.tabs.insert(boundary, tab);
-        domain.publish_topology();
-    }
-    Ok(Response::Domain {
-        domain: domain.snapshot(),
+        Ok(true)
     })
 }
 
@@ -1547,30 +1498,20 @@ fn move_domain_tab(
     tab_id: u32,
     target: usize,
 ) -> anyhow::Result<Response> {
-    validate_id("domain id", domain_id)?;
-    let mut state = state.lock().unwrap();
-    let domain = state
-        .domains
-        .get_mut(domain_id)
-        .context("domain not found")?;
-    if target >= domain.tabs.len() {
-        anyhow::bail!("tab target index {target} is out of range");
-    }
-    let source = domain
-        .tabs
-        .iter()
-        .position(|tab| tab.id == tab_id)
-        .context("tab not found")?;
-    if domain.tabs[source].pinned != domain.tabs[target].pinned {
-        anyhow::bail!("tabs cannot move across the pinned group boundary");
-    }
-    if source != target {
+    with_domain_mut(state, domain_id, |domain| {
+        if target >= domain.tabs.len() {
+            anyhow::bail!("tab target index {target} is out of range");
+        }
+        let source = domain.tab_index(tab_id)?;
+        if domain.tabs[source].pinned != domain.tabs[target].pinned {
+            anyhow::bail!("tabs cannot move across the pinned group boundary");
+        }
+        if source == target {
+            return Ok(false);
+        }
         let tab = domain.tabs.remove(source);
         domain.tabs.insert(target, tab);
-        domain.publish_topology();
-    }
-    Ok(Response::Domain {
-        domain: domain.snapshot(),
+        Ok(true)
     })
 }
 
@@ -1579,30 +1520,23 @@ fn swap_domain_pane_next(
     domain_id: &str,
     pane_id: u32,
 ) -> anyhow::Result<Response> {
-    validate_id("domain id", domain_id)?;
-    let mut state = state.lock().unwrap();
-    let domain = state
-        .domains
-        .get_mut(domain_id)
-        .context("domain not found")?;
-    let tab = domain
-        .tabs
-        .iter_mut()
-        .find(|tab| tab.panes.contains_key(&pane_id))
-        .context("pane not found")?;
-    let panes = tab.layout.panes();
-    if panes.len() <= 1 {
-        anyhow::bail!("swap requires at least two panes");
-    }
-    let index = panes
-        .iter()
-        .position(|pane| *pane == pane_id)
-        .context("pane layout does not contain the requested pane")?;
-    let other = panes[(index + 1) % panes.len()];
-    tab.layout.swap_panes(pane_id, other);
-    domain.publish_topology();
-    Ok(Response::Domain {
-        domain: domain.snapshot(),
+    with_domain_mut(state, domain_id, |domain| {
+        let tab = domain
+            .tabs
+            .iter_mut()
+            .find(|tab| tab.panes.contains_key(&pane_id))
+            .context("pane not found")?;
+        let panes = tab.layout.panes();
+        if panes.len() <= 1 {
+            anyhow::bail!("swap requires at least two panes");
+        }
+        let index = panes
+            .iter()
+            .position(|pane| *pane == pane_id)
+            .context("pane layout does not contain the requested pane")?;
+        let other = panes[(index + 1) % panes.len()];
+        tab.layout.swap_panes(pane_id, other);
+        Ok(true)
     })
 }
 
@@ -1611,25 +1545,12 @@ fn balance_domain_tab(
     domain_id: &str,
     tab_id: u32,
 ) -> anyhow::Result<Response> {
-    validate_id("domain id", domain_id)?;
-    let mut state = state.lock().unwrap();
-    let domain = state
-        .domains
-        .get_mut(domain_id)
-        .context("domain not found")?;
-    let tab = domain
-        .tabs
-        .iter_mut()
-        .find(|tab| tab.id == tab_id)
-        .context("tab not found")?;
-    if tab.panes.len() <= 1 {
-        anyhow::bail!("balance requires at least two panes");
-    }
-    if tab.layout.balance() {
-        domain.publish_topology();
-    }
-    Ok(Response::Domain {
-        domain: domain.snapshot(),
+    with_domain_mut(state, domain_id, |domain| {
+        let tab = domain.tab_mut(tab_id)?;
+        if tab.panes.len() <= 1 {
+            anyhow::bail!("balance requires at least two panes");
+        }
+        Ok(tab.layout.balance())
     })
 }
 
@@ -1639,32 +1560,21 @@ fn apply_domain_pane_layout(
     tab_id: u32,
     preset: PaneLayoutPreset,
 ) -> anyhow::Result<Response> {
-    validate_id("domain id", domain_id)?;
-    let mut state = state.lock().unwrap();
-    let domain = state
-        .domains
-        .get_mut(domain_id)
-        .context("domain not found")?;
-    let tab_index = domain
-        .tabs
-        .iter()
-        .position(|tab| tab.id == tab_id)
-        .context("tab not found")?;
-    let panes = domain.tabs[tab_index].layout.panes();
-    if panes.len() <= 1 {
-        anyhow::bail!("layout preset requires at least two panes");
-    }
-    let focused_pane = domain.tabs[tab_index].focused_pane;
-    let mut next_split = domain.next_split;
-    let shape = preset
-        .shape(&panes, focused_pane)
-        .context("master-detail layout requires its focused pane in the layout")?;
-    let layout = LivePaneLayout::from_shape(shape, &mut next_split)?;
-    domain.tabs[tab_index].layout = layout;
-    domain.next_split = next_split;
-    domain.publish_topology();
-    Ok(Response::Domain {
-        domain: domain.snapshot(),
+    with_domain_mut(state, domain_id, |domain| {
+        let tab_index = domain.tab_index(tab_id)?;
+        let panes = domain.tabs[tab_index].layout.panes();
+        if panes.len() <= 1 {
+            anyhow::bail!("layout preset requires at least two panes");
+        }
+        let focused_pane = domain.tabs[tab_index].focused_pane;
+        let mut next_split = domain.next_split;
+        let shape = preset
+            .shape(&panes, focused_pane)
+            .context("master-detail layout requires its focused pane in the layout")?;
+        let layout = LivePaneLayout::from_shape(shape, &mut next_split)?;
+        domain.tabs[tab_index].layout = layout;
+        domain.next_split = next_split;
+        Ok(true)
     })
 }
 
@@ -1676,74 +1586,66 @@ fn move_domain_pane(
     target_pane_id: Option<u32>,
     direction: SplitDirection,
 ) -> anyhow::Result<Response> {
-    validate_id("domain id", domain_id)?;
-    let mut state = state.lock().unwrap();
-    let domain = state
-        .domains
-        .get_mut(domain_id)
-        .context("domain not found")?;
-    let source_index = domain
-        .tabs
-        .iter()
-        .position(|tab| tab.panes.contains_key(&pane_id))
-        .context("pane not found")?;
-    let destination_index = domain
-        .tabs
-        .iter()
-        .position(|tab| tab.id == destination_tab_id)
-        .context("destination tab not found")?;
-    if source_index == destination_index {
-        anyhow::bail!("source and destination tabs must be different");
-    }
-    if domain.tabs[source_index].panes.len() <= 1 {
-        anyhow::bail!("the last pane in a tab cannot be moved");
-    }
+    with_domain_mut(state, domain_id, |domain| {
+        let source_index = domain
+            .tabs
+            .iter()
+            .position(|tab| tab.panes.contains_key(&pane_id))
+            .context("pane not found")?;
+        let destination_index = domain
+            .tabs
+            .iter()
+            .position(|tab| tab.id == destination_tab_id)
+            .context("destination tab not found")?;
+        if source_index == destination_index {
+            anyhow::bail!("source and destination tabs must be different");
+        }
+        if domain.tabs[source_index].panes.len() <= 1 {
+            anyhow::bail!("the last pane in a tab cannot be moved");
+        }
 
-    let source_layout = domain.tabs[source_index]
-        .layout
-        .clone()
-        .without_pane(pane_id)
-        .context("source pane layout does not contain the requested pane")?;
-    let source_focus = if domain.tabs[source_index].focused_pane == pane_id {
-        domain.tabs[source_index]
+        let source_layout = domain.tabs[source_index]
             .layout
-            .sibling_of(pane_id)
-            .context("source pane has no surviving sibling")?
-    } else {
-        domain.tabs[source_index].focused_pane
-    };
-    let destination_focus = target_pane_id.unwrap_or(domain.tabs[destination_index].focused_pane);
-    if !domain.tabs[destination_index]
-        .panes
-        .contains_key(&destination_focus)
-    {
-        anyhow::bail!("destination anchor pane not found in destination tab");
-    }
-    let split_id = domain.next_split;
-    let next_split = split_id
-        .checked_add(1)
-        .context("domain split identity space exhausted")?;
-    let mut destination_layout = domain.tabs[destination_index].layout.clone();
-    if !destination_layout.split_leaf(destination_focus, pane_id, split_id, direction) {
-        anyhow::bail!("destination layout does not contain its focused pane");
-    }
+            .clone()
+            .without_pane(pane_id)
+            .context("source pane layout does not contain the requested pane")?;
+        let source_focus = if domain.tabs[source_index].focused_pane == pane_id {
+            domain.tabs[source_index]
+                .layout
+                .sibling_of(pane_id)
+                .context("source pane has no surviving sibling")?
+        } else {
+            domain.tabs[source_index].focused_pane
+        };
+        let destination_focus =
+            target_pane_id.unwrap_or(domain.tabs[destination_index].focused_pane);
+        if !domain.tabs[destination_index]
+            .panes
+            .contains_key(&destination_focus)
+        {
+            anyhow::bail!("destination anchor pane not found in destination tab");
+        }
+        let mut next_split = domain.next_split;
+        let split_id = take_split_id(&mut next_split)?;
+        let mut destination_layout = domain.tabs[destination_index].layout.clone();
+        if !destination_layout.split_leaf(destination_focus, pane_id, split_id, direction) {
+            anyhow::bail!("destination layout does not contain its focused pane");
+        }
 
-    let pane = domain.tabs[source_index]
-        .panes
-        .remove(&pane_id)
-        .context("pane disappeared while moving")?;
-    domain.tabs[source_index].layout = source_layout;
-    domain.tabs[source_index].focused_pane = source_focus;
-    domain.tabs[source_index].refresh_title();
-    domain.tabs[destination_index].panes.insert(pane_id, pane);
-    domain.tabs[destination_index].layout = destination_layout;
-    domain.tabs[destination_index].focused_pane = pane_id;
-    domain.tabs[destination_index].refresh_title();
-    domain.active_tab = destination_tab_id;
-    domain.next_split = next_split;
-    domain.publish_topology();
-    Ok(Response::Domain {
-        domain: domain.snapshot(),
+        let pane = domain.tabs[source_index]
+            .panes
+            .remove(&pane_id)
+            .context("pane disappeared while moving")?;
+        domain.tabs[source_index].layout = source_layout;
+        domain.tabs[source_index].focused_pane = source_focus;
+        domain.tabs[source_index].refresh_title();
+        domain.tabs[destination_index].panes.insert(pane_id, pane);
+        domain.tabs[destination_index].layout = destination_layout;
+        domain.tabs[destination_index].focused_pane = pane_id;
+        domain.tabs[destination_index].refresh_title();
+        domain.active_tab = destination_tab_id;
+        domain.next_split = next_split;
+        Ok(true)
     })
 }
 
@@ -1752,13 +1654,8 @@ fn remove_domain_pane(
     domain_id: &str,
     pane_id: u32,
 ) -> anyhow::Result<Response> {
-    validate_id("domain id", domain_id)?;
-    let (mut removed, snapshot) = {
-        let mut state = state.lock().unwrap();
-        let domain = state
-            .domains
-            .get_mut(domain_id)
-            .context("domain not found")?;
+    let mut removed = None;
+    let response = with_domain_mut(state, domain_id, |domain| {
         let tab = domain
             .tabs
             .iter_mut()
@@ -1770,30 +1667,20 @@ fn remove_domain_pane(
                 tab.id
             );
         }
-        let layout = tab
-            .layout
-            .clone()
-            .without_pane(pane_id)
-            .context("pane layout did not contain the requested pane")?;
-        let removed = tab
-            .panes
-            .remove(&pane_id)
-            .context("pane disappeared while closing")?;
-        tab.layout = layout;
-        if tab.focused_pane == pane_id {
-            tab.focused_pane = tab.layout.first_pane();
-            tab.refresh_title();
-        }
-        domain.publish_topology();
-        let snapshot = domain.snapshot();
-        (removed, snapshot)
-    };
-    removed.close_attachments("pane was closed by a domain control request");
-    // Dropping the PTY handle terminates a still-running child. Keeping the
-    // drop outside the state lock lets the reader monitor observe removal
-    // without contending with process teardown.
-    drop(removed);
-    Ok(Response::Domain { domain: snapshot })
+        removed = Some(
+            tab.remove_pane(pane_id)
+                .context("pane layout did not contain the requested pane")?,
+        );
+        Ok(true)
+    })?;
+    if let Some(mut removed) = removed {
+        removed.close_attachments("pane was closed by a domain control request");
+        // Dropping the PTY handle terminates a still-running child. Keeping
+        // the drop outside the state lock lets the reader monitor observe
+        // removal without contending with process teardown.
+        drop(removed);
+    }
+    Ok(response)
 }
 
 fn remove_domain_tab(
@@ -1801,32 +1688,20 @@ fn remove_domain_tab(
     domain_id: &str,
     tab_id: u32,
 ) -> anyhow::Result<Response> {
-    validate_id("domain id", domain_id)?;
-    let (mut removed, snapshot) = {
-        let mut state = state.lock().unwrap();
-        let domain = state
-            .domains
-            .get_mut(domain_id)
-            .context("domain not found")?;
+    let mut removed = None;
+    let response = with_domain_mut(state, domain_id, |domain| {
         if domain.tabs.len() == 1 {
             anyhow::bail!("tab {tab_id} is the last tab; use kill to terminate the domain");
         }
-        let index = domain
-            .tabs
-            .iter()
-            .position(|tab| tab.id == tab_id)
-            .context("tab not found")?;
-        let removed = domain.tabs.remove(index);
-        if domain.active_tab == tab_id {
-            domain.active_tab = domain.tabs[index.min(domain.tabs.len() - 1)].id;
-        }
-        domain.publish_topology();
-        let snapshot = domain.snapshot();
-        (removed, snapshot)
-    };
-    removed.close_attachments("tab was closed by a domain control request");
-    drop(removed);
-    Ok(Response::Domain { domain: snapshot })
+        let index = domain.tab_index(tab_id)?;
+        removed = Some(domain.remove_tab(index));
+        Ok(true)
+    })?;
+    if let Some(mut removed) = removed {
+        removed.close_attachments("tab was closed by a domain control request");
+        drop(removed);
+    }
+    Ok(response)
 }
 
 fn spawn_reader_monitor(
@@ -1965,20 +1840,9 @@ fn close_pane(state: &SharedState, domain_id: &str, pane_id: u32, message: &str)
     }
 
     if domain.tabs[tab_index].panes.len() > 1 {
-        let tab = &mut domain.tabs[tab_index];
-        if let Some(layout) = tab.layout.clone().without_pane(pane_id) {
-            tab.layout = layout;
-            tab.panes.remove(&pane_id);
-            if tab.focused_pane == pane_id {
-                tab.focused_pane = tab.layout.first_pane();
-                tab.refresh_title();
-            }
-        }
+        domain.tabs[tab_index].remove_pane(pane_id);
     } else if domain.tabs.len() > 1 {
-        let removed_tab = domain.tabs.remove(tab_index);
-        if domain.active_tab == removed_tab.id {
-            domain.active_tab = domain.tabs[tab_index.min(domain.tabs.len() - 1)].id;
-        }
+        domain.remove_tab(tab_index);
     }
     // The sole pane of the sole tab remains inspectable as a closed terminal;
     // every other exited leaf is removed from the authoritative topology.
@@ -2108,10 +1972,7 @@ fn serve_topology_subscription(
         let subscription_id = state_guard
             .next_topology_subscription
             .fetch_add(1, Ordering::Relaxed);
-        let domain = state_guard
-            .domains
-            .get_mut(&domain_id)
-            .context("domain not found")?;
+        let domain = state_guard.domain_mut(&domain_id)?;
         if domain.topology_subscribers.len() >= MAX_TOPOLOGY_SUBSCRIBERS_PER_DOMAIN {
             anyhow::bail!(
                 "topology subscriber limit of {MAX_TOPOLOGY_SUBSCRIBERS_PER_DOMAIN} reached"
@@ -2431,11 +2292,8 @@ fn find_pane<'a>(
     domain_id: &str,
     pane_id: u32,
 ) -> anyhow::Result<&'a PaneRuntime> {
-    validate_id("domain id", domain_id)?;
     state
-        .domains
-        .get(domain_id)
-        .context("domain not found")?
+        .domain(domain_id)?
         .tabs
         .iter()
         .find_map(|tab| tab.panes.get(&pane_id))
@@ -2447,11 +2305,8 @@ fn find_pane_mut<'a>(
     domain_id: &str,
     pane_id: u32,
 ) -> anyhow::Result<&'a mut PaneRuntime> {
-    validate_id("domain id", domain_id)?;
     state
-        .domains
-        .get_mut(domain_id)
-        .context("domain not found")?
+        .domain_mut(domain_id)?
         .tabs
         .iter_mut()
         .find_map(|tab| tab.panes.get_mut(&pane_id))
@@ -2561,13 +2416,19 @@ impl PaneRuntime {
         ))
     }
 
+    /// Where the pane's program works: what its shell last reported, else
+    /// the child's current directory, else the directory it was started in.
+    fn working_directory(&self) -> Option<String> {
+        crate::tabs::terminal_working_directory(&self.terminal)
+            .or_else(|| self.pty.child_id().and_then(crate::tabs::get_process_cwd))
+            .or_else(|| self.requested_cwd.clone())
+    }
+
     fn snapshot(&self) -> LivePane {
         LivePane {
             id: self.id,
             title: self.title.clone(),
-            working_directory: crate::tabs::terminal_working_directory(&self.terminal)
-                .or_else(|| self.pty.child_id().and_then(crate::tabs::get_process_cwd))
-                .or_else(|| self.requested_cwd.clone()),
+            working_directory: self.working_directory(),
             command: self.command.clone(),
             cols: self.cols,
             rows: self.rows,
@@ -2656,22 +2517,46 @@ impl ServerState {
     fn pane_count(&self) -> usize {
         self.domains.values().map(DomainRuntime::pane_count).sum()
     }
+
+    /// Domain `domain_id`, once the ID is well formed.
+    fn domain(&self, domain_id: &str) -> anyhow::Result<&DomainRuntime> {
+        validate_id("domain id", domain_id)?;
+        self.domains.get(domain_id).context("domain not found")
+    }
+
+    fn domain_mut(&mut self, domain_id: &str) -> anyhow::Result<&mut DomainRuntime> {
+        validate_id("domain id", domain_id)?;
+        self.domains.get_mut(domain_id).context("domain not found")
+    }
 }
 
 impl TabRuntime {
-    fn refresh_title(&mut self) -> bool {
-        let title = self.user_title.clone().unwrap_or_else(|| {
+    /// Shows the user's title, else the focused pane's, else the tab's
+    /// number.
+    fn refresh_title(&mut self) {
+        self.title = self.user_title.clone().unwrap_or_else(|| {
             self.panes
                 .get(&self.focused_pane)
                 .map(|pane| pane.title.clone())
                 .unwrap_or_else(|| format!("Tab {}", self.id + 1))
         });
-        if self.title == title {
-            false
-        } else {
-            self.title = title;
-            true
+    }
+
+    /// Takes pane `pane_id` out: its sibling fills its place, and if it had
+    /// focus the first remaining pane takes it. `None`, changing nothing,
+    /// when it is the tab's only pane or not in its layout.
+    fn remove_pane(&mut self, pane_id: u32) -> Option<PaneRuntime> {
+        if self.panes.len() <= 1 {
+            return None;
         }
+        let layout = self.layout.clone().without_pane(pane_id)?;
+        let pane = self.panes.remove(&pane_id)?;
+        self.layout = layout;
+        if self.focused_pane == pane_id {
+            self.focused_pane = self.layout.first_pane();
+            self.refresh_title();
+        }
+        Some(pane)
     }
 
     fn snapshot(&self) -> LiveTab {
@@ -2718,6 +2603,31 @@ impl TabRuntime {
 }
 
 impl DomainRuntime {
+    fn tab_index(&self, tab_id: u32) -> anyhow::Result<usize> {
+        self.tabs
+            .iter()
+            .position(|tab| tab.id == tab_id)
+            .context("tab not found")
+    }
+
+    fn tab_mut(&mut self, tab_id: u32) -> anyhow::Result<&mut TabRuntime> {
+        self.tabs
+            .iter_mut()
+            .find(|tab| tab.id == tab_id)
+            .context("tab not found")
+    }
+
+    /// Takes the tab at `index` out, which must not be the only one. If it
+    /// was active, the tab that takes its place (or the new last tab) is.
+    fn remove_tab(&mut self, index: usize) -> TabRuntime {
+        assert!(self.tabs.len() > 1, "a domain keeps at least one tab");
+        let removed = self.tabs.remove(index);
+        if self.active_tab == removed.id {
+            self.active_tab = self.tabs[index.min(self.tabs.len() - 1)].id;
+        }
+        removed
+    }
+
     fn pane_count(&self) -> usize {
         self.tabs.iter().map(|tab| tab.panes.len()).sum()
     }
@@ -3315,6 +3225,43 @@ mod tests {
             let state = state.lock().unwrap();
             assert_eq!(state.domains.len(), 1);
             assert_eq!(state.pane_count(), 1);
+        }
+        process_request(&state, Request::KillDomain { domain: domain.id }).unwrap();
+    }
+
+    #[test]
+    fn a_split_refuses_rather_than_reusing_an_exhausted_split_id() {
+        let state = empty_state();
+        let Response::Domain { domain } = create_domain(
+            &state,
+            "split-ids".into(),
+            SpawnSpec {
+                program: Some("/bin/sh".into()),
+                args: crate::test_support::sleeping_args(),
+                ..SpawnSpec::default()
+            },
+        )
+        .unwrap() else {
+            panic!("expected created domain");
+        };
+        state
+            .lock()
+            .unwrap()
+            .domains
+            .get_mut(&domain.id)
+            .unwrap()
+            .next_split = u32::MAX;
+        let spawn = SpawnSpec {
+            program: Some("/bin/true".into()),
+            ..SpawnSpec::default()
+        };
+        assert!(split_pane(&state, &domain.id, 0, SplitDirection::Vertical, spawn).is_err());
+        {
+            let state = state.lock().unwrap();
+            let unchanged = &state.domains[&domain.id];
+            assert_eq!(unchanged.next_split, u32::MAX);
+            assert_eq!(unchanged.next_pane, 1);
+            assert_eq!(unchanged.tabs[0].layout, LivePaneLayout::Pane { pane: 0 });
         }
         process_request(&state, Request::KillDomain { domain: domain.id }).unwrap();
     }
