@@ -167,7 +167,10 @@ fn read_file_start(path: &Path, max_chars: usize) -> std::io::Result<String> {
     // cut and ends in an ellipsis.
     let limit = (max_chars + 1) * MAX_UTF8_CHAR_BYTES;
     let mut bytes = Vec::new();
-    fs::File::open(path)?
+    // The file was checked when it was chosen, but it may since have been
+    // swapped for a FIFO, a device, or a link: the descriptor is what must be
+    // a regular file. Its size does not matter, since only its start is read.
+    crate::safe_fs::open_regular(path, usize::MAX)?
         .take(limit as u64)
         .read_to_end(&mut bytes)?;
     let reached_limit = bytes.len() == limit;
@@ -435,6 +438,45 @@ mod tests {
         fs::write(&file, [b'a', 0xc3]).unwrap();
         let error = read_file_start(&file, MAX_CONTEXT_SOURCE_CHARS).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn a_file_swapped_for_a_fifo_is_refused_without_waiting_for_a_writer() {
+        use std::os::unix::{ffi::OsStrExt, fs::OpenOptionsExt};
+        use std::sync::mpsc;
+        let directory = tempfile::tempdir().unwrap();
+        let fifo = directory.path().join("chosen.log");
+        let name = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: name is a live C string inside this private fixture directory.
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        let source = fifo.clone();
+        let (send, receive) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            send.send(read_file_start(&source, MAX_CONTEXT_SOURCE_CHARS))
+                .unwrap();
+        });
+        // A read that waits is released by a writer, so the test fails rather
+        // than hangs.
+        let mut rescued = false;
+        let result = match receive.recv_timeout(Duration::from_millis(300)) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                rescued = true;
+                drop(
+                    fs::OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .custom_flags(libc::O_NONBLOCK)
+                        .open(&fifo)
+                        .unwrap(),
+                );
+                receive.recv_timeout(Duration::from_secs(2)).unwrap()
+            }
+            Err(error) => panic!("context worker failed: {error}"),
+        };
+        worker.join().unwrap();
+        assert!(!rescued, "reading the chosen file waited for a FIFO writer");
+        assert!(result.is_err());
     }
 
     #[test]
