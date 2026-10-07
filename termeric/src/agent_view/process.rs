@@ -9,7 +9,6 @@
 use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,7 +18,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::line_reader::read_bounded_line;
-use crate::process_group::Signal;
+use crate::process_group::{PipedChild, Signal};
 
 use super::event::ExitReport;
 
@@ -99,12 +98,7 @@ impl AgentProcess {
     /// Starts the agent. `waker` runs on a background thread after each output.
     pub fn spawn(spec: &LaunchSpec, waker: Waker) -> std::io::Result<Self> {
         let mut command = Command::new(&spec.program);
-        command
-            .args(&spec.args)
-            .current_dir(&spec.cwd)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        command.args(&spec.args).current_dir(&spec.cwd);
         for name in &spec.env_remove {
             command.env_remove(name);
         }
@@ -113,16 +107,13 @@ impl AgentProcess {
         }
         // Its own group, so closing the agent also closes the commands it
         // started, and a terminal's Ctrl+C never reaches it.
-        command.process_group(0);
-        let mut child = command.spawn()?;
+        let PipedChild {
+            child,
+            stdin,
+            stdout,
+            stderr,
+        } = crate::process_group::spawn_piped(&mut command)?;
         let process_id = child.id();
-        let (Some(stdin), Some(stdout), Some(stderr)) =
-            (child.stdin.take(), child.stdout.take(), child.stderr.take())
-        else {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(std::io::Error::other("agent pipes were unavailable"));
-        };
         let child = Arc::new(Mutex::new(child));
         let stopped = Arc::new(AtomicBool::new(false));
         let stderr_tail = Arc::new(Mutex::new(VecDeque::new()));

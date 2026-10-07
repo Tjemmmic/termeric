@@ -1,14 +1,16 @@
-//! Signalling a child that leads its own process group, and reaping it.
+//! Starting a child that leads its own process group, signalling it, and
+//! reaping it.
 //!
 //! Process-group signals are safe only while the group's leader is
 //! unreaped: until then its id cannot be reused, so a signal to the group
-//! cannot reach an unrelated one. A child started with
-//! `CommandExt::process_group(0)` is therefore reaped only through [`reap`]
-//! and its group signalled only through [`signal`], both by the one owner
-//! of its `Child`, never by `Child::try_wait` or `Child::wait` while its
-//! group may still be signalled.
+//! cannot reach an unrelated one. A child started with [`spawn_piped`] is
+//! therefore reaped only through [`reap`] and its group signalled only
+//! through [`signal`], both by the one owner of its `Child`, never by
+//! `Child::try_wait` or `Child::wait` while its group may still be
+//! signalled.
 
-use std::process::{Child, ExitStatus};
+use std::os::unix::process::CommandExt;
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
 
 /// Where a group's leader is in its life.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,6 +25,38 @@ pub enum Leader {
 pub enum Signal {
     Terminate,
     Kill,
+}
+
+/// A child leading its own process group, with its three pipes.
+pub struct PipedChild {
+    pub child: Child,
+    pub stdin: ChildStdin,
+    pub stdout: ChildStdout,
+    pub stderr: ChildStderr,
+}
+
+/// Starts `command` as the leader of a new process group, with stdin,
+/// stdout, and stderr piped to Termeric.
+pub fn spawn_piped(command: &mut Command) -> std::io::Result<PipedChild> {
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()?;
+    let (Some(stdin), Some(stdout), Some(stderr)) =
+        (child.stdin.take(), child.stdout.take(), child.stderr.take())
+    else {
+        signal(&child, Signal::Kill);
+        let _ = child.wait();
+        return Err(std::io::Error::other("the child's pipes were unavailable"));
+    };
+    Ok(PipedChild {
+        child,
+        stdin,
+        stdout,
+        stderr,
+    })
 }
 
 /// Signals `leader` and everything in its group, unless it was reaped.

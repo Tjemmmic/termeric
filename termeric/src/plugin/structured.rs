@@ -12,17 +12,16 @@ use super::permission::{Capability, PermissionScope, PluginPermissions};
 use crate::agents::AgentConfig;
 use crate::line_reader::read_bounded_line;
 use crate::panes::PaneLayoutPreset;
+use crate::process_group::PipedChild;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
-
-use std::os::unix::process::CommandExt;
 
 /// Requests queued on one plugin's lane.
 const QUEUE_CAPACITY: usize = 32;
@@ -870,11 +869,7 @@ fn handler_command(invocation: &StructuredHandlerInvocation) -> Command {
     command
         .args(&invocation.args)
         .env_clear()
-        .env("TERMERIC_PLUGIN_ID", &invocation.plugin_id)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
+        .env("TERMERIC_PLUGIN_ID", &invocation.plugin_id);
     if let Some(path) = std::env::var_os("PATH") {
         command.env("PATH", path);
     }
@@ -907,21 +902,15 @@ struct BoundedStderr {
 
 impl PersistentHandler {
     fn spawn(invocation: &StructuredHandlerInvocation) -> Result<Self, String> {
-        let mut child = handler_command(invocation)
-            .spawn()
+        // Its own group, so a handler that is ended takes the commands it
+        // started with it, and none of them keeps its pipes open.
+        let PipedChild {
+            child,
+            mut stdin,
+            stdout,
+            stderr: stderr_stream,
+        } = crate::process_group::spawn_piped(&mut handler_command(invocation))
             .map_err(|error| bounded_error(&format!("handler launch failed: {error}")))?;
-        let Some(mut stdin) = child.stdin.take() else {
-            terminate_handler(&mut child);
-            return Err("handler stdin was unavailable".into());
-        };
-        let Some(stdout) = child.stdout.take() else {
-            terminate_handler(&mut child);
-            return Err("handler stdout was unavailable".into());
-        };
-        let Some(stderr_stream) = child.stderr.take() else {
-            terminate_handler(&mut child);
-            return Err("handler stderr was unavailable".into());
-        };
         let (request_sender, request_receiver) = sync_channel::<PersistentRequest>(1);
         let io_thread = thread::spawn(move || {
             let mut stdout = BufReader::new(stdout);
