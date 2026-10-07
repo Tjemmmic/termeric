@@ -20,38 +20,20 @@ const ENTRY_FILE: u8 = 2;
 const ENTRY_END: u8 = 0xff;
 const COPY_BUFFER_BYTES: usize = 64 * 1024;
 
+/// A directory packed into an unlinked private file, rewound to its start.
+/// The file has no name, so it disappears with its last handle.
 #[derive(Debug)]
 pub struct DirectoryArchive {
     pub file: File,
-    path: Option<PathBuf>,
     pub entries: u32,
     pub bytes: u64,
 }
 
-impl Drop for DirectoryArchive {
-    fn drop(&mut self) {
-        if let Some(path) = &self.path {
-            let _ = fs::remove_file(path);
-        }
-    }
-}
-
-#[cfg(test)]
-pub fn build_directory_archive(source: &Path) -> anyhow::Result<DirectoryArchive> {
-    build_directory_archive_inner(source, None, None)
-}
-
-pub fn build_directory_archive_with_control(
+/// Packs `source`, which must still be the directory `expected_identity`
+/// names when one is given, stopping once `cancelled` is set.
+pub fn build_directory_archive(
     source: &Path,
     cancelled: &AtomicBool,
-    expected_identity: Option<(u64, u64)>,
-) -> anyhow::Result<DirectoryArchive> {
-    build_directory_archive_inner(source, Some(cancelled), expected_identity)
-}
-
-fn build_directory_archive_inner(
-    source: &Path,
-    cancelled: Option<&AtomicBool>,
     expected_identity: Option<(u64, u64)>,
 ) -> anyhow::Result<DirectoryArchive> {
     check_cancelled(cancelled)?;
@@ -68,7 +50,6 @@ fn build_directory_archive_inner(
     let source_device = source_metadata.dev();
     let mut temporary = anonymous_archive_file().map(|file| DirectoryArchive {
         file,
-        path: None,
         entries: 0,
         bytes: 0,
     });
@@ -91,7 +72,6 @@ fn build_directory_archive_inner(
                 fs::remove_file(&path).context("unlink private directory upload archive")?;
                 temporary = Some(DirectoryArchive {
                     file,
-                    path: None,
                     entries: 0,
                     bytes: 0,
                 });
@@ -143,7 +123,7 @@ fn append_directory(
     relative: &Path,
     source_device: u64,
     depth: usize,
-    cancelled: Option<&AtomicBool>,
+    cancelled: &AtomicBool,
 ) -> anyhow::Result<()> {
     check_cancelled(cancelled)?;
     if depth > MAX_DIRECTORY_DEPTH {
@@ -239,7 +219,7 @@ fn append_file(
     archive: &mut DirectoryArchive,
     path: &Path,
     expected: &fs::Metadata,
-    cancelled: Option<&AtomicBool>,
+    cancelled: &AtomicBool,
 ) -> anyhow::Result<()> {
     if archive.bytes.saturating_add(expected.len()) > MAX_DIRECTORY_ARCHIVE_BYTES {
         anyhow::bail!("directory upload exceeds the 64 MiB archive limit");
@@ -284,8 +264,8 @@ fn append_file(
     Ok(())
 }
 
-fn check_cancelled(cancelled: Option<&AtomicBool>) -> anyhow::Result<()> {
-    if cancelled.is_some_and(|cancelled| cancelled.load(Ordering::Acquire)) {
+fn check_cancelled(cancelled: &AtomicBool) -> anyhow::Result<()> {
+    if cancelled.load(Ordering::Acquire) {
         anyhow::bail!("directory upload was cancelled during local preparation");
     }
     Ok(())
@@ -474,7 +454,7 @@ mod tests {
         fs::write(source.join("bin/run"), b"#!/bin/sh\n").unwrap();
         fs::set_permissions(source.join("bin/run"), fs::Permissions::from_mode(0o751)).unwrap();
 
-        let mut archive = build_directory_archive(&source).unwrap();
+        let mut archive = build_directory_archive(&source, &AtomicBool::new(false), None).unwrap();
         assert_eq!(archive.entries, 4);
         let destination_parent = tempfile::tempdir().unwrap();
         let destination = destination_parent.path().join("staging");
@@ -512,7 +492,7 @@ mod tests {
         fs::create_dir(&source).unwrap();
         std::os::unix::fs::symlink("missing", source.join("link")).unwrap();
         assert!(
-            build_directory_archive(&source)
+            build_directory_archive(&source, &AtomicBool::new(false), None)
                 .unwrap_err()
                 .to_string()
                 .contains("symbolic links")
@@ -523,7 +503,7 @@ mod tests {
         // SAFETY: the path is a valid NUL-free CString and mode is conventional.
         assert_eq!(unsafe { libc::mkfifo(fifo_path.as_ptr(), 0o600) }, 0);
         assert!(
-            build_directory_archive(&source)
+            build_directory_archive(&source, &AtomicBool::new(false), None)
                 .unwrap_err()
                 .to_string()
                 .contains("devices, sockets, and FIFOs")
@@ -538,12 +518,11 @@ mod tests {
         fs::write(source.join("file"), b"content").unwrap();
         let cancelled = AtomicBool::new(false);
         let error =
-            build_directory_archive_with_control(&source, &cancelled, Some((u64::MAX, u64::MAX)))
-                .unwrap_err();
+            build_directory_archive(&source, &cancelled, Some((u64::MAX, u64::MAX))).unwrap_err();
         assert!(error.to_string().contains("identity changed"));
 
         cancelled.store(true, Ordering::Release);
-        let error = build_directory_archive_with_control(&source, &cancelled, None).unwrap_err();
+        let error = build_directory_archive(&source, &cancelled, None).unwrap_err();
         assert!(error.to_string().contains("cancelled"));
     }
 

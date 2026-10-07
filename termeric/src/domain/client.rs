@@ -461,26 +461,27 @@ impl DomainClient {
             anyhow::bail!("upload source must not be a symbolic link");
         }
         if metadata.is_dir() {
-            let archive = match super::archive::build_directory_archive_with_control(
-                source,
-                cancelled,
-                expected_identity,
-            ) {
-                Ok(archive) => archive,
-                Err(_) if cancelled.load(Ordering::Acquire) => {
-                    return Ok(Response::UploadCancelled { bytes_received: 0 });
-                }
-                Err(error) => return Err(error),
-            };
-            let file = archive
-                .file
-                .try_clone()
-                .context("clone directory upload archive handle")?;
+            let archive =
+                match super::archive::build_directory_archive(source, cancelled, expected_identity)
+                {
+                    Ok(archive) => archive,
+                    Err(_) if cancelled.load(Ordering::Acquire) => {
+                        return Ok(Response::UploadCancelled { bytes_received: 0 });
+                    }
+                    Err(error) => return Err(error),
+                };
             let kind = UploadKind::Directory {
                 entries: archive.entries,
             };
             return self.upload_open_file(
-                domain, pane, file, name, kind, upload_id, cancelled, progress,
+                domain,
+                pane,
+                archive.file,
+                name,
+                kind,
+                upload_id,
+                cancelled,
+                progress,
             );
         }
         if !metadata.is_file() {
