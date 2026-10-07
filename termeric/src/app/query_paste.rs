@@ -13,6 +13,8 @@ enum PasteTarget {
     TabRename,
     ShortcutsFilter,
     SettingsFilter,
+    /// The focused text field of an info overlay, such as a font editor's.
+    InfoOverlayInput,
     AgentView,
     Blocked,
     Terminal,
@@ -43,6 +45,9 @@ impl App {
                 }
                 ModalLayer::CommandsPanel if self.commands_panel.is_editing() => {
                     PasteTarget::CommandsForm
+                }
+                ModalLayer::InfoOverlay if self.info_overlay.input_focused() => {
+                    PasteTarget::InfoOverlayInput
                 }
                 _ => PasteTarget::Blocked,
             };
@@ -136,6 +141,10 @@ impl App {
             PasteTarget::TabRename => self.insert_tab_rename_text(text),
             PasteTarget::ShortcutsFilter => self.shortcuts_panel.insert_filter_text(text),
             PasteTarget::SettingsFilter => self.settings_panel.insert_filter_text(text),
+            PasteTarget::InfoOverlayInput => {
+                let request_id = self.info_overlay.request_id();
+                self.info_overlay.insert_input_text(request_id, text)
+            }
             PasteTarget::Search => {
                 let cursor = self.search_cursor_pos;
                 let accepted = self
@@ -221,6 +230,8 @@ mod tests {
     #[derive(Clone, Copy, Debug)]
     enum Higher {
         InfoOverlay,
+        /// An info overlay with a focused text field, as the font editors show.
+        InfoOverlayInput,
         Settings,
         Shortcuts,
         Palette,
@@ -235,6 +246,17 @@ mod tests {
             match self {
                 Self::InfoOverlay => {
                     app.info_overlay.show("Notice", vec![]);
+                }
+                Self::InfoOverlayInput => {
+                    app.info_overlay.show_input(
+                        "Rule",
+                        vec!["Rule: ".into()],
+                        0,
+                        "Rule: ",
+                        "",
+                        64,
+                        Vec::new(),
+                    );
                 }
                 Self::Settings => app.settings_panel.toggle(),
                 Self::Shortcuts => app.shortcuts_panel.open(),
@@ -252,6 +274,10 @@ mod tests {
         fn query(self, app: &mut App) -> Option<String> {
             match self {
                 Self::InfoOverlay | Self::Recording => None,
+                Self::InfoOverlayInput => {
+                    let request_id = app.info_overlay.request_id();
+                    app.info_overlay.input_value(request_id).map(str::to_owned)
+                }
                 Self::Settings => Some(settings_filter(app)),
                 Self::Shortcuts => Some(shortcuts_filter(app)),
                 Self::Palette => Some(app.command_palette.build_info().input),
@@ -522,6 +548,7 @@ mod tests {
             },
             &[
                 Higher::InfoOverlay,
+                Higher::InfoOverlayInput,
                 Higher::Settings,
                 Higher::Shortcuts,
                 Higher::Palette,
@@ -619,6 +646,7 @@ mod tests {
             |app| assert_eq!(settings_filter(app), "settings only"),
             &[
                 Higher::InfoOverlay,
+                Higher::InfoOverlayInput,
                 Higher::Shortcuts,
                 Higher::Palette,
                 Higher::Unicode,
@@ -707,6 +735,7 @@ mod tests {
             |app| assert_eq!(shortcuts_filter(app), "filter"),
             &[
                 Higher::InfoOverlay,
+                Higher::InfoOverlayInput,
                 Higher::Palette,
                 Higher::Unicode,
                 Higher::Domains,
