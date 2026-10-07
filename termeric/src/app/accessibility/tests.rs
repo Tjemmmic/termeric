@@ -105,7 +105,6 @@ fn terminal_tree_exposes_visible_text_cursor_and_selection_without_hidden_text()
         true,
         false,
         rect(0.0, 0.0, 160.0, 40.0),
-        10.0,
         20.0,
         &[],
     );
@@ -157,7 +156,6 @@ fn terminal_tree_uses_frozen_filtered_rows_and_projected_unicode_selection() {
             false,
             false,
             rect(0.0, 0.0, 160.0, 80.0),
-            10.0,
             20.0,
             &[0, 2],
         );
@@ -194,7 +192,6 @@ fn terminal_tree_uses_frozen_filtered_rows_and_projected_unicode_selection() {
         false,
         false,
         rect(0.0, 0.0, 160.0, 80.0),
-        10.0,
         20.0,
         &[],
     );
@@ -229,7 +226,6 @@ fn visible_scrollback_selection_is_mapped_into_semantic_viewport_rows() {
         false,
         false,
         rect(0.0, 0.0, 80.0, 40.0),
-        10.0,
         20.0,
         &[],
     );

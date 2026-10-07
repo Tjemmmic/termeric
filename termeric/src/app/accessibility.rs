@@ -2325,8 +2325,8 @@ impl App {
             width,
             height,
             tab_bar_height: tab_height,
-            cell_width,
             cell_height,
+            ..
         } = self.ui_metrics();
 
         // Search focus is stale whenever search is hidden, whatever is open.
@@ -2628,7 +2628,6 @@ impl App {
                     pane.read_only,
                     panes.zoomed_id() == Some(pane.id),
                     rect(bounds.x, bounds.y, bounds.width, bounds.height),
-                    cell_width,
                     cell_height,
                     if pane.id == focused {
                         self.search
@@ -5167,7 +5166,6 @@ fn append_terminal_nodes(
     read_only: bool,
     zoomed: bool,
     bounds: Rect,
-    cell_width: f32,
     cell_height: f32,
     filtered_rows: &[i32],
 ) {
@@ -5255,7 +5253,6 @@ fn append_terminal_nodes(
             node.set_text_selection(selection);
         }
     }
-    let _ = cell_width; // retained in the signature for future character geometry.
     nodes.push((terminal_id, node));
 }
 
