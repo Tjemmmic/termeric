@@ -2,6 +2,7 @@
 //! shared frame and header buttons, and the Commands and session panel hit tests.
 
 use super::Renderer;
+use super::draw::FieldTextColors;
 use crate::ui::color::{scale_alpha, with_alpha};
 use crate::ui::constants::BUTTON_CORNER_RADIUS;
 use crate::ui::geometry::Bounds;
@@ -62,7 +63,6 @@ impl Renderer {
         if anim <= 0.0 {
             return;
         }
-        let cell_width = self.cell_width();
         let cell_height = self.cell_height();
         let layout = self.commands_panel_layout(info, window_width, window_height);
         let panel = layout.panel;
@@ -168,46 +168,17 @@ impl Renderer {
                 let Some(view) = layout.input_viewport(info, field) else {
                     continue;
                 };
-                let clip = super::text::TextClip {
-                    left: view.text_x,
-                    top: rect.y,
-                    right: view.right,
-                    bottom: rect.y + rect.height,
-                };
-                let (shown, color, range) = if value.is_empty() {
-                    let hint = crate::ui::text_input_viewport::TextInputViewport::calculate(
-                        placeholder,
-                        0,
-                        view.text_x,
-                        view.text_y,
-                        view.right,
-                        cell_width,
-                    );
-                    (
-                        placeholder,
-                        scale_alpha(dim, 0.6),
-                        hint.map_or(0..0, |hint| hint.text_range),
-                    )
-                } else {
-                    (value, text, view.text_range.clone())
-                };
-                self.text_pipeline.push_ui_run(
-                    &shown[range],
-                    view.text_x,
-                    view.text_y,
-                    color,
-                    cell_width,
-                    clip,
+                self.draw_field_text(
+                    rect,
+                    &view,
+                    value,
+                    placeholder,
+                    FieldTextColors {
+                        text,
+                        placeholder: scale_alpha(dim, 0.6),
+                    },
+                    active.then_some(self.ui.palette_accent),
                 );
-                if active {
-                    self.rect_pipeline.push_rect(
-                        view.cursor_x,
-                        rect.y + self.px(3.0),
-                        self.px(2.0).min(view.right - view.cursor_x),
-                        rect.height - self.px(6.0),
-                        self.ui.palette_accent,
-                    );
-                }
             }
             self.build_panel_button(form.save_button, "Save", true, text);
             self.build_panel_button(form.cancel_button, "Cancel", false, text);
@@ -740,25 +711,16 @@ impl Renderer {
                 self.px(BUTTON_CORNER_RADIUS),
             );
             if let Some(view) = layout.rename_input_viewport(name, info.rename_cursor) {
-                self.text_pipeline.push_ui_run(
-                    &name[view.text_range.clone()],
-                    view.text_x,
-                    view.text_y,
-                    text,
-                    self.cell_width(),
-                    super::text::TextClip {
-                        left: view.text_x,
-                        top: input.y,
-                        right: view.right,
-                        bottom: input.y + input.height,
+                self.draw_field_text(
+                    input,
+                    &view,
+                    name,
+                    "",
+                    FieldTextColors {
+                        text,
+                        placeholder: dim,
                     },
-                );
-                self.rect_pipeline.push_rect(
-                    view.cursor_x,
-                    input.y + self.px(3.0),
-                    self.px(2.0).min(view.right - view.cursor_x),
-                    input.height - self.px(6.0),
-                    self.ui.palette_accent,
+                    Some(self.ui.palette_accent),
                 );
             }
             for (button, label, primary) in [

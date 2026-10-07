@@ -1,12 +1,12 @@
 //! Search bar rendering and hit-testing.
 
 use super::Renderer;
+use super::draw::FieldTextColors;
 use super::types::*;
 use crate::ui::color::{scale_alpha, with_alpha};
 use crate::ui::constants::{BUTTON_CORNER_RADIUS, MENU_CORNER_RADIUS};
 use crate::ui::icon::Icon;
 use crate::ui::search_bar::{SearchBarInfo, SearchBarLayout};
-use crate::ui::text_input_viewport::TextInputViewport;
 
 impl Renderer {
     pub(super) fn build_search_bar(
@@ -51,50 +51,17 @@ impl Renderer {
 
         // ── Query ──
         if let Some(view) = layout.input_viewport(info, self.cell_width()) {
-            let clip = super::text::TextClip {
-                left: view.text_x,
-                top: layout.input.y,
-                right: view.right,
-                bottom: layout.input.y + layout.input.height,
-            };
-            if info.query.is_empty() {
-                let hint = "Find";
-                if let Some(hint_view) = TextInputViewport::calculate(
-                    hint,
-                    0,
-                    view.text_x,
-                    view.text_y,
-                    view.right,
-                    self.cell_width(),
-                ) {
-                    self.text_pipeline.push_ui_run(
-                        &hint[hint_view.text_range],
-                        view.text_x,
-                        view.text_y,
-                        scale_alpha(dim, 0.7),
-                        self.cell_width(),
-                        clip,
-                    );
-                }
-            } else {
-                self.text_pipeline.push_ui_run(
-                    &info.query[view.text_range.clone()],
-                    view.text_x,
-                    view.text_y,
+            self.draw_field_text(
+                layout.input,
+                &view,
+                &info.query,
+                "Find",
+                FieldTextColors {
                     text,
-                    self.cell_width(),
-                    clip,
-                );
-            }
-            if info.is_active {
-                self.rect_pipeline.push_rect(
-                    view.cursor_x,
-                    view.text_y,
-                    self.px(2.0).min(view.right - view.cursor_x),
-                    self.cell_height(),
-                    accent,
-                );
-            }
+                    placeholder: scale_alpha(dim, 0.7),
+                },
+                info.is_active.then_some(accent),
+            );
         }
 
         // ── Status, right-aligned in its slot ──

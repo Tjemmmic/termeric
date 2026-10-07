@@ -2,9 +2,18 @@
 //! shadows, card surfaces, scrollbars, buttons, and focus rings.
 
 use super::Renderer;
+use super::text::TextClip;
 use crate::ui::color::{scale_alpha, with_alpha};
 use crate::ui::constants::*;
 use crate::ui::geometry::Bounds;
+use crate::ui::text_input_viewport::TextInputViewport;
+
+/// The colors of a field's text and of its placeholder.
+#[derive(Clone, Copy)]
+pub(super) struct FieldTextColors {
+    pub(super) text: [f32; 4],
+    pub(super) placeholder: [f32; 4],
+}
 
 impl Renderer {
     /// A raised chrome surface: soft `shadows` (each a logical spread and
@@ -99,6 +108,84 @@ impl Renderer {
             radius,
             self.px(BORDER_WIDTH),
         );
+    }
+
+    /// A filter field's surface: a rounded `fill` with a magnifier in
+    /// `icon` color in the slot before its query text.
+    pub(super) fn draw_filter_field(&mut self, field: Bounds, fill: [f32; 4], icon: [f32; 4]) {
+        self.rect_pipeline.push_rounded_rect(
+            field.x,
+            field.y,
+            field.width,
+            field.height,
+            fill,
+            self.px(BUTTON_CORNER_RADIUS),
+        );
+        self.push_magnifier(
+            field.x + self.cell_width() * FILTER_ICON_CENTER_CELLS,
+            field.y + field.height / 2.0,
+            icon,
+            fill,
+        );
+    }
+
+    /// A single-line field's text through `view`, clipped to `field`:
+    /// `text`, or `placeholder` while it is empty, and a caret in `caret`'s
+    /// color when it is given.
+    pub(super) fn draw_field_text(
+        &mut self,
+        field: Bounds,
+        view: &TextInputViewport,
+        text: &str,
+        placeholder: &str,
+        colors: FieldTextColors,
+        caret: Option<[f32; 4]>,
+    ) {
+        let cell_width = self.cell_width();
+        let clip = TextClip {
+            left: view.text_x,
+            top: field.y,
+            right: view.right,
+            bottom: field.bottom(),
+        };
+        if text.is_empty() {
+            // The placeholder starts where the text would, in the same space.
+            if let Some(hint) = TextInputViewport::calculate(
+                placeholder,
+                0,
+                view.text_x,
+                view.text_y,
+                view.right,
+                cell_width,
+            ) {
+                self.text_pipeline.push_ui_run(
+                    &placeholder[hint.text_range],
+                    view.text_x,
+                    view.text_y,
+                    colors.placeholder,
+                    cell_width,
+                    clip,
+                );
+            }
+        } else {
+            self.text_pipeline.push_ui_run(
+                &text[view.text_range.clone()],
+                view.text_x,
+                view.text_y,
+                colors.text,
+                cell_width,
+                clip,
+            );
+        }
+        if let Some(color) = caret {
+            self.rect_pipeline.push_rect(
+                view.cursor_x,
+                view.text_y,
+                self.px(2.0).min(view.right - view.cursor_x),
+                self.cell_height(),
+                color,
+            );
+        }
     }
 
     /// A card's vertical scrollbar: a faint track and an accent thumb for

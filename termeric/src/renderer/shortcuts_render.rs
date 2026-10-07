@@ -2,6 +2,7 @@
 //! headings, and key recording, styled like the command palette.
 
 use super::Renderer;
+use super::draw::FieldTextColors;
 use crate::input::keybindings::BindableAction;
 use crate::ui::color::scale_alpha;
 use crate::ui::constants::BUTTON_CORNER_RADIUS;
@@ -59,60 +60,21 @@ impl Renderer {
 
         // ── Filter field ──
         let input = layout.input;
-        self.rect_pipeline.push_rounded_rect(
-            input.x,
-            input.y,
-            input.width,
-            input.height,
-            fade(self.ui.palette_input_bg, 0.8),
-            self.px(BUTTON_CORNER_RADIUS),
-        );
-        self.push_magnifier(
-            input.x + cell_width * crate::ui::constants::FILTER_ICON_CENTER_CELLS,
-            input.y + input.height / 2.0,
-            dim,
-            fade(self.ui.palette_input_bg, 0.8),
-        );
+        self.draw_filter_field(input, fade(self.ui.palette_input_bg, 0.8), dim);
         if let Some(view) =
             layout.input_viewport(&info.filter, info.cursor, cell_width, cell_height)
         {
-            let clip = super::text::TextClip {
-                left: view.text_x,
-                top: input.y,
-                right: view.right,
-                bottom: input.y + input.height,
-            };
-            if info.filter.is_empty() {
-                let hint = "Filter shortcuts";
-                if let Some(hint_view) = layout.input_viewport(hint, 0, cell_width, cell_height) {
-                    self.text_pipeline.push_ui_run(
-                        &hint[hint_view.text_range],
-                        view.text_x,
-                        view.text_y,
-                        fade(self.ui.palette_text_dim, 0.6),
-                        cell_width,
-                        clip,
-                    );
-                }
-            } else {
-                self.text_pipeline.push_ui_run(
-                    &info.filter[view.text_range.clone()],
-                    view.text_x,
-                    view.text_y,
+            self.draw_field_text(
+                input,
+                &view,
+                &info.filter,
+                "Filter shortcuts",
+                FieldTextColors {
                     text,
-                    cell_width,
-                    clip,
-                );
-            }
-            if !info.recording {
-                self.rect_pipeline.push_rect(
-                    view.cursor_x,
-                    view.text_y,
-                    self.px(2.0).min(view.right - view.cursor_x),
-                    cell_height,
-                    fade(self.ui.palette_accent, 0.9),
-                );
-            }
+                    placeholder: fade(self.ui.palette_text_dim, 0.6),
+                },
+                (!info.recording).then(|| fade(self.ui.palette_accent, 0.9)),
+            );
         }
 
         // ── Separator ──

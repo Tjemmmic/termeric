@@ -1,6 +1,7 @@
 //! Command palette rendering — centered modal with search and results list
 
 use super::Renderer;
+use super::draw::FieldTextColors;
 use crate::ui::color::scale_alpha;
 use crate::ui::command_palette::{PaletteInfo, PaletteLayout};
 use crate::ui::constants::{BUTTON_CORNER_RADIUS, MODAL_CORNER_RADIUS};
@@ -66,57 +67,24 @@ impl Renderer {
         let input_y = panel_y + padding;
         let input_w = panel_width - padding * 2.0;
         let input_height = layout.input_height;
-        self.rect_pipeline.push_rounded_rect(
-            input_x,
-            input_y,
-            input_w,
-            input_height,
+        let field = Bounds::new(input_x, input_y, input_w, input_height);
+        self.draw_filter_field(
+            field,
             fade(self.ui.palette_input_bg, 0.8),
-            self.px(BUTTON_CORNER_RADIUS),
-        );
-        // Magnifier in the slot before the query text.
-        self.push_magnifier(
-            input_x + cell_width * crate::ui::constants::FILTER_ICON_CENTER_CELLS,
-            input_y + input_height / 2.0,
             fade(self.ui.palette_text_dim, 1.0),
-            fade(self.ui.palette_input_bg, 0.8),
         );
-
         // One grapheme-safe, caret-following viewport also anchors native IME.
         if let Some(view) = layout.input_viewport(&info.input, info.cursor) {
-            let clip = super::text::TextClip {
-                left: view.text_x,
-                top: input_y,
-                right: view.right,
-                bottom: input_y + input_height,
-            };
-            if info.input.is_empty() {
-                if let Some(hint) = layout.input_viewport(&info.placeholder, 0) {
-                    self.text_pipeline.push_ui_run(
-                        &info.placeholder[hint.text_range],
-                        view.text_x,
-                        view.text_y,
-                        fade(self.ui.palette_text_dim, 0.7),
-                        cell_width,
-                        clip,
-                    );
-                }
-            } else {
-                self.text_pipeline.push_ui_run(
-                    &info.input[view.text_range],
-                    view.text_x,
-                    view.text_y,
-                    fade(self.ui.palette_text, 1.0),
-                    cell_width,
-                    clip,
-                );
-            }
-            self.rect_pipeline.push_rect(
-                view.cursor_x,
-                view.text_y,
-                self.px(2.0),
-                cell_height,
-                fade(self.ui.palette_accent, 0.9),
+            self.draw_field_text(
+                field,
+                &view,
+                &info.input,
+                &info.placeholder,
+                FieldTextColors {
+                    text: fade(self.ui.palette_text, 1.0),
+                    placeholder: fade(self.ui.palette_text_dim, 0.6),
+                },
+                Some(fade(self.ui.palette_accent, 0.9)),
             );
         }
 
