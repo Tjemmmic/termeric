@@ -2647,7 +2647,7 @@ done"#,
     }
 
     #[test]
-    fn window_switcher_example_cycles_windows_and_jumps_to_a_tab_by_title() {
+    fn window_switcher_example_jumps_to_a_tab_by_title_in_any_window() {
         let tab = |id: u64, title: &str, active: bool| {
             serde_json::json!({
                 "id": id,
@@ -2665,42 +2665,11 @@ done"#,
             ])
         };
         let settings = || Some(serde_json::json!({"tab-title": "logs"}));
-        let mut conversation = ExampleConversation::new("window-switcher", 4);
-
-        // Next Window focuses the window after the origin, wrapping around,
-        // and reports a refused focus request.
-        for (origin, target) in [(4, 5), (5, 3)] {
-            conversation.origin_window_id = origin;
-            let focus = StructuredResponseAction::FocusWindow {
-                action_id: "next-window".into(),
-                window_id: target,
-            };
-            assert_eq!(
-                conversation.command_with_workspace("next-window", settings(), windows(false)),
-                vec![focus.clone()]
-            );
-            let error =
-                "Termeric can focus another window on Wayland only when it is already focused";
-            assert_eq!(
-                conversation.result(
-                    &focus,
-                    serde_json::json!({
-                        "type": "action-result",
-                        "action": "focus-window",
-                        "action_id": "next-window",
-                        "window_id": target,
-                        "ok": false,
-                        "error": error,
-                        "error_truncated": false,
-                    }),
-                ),
-                vec![message(&format!("Window switch failed: {error}"))]
-            );
-        }
+        let mut conversation = ExampleConversation::new("window-switcher", 3);
 
         // Jump to Tab reads the title setting from the workspace query
-        // result, which carries the command's settings.
-        conversation.origin_window_id = 3;
+        // result, which carries the command's settings, and selects the
+        // matching tab in its own window.
         let select = StructuredResponseAction::SelectTab {
             action_id: "jump".into(),
             window_id: Some(4),
@@ -2710,7 +2679,9 @@ done"#,
             conversation.command_with_workspace("jump-to-tab", settings(), windows(false)),
             vec![
                 select.clone(),
-                message("Tab selected; run Jump to Tab again to focus its window"),
+                message(
+                    "Tab selected; run Jump to Tab again to bring its window forward (X11 only)"
+                ),
             ]
         );
         assert!(
@@ -2730,13 +2701,38 @@ done"#,
                 .is_empty()
         );
 
-        // Once the tab is selected, running it again focuses its window.
+        // Once the tab is selected, running it again focuses its window, and
+        // a refused focus request, as on Wayland, is reported.
+        let focus = StructuredResponseAction::FocusWindow {
+            action_id: "jump".into(),
+            window_id: 4,
+        };
         assert_eq!(
             conversation.command_with_workspace("jump-to-tab", settings(), windows(true)),
-            vec![StructuredResponseAction::FocusWindow {
-                action_id: "jump".into(),
-                window_id: 4,
-            }]
+            vec![focus.clone()]
+        );
+        let error = "Termeric can focus another window on Wayland only when it is already focused";
+        assert_eq!(
+            conversation.result(
+                &focus,
+                serde_json::json!({
+                    "type": "action-result",
+                    "action": "focus-window",
+                    "action_id": "jump",
+                    "window_id": 4,
+                    "ok": false,
+                    "error": error,
+                    "error_truncated": false,
+                }),
+            ),
+            vec![message(&format!("Window switch failed: {error}"))]
+        );
+
+        // A title nothing matches is reported.
+        let missing = Some(serde_json::json!({"tab-title": "nowhere"}));
+        assert_eq!(
+            conversation.command_with_workspace("jump-to-tab", missing, windows(false)),
+            vec![message("No tab title contains 'nowhere'")]
         );
     }
 
@@ -2799,52 +2795,39 @@ done"#,
                 "Layout unchanged: Tab 5 has reached its pane limit"
             )]
         );
-        let layout = |action_id: &str, preset| StructuredResponseAction::ApplyPaneLayout {
-            action_id: action_id.into(),
+        // Three or more panes become a tall main pane beside a stack; a
+        // successful result is quiet.
+        let tall = StructuredResponseAction::ApplyPaneLayout {
+            action_id: "dev-layout".into(),
             window_id: None,
             tab_id: 5,
-            preset,
+            preset: PaneLayoutPreset::Tall,
         };
         assert_eq!(
             conversation.command_with_workspace("dev-layout", None, windows(3)),
-            vec![layout("dev-layout", PaneLayoutPreset::Tall)]
-        );
-
-        // Tile and Balance act on the same tab; a successful result is quiet.
-        let tile = layout("tile", PaneLayoutPreset::Grid);
-        assert_eq!(
-            conversation.command_with_workspace("tile", None, windows(4)),
-            vec![tile.clone()]
+            vec![tall.clone()]
         );
         assert!(
             conversation
                 .result(
-                    &tile,
+                    &tall,
                     serde_json::json!({
                         "type": "action-result",
                         "action": "apply-pane-layout",
-                        "action_id": "tile",
+                        "action_id": "dev-layout",
                         "window_id": 3,
                         "tab_id": 5,
-                        "preset": "grid",
+                        "preset": "tall",
                         "ok": true,
                         "changed": true,
                     }),
                 )
                 .is_empty()
         );
-        assert_eq!(
-            conversation.command_with_workspace("balance", None, windows(2)),
-            vec![StructuredResponseAction::BalancePanes {
-                action_id: "balance".into(),
-                window_id: None,
-                tab_id: 5,
-            }]
-        );
 
         // A workspace without the origin window has nothing to arrange.
         assert_eq!(
-            conversation.command_with_workspace("tile", None, serde_json::json!([])),
+            conversation.command_with_workspace("dev-layout", None, serde_json::json!([])),
             vec![message("No active tab to arrange")]
         );
     }

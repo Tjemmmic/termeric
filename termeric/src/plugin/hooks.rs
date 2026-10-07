@@ -106,7 +106,7 @@ pub enum PluginAction {
         program: String,
         /// Arguments to pass to the program
         args: Vec<String>,
-        /// Working directory (None = inherit from active terminal)
+        /// Working directory (None = the home directory)
         cwd: Option<String>,
         /// Tab title (None = use program name)
         title: Option<String>,

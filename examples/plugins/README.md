@@ -19,10 +19,10 @@ This directory has five example plugins. Each manifest starts with a comment exp
 
 | Plugin | What it does | Shows how to |
 | --- | --- | --- |
-| [`task-runner`](task-runner) | Profiles that run your project's test command or dev server in the active terminal's directory, and a clean shell. | Launch profiles, settings, launch context |
+| [`task-runner`](task-runner) | A profile that runs your project's test command in the active terminal's directory, and one that opens your shell in your home directory. | Launch profiles, settings, launch context, no event handler |
 | [`command-notifier`](command-notifier) | Shows a notice with the end of the output when a shell command fails, ignoring exit codes you list. | Reacting to `command-completed` |
-| [`pane-layouts`](pane-layouts) | Commands that split, tile, and balance the panes of the active tab. | Querying the workspace, then acting |
-| [`window-switcher`](window-switcher) | Commands that focus the next window, or select a tab by title in any window. | `:all-windows` permissions |
+| [`pane-layouts`](pane-layouts) | **Dev Layout**, which grows the active tab into a main pane beside a stack. | Querying the workspace, then acting |
+| [`window-switcher`](window-switcher) | **Jump to Tab**, which selects a tab by title in any window, then brings its window forward on X11. | `:all-windows` permissions |
 | [`rerun-in-sibling`](rerun-in-sibling) | Types the focused pane's last command into the next pane of the tab and runs it. | Remembering state, typing into a terminal |
 
 To try one, clone the repository and install it from the repository root, for example:
@@ -150,7 +150,7 @@ A plugin needs at least one profile or an event handler.
 | `description` | no | At most 512 bytes. |
 | `program` | yes | The program to run. It is started directly, never through a shell. |
 | `args` | no | Arguments, passed exactly as written. At most 64, each at most 4 KiB, and 32 KiB with the program. |
-| `working_directory` | no | `active` (default) starts in the active terminal's directory; `inherit` doesn't use it. A split pane always follows your `[panes] cwd` setting. |
+| `working_directory` | no | `active` (default) starts in the active terminal's directory; `inherit` starts in your home directory. A split pane always follows your `[panes] cwd` setting. |
 
 A profile runs in a terminal with your normal environment, plus:
 

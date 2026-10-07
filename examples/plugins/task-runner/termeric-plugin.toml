@@ -1,11 +1,12 @@
 # Task Runner
 #
-# Launch profiles for everyday project tasks. "Project Tests" and "Dev Server"
-# run the commands configured in this plugin's settings from the active
-# terminal's directory, print where they ran, and leave a shell open when the
-# command exits. "Clean Shell" opens a shell that ignores the active directory.
+# Launch profiles, with no event handler. "Project Tests" runs the test
+# command from this plugin's settings in the active terminal's directory,
+# prints where it ran, and leaves your shell open when the command exits.
+# "Clean Shell" opens your shell in your home directory instead of the active
+# terminal's (working_directory = "inherit").
 #
-# Each profile reads its command from TERMERIC_PLUGIN_SETTINGS_JSON and the
+# The test profile reads its command from TERMERIC_PLUGIN_SETTINGS_JSON and the
 # active directory from TERMERIC_PLUGIN_CONTEXT_JSON (workspace-query).
 #
 #   termeric plugin install examples/plugins/task-runner \
@@ -16,7 +17,7 @@ api_version = 1
 id = "task-runner"
 name = "Task Runner"
 version = "1.0.0"
-description = "Profiles that run your project's test and dev-server commands"
+description = "A profile that runs your project's tests, and a clean shell"
 permissions = ["process-spawn", "workspace-query"]
 
 [[settings]]
@@ -26,50 +27,27 @@ name = "Test command"
 description = "Shell command the Project Tests profile runs"
 default = "cargo test"
 
-[[settings]]
-type = "text"
-id = "dev-command"
-name = "Dev server command"
-description = "Shell command the Dev Server profile runs"
-default = "npm run dev"
-
 [[profiles]]
 id = "tests"
 name = "Project Tests"
 description = "Run the configured test command in the active directory"
 program = "python3"
 args = ["-c", """
-import json, os, sys
+import json, os
 settings = json.loads(os.environ["TERMERIC_PLUGIN_SETTINGS_JSON"])["values"]
 context = json.loads(os.environ.get("TERMERIC_PLUGIN_CONTEXT_JSON", "{}"))
-command = settings[sys.argv[1]]
+command = settings["test-command"]
 directory = context.get("active_working_directory") or os.getcwd()
 print(f"$ {command}    ({directory})", flush=True)
 shell = os.environ.get("SHELL") or "/bin/sh"
 os.execvp(shell, [shell, "-c", command + '; exec "$0"'])
-""", "test-command"]
-working_directory = "active"
-
-[[profiles]]
-id = "dev-server"
-name = "Dev Server"
-description = "Run the configured dev-server command in the active directory"
-program = "python3"
-args = ["-c", """
-import json, os, sys
-settings = json.loads(os.environ["TERMERIC_PLUGIN_SETTINGS_JSON"])["values"]
-context = json.loads(os.environ.get("TERMERIC_PLUGIN_CONTEXT_JSON", "{}"))
-command = settings[sys.argv[1]]
-directory = context.get("active_working_directory") or os.getcwd()
-print(f"$ {command}    ({directory})", flush=True)
-shell = os.environ.get("SHELL") or "/bin/sh"
-os.execvp(shell, [shell, "-c", command + '; exec "$0"'])
-""", "dev-command"]
+"""]
 working_directory = "active"
 
 [[profiles]]
 id = "shell"
 name = "Clean Shell"
-description = "Open a shell without selecting the active terminal directory"
+description = "Open your shell in your home directory, not the active one"
 program = "sh"
+args = ["-c", 'exec "${SHELL:-/bin/sh}"']
 working_directory = "inherit"
