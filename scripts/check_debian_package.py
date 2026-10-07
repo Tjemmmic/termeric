@@ -5,6 +5,9 @@ Inspection is read-only. --system-lifecycle changes the host's packages, so it
 needs root on a disposable Debian-family machine without Termeric installed.
 """
 
+# The release workflow runs this on Ubuntu 22.04, so it must stay compatible
+# with that release's Python 3.10.
+
 from __future__ import annotations
 
 import argparse

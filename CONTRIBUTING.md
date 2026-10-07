@@ -28,6 +28,8 @@ python3 scripts/check_terminfo.py --require-apps
 
 `check_terminfo.py --require-apps` compiles `assets/terminfo/xterm-termeric.terminfo` and runs Vim, less, and tmux against it, so those three need to be installed. The Python tests cover the helper scripts themselves.
 
+The scripts in `scripts/` need Python 3.11 or newer, and `generate_icons.py` also needs Pillow.
+
 Add tests with your change. A bug fix should come with a test that fails without it.
 
 ## Testing

@@ -35,19 +35,19 @@ Packages for Debian/Ubuntu and Arch Linux come with the first release. Until the
 
 ### Build from source
 
-You need Rust 1.89 or newer, a C compiler, and the development files for fontconfig, Wayland, xkbcommon, XCB, and Vulkan. On Debian or Ubuntu, install Rust with [rustup](https://rustup.rs) if the distribution's is older, then:
+You need Rust 1.89 or newer, a C compiler, Python 3 (to stage the install tree), and the development files for fontconfig, Wayland, xkbcommon, XCB, and Vulkan. On Debian or Ubuntu, install Rust with [rustup](https://rustup.rs) if the distribution's is older, then:
 
 ```bash
 sudo apt install build-essential git pkg-config libfontconfig1-dev libwayland-dev \
   libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev libvulkan-dev \
-  mesa-vulkan-drivers ncurses-bin
+  mesa-vulkan-drivers ncurses-bin python3
 ```
 
 On Arch Linux:
 
 ```bash
 sudo pacman -S --needed base-devel git rust pkgconf fontconfig wayland \
-  libxkbcommon libx11 ncurses mesa vulkan-icd-loader
+  libxkbcommon libx11 ncurses mesa vulkan-icd-loader python
 ```
 
 Then build, stage the install tree (the program, desktop entries, icons, AppStream metadata, terminfo entry, manual page, shell completions, and documentation), and install it for your user under `~/.local`:

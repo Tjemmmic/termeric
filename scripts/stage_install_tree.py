@@ -7,6 +7,9 @@ the tree itself, the .deb packages its bin/ and share/, and the PKGBUILD
 installs it with the bundled install.sh. MANIFEST lists the files to install
 with their modes, one "MODE PATH" line each, for install.sh and the package
 checks.
+
+The release workflow runs this on Ubuntu 22.04, so it must stay compatible
+with that release's Python 3.10.
 """
 
 from __future__ import annotations

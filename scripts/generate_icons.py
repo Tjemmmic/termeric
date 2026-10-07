@@ -13,21 +13,21 @@ from pathlib import Path
 
 from PIL import Image
 
+# Icons are named after the app ID so the desktop entry and windows find
+# them, in every size the install tree ships.
+from stage_install_tree import APP_ID, ICON_SIZES
+
 
 ROOT = Path(__file__).resolve().parents[1]
 MASTER = ROOT / "assets" / "icons" / "termeric.png"
 HICOLOR = ROOT / "assets" / "icons" / "hicolor"
-# Icons are named after the app ID so the desktop entry and windows find them.
-APP_ID = "org.termeric.Termeric"
-# Keep in sync with ICON_SIZES in stage_install_tree.py.
-SIZES = (16, 24, 32, 48, 64, 128, 256, 512)
 
 
 def main() -> int:
     argparse.ArgumentParser(description=__doc__.splitlines()[0]).parse_args()
     with Image.open(MASTER) as source:
         master = source.convert("RGBA")
-    for size in SIZES:
+    for size in ICON_SIZES:
         target = HICOLOR / f"{size}x{size}" / "apps" / f"{APP_ID}.png"
         target.parent.mkdir(parents=True, exist_ok=True)
         master.resize((size, size), Image.Resampling.LANCZOS).save(target, optimize=True)
