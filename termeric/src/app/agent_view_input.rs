@@ -838,6 +838,7 @@ impl App {
         let Some(scene) = self.agent_view.scene.clone() else {
             return;
         };
+        let reduced_motion = self.agent_view.state.reduced_motion();
         let Some(menu) = &mut self.agent_view.state.menu else {
             return;
         };
@@ -860,10 +861,10 @@ impl App {
         let now = Instant::now();
         let current = menu.scroll.offset(max, now);
         if top - margin < current {
-            menu.scroll.glide_to(top - margin, max, now);
+            menu.scroll.glide_to(top - margin, max, now, reduced_motion);
         } else if bottom + margin > current + viewport.height {
             menu.scroll
-                .glide_to(bottom + margin - viewport.height, max, now);
+                .glide_to(bottom + margin - viewport.height, max, now, reduced_motion);
         }
     }
 
@@ -958,6 +959,7 @@ impl App {
         let viewport = scene.feed_viewport;
         let max = (scene.feed_height - viewport.height).max(0.0);
         let now = Instant::now();
+        let reduced_motion = self.agent_view.state.reduced_motion();
         let Some(scroll) = self.agent_view_scroll_mut() else {
             return;
         };
@@ -966,9 +968,9 @@ impl App {
         let top = hit.bounds.y - viewport.y + current;
         let bottom = top + hit.bounds.height;
         if top < current + margin {
-            scroll.glide_to(top - margin, max, now);
+            scroll.glide_to(top - margin, max, now, reduced_motion);
         } else if bottom > current + viewport.height - margin {
-            scroll.glide_to(bottom - viewport.height + margin, max, now);
+            scroll.glide_to(bottom - viewport.height + margin, max, now, reduced_motion);
         }
     }
 
@@ -991,9 +993,10 @@ impl App {
         let max = (scene.feed_height - scene.feed_viewport.height).max(0.0);
         let page = (scene.feed_viewport.height * 0.85).max(40.0);
         let now = Instant::now();
+        let reduced_motion = self.agent_view.state.reduced_motion();
         if let Some(scroll) = self.agent_view_scroll_mut() {
             let target = scroll.offset(max, now) + page * direction;
-            scroll.glide_to(target, max, now);
+            scroll.glide_to(target, max, now, reduced_motion);
         }
     }
 

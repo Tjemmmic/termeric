@@ -112,8 +112,7 @@ impl Scroll {
                 let t = (now.saturating_duration_since(started).as_secs_f32()
                     / SCROLL_DURATION.as_secs_f32())
                 .min(1.0);
-                let eased = 1.0 - (1.0 - t).powi(3);
-                from + (to - from) * eased
+                from + (to - from) * crate::ui::animation::ease_out_cubic(t)
             }
             None => self.offset,
         };
@@ -143,8 +142,13 @@ impl Scroll {
         self.follow = self.offset >= max - 0.5;
     }
 
-    /// Glides to `offset`, as a key press does.
-    pub fn glide_to(&mut self, offset: f32, max: f32, now: Instant) {
+    /// Glides to `offset`, as a key press does; with reduced motion it
+    /// jumps there instead.
+    pub fn glide_to(&mut self, offset: f32, max: f32, now: Instant, reduced_motion: bool) {
+        if reduced_motion {
+            self.jump_to(offset, max);
+            return;
+        }
         let max = max.max(0.0);
         let from = self.offset(max, now);
         let to = offset.clamp(0.0, max);
@@ -411,6 +415,8 @@ impl OpenMenu {
 pub struct AgentViewState {
     open: bool,
     opened_at: Option<Instant>,
+    /// The panel opens and scrolls without animating.
+    reduced_motion: bool,
     /// Width in logical pixels.
     width: f32,
     /// The panel, not a terminal, receives keys.
@@ -442,6 +448,7 @@ impl Default for AgentViewState {
         Self {
             open: false,
             opened_at: None,
+            reduced_motion: false,
             width: DEFAULT_WIDTH,
             keyboard: false,
             screen: Screen::NewSession,
@@ -529,7 +536,20 @@ impl AgentViewState {
     pub fn open(&mut self) {
         if !self.open {
             self.open = true;
-            self.opened_at = Some(Instant::now());
+            self.opened_at = (!self.reduced_motion).then(Instant::now);
+        }
+    }
+
+    pub fn reduced_motion(&self) -> bool {
+        self.reduced_motion
+    }
+
+    /// With reduced motion the panel appears at once and glides become
+    /// jumps; an opening slide already under way ends.
+    pub fn set_reduced_motion(&mut self, reduced_motion: bool) {
+        self.reduced_motion = reduced_motion;
+        if reduced_motion {
+            self.opened_at = None;
         }
     }
 
@@ -549,7 +569,7 @@ impl AgentViewState {
                 let t = (now.saturating_duration_since(started).as_secs_f32()
                     / OPEN_DURATION.as_secs_f32())
                 .min(1.0);
-                1.0 - (1.0 - t).powi(3)
+                crate::ui::animation::ease_out_cubic(t)
             }
             None if self.open => 1.0,
             None => 0.0,
@@ -702,10 +722,35 @@ mod tests {
         assert_eq!(scroll.offset(900.0, now), 400.0);
         scroll.jump_to(900.0, 900.0);
         assert!(scroll.following());
-        scroll.glide_to(0.0, 900.0, now);
+        scroll.glide_to(0.0, 900.0, now, false);
         assert!(scroll.animating(now));
         assert_eq!(scroll.offset(900.0, now), 900.0);
         assert_eq!(scroll.offset(900.0, now + SCROLL_DURATION), 0.0);
+    }
+
+    #[test]
+    fn reduced_motion_opens_and_scrolls_without_animating() {
+        let now = Instant::now();
+        let mut scroll = Scroll::at_start();
+        scroll.glide_to(400.0, 900.0, now, true);
+        assert!(!scroll.animating(now));
+        assert_eq!(scroll.offset(900.0, now), 400.0);
+
+        let mut state = AgentViewState::default();
+        state.set_reduced_motion(true);
+        state.open();
+        let now = Instant::now();
+        assert!(!state.animating(now));
+        assert_eq!(state.open_progress(now), 1.0);
+
+        // Turning it on mid-slide ends the slide.
+        let mut state = AgentViewState::default();
+        state.open();
+        assert!(state.animating(Instant::now()));
+        state.set_reduced_motion(true);
+        let now = Instant::now();
+        assert!(!state.animating(now));
+        assert_eq!(state.open_progress(now), 1.0);
     }
 
     #[test]

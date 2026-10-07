@@ -649,6 +649,7 @@ impl App {
         self.context_picker.set_reduced_motion(reduced_motion);
         self.guardrail.set_reduced_motion(reduced_motion);
         self.toasts.set_reduced_motion(reduced_motion);
+        self.agent_view.state.set_reduced_motion(reduced_motion);
         if let Some(tabs) = &mut self.tabs {
             tabs.set_reduced_motion(reduced_motion);
         }

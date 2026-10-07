@@ -314,11 +314,13 @@ fn headless_system_accessibility_preferences_respect_explicit_overrides() {
     assert!(!app.high_contrast_enabled());
     app.settings_panel.toggle();
     assert_eq!(app.settings_panel.animation_progress(), 1.0);
+    assert!(app.agent_view.state.reduced_motion());
 
     app.apply_settings_action(SettingsAction::SetReduceMotion(
         crate::config::AccessibilityPreference::Off,
     ));
     assert!(!app.reduced_motion_enabled());
+    assert!(!app.agent_view.state.reduced_motion());
 }
 
 #[test]
