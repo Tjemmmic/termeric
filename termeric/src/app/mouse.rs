@@ -110,10 +110,12 @@ impl App {
         if !self.reconcile_scrollbar_drag() {
             return;
         }
+        // The grid the pane draws, whose scrollback the thumb shows.
         if let Some(terminal) = self.active_terminal_mut() {
-            let max_offset = terminal.grid().scrollback_len();
+            let grid = terminal.presentation_grid_mut();
+            let max_offset = grid.scrollback_len();
             let new_offset = (fraction.clamp(0.0, 1.0) * max_offset as f32) as usize;
-            terminal.grid_mut().set_scroll_offset(new_offset);
+            grid.set_scroll_offset(new_offset);
         }
     }
 
@@ -1734,7 +1736,7 @@ impl App {
         let (x, y) = (position.0 as f32, position.1 as f32);
         let layout = tab.panes.calculate_layout();
         let pane_id = layout.into_iter().find_map(|(pane_id, rect)| {
-            let grid = tab.panes.get_pane(pane_id)?.terminal.grid();
+            let grid = tab.panes.get_pane(pane_id)?.terminal.presentation_grid();
             placement
                 .pane_scrollbar(rect, lone, grid, renderer.cell_size())
                 .filter(|scrollbar| scrollbar.hit.contains(x, y))
@@ -1782,7 +1784,7 @@ impl App {
         let tab = self.tabs.as_ref()?.active_tab()?;
         let rect = *tab.panes.calculate_layout().get(&tab.panes.focused_id())?;
         let lone = tab.panes.pane_count() == 1;
-        let grid = tab.focused_terminal()?.grid();
+        let grid = tab.focused_terminal()?.presentation_grid();
         placement.pane_scrollbar(rect, lone, grid, cell_size)
     }
 }
@@ -2561,6 +2563,53 @@ mod tests {
             app.drag_scrollbar_to(placement, cell, track.y + track.height / 2.0);
             assert_eq!(pane_scroll_offset(&app, focused), scrollback / 2, "{split}");
         }
+    }
+
+    #[test]
+    fn scrollbars_are_found_and_dragged_on_the_grid_the_pane_draws() {
+        use crate::app::tests::harvest_rerun_capture_fixture_in;
+        let placement = PanePlacement {
+            left: 0.0,
+            top: 30.0,
+            right: 800.0,
+            bottom: 600.0,
+            padding: 12.0,
+        };
+        let cell = (10.0, 20.0);
+        let (mut app, _directory, _, _) = harvest_rerun_capture_fixture_in(false);
+        let focused = app.active_panes().focused_id();
+        let terminal = &mut app
+            .active_panes_mut()
+            .get_pane_mut(focused)
+            .unwrap()
+            .terminal;
+        terminal.process(b"history\r\n".repeat(80).as_slice());
+        let track = app
+            .focused_pane_scrollbar(placement, cell)
+            .expect("a pane with scrollback draws a scrollbar")
+            .track;
+        app.begin_scrollbar_drag();
+
+        // Synchronized output freezes the screen without its scrollback, so
+        // no scrollbar is drawn: none is found, and a drag moves nothing.
+        app.active_panes_mut()
+            .get_pane_mut(focused)
+            .unwrap()
+            .terminal
+            .process(b"\x1b[?2026h");
+        assert!(app.focused_pane_scrollbar(placement, cell).is_none());
+        app.drag_scrollbar_to(placement, cell, track.y);
+        assert_eq!(pane_scroll_offset(&app, focused), 0);
+
+        // Once the frame is released, the drawn scrollbar takes the drag.
+        app.active_panes_mut()
+            .get_pane_mut(focused)
+            .unwrap()
+            .terminal
+            .process(b"\x1b[?2026l");
+        assert!(app.focused_pane_scrollbar(placement, cell).is_some());
+        app.drag_scrollbar_to(placement, cell, track.y);
+        assert!(pane_scroll_offset(&app, focused) > 0);
     }
 
     #[test]
