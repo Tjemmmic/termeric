@@ -77,7 +77,7 @@ impl ControlBackend {
         }
         if let Some(process_id) = std::env::var(termeric_core::pty::TERMINAL_ID_VARIABLE)
             .ok()
-            .and_then(|id| id.split_once('.')?.0.parse().ok())
+            .and_then(|id| termeric_core::pty::terminal_id_process(&id))
         {
             return Ok(process_id);
         }

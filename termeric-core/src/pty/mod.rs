@@ -8,7 +8,9 @@ mod event;
 
 pub(crate) use capabilities::TERMERIC_TERM;
 pub use child::{ChildExitStatus, ChildObserver};
-pub use environment::{EnvironmentPolicy, TERMINAL_ID_VARIABLE, terminal_identity_variable};
+pub use environment::{
+    EnvironmentPolicy, TERMINAL_ID_VARIABLE, terminal_id_process, terminal_identity_variable,
+};
 pub use event::PtyEvent;
 pub use portable_pty::PtySize;
 

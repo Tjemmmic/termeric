@@ -1317,13 +1317,8 @@ fn validate_agent_event(
     last_message: Option<&str>,
     transcript_path: Option<&str>,
 ) -> Result<(), String> {
-    let (process, random) = terminal_id
-        .split_once('.')
-        .ok_or("Agent terminal identity must be PID.HEX")?;
     if terminal_id.len() > MAX_AGENT_TERMINAL_ID_BYTES
-        || process.is_empty()
-        || !process.bytes().all(|byte| byte.is_ascii_digit())
-        || !termeric_core::hex::is_lower(random, 32)
+        || termeric_core::pty::terminal_id_process(terminal_id).is_none()
     {
         return Err("Agent terminal identity must be PID.HEX".into());
     }

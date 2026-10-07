@@ -96,10 +96,7 @@ pub fn run(invocation: &HookInvocation) {
     let Ok(terminal_id) = std::env::var(termeric_core::pty::TERMINAL_ID_VARIABLE) else {
         return;
     };
-    let Some(process_id) = terminal_id
-        .split_once('.')
-        .and_then(|(process, _)| process.parse::<u32>().ok())
-    else {
+    let Some(process_id) = termeric_core::pty::terminal_id_process(&terminal_id) else {
         return;
     };
     let payload = payload.and_then(|bytes| serde_json::from_slice(&bytes).ok());
