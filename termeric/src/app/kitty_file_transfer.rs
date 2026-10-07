@@ -21,7 +21,7 @@ use termeric_core::{
     KittyFileTransmissionType, Terminal,
 };
 
-pub(super) const MAX_ACTIVE_KITTY_DOWNLOADS: usize = 4;
+pub(super) const MAX_ACTIVE_KITTY_TRANSFERS: usize = 4;
 pub(super) const MAX_KITTY_DOWNLOAD_FILES: usize = 1_024;
 pub(super) const MAX_KITTY_DOWNLOAD_BYTES: u64 = 64 * 1024 * 1024;
 pub(super) const MAX_KITTY_UPLOAD_PATHS: usize = 16;
@@ -332,72 +332,13 @@ impl App {
             );
             return;
         }
-        if self.kitty_file_transfers.tokens.contains_key(&key)
-            || self.kitty_file_transfers.upload_tokens.contains_key(&key)
-            || self
-                .kitty_file_transfers
-                .pending
-                .as_ref()
-                .is_some_and(|pending| pending.key == key)
-            || self
-                .kitty_file_transfers
-                .pending_upload
-                .as_ref()
-                .is_some_and(|pending| pending.key == key)
-        {
-            self.write_kitty_status(
-                origin,
-                command.reply_uses_8bit_controls,
-                transfer_status(
-                    &command.id,
-                    "",
-                    KittyFileTransferStatusCode::Busy,
-                    "transfer id is already active",
-                ),
-            );
+        let Some(token) = self.admit_kitty_transfer(&key, command.reply_uses_8bit_controls, "read")
+        else {
             return;
-        }
-        if self.kitty_file_transfers.pending.is_some()
-            || self.kitty_file_transfers.pending_upload.is_some()
-            || self.kitty_file_transfers.active.len()
-                + self.kitty_file_transfers.active_uploads.len()
-                >= MAX_ACTIVE_KITTY_DOWNLOADS
-            || self.info_overlay.is_active()
-        {
-            self.write_kitty_status(
-                origin,
-                command.reply_uses_8bit_controls,
-                transfer_status(
-                    &command.id,
-                    "",
-                    KittyFileTransferStatusCode::Busy,
-                    "another confirmation or too many transfers are active",
-                ),
-            );
-            return;
-        }
-        if !self.kitty_origin_accepts_file_transfers(origin) {
-            self.write_kitty_status(
-                origin,
-                command.reply_uses_8bit_controls,
-                transfer_status(
-                    &command.id,
-                    "",
-                    KittyFileTransferStatusCode::PermissionDenied,
-                    "this terminal type cannot read host files",
-                ),
-            );
-            return;
-        }
-
-        self.kitty_file_transfers.next_token = self
-            .kitty_file_transfers
-            .next_token
-            .checked_add(1)
-            .unwrap_or(1);
+        };
         self.kitty_file_transfers.pending_upload = Some(PendingUpload {
             request_id: None,
-            token: self.kitty_file_transfers.next_token,
+            token,
             key,
             expected_paths: expected_paths.expect("validated path count"),
             paths: Vec::with_capacity(expected_paths.expect("validated path count")),
@@ -410,22 +351,7 @@ impl App {
         let Some(pending) = self.kitty_file_transfers.pending_upload.as_mut() else {
             return;
         };
-        let valid = pending.request_id.is_none()
-            && command.action == KittyFileTransferAction::File
-            && command.quiet == 0
-            && !command.bypass_present
-            && command.transmission_type == KittyFileTransmissionType::Simple
-            && command.compression == termeric_core::KittyFileTransferCompression::None
-            && command.file_type == KittyFileTransferType::Regular
-            && !command.file_id.is_empty()
-            && command.name.is_some()
-            && command.mtime_ns.is_none()
-            && command.permissions.is_none()
-            && command.size.is_none()
-            && command.status.is_none()
-            && command.parent.is_none()
-            && command.data.is_empty();
-        if !valid {
+        if pending.request_id.is_some() || !is_upload_path_request(&command) {
             self.deny_pending_kitty_upload(
                 Some(KittyFileTransferStatusCode::Invalid),
                 "invalid path specification or data arrived before approval",
@@ -565,70 +491,11 @@ impl App {
             );
             return;
         }
-        if self.kitty_file_transfers.tokens.contains_key(&key)
-            || self.kitty_file_transfers.upload_tokens.contains_key(&key)
-            || self
-                .kitty_file_transfers
-                .pending
-                .as_ref()
-                .is_some_and(|pending| pending.key == key)
-            || self
-                .kitty_file_transfers
-                .pending_upload
-                .as_ref()
-                .is_some_and(|pending| pending.key == key)
-        {
-            self.write_kitty_status(
-                origin,
-                command.reply_uses_8bit_controls,
-                transfer_status(
-                    &command.id,
-                    "",
-                    KittyFileTransferStatusCode::Busy,
-                    "transfer id is already active",
-                ),
-            );
+        let Some(token) =
+            self.admit_kitty_transfer(&key, command.reply_uses_8bit_controls, "write")
+        else {
             return;
-        }
-        if self.kitty_file_transfers.pending.is_some()
-            || self.kitty_file_transfers.pending_upload.is_some()
-            || self.kitty_file_transfers.active.len()
-                + self.kitty_file_transfers.active_uploads.len()
-                >= MAX_ACTIVE_KITTY_DOWNLOADS
-            || self.info_overlay.is_active()
-        {
-            self.write_kitty_status(
-                origin,
-                command.reply_uses_8bit_controls,
-                transfer_status(
-                    &command.id,
-                    "",
-                    KittyFileTransferStatusCode::Busy,
-                    "another confirmation or too many transfers are active",
-                ),
-            );
-            return;
-        }
-        if !self.kitty_origin_accepts_file_transfers(origin) {
-            self.write_kitty_status(
-                origin,
-                command.reply_uses_8bit_controls,
-                transfer_status(
-                    &command.id,
-                    "",
-                    KittyFileTransferStatusCode::PermissionDenied,
-                    "this terminal type cannot write host files",
-                ),
-            );
-            return;
-        }
-
-        self.kitty_file_transfers.next_token = self
-            .kitty_file_transfers
-            .next_token
-            .checked_add(1)
-            .unwrap_or(1);
-        let token = self.kitty_file_transfers.next_token;
+        };
         let lines = vec![
             "The exact originating terminal wants to create files on this computer.".into(),
             String::new(),
@@ -675,6 +542,101 @@ impl App {
         });
     }
 
+    /// Admit a new transfer in either direction, or refuse it when its ID is
+    /// in use, while another confirmation or too many transfers are active,
+    /// or when its terminal may not `verb` (read or write) host files.
+    /// Returns the token reserved for an admitted transfer.
+    fn admit_kitty_transfer(
+        &mut self,
+        key: &TransferKey,
+        reply_uses_8bit_controls: bool,
+        verb: &str,
+    ) -> Option<u64> {
+        let transfers = &self.kitty_file_transfers;
+        let refusal = if transfers.tokens.contains_key(key)
+            || transfers.upload_tokens.contains_key(key)
+            || transfers
+                .pending
+                .as_ref()
+                .is_some_and(|pending| &pending.key == key)
+            || transfers
+                .pending_upload
+                .as_ref()
+                .is_some_and(|pending| &pending.key == key)
+        {
+            Some((
+                KittyFileTransferStatusCode::Busy,
+                "transfer id is already active".to_string(),
+            ))
+        } else if transfers.pending.is_some()
+            || transfers.pending_upload.is_some()
+            || transfers.active.len() + transfers.active_uploads.len() >= MAX_ACTIVE_KITTY_TRANSFERS
+            || self.info_overlay.is_active()
+        {
+            Some((
+                KittyFileTransferStatusCode::Busy,
+                "another confirmation or too many transfers are active".to_string(),
+            ))
+        } else if !self.kitty_origin_accepts_file_transfers(key.origin) {
+            Some((
+                KittyFileTransferStatusCode::PermissionDenied,
+                format!("this terminal type cannot {verb} host files"),
+            ))
+        } else {
+            None
+        };
+        if let Some((code, message)) = refusal {
+            self.write_kitty_status(
+                key.origin,
+                reply_uses_8bit_controls,
+                transfer_status(&key.id, "", code, &message),
+            );
+            return None;
+        }
+        let transfers = &mut self.kitty_file_transfers;
+        transfers.next_token = transfers.next_token.checked_add(1).unwrap_or(1);
+        Some(transfers.next_token)
+    }
+
+    /// Once the person has consented, what a worker needs to report back to
+    /// this window. When the originating terminal may no longer `verb` host
+    /// files, or the window cannot run a worker, the terminal is told why and
+    /// there is none.
+    fn consented_transfer_channel(
+        &mut self,
+        key: &TransferKey,
+        reply_uses_8bit_controls: bool,
+        verb: &str,
+    ) -> Option<(
+        super::WindowKey,
+        winit::event_loop::EventLoopProxy<AppEvent>,
+    )> {
+        let (code, message) = if !self.kitty_origin_accepts_file_transfers(key.origin) {
+            (
+                KittyFileTransferStatusCode::PermissionDenied,
+                format!("this terminal type can no longer {verb} host files"),
+            )
+        } else if self.window.is_none() {
+            (
+                KittyFileTransferStatusCode::PermissionDenied,
+                "a native window is required for consented transfers".to_string(),
+            )
+        } else if let Some(proxy) = EVENT_LOOP_PROXY.get().cloned() {
+            return Some((self.window_key(), proxy));
+        } else {
+            (
+                KittyFileTransferStatusCode::Io,
+                "transfer event channel is unavailable".to_string(),
+            )
+        };
+        self.write_kitty_status(
+            key.origin,
+            reply_uses_8bit_controls,
+            transfer_status(&key.id, "", code, &message),
+        );
+        None
+    }
+
     fn kitty_transfer_origin(&self, identity: TerminalIdentity) -> Option<TerminalEventOrigin> {
         self.tabs
             .as_ref()?
@@ -716,44 +678,11 @@ impl App {
             .pending
             .take()
             .expect("checked pending transfer");
-        if !self.kitty_origin_accepts_file_transfers(pending.key.origin) {
-            self.write_kitty_status(
-                pending.key.origin,
-                pending.reply_uses_8bit_controls,
-                transfer_status(
-                    &pending.key.id,
-                    "",
-                    KittyFileTransferStatusCode::PermissionDenied,
-                    "this terminal type can no longer write host files",
-                ),
-            );
-            return true;
-        }
-        if self.window.is_none() {
-            self.write_kitty_status(
-                pending.key.origin,
-                pending.reply_uses_8bit_controls,
-                transfer_status(
-                    &pending.key.id,
-                    "",
-                    KittyFileTransferStatusCode::PermissionDenied,
-                    "a native window is required for consented transfers",
-                ),
-            );
-            return true;
-        }
-        let window_key = self.window_key();
-        let Some(proxy) = EVENT_LOOP_PROXY.get().cloned() else {
-            self.write_kitty_status(
-                pending.key.origin,
-                pending.reply_uses_8bit_controls,
-                transfer_status(
-                    &pending.key.id,
-                    "",
-                    KittyFileTransferStatusCode::Io,
-                    "transfer event channel is unavailable",
-                ),
-            );
+        let Some((window_key, proxy)) = self.consented_transfer_channel(
+            &pending.key,
+            pending.reply_uses_8bit_controls,
+            "write",
+        ) else {
             return true;
         };
         let cancellation = Arc::new(AtomicBool::new(false));
@@ -824,44 +753,9 @@ impl App {
             .pending_upload
             .take()
             .expect("checked pending upload");
-        if !self.kitty_origin_accepts_file_transfers(pending.key.origin) {
-            self.write_kitty_status(
-                pending.key.origin,
-                pending.reply_uses_8bit_controls,
-                transfer_status(
-                    &pending.key.id,
-                    "",
-                    KittyFileTransferStatusCode::PermissionDenied,
-                    "this terminal type can no longer read host files",
-                ),
-            );
-            return true;
-        }
-        if self.window.is_none() {
-            self.write_kitty_status(
-                pending.key.origin,
-                pending.reply_uses_8bit_controls,
-                transfer_status(
-                    &pending.key.id,
-                    "",
-                    KittyFileTransferStatusCode::PermissionDenied,
-                    "a native window is required for consented transfers",
-                ),
-            );
-            return true;
-        }
-        let window_key = self.window_key();
-        let Some(proxy) = EVENT_LOOP_PROXY.get().cloned() else {
-            self.write_kitty_status(
-                pending.key.origin,
-                pending.reply_uses_8bit_controls,
-                transfer_status(
-                    &pending.key.id,
-                    "",
-                    KittyFileTransferStatusCode::Io,
-                    "transfer event channel is unavailable",
-                ),
-            );
+        let Some((window_key, proxy)) =
+            self.consented_transfer_channel(&pending.key, pending.reply_uses_8bit_controls, "read")
+        else {
             return true;
         };
         let cancellation = Arc::new(AtomicBool::new(false));
@@ -932,21 +826,7 @@ impl App {
             self.remove_active_kitty_upload(token);
             return;
         }
-        let valid = command.action == KittyFileTransferAction::File
-            && command.quiet == 0
-            && !command.bypass_present
-            && command.transmission_type == KittyFileTransmissionType::Simple
-            && command.compression == termeric_core::KittyFileTransferCompression::None
-            && command.file_type == KittyFileTransferType::Regular
-            && !command.file_id.is_empty()
-            && command.name.is_some()
-            && command.mtime_ns.is_none()
-            && command.permissions.is_none()
-            && command.size.is_none()
-            && command.status.is_none()
-            && command.parent.is_none()
-            && command.data.is_empty();
-        if !valid {
+        if !is_upload_path_request(&command) {
             self.fail_active_kitty_upload(
                 token,
                 command.reply_uses_8bit_controls,
@@ -1352,6 +1232,25 @@ fn format_transfer_bytes(bytes: u64) -> String {
 
 fn format_transfer_bytes_sent(bytes: u64) -> String {
     format_transfer_bytes(bytes).replace("received", "sent")
+}
+
+/// Whether `command` names one host file for an upload, the only form a
+/// receive session accepts both while collecting paths and after consent.
+fn is_upload_path_request(command: &KittyFileTransferCommand) -> bool {
+    command.action == KittyFileTransferAction::File
+        && command.quiet == 0
+        && !command.bypass_present
+        && command.transmission_type == KittyFileTransmissionType::Simple
+        && command.compression == termeric_core::KittyFileTransferCompression::None
+        && command.file_type == KittyFileTransferType::Regular
+        && !command.file_id.is_empty()
+        && command.name.is_some()
+        && command.mtime_ns.is_none()
+        && command.permissions.is_none()
+        && command.size.is_none()
+        && command.status.is_none()
+        && command.parent.is_none()
+        && command.data.is_empty()
 }
 
 fn describe_origin(origin: TerminalIdentity) -> String {
