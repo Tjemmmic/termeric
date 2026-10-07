@@ -47,12 +47,38 @@ struct TabSlot {
     width: f32,
 }
 
+/// A top-strip overflow arrow. Its slot stays while the strip overflows, so
+/// the strip never jumps; it is enabled while tabs are hidden on its side.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct OverflowArrow {
+    x: f32,
+    enabled: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 struct TabBarLayout {
     tabs: Vec<TabSlot>,
     add_x: f32,
-    previous_x: Option<f32>,
-    next_x: Option<f32>,
+    previous: Option<OverflowArrow>,
+    next: Option<OverflowArrow>,
+}
+
+impl TabBarLayout {
+    /// Where an overflow arrow is drawn, if the strip overflows.
+    fn arrow(&self, target: TabBarClick) -> Option<OverflowArrow> {
+        match target {
+            TabBarClick::PreviousTab => self.previous,
+            TabBarClick::NextTab => self.next,
+            _ => None,
+        }
+    }
+
+    /// The left edge of an overflow arrow that takes clicks and focus.
+    fn enabled_arrow_x(&self, target: TabBarClick) -> Option<f32> {
+        self.arrow(target)
+            .filter(|arrow| arrow.enabled)
+            .map(|arrow| arrow.x)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -288,8 +314,8 @@ fn tab_bar_layout(
         return TabBarLayout {
             tabs: slots,
             add_x: x.min(tab_strip_end),
-            previous_x: None,
-            next_x: None,
+            previous: None,
+            next: None,
         };
     }
 
@@ -327,8 +353,14 @@ fn tab_bar_layout(
     TabBarLayout {
         tabs: slots,
         add_x: tab_strip_end,
-        previous_x: (start > 0).then_some(0.0),
-        next_x: (end < tabs.len()).then_some(tab_strip_end - height),
+        previous: Some(OverflowArrow {
+            x: 0.0,
+            enabled: start > 0,
+        }),
+        next: Some(OverflowArrow {
+            x: tab_strip_end - height,
+            enabled: end < tabs.len(),
+        }),
     }
 }
 
@@ -436,15 +468,48 @@ fn horizontal_tab_bar_element_rect(
         TabBarClick::Tab(index) => surface(index),
         TabBarClick::CloseTab(index) => surface(index).map(|surface| chrome.close_rect(surface)),
         TabBarClick::NewTab => Some(Bounds::new(layout.add_x, 0.0, height, height)),
-        TabBarClick::PreviousTab => layout
-            .previous_x
+        TabBarClick::PreviousTab | TabBarClick::NextTab => layout
+            .enabled_arrow_x(target)
             .map(|x| Bounds::new(x, 0.0, height, height)),
-        TabBarClick::NextTab => layout.next_x.map(|x| Bounds::new(x, 0.0, height, height)),
         TabBarClick::CommandsButton | TabBarClick::SessionDropdown | TabBarClick::Gear => {
             toolbar_control_rect(target, window_width, height)
         }
         TabBarClick::None => None,
     }
+}
+
+/// Every top-strip button as drawn: its target, bounds, and whether it is
+/// enabled. A disabled overflow arrow keeps its slot, dimmed, and takes no
+/// clicks; enabled buttons are exactly the element rectangles hit testing,
+/// focus, and accessibility use.
+fn horizontal_toolbar_buttons(
+    layout: &TabBarLayout,
+    window_width: f32,
+    height: f32,
+    chrome: TabChrome,
+) -> Vec<(TabBarClick, Bounds, bool)> {
+    let arrows = [TabBarClick::PreviousTab, TabBarClick::NextTab]
+        .into_iter()
+        .filter_map(|target| {
+            let arrow = layout.arrow(target)?;
+            Some((
+                target,
+                Bounds::new(arrow.x, 0.0, height, height),
+                arrow.enabled,
+            ))
+        });
+    let buttons = [
+        TabBarClick::NewTab,
+        TabBarClick::CommandsButton,
+        TabBarClick::SessionDropdown,
+        TabBarClick::Gear,
+    ]
+    .into_iter()
+    .filter_map(|target| {
+        horizontal_tab_bar_element_rect(layout, target, window_width, height, chrome)
+            .map(|rect| (target, rect, true))
+    });
+    arrows.chain(buttons).collect()
 }
 
 fn horizontal_tab_bar_hit_test(
@@ -591,43 +656,10 @@ impl Renderer {
             with_alpha(self.ui.tab_border, 0.6),
         );
 
-        let overflow = layout.previous_x.is_some() || layout.next_x.is_some();
-        for target in [
-            TabBarClick::PreviousTab,
-            TabBarClick::NextTab,
-            TabBarClick::NewTab,
-            TabBarClick::CommandsButton,
-            TabBarClick::SessionDropdown,
-            TabBarClick::Gear,
-        ] {
-            let rect = match target {
-                // Overflow arrows keep a fixed, dimmed slot while either end
-                // still has hidden tabs, so the strip never jumps.
-                TabBarClick::PreviousTab if overflow => {
-                    Some(Bounds::new(0.0, 0.0, tab_bar_height, tab_bar_height))
-                }
-                TabBarClick::NextTab if overflow => Some(Bounds::new(
-                    window_width - tab_bar_height * 5.0,
-                    0.0,
-                    tab_bar_height,
-                    tab_bar_height,
-                )),
-                _ => horizontal_tab_bar_element_rect(
-                    &layout,
-                    target,
-                    window_width,
-                    tab_bar_height,
-                    chrome,
-                ),
-            };
-            let enabled = match target {
-                TabBarClick::PreviousTab => layout.previous_x.is_some(),
-                TabBarClick::NextTab => layout.next_x.is_some(),
-                _ => true,
-            };
-            if let Some(rect) = rect {
-                self.build_toolbar_button(target, rect, enabled, false);
-            }
+        for (target, rect, enabled) in
+            horizontal_toolbar_buttons(&layout, window_width, tab_bar_height, chrome)
+        {
+            self.build_toolbar_button(target, rect, enabled, false);
         }
     }
 
@@ -1297,7 +1329,7 @@ mod tests {
         let tabs = tabs(12, 10);
         let layout = tab_bar_layout(&tabs, 640.0, 32.0, 10, 1.0);
 
-        assert!(layout.previous_x.is_some());
+        assert!(layout.enabled_arrow_x(TabBarClick::PreviousTab).is_some());
         assert!(layout.tabs.iter().any(|slot| slot.index == 10));
         assert!(layout.tabs.iter().all(|slot| slot.x >= 32.0));
         assert!(layout.tabs.iter().all(|slot| slot.x + slot.width <= 480.0));
@@ -1308,13 +1340,13 @@ mod tests {
     fn crowded_tab_bar_reveals_hidden_tabs_from_each_end() {
         let tabs = tabs(12, 0);
         let first = tab_bar_layout(&tabs, 640.0, 32.0, 0, 1.0);
-        assert!(first.previous_x.is_none());
-        assert!(first.next_x.is_some());
+        assert!(first.enabled_arrow_x(TabBarClick::PreviousTab).is_none());
+        assert!(first.enabled_arrow_x(TabBarClick::NextTab).is_some());
         assert_eq!(first.tabs.first().map(|slot| slot.index), Some(0));
 
         let last = tab_bar_layout(&tabs, 640.0, 32.0, 11, 1.0);
-        assert!(last.previous_x.is_some());
-        assert!(last.next_x.is_none());
+        assert!(last.enabled_arrow_x(TabBarClick::PreviousTab).is_some());
+        assert!(last.enabled_arrow_x(TabBarClick::NextTab).is_none());
         assert_eq!(last.tabs.last().map(|slot| slot.index), Some(11));
     }
 
@@ -1324,8 +1356,7 @@ mod tests {
         let layout = tab_bar_layout(&tabs, 640.0, 32.0, 1, 1.0);
 
         assert_eq!(layout.tabs.len(), 3);
-        assert!(layout.previous_x.is_none());
-        assert!(layout.next_x.is_none());
+        assert!(layout.previous.is_none() && layout.next.is_none());
         assert!(layout.tabs.iter().all(|slot| slot.width > MIN_TAB_WIDTH));
         assert!(layout.add_x <= 512.0);
     }
@@ -1583,6 +1614,56 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn overflow_arrows_are_drawn_where_they_are_hit_and_keep_their_slots() {
+        for scale in [1.0, 1.25, 2.0] {
+            let chrome = TabChrome::new(scale);
+            let height = (34.0_f32 * scale).round();
+            let width = 900.0 * scale;
+            let tabs = tabs(20, 0);
+            let mut slots = Vec::new();
+            for anchor in [0, 10, 19] {
+                let layout = tab_bar_layout(&tabs, width, height, anchor, scale);
+                let buttons = horizontal_toolbar_buttons(&layout, width, height, chrome);
+                for &(target, rect, enabled) in &buttons {
+                    let hit = horizontal_tab_bar_hit_test(
+                        &layout,
+                        &tabs,
+                        rect.x + rect.width / 2.0,
+                        rect.y + rect.height / 2.0,
+                        width,
+                        height,
+                        chrome,
+                    );
+                    if enabled {
+                        assert_eq!(
+                            Some(rect),
+                            horizontal_tab_bar_element_rect(&layout, target, width, height, chrome)
+                        );
+                        assert_eq!(hit, target, "scale={scale} anchor={anchor}");
+                    } else {
+                        assert_ne!(hit, target, "a disabled arrow takes no clicks");
+                    }
+                }
+                slots.push(
+                    buttons
+                        .iter()
+                        .filter(|(target, ..)| {
+                            matches!(target, TabBarClick::PreviousTab | TabBarClick::NextTab)
+                        })
+                        .map(|&(target, rect, _)| (target, rect))
+                        .collect::<Vec<_>>(),
+                );
+            }
+            // Both arrows show at either end of the strip, in the same slots.
+            assert_eq!(slots[0].len(), 2);
+            assert!(slots.iter().all(|arrows| arrows == &slots[0]));
+            // The first tabs hide nothing before them, the last nothing after.
+            let first = tab_bar_layout(&tabs, width, height, 0, scale);
+            assert!(!first.previous.unwrap().enabled && first.next.unwrap().enabled);
         }
     }
 
