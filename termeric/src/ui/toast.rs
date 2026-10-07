@@ -11,7 +11,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 const FADE_IN: Duration = Duration::from_millis(150);
-const FADE_OUT: Duration = Duration::from_millis(300);
+const FADE_OUT: Duration = Duration::from_millis(250);
 const ANIMATION_FRAME: Duration = Duration::from_millis(16);
 pub const MAX_TOAST_MESSAGE_CHARS: usize = 512;
 
@@ -51,12 +51,12 @@ pub struct Toast {
 
 impl Toast {
     /// Eased opacity (0.0–1.0) for this frame. Appears with a 150ms fade-in,
-    /// holds at 1.0, then fades out over the last 300ms of its life.
+    /// holds at 1.0, then fades out over the last 250ms of its life.
     pub fn opacity(&self, now: Instant) -> f32 {
         let elapsed = now.duration_since(self.created);
         if self.persistent {
             let fade_in = (elapsed.as_millis() as f32 / FADE_IN.as_millis() as f32).clamp(0.0, 1.0);
-            return 1.0 - (1.0 - fade_in).powi(3);
+            return crate::ui::animation::ease_out_cubic(fade_in);
         }
         let total_ms = self.duration.as_millis() as f32;
         let elapsed_ms = elapsed.as_millis() as f32;
@@ -65,9 +65,7 @@ impl Toast {
         }
         let fade_in = (elapsed_ms / FADE_IN.as_millis() as f32).clamp(0.0, 1.0);
         let fade_out = ((total_ms - elapsed_ms) / FADE_OUT.as_millis() as f32).clamp(0.0, 1.0);
-        let raw = fade_in.min(fade_out);
-        // Ease-out cubic to match the rest of the UI.
-        1.0 - (1.0 - raw).powi(3)
+        crate::ui::animation::ease_out_cubic(fade_in.min(fade_out))
     }
 
     pub fn is_expired(&self, now: Instant) -> bool {
@@ -398,6 +396,16 @@ mod tests {
     }
 
     #[test]
+    fn a_toast_fades_out_within_the_last_250ms() {
+        let mut tm = ToastManager::new();
+        tm.info("hello");
+        let toast = tm.toasts.back().unwrap();
+        let end = toast.created + toast.duration;
+        assert_eq!(toast.opacity(end - Duration::from_millis(251)), 1.0);
+        assert!(toast.opacity(end - Duration::from_millis(125)) < 1.0);
+    }
+
+    #[test]
     fn test_eviction_above_max_visible() {
         let mut tm = ToastManager::new();
         tm.max_visible = 2;
@@ -545,7 +553,7 @@ mod tests {
         let toast = tm.toasts.back_mut().unwrap();
         toast.created = now - Duration::from_millis(200);
         toast.duration = Duration::from_secs(1);
-        let fade_out_at = toast.created + Duration::from_millis(700);
+        let fade_out_at = toast.created + toast.duration - FADE_OUT;
 
         assert!(!tm.has_active_animation(now));
         assert_eq!(tm.next_redraw_deadline(now), Some(fade_out_at));
