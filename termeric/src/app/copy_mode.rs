@@ -43,13 +43,18 @@ impl App {
                 .collect();
             (status, hints)
         } else {
-            let bindings = match self.config.copy_mode.bindings {
-                CopyModeBindings::Vi => "VI · HJKL MOVE · V SELECT · Y COPY · / SEARCH",
-                CopyModeBindings::Emacs => {
-                    "EMACS · ARROWS MOVE · SPACE SELECT · ALT+W COPY · CTRL+S SEARCH"
-                }
+            let bindings = self.config.copy_mode.bindings;
+            let name = match bindings {
+                CopyModeBindings::Vi => "VI",
+                CopyModeBindings::Emacs => "EMACS",
             };
-            (format!("COPY MODE · {bindings} · ESC EXIT"), Vec::new())
+            let keys = copy_mode_key_hints(bindings)
+                .map(|(key, action)| format!("{key} {action}").to_uppercase())
+                .join(" · ");
+            (
+                format!("COPY MODE · {name} · {keys} · ESC EXIT"),
+                Vec::new(),
+            )
         };
         Some(crate::renderer::CopyModeRenderInfo {
             cursor: self
@@ -74,8 +79,10 @@ impl App {
     pub(super) fn enter_copy_mode(&mut self) {
         self.start_copy_mode();
         if self.copy_mode.is_active() {
-            self.toasts
-                .info("Copy mode: move, v select, y copy, / search, Esc exit");
+            let keys = copy_mode_key_hints(self.config.copy_mode.bindings)
+                .map(|(key, action)| format!("{key} {action}"))
+                .join(", ");
+            self.toasts.info(format!("Copy mode: {keys}, Esc exit"));
         }
     }
 
@@ -515,6 +522,25 @@ enum CopyModeCommand {
     Yank,
 }
 
+/// The keys copy mode's status line and entry notice name for moving,
+/// selecting, copying, and searching, in the configured key set.
+fn copy_mode_key_hints(bindings: CopyModeBindings) -> [(&'static str, &'static str); 4] {
+    match bindings {
+        CopyModeBindings::Vi => [
+            ("hjkl", "move"),
+            ("v", "select"),
+            ("y", "copy"),
+            ("/", "search"),
+        ],
+        CopyModeBindings::Emacs => [
+            ("Arrows", "move"),
+            ("Space", "select"),
+            ("Alt+W", "copy"),
+            ("Ctrl+S", "search"),
+        ],
+    }
+}
+
 /// Copy mode's own chords. Modifiers must match exactly, so a chord such as
 /// Ctrl+Shift+F is an application shortcut rather than Emacs Ctrl+F.
 /// Characters typed alone, with Shift, or through AltGr match by the
@@ -616,6 +642,33 @@ fn copy_mode_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_entry_notice_names_the_configured_keys() {
+        for (bindings, notice) in [
+            (
+                CopyModeBindings::Vi,
+                "Copy mode: hjkl move, v select, y copy, / search, Esc exit",
+            ),
+            (
+                CopyModeBindings::Emacs,
+                "Copy mode: Arrows move, Space select, Alt+W copy, Ctrl+S search, Esc exit",
+            ),
+        ] {
+            let mut config = crate::config::Config {
+                shell: crate::test_support::sleeping_shell(),
+                ..crate::config::Config::default()
+            };
+            config.copy_mode.bindings = bindings;
+            let mut app = App::new_headless_with_tabs(config);
+            app.enter_copy_mode();
+            assert!(app.copy_mode.is_active());
+            assert_eq!(
+                app.toasts.iter().last().map(|toast| toast.message.as_str()),
+                Some(notice)
+            );
+        }
+    }
 
     #[test]
     fn copy_mode_chords_match_modifiers_exactly_and_typed_keys_by_character() {
