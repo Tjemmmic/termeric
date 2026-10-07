@@ -729,16 +729,6 @@ impl App {
             );
             return true;
         }
-        if self
-            .tabs
-            .as_ref()
-            .and_then(|tabs| {
-                tabs.origin_for_pane(pending.key.origin.tab_id, pending.key.origin.pane_id)
-            })
-            .is_none()
-        {
-            return true;
-        }
         if self.window.is_none() {
             self.write_kitty_status(
                 pending.key.origin,
@@ -845,16 +835,6 @@ impl App {
                     "this terminal type can no longer read host files",
                 ),
             );
-            return true;
-        }
-        if self
-            .tabs
-            .as_ref()
-            .and_then(|tabs| {
-                tabs.origin_for_pane(pending.key.origin.tab_id, pending.key.origin.pane_id)
-            })
-            .is_none()
-        {
             return true;
         }
         if self.window.is_none() {
@@ -1165,14 +1145,7 @@ impl App {
             .kitty_file_transfers
             .active
             .get(&token)
-            .is_some_and(|active| {
-                self.tabs
-                    .as_ref()
-                    .and_then(|tabs| {
-                        tabs.origin_for_pane(active.key.origin.tab_id, active.key.origin.pane_id)
-                    })
-                    .is_none()
-            })
+            .is_some_and(|active| self.kitty_transfer_origin(active.key.origin).is_none())
         {
             self.remove_active_kitty_download(token);
             return;

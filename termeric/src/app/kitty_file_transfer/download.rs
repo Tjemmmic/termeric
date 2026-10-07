@@ -1039,9 +1039,6 @@ fn write_decompressed(
     declared_size: u64,
     cancellation: &AtomicBool,
 ) -> Result<(), String> {
-    if cancellation.load(Ordering::Acquire) {
-        return Err("transfer was canceled".into());
-    }
     if stream.finished {
         // Compression EOF does not finish the protocol entry. Empty data
         // and end_data packets are valid; a second stream or any trailing
@@ -1575,7 +1572,6 @@ pub(super) fn run_worker(
             break;
         }
         let reply_mode = command.reply_uses_8bit_controls;
-        let action = command.action;
         let result = transaction.handle(command, &cancellation);
         let (progress_files, progress_bytes) = transaction.progress();
         let disposition = match result {
@@ -1603,7 +1599,6 @@ pub(super) fn run_worker(
             reply_uses_8bit_controls: reply_mode,
             disposition,
         }) || terminal
-            || action == KittyFileTransferAction::Finish
         {
             break;
         }
