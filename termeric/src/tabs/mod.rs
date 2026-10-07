@@ -363,7 +363,7 @@ impl TabManager {
         &mut self,
         snapshot: &crate::domain::model::DomainTopology,
         relay_command: &crate::domain::DomainRelayCommand,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<()> {
         if snapshot.tabs.is_empty() {
             anyhow::bail!("live domain has no tabs");
         }
@@ -391,12 +391,11 @@ impl TabManager {
                 })
             })
             .collect();
-        let mut changed = false;
         for index in stale.into_iter().rev() {
-            changed |= self.close_tab(index);
+            self.close_tab(index);
         }
 
-        changed |= self.relocate_live_domain_relays(snapshot)?;
+        self.relocate_live_domain_relays(snapshot)?;
 
         for remote_tab in &snapshot.tabs {
             let index = self.tabs.iter().position(|tab| {
@@ -406,10 +405,7 @@ impl TabManager {
             });
             let index = match index {
                 Some(index) => index,
-                None => {
-                    changed = true;
-                    self.attach_topology_tab(&snapshot.domain_id, remote_tab, relay_command)?
-                }
+                None => self.attach_topology_tab(&snapshot.domain_id, remote_tab, relay_command)?,
             };
             self.reconcile_live_domain_tab(index, &snapshot.domain_id, remote_tab, relay_command)?;
         }
@@ -424,7 +420,7 @@ impl TabManager {
                 })
             })
             .context("live domain active tab is absent from its topology")?;
-        Ok(changed || !snapshot.tabs.is_empty())
+        Ok(())
     }
 
     /// Move an existing relay ownership bundle between local tabs before the
@@ -434,7 +430,7 @@ impl TabManager {
     fn relocate_live_domain_relays(
         &mut self,
         snapshot: &crate::domain::model::DomainTopology,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<()> {
         let mut desired_tabs = HashMap::new();
         for tab in &snapshot.tabs {
             for pane in &tab.panes {
@@ -462,7 +458,6 @@ impl TabManager {
             }
         }
 
-        let mut changed = false;
         for (remote_pane, source_tab_id, destination_tab_id) in moves {
             let source_index = self.tabs.iter().position(|tab| {
                 tab.live_domain.as_ref().is_some_and(|live| {
@@ -525,9 +520,8 @@ impl TabManager {
                 .context("live-domain destination tab lost its stable route")?
                 .pane_ids
                 .insert(destination_local, remote_pane);
-            changed = true;
         }
-        Ok(changed)
+        Ok(())
     }
 
     fn reorder_live_domain_tabs(

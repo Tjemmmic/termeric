@@ -130,6 +130,56 @@ fn native_window_title_tracks_the_active_tab_without_losing_product_identity() {
     );
 }
 
+#[test]
+fn restoring_a_refused_live_domain_change_refreshes_the_restored_focus() {
+    use crate::domain::model::{DomainSnapshot, LivePaneLayout, LiveTab};
+    let snapshot = DomainSnapshot::fixture(
+        "refused-change",
+        10,
+        vec![
+            LiveTab::fixture(10, LivePaneLayout::pane(100)),
+            LiveTab::fixture(11, LivePaneLayout::pane(101)),
+        ],
+    );
+    let relay = crate::domain::DomainRelayCommand::local("/bin/true");
+    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 100, 1024 * 1024);
+    tabs.attach_domain(&snapshot, &relay).unwrap();
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.tabs = Some(tabs);
+    app.live_domain_relay_command = Some(relay);
+    app.live_domain_topologies
+        .insert(snapshot.id.clone(), (&snapshot).into());
+    let active_route = |app: &App| {
+        app.tabs
+            .as_ref()
+            .and_then(TabManager::active_tab)
+            .and_then(crate::tabs::Tab::live_domain_tab_route)
+            .map(|(_, tab)| tab)
+    };
+    // Renaming the domain's other tab, which the daemon does not have active.
+    let tabs = app.tabs.as_mut().unwrap();
+    let other = tabs
+        .iter()
+        .position(|(_, tab)| tab.live_domain_tab_route() == Some(("refused-change", 11)))
+        .unwrap();
+    tabs.switch_to(other);
+    app.begin_tab_rename();
+    assert!(app.tab_rename.is_some());
+
+    // Headless, the control is refused at once and the window goes back to
+    // the domain's last topology, whose active tab is the first one.
+    app.queue_live_domain_control(LiveDomainControl::MoveTab {
+        domain_id: "refused-change".into(),
+        remote_tab_id: 11,
+        index: 0,
+    });
+    assert_eq!(active_route(&app), Some(10));
+    assert!(
+        app.tab_rename.is_none(),
+        "a rename of a tab that lost focus must not stay open"
+    );
+}
+
 #[derive(Debug)]
 struct ThirdPartyReservedSuffixFixture;
 

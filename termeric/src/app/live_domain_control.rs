@@ -107,8 +107,9 @@ impl App {
         let Some(tabs) = &mut self.tabs else {
             return;
         };
-        if let Err(error) = tabs.reconcile_live_domain(&topology, relay_command) {
-            log::error!("Could not restore rejected live-domain preview: {error:#}");
+        match tabs.reconcile_live_domain(&topology, relay_command) {
+            Ok(()) => self.sync_after_live_domain_topology(),
+            Err(error) => log::error!("Could not restore rejected live-domain preview: {error:#}"),
         }
     }
 
@@ -586,7 +587,7 @@ impl App {
 
     /// Make this window's tabs match `topology`, remember it, keep a rename
     /// draft's title over the domain's, tell plugins which tabs appeared and
-    /// went away, and resize if anything changed.
+    /// went away, and resize.
     fn reconcile_live_domain_and_notify(
         &mut self,
         topology: &crate::domain::model::DomainTopology,
@@ -596,8 +597,7 @@ impl App {
             .live_domain_relay_command
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("live-domain relay state is unavailable"))?;
-        let changed = self
-            .tabs
+        self.tabs
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("tab manager is unavailable"))?
             .reconcile_live_domain(topology, relay)?;
@@ -622,14 +622,20 @@ impl App {
                 self.dispatch_plugin_hook(crate::plugin::Hook::TabClosed { tab_id: *tab_id });
             }
         }
-        if changed {
-            self.reconcile_broadcast_state();
-            if let Some(size) = self.window.as_ref().map(|window| window.inner_size()) {
-                self.sync_terminal_geometry(size.width, size.height);
-            }
-            self.refresh_focused_terminal_surfaces();
-        }
+        self.sync_after_live_domain_topology();
         Ok(())
+    }
+
+    /// Bring broadcast targets, terminal sizes, and the focused terminal's
+    /// surfaces in line with a live domain's tabs after a topology update.
+    /// Every update is synchronized: a revision can move, split, or close
+    /// panes without changing which tabs exist.
+    fn sync_after_live_domain_topology(&mut self) {
+        self.reconcile_broadcast_state();
+        if let Some(size) = self.window.as_ref().map(|window| window.inner_size()) {
+            self.sync_terminal_geometry(size.width, size.height);
+        }
+        self.refresh_focused_terminal_surfaces();
     }
 
     pub(super) fn handle_live_domain_control_completed(
