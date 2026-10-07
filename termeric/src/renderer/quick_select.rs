@@ -57,12 +57,7 @@ impl Renderer {
             } else {
                 with_alpha(self.ui.palette_border, 0.92)
             };
-            let background = [
-                self.ui.palette_bg[0],
-                self.ui.palette_bg[1],
-                self.ui.palette_bg[2],
-                0.98,
-            ];
+            let background = with_alpha(self.ui.palette_bg, 0.98);
             self.rect_pipeline
                 .push_rounded_rect(x, y, width, cell_height, accent, 3.0);
             self.rect_pipeline.push_rounded_rect(
@@ -90,12 +85,7 @@ impl Renderer {
             status_y,
             status_width,
             cell_height,
-            [
-                self.ui.palette_bg[0],
-                self.ui.palette_bg[1],
-                self.ui.palette_bg[2],
-                0.96,
-            ],
+            with_alpha(self.ui.palette_bg, 0.96),
             3.0,
         );
         let mut text_x = offset_x + cell_width;

@@ -4,6 +4,7 @@ use super::icons::draw_icon;
 use super::types::*;
 use super::{Renderer, TextClip};
 use crate::ui::constants::BUTTON_CORNER_RADIUS;
+use crate::ui::geometry::Bounds;
 use crate::ui::icon::Icon;
 
 const EDGE: f32 = 2.0;
@@ -267,25 +268,11 @@ impl Renderer {
         };
         let cw = self.cell_width();
         let cell_h = self.cell_height();
-        let accent = self.ui.tab_accent;
         let text_color = self.ui.menu_text;
-        let bg = self.ui.menu_bg;
+        let dim = self.ui.menu_text_dim;
         let clip = layout.clip();
-        self.rect_pipeline.push_rounded_rect(
-            layout.x,
-            layout.y,
-            layout.width,
-            layout.height,
-            [bg[0], bg[1], bg[2], 0.95],
-            6.0,
-        );
-        self.rect_pipeline.push_rounded_outline(
-            layout.x,
-            layout.y,
-            layout.width,
-            layout.height,
-            [accent[0], accent[1], accent[2], 0.3],
-            6.0,
+        self.push_menu_surface(
+            Bounds::new(layout.x, layout.y, layout.width, layout.height),
             1.0,
         );
 
@@ -299,21 +286,22 @@ impl Renderer {
                 Icon::Branch,
                 [icon_cx, icon_cy],
                 arm * 2.0 * 16.0 / 10.0,
-                accent,
+                dim,
             );
             self.git_completion_text(
                 " branches",
                 layout.x + cw * 2.3,
                 layout.y + EDGE,
                 layout.row_height,
-                [accent[0], accent[1], accent[2], 0.7],
+                dim,
                 clip,
             );
+            let line = self.px(1.0);
             self.rect_pipeline.push_rect(
                 layout.x + cw * 0.5,
-                layout.items_y() - 1.0,
+                (layout.items_y() - line).round(),
                 layout.width - cw,
-                0.5,
+                line,
                 self.ui.menu_border,
             );
         }
@@ -326,7 +314,7 @@ impl Renderer {
                     y,
                     layout.width - EDGE * 2.0,
                     layout.row_height,
-                    [accent[0], accent[1], accent[2], 0.15],
+                    self.ui.menu_highlight,
                     self.px(BUTTON_CORNER_RADIUS),
                 );
             }
@@ -335,7 +323,7 @@ impl Renderer {
                 layout.x + cw,
                 y,
                 layout.row_height,
-                if selected { accent } else { text_color },
+                text_color,
                 clip,
             );
         }
@@ -351,7 +339,7 @@ impl Renderer {
                 layout.x + cw,
                 layout.items_y() + (layout.end - layout.start) as f32 * layout.row_height,
                 layout.row_height,
-                [text_color[0], text_color[1], text_color[2], 0.5],
+                dim,
                 clip,
             );
         }

@@ -48,10 +48,8 @@ impl Renderer {
     ) {
         let padding = self.padding;
 
-        let mut groove_color = self.ui.tab_border;
-        groove_color[3] = 0.9;
-        let mut edge_color = self.ui.cursor;
-        edge_color[3] = 0.35;
+        let groove_color = with_alpha(self.ui.tab_border, 0.9);
+        let edge_color = with_alpha(self.ui.cursor, 0.35);
         let groove_width = crate::panes::PANE_DIVIDER_THICKNESS - 1.0;
 
         for div in dividers {
