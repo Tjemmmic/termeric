@@ -384,6 +384,27 @@ struct ModalSnapshot {
 }
 
 impl AccessibilityState {
+    /// The focus a modal layer reports: the node assistive technology moved
+    /// to while it is still among `nodes` and `allowed`, else
+    /// `default_focus`. A request that went stale is replaced by the default;
+    /// with no request, focus keeps following the layer's own.
+    fn modal_focus(
+        &mut self,
+        nodes: &[(NodeId, Node)],
+        default_focus: NodeId,
+        allowed: impl Fn(&Self, NodeId) -> bool,
+    ) -> NodeId {
+        let Some(requested) = self.focus_override else {
+            return default_focus;
+        };
+        if allowed(self, requested) && nodes.iter().any(|(node, _)| *node == requested) {
+            requested
+        } else {
+            self.focus_override = Some(default_focus);
+            default_focus
+        }
+    }
+
     fn activate(&mut self) {
         self.active = true;
     }
@@ -3725,19 +3746,17 @@ impl App {
             ContextPickerPhase::FilePaths => input_id.unwrap_or(cancel_id),
             ContextPickerPhase::Gathering => cancel_id,
         };
-        let requested_focus = self.accessibility.focus_override.filter(|node| {
-            self.accessibility.is_context_node(*node)
-                && nodes.iter().any(|(current, _)| current == node)
-                && (snapshot.awaiting || *node == CONTEXT_DIALOG)
-        });
-        let focus = requested_focus.unwrap_or(if snapshot.awaiting {
-            default_focus
-        } else {
-            CONTEXT_DIALOG
-        });
-        if self.accessibility.focus_override.is_some() && requested_focus.is_none() {
-            self.accessibility.focus_override = None;
-        }
+        let focus = self.accessibility.modal_focus(
+            &nodes,
+            if snapshot.awaiting {
+                default_focus
+            } else {
+                CONTEXT_DIALOG
+            },
+            |accessibility, node| {
+                accessibility.is_context_node(node) && (snapshot.awaiting || node == CONTEXT_DIALOG)
+            },
+        );
         self.accessibility.focus_override = Some(focus);
         ModalSnapshot {
             dialog: CONTEXT_DIALOG,
@@ -3907,15 +3926,13 @@ impl App {
         dialog.set_children(children);
         nodes.push((DIFF_DIALOG, dialog));
 
-        let requested_focus = self.accessibility.focus_override.filter(|node| {
-            self.accessibility.is_diff_node(*node)
-                && nodes.iter().any(|(current, _)| current == node)
-                && (awaiting || *node == DIFF_DIALOG)
-        });
-        let focus = requested_focus.unwrap_or(if awaiting { dismiss_id } else { DIFF_DIALOG });
-        if self.accessibility.focus_override.is_some() && requested_focus.is_none() {
-            self.accessibility.focus_override = None;
-        }
+        let focus = self.accessibility.modal_focus(
+            &nodes,
+            if awaiting { dismiss_id } else { DIFF_DIALOG },
+            |accessibility, node| {
+                accessibility.is_diff_node(node) && (awaiting || node == DIFF_DIALOG)
+            },
+        );
         self.accessibility.focus_override = Some(focus);
         ModalSnapshot {
             dialog: DIFF_DIALOG,
@@ -4061,20 +4078,16 @@ impl App {
         ]);
         nodes.push((GUARDRAIL_DIALOG, dialog));
 
-        let requested_focus = self.accessibility.focus_override.filter(|node| {
-            self.accessibility.is_guardrail_node(*node)
-                && nodes.iter().any(|(current, _)| current == node)
-                && (awaiting || *node == GUARDRAIL_DIALOG)
-        });
         let default_focus = if awaiting {
             cancel_id
         } else {
             GUARDRAIL_DIALOG
         };
-        let focus = requested_focus.unwrap_or(default_focus);
-        if self.accessibility.focus_override.is_some() && requested_focus.is_none() {
-            self.accessibility.focus_override = Some(default_focus);
-        }
+        let focus = self
+            .accessibility
+            .modal_focus(&nodes, default_focus, |accessibility, node| {
+                accessibility.is_guardrail_node(node) && (awaiting || node == GUARDRAIL_DIALOG)
+            });
         ModalSnapshot {
             dialog: GUARDRAIL_DIALOG,
             nodes,
@@ -4204,15 +4217,12 @@ impl App {
         } else {
             SHORTCUTS_INPUT
         });
-        let requested_focus = self.accessibility.focus_override.filter(|node| {
-            (!info.recording || *node != SHORTCUTS_INPUT)
-                && self.accessibility.is_shortcuts_node(*node)
-                && nodes.iter().any(|(current, _)| current == node)
-        });
-        let focus = requested_focus.unwrap_or(default_focus);
-        if self.accessibility.focus_override.is_some() && requested_focus.is_none() {
-            self.accessibility.focus_override = Some(default_focus);
-        }
+        let focus = self
+            .accessibility
+            .modal_focus(&nodes, default_focus, |accessibility, node| {
+                (!info.recording || node != SHORTCUTS_INPUT)
+                    && accessibility.is_shortcuts_node(node)
+            });
         ModalSnapshot {
             dialog: SHORTCUTS_DIALOG,
             nodes,
@@ -4521,15 +4531,12 @@ impl App {
         } else {
             SETTINGS_INPUT
         };
-        let requested_focus = self.accessibility.focus_override.filter(|node| {
-            (!info.dropdown_open || *node != SETTINGS_INPUT)
-                && self.accessibility.is_settings_node(*node)
-                && nodes.iter().any(|(current, _)| current == node)
-        });
-        let focus = requested_focus.unwrap_or(default_focus);
-        if self.accessibility.focus_override.is_some() && requested_focus.is_none() {
-            self.accessibility.focus_override = Some(default_focus);
-        }
+        let focus = self
+            .accessibility
+            .modal_focus(&nodes, default_focus, |accessibility, node| {
+                (!info.dropdown_open || node != SETTINGS_INPUT)
+                    && accessibility.is_settings_node(node)
+            });
         ModalSnapshot {
             dialog: SETTINGS_DIALOG,
             nodes,
@@ -4719,14 +4726,11 @@ impl App {
                 _ => COMMANDS_NEW,
             },
         };
-        let requested_focus = self.accessibility.focus_override.filter(|node| {
-            self.accessibility.is_commands_node(*node)
-                && nodes.iter().any(|(current, _)| current == node)
-        });
-        let focus = requested_focus.unwrap_or(default_focus);
-        if self.accessibility.focus_override.is_some() && requested_focus.is_none() {
-            self.accessibility.focus_override = Some(default_focus);
-        }
+        let focus = self
+            .accessibility
+            .modal_focus(&nodes, default_focus, |accessibility, node| {
+                accessibility.is_commands_node(node)
+            });
         ModalSnapshot {
             dialog: COMMANDS_DIALOG,
             nodes,
@@ -4850,14 +4854,11 @@ impl App {
             }
             _ => AGENTS_CLOSE,
         };
-        let requested_focus = self.accessibility.focus_override.filter(|node| {
-            self.accessibility.is_agents_node(*node)
-                && nodes.iter().any(|(current, _)| current == node)
-        });
-        let focus = requested_focus.unwrap_or(default_focus);
-        if self.accessibility.focus_override.is_some() && requested_focus.is_none() {
-            self.accessibility.focus_override = Some(default_focus);
-        }
+        let focus = self
+            .accessibility
+            .modal_focus(&nodes, default_focus, |accessibility, node| {
+                accessibility.is_agents_node(node)
+            });
         ModalSnapshot {
             dialog: AGENTS_DIALOG,
             nodes,
@@ -5115,14 +5116,11 @@ impl App {
         } else {
             selected_load.unwrap_or(SESSION_CLOSE)
         };
-        let requested_focus = self.accessibility.focus_override.filter(|node| {
-            self.accessibility.is_session_node(*node)
-                && nodes.iter().any(|(current, _)| current == node)
-        });
-        let focus = requested_focus.unwrap_or(default_focus);
-        if self.accessibility.focus_override.is_some() && requested_focus.is_none() {
-            self.accessibility.focus_override = Some(default_focus);
-        }
+        let focus = self
+            .accessibility
+            .modal_focus(&nodes, default_focus, |accessibility, node| {
+                accessibility.is_session_node(node)
+            });
         ModalSnapshot {
             dialog: SESSION_DIALOG,
             nodes,
