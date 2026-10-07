@@ -441,10 +441,8 @@ impl std::fmt::Display for SendRefusal {
     }
 }
 
-/// The largest message, small enough for the person to read in full before
-/// approving it.
-/// Shown indented in a dialog whose lines hold 4096 characters, a
-/// message's longest line still shows in full.
+/// The largest message, in bytes and lines, small enough for the person to
+/// read in full before approving it.
 pub const MAX_MESSAGE_BYTES: usize = 4000;
 pub const MAX_MESSAGE_LINES: usize = 80;
 

@@ -261,6 +261,16 @@ pub(crate) fn tool_names() -> Vec<String> {
         .collect()
 }
 
+/// What a message an agent is sent may be, as `agents::supervisor::check_message`
+/// enforces it.
+fn sendable_text() -> String {
+    use crate::agents::supervisor::{MAX_MESSAGE_BYTES, MAX_MESSAGE_LINES};
+    format!(
+        "Plain text of at most {MAX_MESSAGE_BYTES} bytes and {MAX_MESSAGE_LINES} lines, not \
+         starting with `!` or `/`."
+    )
+}
+
 fn tools() -> Value {
     json!([
         {
@@ -285,7 +295,7 @@ fn tools() -> Value {
         {
             "name": "send_to_agent",
             "title": "Send to an agent",
-            "description": "Give the agent in one pane a prompt, pasted and submitted as if typed. Plain text of at most 4000 bytes and 80 lines, not starting with `!` or `/`. Refused if that pane no longer runs agent_id, while the person is typing to it, or if the person has not enabled external input.",
+            "description": format!("Give the agent in one pane a prompt, pasted and submitted as if typed. {} Refused if that pane no longer runs agent_id, while the person is typing to it, or if the person has not enabled external input.", sendable_text()),
             "inputSchema": pane_schema(&[
                 (
                     "agent_id",
@@ -321,7 +331,7 @@ fn tools() -> Value {
         {
             "name": "send_to_session",
             "title": "Send to an agent view session",
-            "description": "Give an agent view session its next message. Plain text of at most 4000 bytes and 80 lines, not starting with `!` or `/`. Refused while the person is writing to that session.",
+            "description": format!("Give an agent view session its next message. {} Refused while the person is writing to that session.", sendable_text()),
             "inputSchema": session_schema(&[(
                 "text",
                 json!({"type": "string", "description": "The message."}),
