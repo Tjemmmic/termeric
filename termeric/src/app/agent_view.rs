@@ -633,6 +633,17 @@ impl App {
         events
     }
 
+    /// Whether the person is looking at session `id`'s conversation: the
+    /// window has focus and the panel shows that conversation, not the
+    /// session list or a new-session form over it.
+    pub(super) fn agent_conversation_visible(&self, id: SessionId) -> bool {
+        let state = &self.agent_view.state;
+        self.window_focused
+            && state.is_open()
+            && state.screen == Screen::Conversation
+            && state.active == Some(id)
+    }
+
     /// Tells the person, once per request, when a session needs them and
     /// they cannot see it.
     fn announce_agent_view_attention(&mut self) {
@@ -652,14 +663,8 @@ impl App {
         self.agent_view
             .announced
             .retain(|id| waiting.iter().any(|(waiting, ..)| waiting == id));
-        let visible = |app: &App, id: SessionId| {
-            app.window_focused
-                && app.agent_view.state.is_open()
-                && app.agent_view.state.screen == Screen::Conversation
-                && app.agent_view.state.active == Some(id)
-        };
         for (id, summary, title) in waiting {
-            if self.agent_view.announced.contains(&id) || visible(self, id) {
+            if self.agent_view.announced.contains(&id) || self.agent_conversation_visible(id) {
                 continue;
             }
             self.agent_view.announced.insert(id);

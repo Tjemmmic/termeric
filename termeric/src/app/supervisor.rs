@@ -650,10 +650,8 @@ impl App {
             target,
             text: text.to_owned(),
         });
-        let visible = self.window_focused
-            && self.agent_view.state.is_open()
-            && self.agent_view.state.active == Some(supervisor.session);
-        if !visible {
+        let session = supervisor.session;
+        if !self.agent_conversation_visible(session) {
             self.notify_agent_view(
                 "The supervisor needs you",
                 &format!("The supervisor wants to message {name}"),

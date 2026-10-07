@@ -1697,8 +1697,30 @@ done
             .contains("run as a command")
     );
     // Assist: held as a card in the supervisor's conversation, sent once
-    // approved.
+    // approved. The person is told about it only when that conversation is
+    // out of view; delivery fails here, so a notification shows as a toast.
+    use crate::ui::agent_view::Screen;
+    app.notifications
+        .fail_delivery_for_test("notification probe");
+    app.window_focused = true;
+    assert!(app.agent_view.state.is_open());
+    assert_eq!(app.agent_view.state.active, Some(supervisor));
+    app.agent_view.state.screen = Screen::Conversation;
+    let notified = |app: &mut App, expected: bool| {
+        let deadline = Instant::now() + Duration::from_millis(if expected { 3000 } else { 100 });
+        let shown = |app: &App| {
+            app.toasts
+                .iter()
+                .any(|toast| toast.message.contains("notification probe"))
+        };
+        while !shown(app) && Instant::now() < deadline {
+            app.process_pty_events();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(shown(app), expected);
+    };
     assert_eq!(send(&mut app, &token, "yes, run it"), Ok(true));
+    notified(&mut app, false);
     let request = app.supervisor_request().unwrap();
     assert_eq!(
         (request.recipient.as_str(), request.text.as_str()),
@@ -1729,8 +1751,12 @@ done
         "the person approved your message to Codex; it was sent.",
     );
 
-    // Declined messages count toward the limits too.
+    // Declined messages count toward the limits too. The session list does
+    // not show the conversation, so this one is announced.
+    app.agent_view.state.screen = Screen::Sessions;
     assert_eq!(send(&mut app, &token, "try the fix"), Ok(true));
+    notified(&mut app, true);
+    app.agent_view.state.screen = Screen::Conversation;
     app.answer_supervisor_request(false);
     wait_until_told(&mut app, "the person declined your message to Codex");
     assert!(
