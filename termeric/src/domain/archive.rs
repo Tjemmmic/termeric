@@ -48,40 +48,25 @@ pub fn build_directory_archive(
         anyhow::bail!("directory upload source identity changed after confirmation");
     }
     let source_device = source_metadata.dev();
-    let mut temporary = anonymous_archive_file().map(|file| DirectoryArchive {
+    let file = match anonymous_archive_file() {
+        Some(file) => file,
+        // Without O_TMPFILE support, a named file unlinked at once.
+        None => {
+            let (path, file) = super::io_util::create_unique(
+                &std::env::temp_dir(),
+                ".termeric-directory-archive-",
+                super::io_util::private_file,
+            )
+            .context("create private directory upload archive")?;
+            fs::remove_file(&path).context("unlink private directory upload archive")?;
+            file
+        }
+    };
+    let mut archive = DirectoryArchive {
         file,
         entries: 0,
         bytes: 0,
-    });
-    let archive_id = crate::session::generate_session_id();
-    for attempt in 0..16_u8 {
-        if temporary.is_some() {
-            break;
-        }
-        let path = std::env::temp_dir().join(format!(
-            ".termeric-directory-archive-{archive_id}-{attempt}"
-        ));
-        match OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&path)
-        {
-            Ok(file) => {
-                fs::remove_file(&path).context("unlink private directory upload archive")?;
-                temporary = Some(DirectoryArchive {
-                    file,
-                    entries: 0,
-                    bytes: 0,
-                });
-                break;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error).context("create private directory upload archive"),
-        }
-    }
-    let mut archive = temporary.context("could not allocate directory upload archive")?;
+    };
     write_bounded(&mut archive, MAGIC)?;
     append_directory(
         &mut archive,

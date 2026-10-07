@@ -4,9 +4,65 @@
 use super::protocol;
 use anyhow::Context;
 use sha2::{Digest, Sha256};
-use std::fs::{File, Metadata};
-use std::io::{Read, Seek, SeekFrom};
-use std::os::unix::fs::MetadataExt;
+use std::fs::{self, File, Metadata, OpenOptions};
+use std::io::{self, Read, Seek, SeekFrom};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::path::{Path, PathBuf};
+
+/// Random bytes in a [`create_unique`] name: enough that a clash means
+/// someone guessed or copied the name, not chance.
+const UNIQUE_NAME_RANDOM_BYTES: usize = 16;
+/// Names [`create_unique`] tries before giving up; each clash is another
+/// file that appeared under a fresh random name.
+const UNIQUE_NAME_ATTEMPTS: usize = 16;
+
+/// Creates a new entry named `prefix` and random hex in `directory` with
+/// `create`, which must refuse an existing one ([`private_file`] or
+/// [`private_directory`]), and returns its path with what `create` made.
+pub(super) fn create_unique<T>(
+    directory: &Path,
+    prefix: &str,
+    create: fn(&Path) -> io::Result<T>,
+) -> anyhow::Result<(PathBuf, T)> {
+    for _ in 0..UNIQUE_NAME_ATTEMPTS {
+        let name = termeric_core::hex::random(UNIQUE_NAME_RANDOM_BYTES)
+            .context("generate a unique file name")?;
+        let path = directory.join(format!("{prefix}{name}"));
+        match create(&path) {
+            Ok(created) => return Ok((path, created)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(error).with_context(|| format!("create {}", path.display()));
+            }
+        }
+    }
+    anyhow::bail!(
+        "could not create a unique {prefix}* entry in {}",
+        directory.display()
+    )
+}
+
+/// A new file at `path` that only this user can read and write, opened for
+/// both; never an existing one.
+pub(super) fn private_file(path: &Path) -> io::Result<File> {
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?;
+    // The umask can only narrow the creation mode; set it exactly, since a
+    // resumed upload checks for 0600.
+    file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    Ok(file)
+}
+
+/// A new directory at `path` that only this user can use; never an
+/// existing one.
+pub(super) fn private_directory(path: &Path) -> io::Result<()> {
+    fs::DirBuilder::new().mode(0o700).create(path)?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+}
 
 /// Lowercase SHA-256 of the first `bytes` of `file`, leaving its cursor at
 /// `bytes`: the offset an upload resumes from.
@@ -46,8 +102,6 @@ pub(super) fn metadata_unchanged(before: &Metadata, after: &Metadata) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn metadata_check_detects_same_size_changes() {
@@ -60,6 +114,39 @@ mod tests {
         let after = fs::metadata(&source).unwrap();
         assert_eq!(before.len(), after.len());
         assert!(!metadata_unchanged(&before, &after));
+    }
+
+    #[test]
+    fn unique_entries_are_private_new_and_named_by_prefix() {
+        let temporary = tempfile::tempdir().unwrap();
+        let (first, _) = create_unique(temporary.path(), ".fixture-", private_file).unwrap();
+        let (second, ()) = create_unique(temporary.path(), ".fixture-", private_directory).unwrap();
+        assert_ne!(first, second);
+        for (path, mode) in [(&first, 0o600), (&second, 0o700)] {
+            let name = path.file_name().unwrap().to_str().unwrap();
+            let random = name.strip_prefix(".fixture-").unwrap();
+            assert!(termeric_core::hex::is_lower(random, 32), "{name}");
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                mode
+            );
+        }
+        // Neither kind ever opens or reuses an existing entry.
+        assert_eq!(
+            private_file(&first).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(
+            private_directory(&second).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        // Other failures end at once rather than trying more names.
+        let missing = temporary.path().join("missing");
+        let error = create_unique(&missing, ".fixture-", private_file).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<io::Error>().unwrap().kind(),
+            io::ErrorKind::NotFound
+        );
     }
 
     #[test]

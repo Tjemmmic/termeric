@@ -1,5 +1,6 @@
 //! Local daemon that owns live PTYs independently of GUI processes.
 
+use super::io_util;
 use super::model::*;
 use super::protocol::{self, ClientFrame, Request, Response, ServerFrame, UploadKind};
 use crate::deadline_io::{Deadline, PollReader};
@@ -9,7 +10,7 @@ use anyhow::Context;
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{SyncSender, TrySendError};
@@ -862,34 +863,14 @@ fn receive_file_upload(
             if fs::symlink_metadata(&target_path).is_ok() {
                 anyhow::bail!("destination already exists; uploads never overwrite destinations");
             }
-            let staging_id = crate::session::generate_session_id();
-            let mut temporary = None;
-            for attempt in 0..16_u8 {
-                let path = directory.join(format!(".termeric-upload-{staging_id}-{attempt}"));
-                match OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .create_new(true)
-                    .mode(0o600)
-                    .open(&path)
-                {
-                    Ok(file) => {
-                        file.set_permissions(fs::Permissions::from_mode(0o600))?;
-                        temporary = Some(TemporaryUpload {
-                            path,
-                            file,
-                            remove_on_drop: true,
-                        });
-                        break;
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                    Err(error) => {
-                        return Err(error).context("create temporary upload in pane directory");
-                    }
-                }
-            }
-            let temporary =
-                temporary.context("could not allocate a unique temporary upload file")?;
+            let (path, file) =
+                io_util::create_unique(&directory, ".termeric-upload-", io_util::private_file)
+                    .context("create temporary upload in pane directory")?;
+            let temporary = TemporaryUpload {
+                path,
+                file,
+                remove_on_drop: true,
+            };
             let metadata = temporary
                 .file
                 .metadata()
@@ -916,7 +897,7 @@ fn receive_file_upload(
             (temporary, target_path, 0)
         }
     };
-    let prefix_sha256 = super::io_util::sha256_prefix(&mut temporary.file, offset)?;
+    let prefix_sha256 = io_util::sha256_prefix(&mut temporary.file, offset)?;
     if let Err(error) = write_server_frame(
         stream,
         &ServerFrame::Response {
@@ -1032,24 +1013,16 @@ fn create_staged_directory(target: &std::path::Path) -> anyhow::Result<StagedDir
     let parent = target
         .parent()
         .context("upload destination has no parent")?;
-    let staging_id = crate::session::generate_session_id();
-    for attempt in 0..16_u8 {
-        let path = parent.join(format!(".termeric-directory-upload-{staging_id}-{attempt}"));
-        let mut builder = fs::DirBuilder::new();
-        builder.mode(0o700);
-        match builder.create(&path) {
-            Ok(()) => {
-                fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
-                return Ok(StagedDirectory {
-                    path,
-                    remove_on_drop: true,
-                });
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error).context("create staged upload directory"),
-        }
-    }
-    anyhow::bail!("could not allocate a unique staged upload directory")
+    let (path, ()) = io_util::create_unique(
+        parent,
+        ".termeric-directory-upload-",
+        io_util::private_directory,
+    )
+    .context("create staged upload directory")?;
+    Ok(StagedDirectory {
+        path,
+        remove_on_drop: true,
+    })
 }
 
 fn sync_directory(path: &std::path::Path) -> anyhow::Result<()> {
@@ -1248,11 +1221,18 @@ fn check_working_directory(spawn: &SpawnSpec) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// A fresh domain ID: `domain-` and 32 random hex digits, which
+/// [`validate_id`] accepts.
+fn new_domain_id() -> anyhow::Result<String> {
+    let random = termeric_core::hex::random(16).context("generate a domain ID")?;
+    Ok(format!("domain-{random}"))
+}
+
 fn create_domain(state: &SharedState, name: String, spawn: SpawnSpec) -> anyhow::Result<Response> {
     validate_name("domain name", &name)?;
     spawn.validate()?;
     check_working_directory(&spawn)?;
-    let id = format!("domain-{}", crate::session::generate_session_id());
+    let id = new_domain_id()?;
     let title = spawn.title.clone().unwrap_or_else(|| name.clone());
     let created_at = crate::session::format_unix_timestamp(
         std::time::SystemTime::now()
@@ -3377,6 +3357,18 @@ mod tests {
             .to_string()
             .contains("exhausted")
         );
+    }
+
+    #[test]
+    fn domain_ids_are_prefixed_random_hex_that_validation_accepts() {
+        let first = new_domain_id().unwrap();
+        let second = new_domain_id().unwrap();
+        assert_ne!(first, second);
+        for id in [first, second] {
+            let random = id.strip_prefix("domain-").unwrap();
+            assert!(termeric_core::hex::is_lower(random, 32), "{id}");
+            validate_id("domain id", &id).unwrap();
+        }
     }
 
     #[test]
