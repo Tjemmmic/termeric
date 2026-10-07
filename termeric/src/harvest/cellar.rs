@@ -82,23 +82,12 @@ impl CommandEntry {
         }
     }
 
-    /// Get the health of this command (for visual styling)
-    /// Returns: Healthy (0), Wilted (1), Running (2)
-    pub fn health(&self) -> u8 {
+    /// How this command fared, which its cellar row shows.
+    pub fn health(&self) -> CommandHealth {
         match self.exit_code {
-            Some(0) => 0, // Healthy root
-            Some(_) => 1, // Wilted root
-            None => 2,    // Still growing
-        }
-    }
-
-    /// Get color based on health
-    /// Returns [r, g, b, a]
-    pub fn health_color(&self) -> [f32; 4] {
-        match self.health() {
-            0 => [0.4, 0.7, 0.3, 1.0], // Healthy green
-            1 => [0.7, 0.4, 0.3, 1.0], // Wilted brown
-            _ => [0.6, 0.5, 0.4, 0.7], // Growing - muted
+            Some(0) => CommandHealth::Healthy,
+            Some(_) => CommandHealth::Wilted,
+            None => CommandHealth::Running,
         }
     }
 
@@ -109,6 +98,17 @@ impl CommandEntry {
     pub fn command_text(&self) -> &str {
         self.command_snapshot.as_deref().unwrap_or(&self.command)
     }
+}
+
+/// How a command in the cellar fared.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommandHealth {
+    /// It exited successfully.
+    Healthy,
+    /// It exited with a failure status.
+    Wilted,
+    /// It is still running.
+    Running,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -633,13 +633,13 @@ mod tests {
     #[test]
     fn test_command_entry_health() {
         let success = CommandEntry::new(0, Some(0));
-        assert_eq!(success.health(), 0);
+        assert_eq!(success.health(), CommandHealth::Healthy);
 
         let failure = CommandEntry::new(0, Some(1));
-        assert_eq!(failure.health(), 1);
+        assert_eq!(failure.health(), CommandHealth::Wilted);
 
         let running = CommandEntry::new(0, None);
-        assert_eq!(running.health(), 2);
+        assert_eq!(running.health(), CommandHealth::Running);
     }
 
     #[test]

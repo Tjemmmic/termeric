@@ -6,6 +6,8 @@
 //! - `build_sprout_menu()` — context menu for command actions
 
 use super::Renderer;
+use super::colors::UiPalette;
+use crate::harvest::CommandHealth;
 use crate::renderer::types::{CellarRenderInfo, IndicatorRenderInfo, SproutMenuRenderInfo};
 use crate::ui::color::{scale_alpha, with_alpha};
 use crate::ui::constants::BORDER_WIDTH;
@@ -143,7 +145,7 @@ impl Renderer {
         // Entry list
         for (entry, (_, row)) in cellar.entries.iter().zip(&layout.rows) {
             let entry_y = row.y;
-            let entry_color = with_alpha(entry.health_color, anim);
+            let (health_char, health_color) = health_marker(&self.ui, entry.health);
 
             if cellar.selected_id == Some(entry.id) {
                 self.rect_pipeline.push_rounded_rect(
@@ -156,17 +158,11 @@ impl Renderer {
                 );
             }
 
-            // Health indicator character
-            let health_char = match entry.health {
-                0 => '\u{25CF}', // filled circle (healthy)
-                1 => '\u{25CB}', // empty circle (warning)
-                _ => '\u{2716}', // heavy X (sick)
-            };
             self.text_pipeline.push_char(
                 health_char,
                 row.x + cell_width * 0.5,
                 entry_y,
-                entry_color,
+                scale_alpha(health_color, anim),
             );
 
             // Exit code, right-aligned
@@ -284,9 +280,38 @@ impl Renderer {
     }
 }
 
+/// The marker a cellar row draws for how its command fared, in the theme's
+/// status colors: a filled dot for success, a cross for failure, and a
+/// muted ring while it runs.
+fn health_marker(ui: &UiPalette, health: CommandHealth) -> (char, [f32; 4]) {
+    match health {
+        CommandHealth::Healthy => ('\u{25CF}', ui.success),
+        CommandHealth::Wilted => ('\u{2716}', ui.error),
+        CommandHealth::Running => ('\u{25CB}', ui.menu_text_dim),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cellar_markers_say_how_each_command_fared_in_theme_colors() {
+        let theme = crate::config::theme::Theme::load_builtin("solarized-light").unwrap();
+        let ui = UiPalette::from_theme_with_contrast(&theme, false);
+        assert_eq!(
+            health_marker(&ui, CommandHealth::Healthy),
+            ('\u{25CF}', ui.success)
+        );
+        assert_eq!(
+            health_marker(&ui, CommandHealth::Wilted),
+            ('\u{2716}', ui.error)
+        );
+        assert_eq!(
+            health_marker(&ui, CommandHealth::Running),
+            ('\u{25CB}', ui.menu_text_dim)
+        );
+    }
 
     #[test]
     fn sprout_hit_test_matches_rendered_rows() {

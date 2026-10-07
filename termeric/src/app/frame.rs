@@ -406,7 +406,6 @@ impl App {
                     exit_code: e.exit_code,
                     output_truncated: e.output_truncated,
                     health: e.health(),
-                    health_color: e.health_color(),
                 })
                 .collect(),
             total_entries: harvest.cellar.len(),

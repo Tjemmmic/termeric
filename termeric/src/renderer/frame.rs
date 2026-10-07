@@ -371,18 +371,12 @@ impl Renderer {
                     || pane.is_zoomed
                     || (panes.len() > 1 && pane.is_focused))
             {
-                let border_color = if let Some(state) = pane.broadcast_target {
-                    match state {
-                        BroadcastTargetState::Armed => [0.96, 0.68, 0.16, 1.0],
-                        BroadcastTargetState::Active => [0.95, 0.24, 0.12, 1.0],
-                    }
-                } else if pane.read_only {
-                    [0.30, 0.78, 0.72, 1.0]
-                } else if pane.is_zoomed {
-                    with_alpha(self.ui.palette_accent, 0.9)
-                } else {
-                    with_alpha(self.ui.cursor, 0.5)
-                };
+                let border_color = pane_outline_color(
+                    &self.ui,
+                    pane.broadcast_target,
+                    pane.read_only,
+                    pane.is_zoomed,
+                );
                 let bw = if pane.broadcast_target.is_some() || pane.read_only {
                     4.0
                 } else {
@@ -406,8 +400,7 @@ impl Renderer {
 
         // Visual bell flash — subtle screen-edge glow
         if self.bell_intensity > 0.0 {
-            let alpha = self.bell_intensity * 0.15;
-            let flash_color = [1.0, 1.0, 1.0, alpha];
+            let flash_color = bell_flash_color(&self.ui, self.bell_intensity);
             self.rect_pipeline
                 .push_rect(0.0, 0.0, window_width, window_height, flash_color);
         }
@@ -580,5 +573,64 @@ impl Renderer {
         if let Some(preedit) = ime_preedit {
             self.build_ime_preedit(preedit, window_width, window_height);
         }
+    }
+}
+
+/// The outline of a split or zoomed pane. Broadcast states use the status
+/// colors the tab bar shows them in, read-only the theme's cyan; zoom and
+/// focus use progressively quieter accents.
+fn pane_outline_color(
+    ui: &UiPalette,
+    broadcast_target: Option<BroadcastTargetState>,
+    read_only: bool,
+    zoomed: bool,
+) -> [f32; 4] {
+    match broadcast_target {
+        Some(BroadcastTargetState::Armed) => ui.warning,
+        Some(BroadcastTargetState::Active) => ui.error,
+        None if read_only => ui.info,
+        None if zoomed => with_alpha(ui.palette_accent, 0.9),
+        None => with_alpha(ui.cursor, 0.5),
+    }
+}
+
+/// The visual bell's glow over the whole window at `intensity` (0 to 1):
+/// the terminal's foreground, so it brightens dark themes and darkens light
+/// ones.
+fn bell_flash_color(ui: &UiPalette, intensity: f32) -> [f32; 4] {
+    with_alpha(ui.foreground, intensity * 0.15)
+}
+
+#[cfg(test)]
+mod chrome_color_tests {
+    use super::*;
+
+    #[test]
+    fn pane_outlines_and_the_bell_take_the_themes_colors() {
+        let theme = Theme::load_builtin("solarized-light").unwrap();
+        let ui = UiPalette::from_theme_with_contrast(&theme, false);
+        let outline =
+            |broadcast, read_only, zoomed| pane_outline_color(&ui, broadcast, read_only, zoomed);
+        // Broadcast outranks the read-only lock, which outranks zoom.
+        assert_eq!(
+            outline(Some(BroadcastTargetState::Armed), true, true),
+            ui.warning
+        );
+        assert_eq!(
+            outline(Some(BroadcastTargetState::Active), true, true),
+            ui.error
+        );
+        assert_eq!(outline(None, true, true), ui.info);
+        assert_eq!(
+            outline(None, false, true),
+            with_alpha(ui.palette_accent, 0.9)
+        );
+        assert_eq!(outline(None, false, false), with_alpha(ui.cursor, 0.5));
+        assert_eq!(ui.info, theme.primary.cyan.to_f32_array());
+
+        assert_eq!(
+            bell_flash_color(&ui, 1.0),
+            with_alpha(theme.ui.foreground.to_f32_array(), 0.15)
+        );
     }
 }

@@ -383,7 +383,7 @@ impl Renderer {
                 width: scrollbar_width,
                 height: scrollbar_height,
             } = scrollbar.track;
-            let track_color = [1.0_f32, 1.0, 1.0, 0.05];
+            let (track_color, thumb_color) = pane_scrollbar_colors(&self.ui);
             self.rect_pipeline.push_rounded_rect(
                 scrollbar_x,
                 scrollbar_top,
@@ -408,7 +408,6 @@ impl Renderer {
             let thumb_travel = scrollbar_height - thumb_height;
             let thumb_y = scrollbar_top + thumb_travel * (1.0 - scroll_fraction);
 
-            let thumb_color = [1.0_f32, 1.0, 1.0, 0.25];
             self.rect_pipeline.push_rounded_rect(
                 scrollbar_x,
                 thumb_y,
@@ -419,6 +418,15 @@ impl Renderer {
             );
         }
     }
+}
+
+/// A pane scrollbar's track and thumb: the terminal's foreground, faint over
+/// its content, so it shows on light themes as on dark ones.
+fn pane_scrollbar_colors(ui: &UiPalette) -> ([f32; 4], [f32; 4]) {
+    (
+        with_alpha(ui.foreground, 0.05),
+        with_alpha(ui.foreground, 0.25),
+    )
 }
 
 /// Whether a cell holding this character draws it: blanks and Kitty image
@@ -462,6 +470,16 @@ pub(super) fn gliding_cursor_origin(
         rest.0 as f32 + glide.0 - cursor.0 as f32,
         rest.1 as f32 + glide.1 - cursor.1 as f32,
     )
+}
+
+#[cfg(test)]
+#[test]
+fn pane_scrollbars_take_the_themes_foreground() {
+    let theme = Theme::load_builtin("solarized-light").unwrap();
+    let ui = UiPalette::from_theme_with_contrast(&theme, false);
+    let (track, thumb) = pane_scrollbar_colors(&ui);
+    assert_eq!(track, with_alpha(theme.ui.foreground.to_f32_array(), 0.05));
+    assert_eq!(thumb, with_alpha(theme.ui.foreground.to_f32_array(), 0.25));
 }
 
 #[cfg(test)]

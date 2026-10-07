@@ -471,10 +471,8 @@ pub struct CellarEntryInfo {
     pub exit_code: Option<i32>,
     /// Whether only a clipped 64-KiB output snapshot is retained.
     pub output_truncated: bool,
-    /// Health level (0 = healthy, 1 = warning, 2 = sick)
-    pub health: u8,
-    /// Health color (RGBA)
-    pub health_color: [f32; 4],
+    /// How the command fared, which picks its marker and color.
+    pub health: crate::harvest::CommandHealth,
 }
 
 /// Sprout context menu render info

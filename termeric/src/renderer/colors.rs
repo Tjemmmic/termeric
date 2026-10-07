@@ -7,6 +7,9 @@ use crate::ui::color::high_contrast_text_on;
 #[derive(Clone)]
 pub(crate) struct UiPalette {
     pub(crate) background: wgpu::Color,
+    /// The terminal's foreground, for chrome drawn over terminal content:
+    /// pane scrollbars and the visual bell.
+    pub(crate) foreground: [f32; 4],
     pub(crate) selection: [f32; 4],
     pub(crate) selection_flash: [f32; 4],
     pub(crate) selection_text: Option<[f32; 4]>,
@@ -26,11 +29,13 @@ pub(crate) struct UiPalette {
     pub(crate) menu_highlight: [f32; 4],
     pub(crate) menu_text: [f32; 4],
     pub(crate) menu_text_dim: [f32; 4],
-    /// Status hues from the terminal's own palette (yellow, red, green), for
-    /// agent badges, tab activity, toasts, diffs, and warnings.
+    /// Status hues from the terminal's own palette (yellow, red, green,
+    /// cyan), for agent badges, tab activity, toasts, diffs, warnings, and
+    /// pane outlines.
     pub(crate) warning: [f32; 4],
     pub(crate) error: [f32; 4],
     pub(crate) success: [f32; 4],
+    pub(crate) info: [f32; 4],
     pub(crate) tab_border: [f32; 4],
     pub(crate) tab_text_active: [f32; 4],
     pub(crate) tab_text_inactive: [f32; 4],
@@ -72,6 +77,7 @@ impl UiPalette {
         let tab_text_inactive = with_alpha(fg.to_f32_array(), 0.62);
         let mut palette = Self {
             background: bg.to_wgpu(),
+            foreground: fg.to_f32_array(),
             selection: selection.to_f32_array(),
             selection_flash: with_alpha(fg.to_f32_array(), 0.85),
             selection_text: theme.ui.selection_text.map(|c| c.to_f32_array()),
@@ -89,6 +95,7 @@ impl UiPalette {
             warning: theme.primary.yellow.to_f32_array(),
             error: theme.primary.red.to_f32_array(),
             success: theme.primary.green.to_f32_array(),
+            info: theme.primary.cyan.to_f32_array(),
             tab_border: tab_border.to_f32_array(),
             tab_text_active,
             tab_text_inactive,
@@ -117,6 +124,14 @@ impl UiPalette {
     }
 
     fn enforce_high_contrast(&mut self) {
+        let background = [
+            self.background.r as f32,
+            self.background.g as f32,
+            self.background.b as f32,
+            1.0,
+        ];
+        self.foreground = high_contrast_text(background);
+
         self.tab_bar_bg[3] = 1.0;
         self.tab_active[3] = 1.0;
         self.tab_inactive[3] = 1.0;
@@ -390,7 +405,14 @@ mod ui_palette_accessibility_tests {
         for theme_name in Theme::list_available() {
             let theme = Theme::load_builtin(theme_name).unwrap();
             let palette = UiPalette::from_theme_with_contrast(&theme, true);
+            let terminal_background = [
+                palette.background.r as f32,
+                palette.background.g as f32,
+                palette.background.b as f32,
+                1.0,
+            ];
             for (foreground, background) in [
+                (palette.foreground, terminal_background),
                 (palette.tab_text_active, palette.tab_active),
                 (palette.tab_text_inactive, palette.tab_bar_bg),
                 (palette.tab_text_inactive, palette.tab_inactive),
