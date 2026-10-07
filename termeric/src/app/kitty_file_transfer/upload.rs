@@ -73,13 +73,78 @@ pub(super) fn reopen_upload_regular_file(pinned: &std::fs::File) -> std::io::Res
     Ok(file)
 }
 
+/// Hands one upload's completions to the App and waits for each to be
+/// delivered, so the worker never reads further ahead than the terminal.
+struct Delivery<'a, E> {
+    emit: E,
+    cancellation: &'a AtomicBool,
+    session_id: &'a str,
+    total_files: usize,
+    reply_uses_8bit_controls: bool,
+}
+
+impl<E: FnMut(UploadWorkerCompletion) -> bool> Delivery<'_, E> {
+    /// Deliver progress frames; false when the App did not write them to
+    /// the originating terminal.
+    fn send(&mut self, frames: Vec<Vec<u8>>, files: usize, bytes: u64) -> bool {
+        self.emit_with_ack(frames, false, files, bytes, None)
+    }
+
+    /// End the upload with one error status for `file_id`, reporting only
+    /// progress the terminal has already acknowledged.
+    fn fail(
+        &mut self,
+        file_id: &str,
+        code: KittyFileTransferStatusCode,
+        message: String,
+        files: usize,
+        bytes: u64,
+    ) {
+        let frame = transfer_status(self.session_id, file_id, code, &message).canonical_reply();
+        let _ = self.emit_with_ack(vec![frame], true, files, bytes, Some(message));
+    }
+
+    fn emit_with_ack(
+        &mut self,
+        frames: Vec<Vec<u8>>,
+        terminal: bool,
+        files: usize,
+        bytes: u64,
+        error: Option<String>,
+    ) -> bool {
+        let (sender, receiver) = sync_channel(1);
+        if !(self.emit)(UploadWorkerCompletion {
+            frames,
+            terminal,
+            files,
+            total_files: self.total_files,
+            bytes,
+            error,
+            reply_uses_8bit_controls: self.reply_uses_8bit_controls,
+            acknowledge: sender,
+        }) {
+            return false;
+        }
+        loop {
+            if self.cancellation.load(Ordering::Acquire) {
+                return false;
+            }
+            match receiver.recv_timeout(Duration::from_millis(100)) {
+                Ok(written) => return written,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return false,
+            }
+        }
+    }
+}
+
 pub(super) fn run_upload_worker(
     receiver: Receiver<KittyFileTransferCommand>,
     session_id: String,
     paths: Vec<UploadPath>,
     reply_uses_8bit_controls: bool,
     cancellation: Arc<AtomicBool>,
-    mut emit: impl FnMut(UploadWorkerCompletion) -> bool,
+    emit: impl FnMut(UploadWorkerCompletion) -> bool,
 ) {
     use std::fs::File;
     use std::io::Read;
@@ -93,52 +158,14 @@ pub(super) fn run_upload_worker(
         sent: bool,
     }
 
-    fn error_frame(
-        session_id: &str,
-        file_id: &str,
-        code: KittyFileTransferStatusCode,
-        message: &str,
-    ) -> Vec<u8> {
-        transfer_status(session_id, file_id, code, message).canonical_reply()
-    }
-
-    fn emit_with_ack(
-        emit: &mut impl FnMut(UploadWorkerCompletion) -> bool,
-        cancellation: &AtomicBool,
-        frames: Vec<Vec<u8>>,
-        terminal: bool,
-        files: usize,
-        total_files: usize,
-        bytes: u64,
-        error: Option<String>,
-        reply_uses_8bit_controls: bool,
-    ) -> bool {
-        let (sender, receiver) = sync_channel(1);
-        if !emit(UploadWorkerCompletion {
-            frames,
-            terminal,
-            files,
-            total_files,
-            bytes,
-            error,
-            reply_uses_8bit_controls,
-            acknowledge: sender,
-        }) {
-            return false;
-        }
-        loop {
-            if cancellation.load(Ordering::Acquire) {
-                return false;
-            }
-            match receiver.recv_timeout(Duration::from_millis(100)) {
-                Ok(written) => return written,
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return false,
-            }
-        }
-    }
-
     let total_files = paths.len();
+    let mut delivery = Delivery {
+        emit,
+        cancellation: &cancellation,
+        session_id: &session_id,
+        total_files,
+        reply_uses_8bit_controls,
+    };
     let mut sources = HashMap::with_capacity(total_files);
     let mut metadata_frames = Vec::with_capacity(total_files + 1);
     let mut total_bytes = 0u64;
@@ -146,25 +173,20 @@ pub(super) fn run_upload_worker(
         if cancellation.load(Ordering::Acquire) {
             return;
         }
+        // Nothing is sent until every path is pinned, so these failures
+        // report no progress.
+        let mut fail = |code, message: String| delivery.fail(&path.file_id, code, message, 0, 0);
         let file = match pin_upload_path(&path.path) {
             Ok(file) => file,
             Err(error) => {
-                let message = format!("could not open approved regular file: {error}");
                 let code = if error.kind() == std::io::ErrorKind::PermissionDenied {
                     KittyFileTransferStatusCode::PermissionDenied
                 } else {
                     KittyFileTransferStatusCode::Io
                 };
-                let _ = emit_with_ack(
-                    &mut emit,
-                    &cancellation,
-                    vec![error_frame(&session_id, &path.file_id, code, &message)],
-                    true,
-                    0,
-                    total_files,
-                    0,
-                    Some(message),
-                    reply_uses_8bit_controls,
+                fail(
+                    code,
+                    format!("could not open approved regular file: {error}"),
                 );
                 return;
             }
@@ -172,42 +194,16 @@ pub(super) fn run_upload_worker(
         let metadata = match file.metadata() {
             Ok(metadata) if metadata.is_file() && metadata.nlink() == 1 => metadata,
             Ok(_) => {
-                let message = "approved path is not a single-link regular file".to_string();
-                let _ = emit_with_ack(
-                    &mut emit,
-                    &cancellation,
-                    vec![error_frame(
-                        &session_id,
-                        &path.file_id,
-                        KittyFileTransferStatusCode::Invalid,
-                        &message,
-                    )],
-                    true,
-                    0,
-                    total_files,
-                    0,
-                    Some(message),
-                    reply_uses_8bit_controls,
+                fail(
+                    KittyFileTransferStatusCode::Invalid,
+                    "approved path is not a single-link regular file".into(),
                 );
                 return;
             }
             Err(error) => {
-                let message = format!("could not inspect approved regular file: {error}");
-                let _ = emit_with_ack(
-                    &mut emit,
-                    &cancellation,
-                    vec![error_frame(
-                        &session_id,
-                        &path.file_id,
-                        KittyFileTransferStatusCode::Io,
-                        &message,
-                    )],
-                    true,
-                    0,
-                    total_files,
-                    0,
-                    Some(message),
-                    reply_uses_8bit_controls,
+                fail(
+                    KittyFileTransferStatusCode::Io,
+                    format!("could not inspect approved regular file: {error}"),
                 );
                 return;
             }
@@ -218,43 +214,16 @@ pub(super) fn run_upload_worker(
                     && path_metadata.dev() == metadata.dev()
                     && path_metadata.ino() == metadata.ino() => {}
             Ok(_) => {
-                let message =
-                    "approved path changed identity while its file was being opened".to_string();
-                let _ = emit_with_ack(
-                    &mut emit,
-                    &cancellation,
-                    vec![error_frame(
-                        &session_id,
-                        &path.file_id,
-                        KittyFileTransferStatusCode::PermissionDenied,
-                        &message,
-                    )],
-                    true,
-                    0,
-                    total_files,
-                    0,
-                    Some(message),
-                    reply_uses_8bit_controls,
+                fail(
+                    KittyFileTransferStatusCode::PermissionDenied,
+                    "approved path changed identity while its file was being opened".into(),
                 );
                 return;
             }
             Err(error) => {
-                let message = format!("could not revalidate approved file identity: {error}");
-                let _ = emit_with_ack(
-                    &mut emit,
-                    &cancellation,
-                    vec![error_frame(
-                        &session_id,
-                        &path.file_id,
-                        KittyFileTransferStatusCode::Io,
-                        &message,
-                    )],
-                    true,
-                    0,
-                    total_files,
-                    0,
-                    Some(message),
-                    reply_uses_8bit_controls,
+                fail(
+                    KittyFileTransferStatusCode::Io,
+                    format!("could not revalidate approved file identity: {error}"),
                 );
                 return;
             }
@@ -262,50 +231,23 @@ pub(super) fn run_upload_worker(
         total_bytes = match total_bytes.checked_add(metadata.len()) {
             Some(total) if total <= MAX_KITTY_UPLOAD_BYTES => total,
             _ => {
-                let message = "approved files exceed the 64 MiB transfer limit".to_string();
-                let _ = emit_with_ack(
-                    &mut emit,
-                    &cancellation,
-                    vec![error_frame(
-                        &session_id,
-                        &path.file_id,
-                        KittyFileTransferStatusCode::TooLarge,
-                        &message,
-                    )],
-                    true,
-                    0,
-                    total_files,
-                    0,
-                    Some(message),
-                    reply_uses_8bit_controls,
+                fail(
+                    KittyFileTransferStatusCode::TooLarge,
+                    "approved files exceed the 64 MiB transfer limit".into(),
                 );
                 return;
             }
         };
         let Some(path_name) = path.path.to_str().map(str::to_owned) else {
-            let message = "approved path is not valid UTF-8".to_string();
-            let _ = emit_with_ack(
-                &mut emit,
-                &cancellation,
-                vec![error_frame(
-                    &session_id,
-                    &path.file_id,
-                    KittyFileTransferStatusCode::Invalid,
-                    &message,
-                )],
-                true,
-                0,
-                total_files,
-                0,
-                Some(message),
-                reply_uses_8bit_controls,
+            fail(
+                KittyFileTransferStatusCode::Invalid,
+                "approved path is not valid UTF-8".into(),
             );
             return;
         };
         let file = match reopen_upload_regular_file(&file) {
             Ok(file) => file,
             Err(error) => {
-                let message = format!("could not read pinned regular file: {error}");
                 let code = match error.kind() {
                     std::io::ErrorKind::InvalidInput => KittyFileTransferStatusCode::Invalid,
                     std::io::ErrorKind::PermissionDenied => {
@@ -313,17 +255,7 @@ pub(super) fn run_upload_worker(
                     }
                     _ => KittyFileTransferStatusCode::Io,
                 };
-                let _ = emit_with_ack(
-                    &mut emit,
-                    &cancellation,
-                    vec![error_frame(&session_id, &path.file_id, code, &message)],
-                    true,
-                    0,
-                    total_files,
-                    0,
-                    Some(message),
-                    reply_uses_8bit_controls,
-                );
+                fail(code, format!("could not read pinned regular file: {error}"));
                 return;
             }
         };
@@ -360,17 +292,7 @@ pub(super) fn run_upload_worker(
     let mut ready = transfer_status(&session_id, "", KittyFileTransferStatusCode::Ok, "");
     ready.name = Some(home);
     metadata_frames.push(ready.canonical_reply());
-    if !emit_with_ack(
-        &mut emit,
-        &cancellation,
-        metadata_frames,
-        false,
-        0,
-        total_files,
-        0,
-        None,
-        reply_uses_8bit_controls,
-    ) {
+    if !delivery.send(metadata_frames, 0, 0) {
         return;
     }
 
@@ -380,22 +302,12 @@ pub(super) fn run_upload_worker(
         let command = match receiver.recv_timeout(WORKER_IDLE_TIMEOUT) {
             Ok(command) => command,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                let message = "host file read expired after ten minutes of inactivity".to_string();
-                let _ = emit_with_ack(
-                    &mut emit,
-                    &cancellation,
-                    vec![error_frame(
-                        &session_id,
-                        "",
-                        KittyFileTransferStatusCode::TimedOut,
-                        &message,
-                    )],
-                    true,
+                delivery.fail(
+                    "",
+                    KittyFileTransferStatusCode::TimedOut,
+                    "host file read expired after ten minutes of inactivity".into(),
                     files_sent,
-                    total_files,
                     bytes_sent,
-                    Some(message),
-                    reply_uses_8bit_controls,
                 );
                 return;
             }
@@ -405,22 +317,12 @@ pub(super) fn run_upload_worker(
             return;
         }
         let Some(source) = sources.get_mut(&command.file_id) else {
-            let message = "requested an unknown approved file id".to_string();
-            let _ = emit_with_ack(
-                &mut emit,
-                &cancellation,
-                vec![error_frame(
-                    &session_id,
-                    &command.file_id,
-                    KittyFileTransferStatusCode::Invalid,
-                    &message,
-                )],
-                true,
+            delivery.fail(
+                &command.file_id,
+                KittyFileTransferStatusCode::Invalid,
+                "requested an unknown approved file id".into(),
                 files_sent,
-                total_files,
                 bytes_sent,
-                Some(message),
-                reply_uses_8bit_controls,
             );
             return;
         };
@@ -430,22 +332,12 @@ pub(super) fn run_upload_worker(
                 .as_deref()
                 .is_none_or(|name| name != source.path_name && name != source.requested_name)
         {
-            let message = "file was already sent or its path did not match approval".to_string();
-            let _ = emit_with_ack(
-                &mut emit,
-                &cancellation,
-                vec![error_frame(
-                    &session_id,
-                    &command.file_id,
-                    KittyFileTransferStatusCode::Invalid,
-                    &message,
-                )],
-                true,
+            delivery.fail(
+                &command.file_id,
+                KittyFileTransferStatusCode::Invalid,
+                "file was already sent or its path did not match approval".into(),
                 files_sent,
-                total_files,
                 bytes_sent,
-                Some(message),
-                reply_uses_8bit_controls,
             );
             return;
         }
@@ -466,17 +358,7 @@ pub(super) fn run_upload_worker(
             );
             // No read-loop iteration will flush this frame. Empty files still
             // require end_data and the same delivery acknowledgement as payloads.
-            if !emit_with_ack(
-                &mut emit,
-                &cancellation,
-                std::mem::take(&mut batch),
-                false,
-                files_sent + 1,
-                total_files,
-                bytes_sent,
-                None,
-                reply_uses_8bit_controls,
-            ) {
+            if !delivery.send(std::mem::take(&mut batch), files_sent + 1, bytes_sent) {
                 return;
             }
         }
@@ -488,43 +370,23 @@ pub(super) fn run_upload_worker(
             let wanted = usize::try_from(remaining.min(chunk.len() as u64)).unwrap_or(chunk.len());
             let count = match source.file.read(&mut chunk[..wanted]) {
                 Ok(0) => {
-                    let message = "approved file changed or ended while being read".to_string();
-                    let _ = emit_with_ack(
-                        &mut emit,
-                        &cancellation,
-                        vec![error_frame(
-                            &session_id,
-                            &command.file_id,
-                            KittyFileTransferStatusCode::Io,
-                            &message,
-                        )],
-                        true,
+                    delivery.fail(
+                        &command.file_id,
+                        KittyFileTransferStatusCode::Io,
+                        "approved file changed or ended while being read".into(),
                         files_sent,
-                        total_files,
                         bytes_sent + acknowledged_bytes,
-                        Some(message),
-                        reply_uses_8bit_controls,
                     );
                     return;
                 }
                 Ok(count) => count,
                 Err(error) => {
-                    let message = format!("could not read approved regular file: {error}");
-                    let _ = emit_with_ack(
-                        &mut emit,
-                        &cancellation,
-                        vec![error_frame(
-                            &session_id,
-                            &command.file_id,
-                            KittyFileTransferStatusCode::Io,
-                            &message,
-                        )],
-                        true,
+                    delivery.fail(
+                        &command.file_id,
+                        KittyFileTransferStatusCode::Io,
+                        format!("could not read approved regular file: {error}"),
                         files_sent,
-                        total_files,
                         bytes_sent + acknowledged_bytes,
-                        Some(message),
-                        reply_uses_8bit_controls,
                     );
                     return;
                 }
@@ -541,16 +403,10 @@ pub(super) fn run_upload_worker(
                 .canonical_reply(),
             );
             if batch.len() == UPLOAD_BATCH_CHUNKS || remaining == 0 {
-                if !emit_with_ack(
-                    &mut emit,
-                    &cancellation,
+                if !delivery.send(
                     std::mem::take(&mut batch),
-                    false,
                     files_sent + usize::from(remaining == 0),
-                    total_files,
                     bytes_sent + (source.size - remaining),
-                    None,
-                    reply_uses_8bit_controls,
                 ) {
                     return;
                 }
