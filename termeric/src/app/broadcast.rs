@@ -149,17 +149,27 @@ impl App {
                 .warning("Broadcast arming expired; input was not sent");
             return true;
         }
+        self.handle_broadcast_arming_press(&event.logical_key);
+        true
+    }
 
+    /// A key pressed while broadcast is armed: Enter confirms, Space toggles
+    /// the focused pane, and only broadcast and pane navigation shortcuts
+    /// run. Every other key is swallowed.
+    fn handle_broadcast_arming_press(&mut self, key: &winit::keyboard::Key) {
         use crate::input::keybindings::BindableAction;
         use winit::keyboard::{Key, NamedKey};
-        let plain = !self.modifiers.control_key()
+        // Shift may be held, but not AltGr: there the key types something
+        // else, even on layouts that report no modifier with it.
+        let plain = !self.alt_graph_active
+            && !self.modifiers.control_key()
             && !self.modifiers.alt_key()
             && !self.modifiers.super_key();
-        if plain && matches!(event.logical_key, Key::Named(NamedKey::Enter)) {
+        if plain && matches!(key, Key::Named(NamedKey::Enter)) {
             self.toggle_broadcast();
-            return true;
+            return;
         }
-        if plain && matches!(event.logical_key, Key::Named(NamedKey::Space)) {
+        if plain && matches!(key, Key::Named(NamedKey::Space)) {
             if let Some(target) = self
                 .tabs
                 .as_ref()
@@ -169,11 +179,11 @@ impl App {
             {
                 self.toggle_armed_broadcast_target(target);
             }
-            return true;
+            return;
         }
         if let Some(action) = self
             .shortcut_registry
-            .check(&event.logical_key, self.modifiers)
+            .check(key, self.modifiers)
             .filter(|action| {
                 matches!(
                     action,
@@ -187,7 +197,6 @@ impl App {
         {
             self.handle_action(action.to_action());
         }
-        true
     }
 
     pub(super) fn cancel_broadcast_on_escape(&mut self, event: &winit::event::KeyEvent) -> bool {
@@ -660,5 +669,43 @@ mod tests {
 
         app.close_focused_pane();
         assert!(matches!(app.broadcast, BroadcastState::Inactive));
+    }
+
+    #[test]
+    fn altgr_enter_and_space_neither_confirm_nor_retarget_an_armed_broadcast() {
+        use winit::keyboard::{Key, NamedKey};
+
+        let mut app = App::new_headless_running("sleep 2", "altgr-arming");
+        app.tabs
+            .as_mut()
+            .unwrap()
+            .active_tab_mut()
+            .unwrap()
+            .panes_for_test(
+                crate::test_support::sleeping_shell(),
+                400.0,
+                160.0,
+                10.0,
+                20.0,
+            )
+            .split(SplitDirection::Vertical)
+            .unwrap();
+        app.toggle_broadcast();
+        let armed_targets = |app: &App| match &app.broadcast {
+            BroadcastState::Armed { targets, .. } => Some(targets.len()),
+            _ => None,
+        };
+        assert_eq!(armed_targets(&app), Some(2));
+
+        app.alt_graph_active = true;
+        for key in [NamedKey::Space, NamedKey::Enter] {
+            app.handle_broadcast_arming_press(&Key::Named(key));
+        }
+        assert_eq!(armed_targets(&app), Some(2));
+
+        // Without AltGr, Space drops the focused pane from the targets.
+        app.alt_graph_active = false;
+        app.handle_broadcast_arming_press(&Key::Named(NamedKey::Space));
+        assert_eq!(armed_targets(&app), Some(1));
     }
 }
