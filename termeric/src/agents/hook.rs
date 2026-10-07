@@ -188,14 +188,14 @@ fn build_report(
         ),
         _ => None,
     };
-    // Control characters are dropped here as the GUI would drop them: each
-    // costs six bytes once escaped, and could push the report past the
-    // protocol's frame limit.
+    // Control and bidi formatting characters are dropped here as the GUI
+    // would drop them: a control costs six bytes once escaped, and could
+    // push the report past the protocol's frame limit.
     let last_message = if invocation.event == HookEvent::Stop {
         text("last_assistant_message").map(|message| {
             let printable: String = message
                 .chars()
-                .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+                .filter(|c| !crate::safe_text::is_unsafe_multiline_char(*c))
                 .collect();
             crate::safe_text::prefix_within(&printable, MAX_AGENT_LAST_MESSAGE_BYTES).to_owned()
         })
@@ -311,6 +311,16 @@ mod tests {
         ));
         assert_eq!(kind, AgentEventKind::Failed);
         assert_eq!(detail.as_deref(), Some("The turn ended with an error"));
+    }
+
+    #[test]
+    fn last_messages_lose_controls_and_bidi_formatting() {
+        let (.., last, _) = fields(build_report(
+            &invocation(HookEvent::Stop),
+            "1.0123456789abcdef0123456789abcdef".into(),
+            Some(&json!({ "last_assistant_message": "Done\u{202e}txt.exe\u{1b}[2J\n\tok" })),
+        ));
+        assert_eq!(last.as_deref(), Some("Donetxt.exe[2J\n\tok"));
     }
 
     #[test]

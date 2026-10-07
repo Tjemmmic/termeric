@@ -90,7 +90,8 @@ pub struct AgentReport {
 
 impl AgentReport {
     /// A report built from wire values, with text made safe to display:
-    /// control characters are dropped, and the detail becomes one line.
+    /// control and bidi formatting characters are dropped, and the detail
+    /// becomes one line.
     pub fn from_wire(
         agent_id: String,
         event: AgentEventKind,
@@ -100,7 +101,14 @@ impl AgentReport {
     ) -> Self {
         let detail = detail
             .map(|text| {
-                text.split(|c: char| c.is_whitespace() || c.is_control())
+                // Line breaks separate words, so they become spaces; bidi
+                // formatting goes first so it never leaves a stray space.
+                let visible: String = text
+                    .chars()
+                    .filter(|c| !crate::safe_text::is_bidi_format(*c))
+                    .collect();
+                visible
+                    .split(|c: char| c.is_whitespace() || crate::safe_text::breaks_single_line(c))
                     .filter(|word| !word.is_empty())
                     .collect::<Vec<_>>()
                     .join(" ")
@@ -109,7 +117,7 @@ impl AgentReport {
         let last_message = last_message
             .map(|text| {
                 text.chars()
-                    .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+                    .filter(|c| !crate::safe_text::is_unsafe_multiline_char(*c))
                     .collect::<String>()
             })
             .filter(|text| !text.trim().is_empty());
@@ -299,6 +307,27 @@ mod tests {
             None,
         );
         assert_eq!((empty.detail, empty.last_message), (None, None));
+    }
+
+    #[test]
+    fn wire_text_loses_bidi_formatting() {
+        let report = AgentReport::from_wire(
+            "codex".into(),
+            AgentEventKind::NeedsInput,
+            Some("Approve \u{202e}fdp.exe\u{2066}\u{2028}now".into()),
+            Some("Done\u{202e}txt.exe\n\u{2067}\tok\n".into()),
+            None,
+        );
+        assert_eq!(report.detail.as_deref(), Some("Approve fdp.exe now"));
+        assert_eq!(report.last_message.as_deref(), Some("Donetxt.exe\n\tok\n"));
+        let only_bidi = AgentReport::from_wire(
+            "codex".into(),
+            AgentEventKind::Finished,
+            Some("\u{202e}".into()),
+            Some("\u{202e}\n".into()),
+            None,
+        );
+        assert_eq!((only_bidi.detail, only_bidi.last_message), (None, None));
     }
 
     #[test]

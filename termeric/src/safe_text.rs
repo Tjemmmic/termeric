@@ -4,7 +4,7 @@
 
 pub use termeric_core::safe_text::{
     breaks_single_line, ceil_char_boundary, floor_char_boundary, is_bidi_format,
-    is_unsafe_display_char,
+    is_unsafe_display_char, is_unsafe_multiline_char,
 };
 
 /// `text` without the characters [`is_unsafe_display_char`] rejects, cut at

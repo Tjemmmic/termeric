@@ -459,11 +459,7 @@ pub fn check_message(text: &str) -> Result<(), SendRefusal> {
     }
     // Multi-line messages keep newlines and tabs, so only other controls
     // and bidi formatting count as hidden.
-    let hidden = |character: char| {
-        (character.is_control() && !matches!(character, '\n' | '\t'))
-            || crate::safe_text::is_bidi_format(character)
-    };
-    if text.chars().any(hidden) {
+    if text.chars().any(crate::safe_text::is_unsafe_multiline_char) {
         return Err(SendRefusal::HiddenCharacters);
     }
     if trimmed.starts_with(['!', '/']) {

@@ -23,6 +23,12 @@ pub fn is_unsafe_display_char(character: char) -> bool {
     breaks_single_line(character) || is_bidi_format(character)
 }
 
+/// Unsafe in multi-line untrusted text, which keeps its newlines and tabs:
+/// any other control character, or bidi formatting.
+pub fn is_unsafe_multiline_char(character: char) -> bool {
+    (character.is_control() && !matches!(character, '\n' | '\t')) || is_bidi_format(character)
+}
+
 /// The largest character boundary in `text` at or before `index`, which is
 /// `text.len()` past its end. `str::floor_char_boundary` once the MSRV has it.
 pub fn floor_char_boundary(text: &str, index: usize) -> usize {
@@ -79,6 +85,16 @@ mod tests {
         }
         for character in ['a', ' ', 'é', '界', '\u{200d}', '\u{202f}', '\u{206a}'] {
             assert!(!is_unsafe_display_char(character), "{character:?}");
+        }
+    }
+
+    #[test]
+    fn multiline_text_keeps_newlines_and_tabs_only() {
+        for character in ['\n', '\t', 'a', ' ', '界', '\u{2028}'] {
+            assert!(!is_unsafe_multiline_char(character), "{character:?}");
+        }
+        for character in ['\r', '\u{1b}', '\u{7f}', '\u{85}', '\u{202e}', '\u{2066}'] {
+            assert!(is_unsafe_multiline_char(character), "{character:?}");
         }
     }
 }
