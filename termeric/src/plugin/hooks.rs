@@ -162,9 +162,10 @@ pub trait Plugin: std::fmt::Debug + Send {
     /// Human-readable name (e.g., "Claude Code")
     fn name(&self) -> &str;
 
-    /// Version string
-    fn version(&self) -> &str {
-        "0.1.0"
+    /// The plugin's own version, when it has one apart from Termeric's: a
+    /// runtime plugin's manifest names it, and built-in plugins have none.
+    fn version(&self) -> Option<&str> {
+        None
     }
 
     /// Respond to a hook event with at most one action; `None` ignores it.

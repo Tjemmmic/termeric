@@ -64,12 +64,10 @@ impl PluginManager {
             }
         }
 
-        log::info!(
-            "Loaded plugin: {} v{} ({})",
-            plugin.name(),
-            plugin.version(),
-            id
-        );
+        match plugin.version() {
+            Some(version) => log::info!("Loaded plugin: {} v{version} ({id})", plugin.name()),
+            None => log::info!("Loaded plugin: {} ({id})", plugin.name()),
+        }
         self.plugins.push(plugin);
         Ok(())
     }
@@ -305,6 +303,11 @@ mod tests {
             active_tab_id: Some(1),
             terminal_size: (80, 24),
         }
+    }
+
+    #[test]
+    fn plugins_claim_no_version_of_their_own_unless_they_name_one() {
+        assert_eq!(CommandPlugin.version(), None);
     }
 
     #[test]

@@ -1086,8 +1086,8 @@ impl Plugin for DeclarativePlugin {
         &self.manifest.name
     }
 
-    fn version(&self) -> &str {
-        &self.manifest.version
+    fn version(&self) -> Option<&str> {
+        Some(&self.manifest.version)
     }
 
     fn on_hook(&mut self, hook: &Hook, context: &PluginContext) -> Option<PluginAction> {
@@ -3004,6 +3004,7 @@ events = ["command-invoked"]
         let grants = permissions(&["process-spawn", "workspace-query"]);
         validate_grants(&parsed, &grants).unwrap();
         let mut plugin = DeclarativePlugin::new(parsed.clone(), None, grants.clone());
+        assert_eq!(plugin.version(), Some("2.0.0"));
         let context = PluginContext {
             window_id: 3,
             cwd: Some("/workspace/fixture".into()),
