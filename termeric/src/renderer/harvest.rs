@@ -1,13 +1,13 @@
 //! Harvest mode rendering — growth indicators, root cellar, sprout menu
 //!
 //! Three `pub(super)` functions called from `build_render_data()`:
-//! - `build_harvest_indicators()` — draw growth phase characters in the left gutter
+//! - `build_harvest_indicators()` — draw growth phase characters beside their pane's rows
 //! - `build_root_cellar()` — slide-in command history panel
 //! - `build_sprout_menu()` — context menu for command actions
 
 use super::Renderer;
 use super::colors::UiPalette;
-use crate::harvest::CommandHealth;
+use crate::harvest::{CommandHealth, GrowthPhase};
 use crate::renderer::types::{CellarRenderInfo, IndicatorRenderInfo, SproutMenuRenderInfo};
 use crate::ui::color::{scale_alpha, with_alpha};
 use crate::ui::constants::BORDER_WIDTH;
@@ -20,31 +20,19 @@ pub fn sprout_menu_hit_test(menu: &SproutMenuRenderInfo, x: f32, y: f32) -> Opti
 }
 
 impl Renderer {
-    /// Draw growth indicators in the left gutter next to terminal rows.
+    /// Draw growth indicators beside the rows their commands started on.
     ///
     /// Each indicator is a single character (seedling, sprout, flower, etc.)
-    /// positioned just left of the grid, colored by growth phase.
-    pub(super) fn build_harvest_indicators(
-        &mut self,
-        indicators: &[IndicatorRenderInfo],
-        content_y: f32,
-    ) {
-        let cell_width = self.cell_width();
-        let cell_height = self.cell_height();
-        // Position indicators in the left padding, one cell-width left of the grid
-        let gutter_x = self.tab_bar_width() + (self.padding - cell_width).max(0.0);
-
-        for ind in indicators {
-            let y = content_y + ind.row as f32 * cell_height;
-            let color = scale_alpha(ind.color, ind.opacity);
-
-            // Scale effect: slightly enlarge during pulse
-            // We can't truly scale text in the pipeline, but we can adjust
-            // position to center a "scaled" glyph
-            let offset = (1.0 - ind.scale) * cell_width * 0.5;
-            let x = gutter_x + offset;
-
-            self.text_pipeline.push_char(ind.character, x, y, color);
+    /// in the cell its pane's placement gives it, colored by growth phase.
+    pub(super) fn build_harvest_indicators(&mut self, indicators: &[IndicatorRenderInfo]) {
+        for indicator in indicators {
+            let color = scale_alpha(growth_color(&self.ui, indicator.phase), indicator.opacity);
+            self.text_pipeline.push_char(
+                indicator.phase.character(),
+                indicator.cell.x,
+                indicator.cell.y,
+                color,
+            );
         }
     }
 
@@ -291,9 +279,42 @@ fn health_marker(ui: &UiPalette, health: CommandHealth) -> (char, [f32; 4]) {
     }
 }
 
+/// A growth indicator's color in the theme's status colors: a running
+/// command grows from the muted foreground into green, and a finished one
+/// blooms gold or withers red.
+fn growth_color(ui: &UiPalette, phase: GrowthPhase) -> [f32; 4] {
+    match phase {
+        GrowthPhase::Seed => with_alpha(ui.foreground, 0.6),
+        GrowthPhase::Sprouting => with_alpha(ui.success, 0.8),
+        GrowthPhase::Growing | GrowthPhase::FullGrowth => ui.success,
+        GrowthPhase::Withering => ui.error,
+        GrowthPhase::Blooming => ui.warning,
+        GrowthPhase::Finished => [0.0; 4],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn growth_indicators_take_the_themes_status_colors() {
+        let theme = crate::config::theme::Theme::load_builtin("solarized-light").unwrap();
+        let ui = UiPalette::from_theme_with_contrast(&theme, false);
+        assert_eq!(
+            growth_color(&ui, GrowthPhase::Seed),
+            with_alpha(theme.ui.foreground.to_f32_array(), 0.6)
+        );
+        assert_eq!(
+            growth_color(&ui, GrowthPhase::Sprouting),
+            with_alpha(ui.success, 0.8)
+        );
+        assert_eq!(growth_color(&ui, GrowthPhase::Growing), ui.success);
+        assert_eq!(growth_color(&ui, GrowthPhase::FullGrowth), ui.success);
+        assert_eq!(growth_color(&ui, GrowthPhase::Withering), ui.error);
+        assert_eq!(growth_color(&ui, GrowthPhase::Blooming), ui.warning);
+        assert_eq!(growth_color(&ui, GrowthPhase::Finished)[3], 0.0);
+    }
 
     #[test]
     fn cellar_markers_say_how_each_command_fared_in_theme_colors() {

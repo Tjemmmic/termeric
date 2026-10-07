@@ -321,6 +321,44 @@ impl App {
             .unwrap_or_default()
     }
 
+    /// The focused pane's growth indicators that are still shown, each
+    /// beside its row of that pane as `placement` places it.
+    pub(super) fn harvest_indicator_infos(
+        &self,
+        placement: crate::renderer::PanePlacement,
+        cell_size: (f32, f32),
+        reduced_motion: bool,
+    ) -> Vec<IndicatorRenderInfo> {
+        if !self.config.harvest.show_indicators {
+            return Vec::new();
+        }
+        let Some(tab) = self.tabs.as_ref().and_then(TabManager::active_tab) else {
+            return Vec::new();
+        };
+        let Some(rect) = tab
+            .panes
+            .calculate_layout()
+            .get(&tab.panes.focused_id())
+            .copied()
+        else {
+            return Vec::new();
+        };
+        let lone = tab.panes.pane_count() == 1;
+        self.harvest_indicators()
+            .iter()
+            .filter(|indicator| !indicator.is_finished())
+            .map(|indicator| IndicatorRenderInfo {
+                cell: placement.row_marker(rect, lone, indicator.prompt_row, cell_size),
+                phase: indicator.phase,
+                opacity: if reduced_motion {
+                    1.0
+                } else {
+                    indicator.opacity()
+                },
+            })
+            .collect()
+    }
+
     /// Step the Harvest cellar's animation; true while Harvest chrome still
     /// moves.
     fn update_harvest_animations(&mut self, reduced_motion: bool) -> bool {
@@ -375,26 +413,11 @@ impl App {
         });
         let renderer = self.renderer.as_ref()?;
         let harvest = self.harvest.as_ref()?;
-        // Growth indicators (respect the config toggle)
-        let indicators: Vec<IndicatorRenderInfo> = if self.config.harvest.show_indicators {
-            self.harvest_indicators()
-                .iter()
-                .filter(|ind| !ind.is_finished())
-                .map(|ind| IndicatorRenderInfo {
-                    row: ind.prompt_row,
-                    character: ind.phase.character(),
-                    color: if reduced_motion {
-                        ind.phase.color()
-                    } else {
-                        ind.color()
-                    },
-                    scale: if reduced_motion { 1.0 } else { ind.scale() },
-                    opacity: if ind.is_finished() { 0.0 } else { 1.0 },
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let indicators = self.harvest_indicator_infos(
+            renderer.pane_placement(),
+            renderer.cell_size(),
+            reduced_motion,
+        );
         // Cellar panel (visible while open or animating out)
         let cellar = cellar_layout.map(|layout| CellarRenderInfo {
             entries: harvest

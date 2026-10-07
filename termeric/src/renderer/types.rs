@@ -302,6 +302,26 @@ impl PanePlacement {
         }
     }
 
+    /// The cell where Harvest marks row `row` of the pane laid out at
+    /// `rect`: just left of the pane's grid, in the margin there (the
+    /// padding at the terminal area's left edge, a divider elsewhere). A
+    /// margin narrower than a cell pushes the marker over the pane's own
+    /// first column rather than onto its neighbour.
+    pub fn row_marker(self, rect: Bounds, lone: bool, row: usize, cell_size: (f32, f32)) -> Bounds {
+        let pane = self.pane_bounds(rect, lone);
+        let margin = if lone || rect.x <= 0.0 {
+            self.padding
+        } else {
+            crate::panes::PANE_DIVIDER_THICKNESS
+        };
+        Bounds::new(
+            pane.x - cell_size.0.min(margin),
+            pane.y + row as f32 * cell_size.1,
+            cell_size.0,
+            cell_size.1,
+        )
+    }
+
     /// The scrollbar the pane laid out at `rect` draws for `grid`, if any.
     pub fn pane_scrollbar(
         self,
@@ -422,7 +442,7 @@ pub struct CopyModeRenderInfo {
 
 /// Info for rendering harvest mode indicators in the gutter
 pub struct HarvestRenderInfo {
-    /// Growth indicators to draw in the left gutter
+    /// Growth indicators to draw beside their pane's rows
     pub indicators: Vec<IndicatorRenderInfo>,
     /// Root cellar panel (command history), if visible
     pub cellar: Option<CellarRenderInfo>,
@@ -430,17 +450,14 @@ pub struct HarvestRenderInfo {
     pub sprout_menu: Option<SproutMenuRenderInfo>,
 }
 
-/// A single growth indicator in the gutter
+/// A single growth indicator beside the row its command started on
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct IndicatorRenderInfo {
-    /// Terminal row where this indicator sits
-    pub row: usize,
-    /// Character to render (from GrowthPhase::character())
-    pub character: char,
-    /// RGBA color (from GrowthPhase::color())
-    pub color: [f32; 4],
-    /// Scale factor for the indicator (pulse animation)
-    pub scale: f32,
-    /// Opacity (fades during Finished phase)
+    /// The cell it is drawn in, from [`PanePlacement::row_marker`].
+    pub cell: Bounds,
+    /// Its phase, which picks its character and color.
+    pub phase: crate::harvest::GrowthPhase,
+    /// 1.0 until it fades out after its command finishes.
     pub opacity: f32,
 }
 
@@ -526,6 +543,48 @@ mod tests {
                 height: 200.0,
             }
         );
+    }
+
+    #[test]
+    fn harvest_marks_a_row_beside_its_own_pane() {
+        let placement = PanePlacement {
+            left: 40.0,
+            top: 30.0,
+            right: 840.0,
+            bottom: 630.0,
+            padding: 12.0,
+        };
+        let cell = (10.0, 20.0);
+        let left = Bounds::new(0.0, 0.0, 398.0, 600.0);
+        let right = Bounds::new(402.0, 0.0, 386.0, 290.0);
+        let lower_right = Bounds::new(402.0, 294.0, 386.0, 306.0);
+        // A lone pane's marker sits in the left padding, a cell left of its
+        // grid, which starts one padding below the tab bar.
+        assert_eq!(
+            placement.row_marker(left, true, 3, cell),
+            Bounds::new(42.0, 102.0, 10.0, 20.0)
+        );
+        // Split panes are marked beside their own rows: at the area's left
+        // edge in the padding, elsewhere as far into the divider as it
+        // reaches.
+        assert_eq!(
+            placement.row_marker(left, false, 3, cell),
+            Bounds::new(42.0, 90.0, 10.0, 20.0)
+        );
+        assert_eq!(
+            placement.row_marker(lower_right, false, 2, cell),
+            Bounds::new(450.0, 364.0, 10.0, 20.0)
+        );
+        assert_eq!(
+            placement.row_marker(right, false, 0, cell).y,
+            placement.pane_bounds(right, false).y
+        );
+        // A padding narrower than a cell keeps the marker off the tab rail.
+        let narrow = PanePlacement {
+            padding: 4.0,
+            ..placement
+        };
+        assert_eq!(narrow.row_marker(left, true, 0, cell).x, 40.0);
     }
 
     #[test]

@@ -298,7 +298,6 @@ impl Renderer {
         let cell_height = self.cell_height();
         let window_width = self.size.0 as f32;
         let window_height = self.size.1 as f32;
-        let padding = self.padding;
         let tab_bar_height = self.tab_bar_height();
         let content_left = self.tab_bar_width();
         let content_width = self.content_width_for(window_width);
@@ -418,7 +417,7 @@ impl Renderer {
         self.rect_pipeline.mark_layer();
         self.text_pipeline.mark_layer();
         if let Some(harvest_info) = harvest {
-            self.build_harvest_indicators(&harvest_info.indicators, content_top + padding);
+            self.build_harvest_indicators(&harvest_info.indicators);
         }
 
         // ── Search bar, over the grid and under every modal layer ──

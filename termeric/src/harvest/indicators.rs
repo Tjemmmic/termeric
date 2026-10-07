@@ -5,7 +5,12 @@
 
 use std::time::Instant;
 
-use crate::ui::color::scale_alpha;
+use crate::ui::animation::ease_out_cubic;
+
+/// How long a finished command's bloom or wither stays before it is gone.
+const COMPLETED_SECONDS: f32 = 2.0;
+/// The fade that ends that time, within the 250 ms every transition keeps to.
+const FADE_SECONDS: f32 = 0.25;
 
 /// Growth phase of the indicator
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,19 +32,6 @@ pub enum GrowthPhase {
 }
 
 impl GrowthPhase {
-    /// Get the color for this phase [r, g, b, a]
-    pub fn color(&self) -> [f32; 4] {
-        match self {
-            Self::Seed => [0.5, 0.4, 0.3, 0.6],       // Brown seed
-            Self::Sprouting => [0.5, 0.6, 0.4, 0.8],  // Light green
-            Self::Growing => [0.4, 0.7, 0.3, 1.0],    // Green
-            Self::FullGrowth => [0.3, 0.8, 0.3, 1.0], // Bright green
-            Self::Withering => [0.6, 0.4, 0.3, 0.8],  // Brown (wilted)
-            Self::Blooming => [0.9, 0.8, 0.4, 1.0],   // Golden bloom
-            Self::Finished => [0.0, 0.0, 0.0, 0.0],   // Invisible
-        }
-    }
-
     /// Get a character representation for text-based display
     pub fn character(&self) -> char {
         match self {
@@ -96,7 +88,7 @@ impl GrowthIndicator {
         let elapsed = now.duration_since(self.started_at).as_secs_f32();
         if let Some(completed_at) = self.completed_at {
             let completion_elapsed = now.duration_since(completed_at).as_secs_f32();
-            self.phase = if completion_elapsed > 2.0 {
+            self.phase = if completion_elapsed > COMPLETED_SECONDS {
                 GrowthPhase::Finished
             } else if self.success {
                 GrowthPhase::Blooming
@@ -126,33 +118,20 @@ impl GrowthIndicator {
         self.phase == GrowthPhase::Finished
     }
 
-    /// Get the current scale (for pulsing animation)
-    pub fn scale(&self) -> f32 {
-        let now = Instant::now();
-        if let Some(completed_at) = self.completed_at {
-            // Shrink when complete
-            1.0 - now.duration_since(completed_at).as_secs_f32().min(1.0) * 0.5
-        } else {
-            // Pulse while running
-            1.0 + (now.duration_since(self.started_at).as_secs_f32() * 3.0).sin() * 0.1
-        }
+    /// How visible the indicator is: fully, until it fades out at the end
+    /// of its finished command's bloom or wither.
+    pub fn opacity(&self) -> f32 {
+        self.opacity_at(Instant::now())
     }
 
-    /// Get the current color with animation
-    pub fn color(&self) -> [f32; 4] {
-        let base = self.phase.color();
-
-        let fade_elapsed = self
-            .completed_at
-            .map(|completed_at| completed_at.elapsed().as_secs_f32())
-            .unwrap_or(0.0);
-        if self.completed && fade_elapsed > 1.0 {
-            // Fade out
-            let fade = 1.0 - (fade_elapsed - 1.0).min(1.0);
-            scale_alpha(base, fade)
-        } else {
-            base
-        }
+    fn opacity_at(&self, now: Instant) -> f32 {
+        let Some(completed_at) = self.completed_at else {
+            return 1.0;
+        };
+        let fade_start = COMPLETED_SECONDS - FADE_SECONDS;
+        let elapsed = now.duration_since(completed_at).as_secs_f32();
+        let t = ((elapsed - fade_start) / FADE_SECONDS).clamp(0.0, 1.0);
+        1.0 - ease_out_cubic(t)
     }
 }
 
@@ -185,6 +164,24 @@ mod tests {
         let completed_at = indicator.completed_at.unwrap();
         indicator.update_at(completed_at + Duration::from_secs(3));
 
+        assert!(indicator.is_finished());
+    }
+
+    #[test]
+    fn a_finished_indicator_fades_out_within_250_ms_before_it_is_gone() {
+        let mut indicator = GrowthIndicator::new(1, 0);
+        assert_eq!(indicator.opacity_at(indicator.started_at), 1.0);
+        indicator.complete(false);
+        let completed_at = indicator.completed_at.unwrap();
+        let at = |millis| completed_at + Duration::from_millis(millis);
+
+        assert_eq!(indicator.opacity_at(at(1_750)), 1.0);
+        let fading = indicator.opacity_at(at(1_875));
+        assert!(0.0 < fading && fading < 1.0, "{fading}");
+        assert_eq!(indicator.opacity_at(at(2_000)), 0.0);
+        indicator.update_at(at(1_999));
+        assert_eq!(indicator.phase, GrowthPhase::Withering);
+        indicator.update_at(at(2_001));
         assert!(indicator.is_finished());
     }
 }

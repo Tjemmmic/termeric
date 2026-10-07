@@ -12,7 +12,7 @@ pub mod sprouts;
 #[cfg(test)]
 pub use cellar::MAX_HARVEST_COMMAND_BYTES;
 pub use cellar::{CellarAction, CellarLayout, CommandEntry, CommandHealth, RootCellar};
-pub use indicators::GrowthIndicator;
+pub use indicators::{GrowthIndicator, GrowthPhase};
 pub use sprouts::{SproutAvailability, SproutMenu, SproutMenuLayout};
 
 use termeric_core::CommandRegion;

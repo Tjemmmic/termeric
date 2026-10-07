@@ -666,3 +666,47 @@ fn manual_shell_integration_counts_once_the_shell_marks_a_prompt() {
     app.jump_to_failed_command(true);
     assert!(toasted(&app, "No earlier failed command"));
 }
+
+#[test]
+fn growth_indicators_sit_beside_their_row_of_the_focused_split_pane() {
+    let (mut app, _directory, _, _) = harvest_rerun_capture_fixture_in(true);
+    let focused = app.active_panes().focused_id();
+    let rect = app.active_panes().calculate_layout()[&focused];
+    assert!(
+        rect.x > 0.0 && rect.y > 0.0,
+        "the focused pane is away from the lone pane's place: {rect:?}"
+    );
+    app.active_panes_mut()
+        .get_pane_mut(focused)
+        .unwrap()
+        .harvest
+        .indicators
+        .push(crate::harvest::GrowthIndicator::new(7, 2));
+    let placement = crate::renderer::PanePlacement {
+        left: 0.0,
+        top: 30.0,
+        right: 800.0,
+        bottom: 510.0,
+        padding: 8.0,
+    };
+    let cell = (10.0, 20.0);
+
+    let indicators = app.harvest_indicator_infos(placement, cell, true);
+    assert_eq!(indicators.len(), 1);
+    let marker = indicators[0].cell;
+    assert_eq!(marker, placement.row_marker(rect, false, 2, cell));
+    // On the pane's third row, ending inside its left edge.
+    let pane = placement.pane_bounds(rect, false);
+    assert_eq!(marker.y, pane.y + 2.0 * cell.1);
+    assert!(
+        marker.x < pane.x && pane.x < marker.right(),
+        "{marker:?} {pane:?}"
+    );
+    assert_eq!(indicators[0].opacity, 1.0);
+
+    app.config.harvest.show_indicators = false;
+    assert!(
+        app.harvest_indicator_infos(placement, cell, true)
+            .is_empty()
+    );
+}
