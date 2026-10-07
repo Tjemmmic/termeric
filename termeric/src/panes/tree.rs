@@ -842,7 +842,7 @@ mod tests {
         let ratio = tree
             .resize_target(bounds, 600.0, 450.0, nested.target)
             .unwrap();
-        assert!((100..=900).contains(&ratio));
+        assert!(termeric_core::split::RATIO_MILLIS.contains(&ratio));
         let after = tree.get_dividers(bounds);
         assert_eq!(
             after

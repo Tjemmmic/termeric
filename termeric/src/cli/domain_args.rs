@@ -7,6 +7,7 @@ use crate::domain::{DomainAuthority, DomainCommand, DomainTarget};
 use crate::panes::PaneLayoutPreset;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
+use termeric_core::split::RATIO_MILLIS;
 
 #[derive(Parser)]
 #[command(
@@ -101,7 +102,9 @@ enum DomainArgs {
         /// Split ID, as `show --json` lists it
         split: u32,
         /// The first side's share, in thousandths from 100 to 900
-        #[arg(value_parser = clap::value_parser!(u16).range(100..=900))]
+        #[arg(value_parser = clap::value_parser!(u16).range(
+            i64::from(*RATIO_MILLIS.start())..=i64::from(*RATIO_MILLIS.end())
+        ))]
         ratio_millis: u16,
     },
     /// Set a tab's title; an empty title clears it

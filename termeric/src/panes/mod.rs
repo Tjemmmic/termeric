@@ -1389,7 +1389,7 @@ impl PaneManager {
         if self.zoomed.is_some() {
             anyhow::bail!("Cannot resize a divider while the tab is zoomed");
         }
-        if !(100..=900).contains(&ratio_millis) {
+        if !termeric_core::split::RATIO_MILLIS.contains(&ratio_millis) {
             anyhow::bail!("Divider ratio must be between 100 and 900 thousandths");
         }
         let previous = self

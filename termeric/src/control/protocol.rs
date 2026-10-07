@@ -5,6 +5,7 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::HashSet;
 use std::io::{Read, Write};
+use termeric_core::split::RATIO_MILLIS;
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const JSON_SCHEMA_VERSION: u32 = 1;
@@ -861,8 +862,8 @@ impl Response {
                 ..
             } => {
                 *window_id != 0
-                    && (100..=900).contains(previous_ratio_millis)
-                    && (100..=900).contains(ratio_millis)
+                    && RATIO_MILLIS.contains(previous_ratio_millis)
+                    && RATIO_MILLIS.contains(ratio_millis)
                     && *changed == (previous_ratio_millis != ratio_millis)
             }
             Self::WindowCreated { window_id, .. }
@@ -1228,7 +1229,7 @@ impl Request {
                 ..
             } => {
                 require_target_window(*window_id)?;
-                if !(100..=900).contains(ratio_millis) {
+                if !RATIO_MILLIS.contains(ratio_millis) {
                     return Err("GUI divider ratio must be between 100 and 900 thousandths".into());
                 }
                 Ok(())
@@ -1641,7 +1642,7 @@ impl ProcessInventory {
                 let mut divider_ids = HashSet::with_capacity(tab.dividers.len());
                 for divider in &tab.dividers {
                     if !divider_ids.insert(divider.id)
-                        || !(100..=900).contains(&divider.ratio_millis)
+                        || !RATIO_MILLIS.contains(&divider.ratio_millis)
                     {
                         anyhow::bail!("GUI inventory contains an invalid or duplicate divider");
                     }

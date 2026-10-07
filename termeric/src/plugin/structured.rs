@@ -464,7 +464,7 @@ impl StructuredResponseAction {
                 ..
             } => {
                 validate_action_id(name, action_id)?;
-                if !(100..=900).contains(ratio_millis) {
+                if !termeric_core::split::RATIO_MILLIS.contains(ratio_millis) {
                     return Err("divider ratio must be between 100 and 900 thousandths".into());
                 }
                 Ok(())

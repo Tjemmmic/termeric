@@ -4,6 +4,10 @@
 
 use serde::{Deserialize, Serialize};
 
+/// The ratios every pane tree accepts for a split, in thousandths of the
+/// first child's share: neither side gets less than a tenth.
+pub const RATIO_MILLIS: std::ops::RangeInclusive<u16> = 100..=900;
+
 /// Which way a split divides its area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

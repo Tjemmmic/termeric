@@ -328,7 +328,7 @@ impl App {
         divider_id: u64,
         ratio_millis: u16,
     ) -> std::result::Result<Option<(LiveDomainControl, u16)>, String> {
-        if !(100..=900).contains(&ratio_millis) {
+        if !termeric_core::split::RATIO_MILLIS.contains(&ratio_millis) {
             return Err("Split ratio must be between 100 and 900 thousandths".into());
         }
         let tab = self.control_tab(tab_id)?;

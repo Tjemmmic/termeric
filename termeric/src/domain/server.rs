@@ -1470,7 +1470,7 @@ fn resize_domain_split(
     split_id: u32,
     ratio_millis: u16,
 ) -> anyhow::Result<Response> {
-    if !(100..=900).contains(&ratio_millis) {
+    if !termeric_core::split::RATIO_MILLIS.contains(&ratio_millis) {
         anyhow::bail!("split ratio must be between 100 and 900 thousandths");
     }
     with_domain_mut(state, domain_id, |domain| {
