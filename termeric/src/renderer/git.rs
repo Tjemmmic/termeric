@@ -179,12 +179,9 @@ impl CompletionLayout {
     }
 
     fn clip(&self) -> TextClip {
-        TextClip {
-            left: self.x + EDGE,
-            top: self.y + EDGE,
-            right: self.x + self.width - EDGE,
-            bottom: self.y + self.height - EDGE,
-        }
+        Bounds::new(self.x, self.y, self.width, self.height)
+            .inset(EDGE, EDGE)
+            .into()
     }
 
     #[cfg(test)]

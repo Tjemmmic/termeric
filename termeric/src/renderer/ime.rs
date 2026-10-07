@@ -4,6 +4,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use super::{ImePreeditRenderInfo, Renderer};
 use crate::ui::color::with_alpha;
+use crate::ui::geometry::Bounds;
 
 /// Where the preedit is drawn: its box in window pixels and the text that
 /// fits in it.
@@ -115,12 +116,7 @@ impl Renderer {
             text_y,
             self.ui.palette_text,
             self.cell_width(),
-            super::text::TextClip {
-                left: x,
-                top: y,
-                right: x + width,
-                bottom: y + height,
-            },
+            Bounds::new(x, y, width, height).into(),
         );
 
         if let Some((start, end)) = info.cursor

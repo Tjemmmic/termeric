@@ -448,12 +448,7 @@ pub(crate) fn headless_ui_text_smoke(device: &Device, queue: &Queue) -> Result<(
 /// The whole of a `width` by `height` render target, for text the terminal
 /// grid would queue with its pane's clip.
 fn target_clip(width: u32, height: u32) -> TextClip {
-    TextClip {
-        left: 0.0,
-        top: 0.0,
-        right: width as f32,
-        bottom: height as f32,
-    }
+    crate::ui::geometry::Bounds::new(0.0, 0.0, width as f32, height as f32).into()
 }
 
 /// Shape and submit representative multi-scalar terminal graphemes through the

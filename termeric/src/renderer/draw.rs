@@ -214,12 +214,12 @@ impl Renderer {
         caret: Option<[f32; 4]>,
     ) {
         let cell_width = self.cell_width();
-        let clip = TextClip {
-            left: view.text_x,
-            top: field.y,
-            right: view.right,
-            bottom: field.bottom(),
-        };
+        let clip = TextClip::from(Bounds::new(
+            view.text_x,
+            field.y,
+            view.right - view.text_x,
+            field.height,
+        ));
         if text.is_empty() {
             // The placeholder starts where the text would, in the same space.
             if let Some(hint) = TextInputViewport::calculate(

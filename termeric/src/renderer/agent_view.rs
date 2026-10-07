@@ -11,7 +11,6 @@ use super::Renderer;
 use super::icons::{draw_arc, draw_icon};
 use super::text::TextClip;
 use crate::ui::agent_view::scene::{Layer, Prim, Scene};
-use crate::ui::geometry::Bounds;
 
 impl Renderer {
     /// Shows the panel's scene, or nothing.
@@ -66,7 +65,7 @@ impl Renderer {
     }
 
     fn draw_layer(&mut self, layer: &Layer, background: [f32; 4]) {
-        let clip = layer.clip.map(text_clip);
+        let clip = layer.clip.map(TextClip::from);
         let previous = self.rect_pipeline.set_clip(clip);
         for prim in &layer.prims {
             self.draw_prim(prim, clip, background);
@@ -190,15 +189,6 @@ impl Renderer {
                 }
             }
         }
-    }
-}
-
-fn text_clip(bounds: Bounds) -> TextClip {
-    TextClip {
-        left: bounds.x,
-        top: bounds.y,
-        right: bounds.right(),
-        bottom: bounds.bottom(),
     }
 }
 

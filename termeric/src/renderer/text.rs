@@ -6,6 +6,7 @@ use wgpu::*;
 
 use super::buffer::GrowableBuffer;
 use super::glyph_cache::{FontStyle, GlyphCache, GlyphEntry};
+use crate::ui::geometry::Bounds;
 
 /// Vertex for text rendering
 #[repr(C)]
@@ -94,6 +95,18 @@ pub(super) struct TextClip {
     pub top: f32,
     pub right: f32,
     pub bottom: f32,
+}
+
+impl From<Bounds> for TextClip {
+    /// Text clipped to a chrome rectangle.
+    fn from(bounds: Bounds) -> Self {
+        Self {
+            left: bounds.x,
+            top: bounds.y,
+            right: bounds.right(),
+            bottom: bounds.bottom(),
+        }
+    }
 }
 
 /// Queued character or grapheme for rendering
