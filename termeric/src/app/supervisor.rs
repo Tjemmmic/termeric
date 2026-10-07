@@ -12,13 +12,14 @@ use crate::agent_view::session::{AgentProgram, AgentSession, SessionId, StartOpt
 use crate::agents::supervisor::{self, SendLimits, SupervisorMode};
 use crate::agents::{AgentActivity, AgentStatus};
 use crate::tabs::TerminalIdentity;
+use anyhow::Context as _;
 use std::collections::VecDeque;
 
 const MAX_QUEUED_MESSAGES: usize = 32;
 const MAX_LOG_ENTRIES: usize = 200;
 /// Rules are given to the agent on its command line, and read by it on every
 /// turn; more than this is not a rule list.
-const MAX_RULES_BYTES: u64 = 16 * 1024;
+const MAX_RULES_BYTES: usize = 16 * 1024;
 
 /// What became of a message held for the person's approval.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,24 +138,24 @@ impl App {
             .supervisor_rules_path
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!(crate::paths::NO_HOME_DIRECTORY))?;
-        match std::fs::metadata(path) {
-            Ok(metadata) if metadata.len() > MAX_RULES_BYTES => anyhow::bail!(
-                "{} is larger than {} KiB; shorten it",
-                path.display(),
-                MAX_RULES_BYTES / 1024
-            ),
-            _ => {}
-        }
-        match std::fs::read_to_string(path) {
+        match crate::safe_fs::read_linked_text(path, MAX_RULES_BYTES) {
             Ok(rules) => Ok((path, rules)),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // Only when nothing is there: replacing a link whose file is gone
+            // would quietly disconnect it from its real location.
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && std::fs::symlink_metadata(path).is_err() =>
+            {
                 if let Some(parent) = path.parent() {
                     std::fs::create_dir_all(parent)?;
                 }
-                std::fs::write(path, supervisor::DEFAULT_RULES)?;
+                crate::safe_fs::atomic_replace(path, |writer| {
+                    writer.write_all(supervisor::DEFAULT_RULES.as_bytes())
+                })
+                .with_context(|| format!("write {}", path.display()))?;
                 Ok((path, supervisor::DEFAULT_RULES.to_string()))
             }
-            Err(error) => Err(error.into()),
+            Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
         }
     }
 
@@ -986,4 +987,52 @@ impl App {
 /// `text` as the activity log quotes it.
 fn one_line(text: &str) -> String {
     crate::safe_text::first_line_truncated(text, 80)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rules_are_written_privately_read_through_links_and_bounded() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config").join("supervisor.md");
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.supervisor_rules_path = Some(path.clone());
+
+        let (_, rules) = app.ensure_rules_file().unwrap();
+        assert_eq!(rules, supervisor::DEFAULT_RULES);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            supervisor::DEFAULT_RULES
+        );
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o077,
+            0
+        );
+
+        // A dotfile manager's link is read, not replaced.
+        let real = temp.path().join("dotfiles-supervisor.md");
+        std::fs::write(&real, "my rules").unwrap();
+        std::fs::remove_file(&path).unwrap();
+        symlink(&real, &path).unwrap();
+        assert_eq!(app.ensure_rules_file().unwrap().1, "my rules");
+        assert!(std::fs::symlink_metadata(&path).unwrap().is_symlink());
+
+        // A link whose file is gone is reported, never replaced.
+        std::fs::remove_file(&real).unwrap();
+        assert!(app.ensure_rules_file().is_err());
+        assert!(std::fs::symlink_metadata(&path).unwrap().is_symlink());
+
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, "x".repeat(MAX_RULES_BYTES + 1)).unwrap();
+        let error = app.ensure_rules_file().unwrap_err();
+        assert_eq!(
+            error
+                .downcast_ref::<std::io::Error>()
+                .map(std::io::Error::kind),
+            Some(std::io::ErrorKind::InvalidData)
+        );
+    }
 }
