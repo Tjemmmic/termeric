@@ -19,6 +19,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::line_reader::read_bounded_line;
+use crate::process_group::Signal;
 
 use super::event::ExitReport;
 
@@ -378,96 +379,23 @@ fn wait_for_exit(child: &Mutex<Child>, limit: Duration) -> Option<std::process::
     }
 }
 
-// Process-group signals are safe only while the agent, the group's leader,
-// is unreaped: until then its id cannot be reused, so a signal to the group
-// cannot reach an unrelated one. Every reap therefore happens here, under
-// the child's lock, and so does every group signal.
-
-/// Where the group's leader is in its life.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Leader {
-    Running,
-    /// Exited but unreaped, still holding its id.
-    Exited,
-    Reaped,
-}
+// The agent leads its own process group, which `crate::process_group` may
+// signal only while the agent is unreaped. Every reap therefore happens
+// here, under the child's lock, and so does every group signal.
 
 /// Signals the agent and everything in its group, unless it was reaped.
 fn signal_agent_group(child: &Mutex<Child>, signal: Signal) {
     let Ok(child) = child.lock() else {
         return;
     };
-    if leader_state(child.id()) != Leader::Reaped {
-        signal_group(child.id(), signal);
-    }
+    crate::process_group::signal(&child, signal);
 }
 
 /// Reaps the agent once it has exited, first ending the commands it left
 /// running in its group. `Ok(None)` while it runs.
 fn reap(child: &Mutex<Child>) -> Result<Option<std::process::ExitStatus>, ()> {
     let mut child = child.lock().map_err(|_| ())?;
-    match leader_state(child.id()) {
-        Leader::Running => Ok(None),
-        Leader::Exited => {
-            signal_group(child.id(), Signal::Terminate);
-            child.wait().map(Some).map_err(|_| ())
-        }
-        // Reaped already: the status std kept.
-        Leader::Reaped => child.try_wait().map_err(|_| ()),
-    }
-}
-
-fn leader_state(process_id: u32) -> Leader {
-    let id = libc::id_t::from(process_id);
-    loop {
-        // SAFETY: a zeroed siginfo_t is a valid value, and waitid only
-        // writes into it. WNOWAIT leaves an exited child unreaped.
-        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-        let result = unsafe {
-            libc::waitid(
-                libc::P_PID,
-                id,
-                &mut info,
-                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-            )
-        };
-        if result == 0 {
-            // With WNOHANG, nothing is written while the child runs.
-            return if info.si_signo == libc::SIGCHLD {
-                Leader::Exited
-            } else {
-                Leader::Running
-            };
-        }
-        if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
-            // ECHILD: no such unreaped child.
-            return Leader::Reaped;
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum Signal {
-    Terminate,
-    Kill,
-}
-
-fn signal_group(process_id: u32, signal: Signal) {
-    let Ok(group) = libc::pid_t::try_from(process_id) else {
-        return;
-    };
-    if group <= 1 {
-        return;
-    }
-    let signal = match signal {
-        Signal::Terminate => libc::SIGTERM,
-        Signal::Kill => libc::SIGKILL,
-    };
-    // The agent leads its own process group; a negative id signals the whole
-    // group, including commands it is running.
-    unsafe {
-        libc::kill(-group, signal);
-    }
+    crate::process_group::reap(&mut child, Signal::Terminate).map_err(|_| ())
 }
 
 /// Whether a program was found, once the search has finished.

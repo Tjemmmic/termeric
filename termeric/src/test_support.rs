@@ -93,6 +93,18 @@ pub(crate) fn hook_counter(
     })
 }
 
+/// Whether a process with `process_id` exists; signal 0 only checks.
+pub(crate) fn process_is_alive(process_id: libc::pid_t) -> bool {
+    // SAFETY: signal 0 sends nothing.
+    unsafe { libc::kill(process_id, 0) == 0 }
+}
+
+/// Whether `process_id` is gone within a few seconds; whoever adopted it
+/// may take a moment to reap it.
+pub(crate) fn process_ends(process_id: libc::pid_t) -> bool {
+    poll_until(Duration::from_secs(5), || !process_is_alive(process_id))
+}
+
 /// Run `step` until it returns true or `timeout` passes, pausing briefly
 /// between tries. Returns whether it succeeded.
 pub(crate) fn poll_until(timeout: Duration, mut step: impl FnMut() -> bool) -> bool {

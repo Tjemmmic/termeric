@@ -93,6 +93,7 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `safe_fs.rs` | Hardened reads (no symlinks, FIFOs, or unbounded reads) and atomic private-staging writes for Termeric's own files |
 | `line_reader.rs` | Reading newline-delimited input from other processes with bounded memory; callers decide what an oversized or unterminated line means |
 | `safe_text.rs` | Bounding untrusted text shown in chrome or sent over protocols (character classes come from termeric-core) |
+| `process_group.rs` | Reaping and signalling a child that leads its own process group (agent view agents, plugin handlers): its group is signalled only while it is unreaped |
 
 ### Key Modules (termeric-core/)
 

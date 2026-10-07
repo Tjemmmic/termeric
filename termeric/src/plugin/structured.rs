@@ -969,7 +969,16 @@ impl PersistentHandler {
     }
 
     fn is_running(&mut self) -> bool {
-        matches!(self.child.try_wait(), Ok(None))
+        matches!(self.reap(), Ok(None))
+    }
+
+    /// The handler's exit status once it has exited, `None` while it runs.
+    /// The handler's group is ended before the handler is reaped: it is
+    /// discarded once it exits, and its group may be signalled only while
+    /// it is unreaped.
+    fn reap(&mut self) -> Result<Option<std::process::ExitStatus>, String> {
+        crate::process_group::reap(&mut self.child, crate::process_group::Signal::Kill)
+            .map_err(|error| bounded_error(&format!("handler wait failed: {error}")))
     }
 
     fn request(
@@ -986,11 +995,7 @@ impl PersistentHandler {
             shutdown.load(Ordering::Acquire)
                 || active_generation.load(Ordering::Acquire) != expected_generation
         };
-        if let Some(status) = self
-            .child
-            .try_wait()
-            .map_err(|error| bounded_error(&format!("handler wait failed: {error}")))?
-        {
+        if let Some(status) = self.reap()? {
             return Err(self.exit_error(status, deadline));
         }
         let (response_sender, response_receiver) = sync_channel(1);
@@ -1034,11 +1039,7 @@ impl PersistentHandler {
             ));
         }
         let actions = parse_response(&bytes, authority, request_id)?;
-        if let Some(status) = self
-            .child
-            .try_wait()
-            .map_err(|error| bounded_error(&format!("handler wait failed: {error}")))?
-        {
+        if let Some(status) = self.reap()? {
             return Err(self.exit_error(status, deadline));
         }
         Ok(actions)
@@ -1055,7 +1056,7 @@ impl PersistentHandler {
         cancelled: &dyn Fn() -> bool,
     ) -> String {
         loop {
-            match self.child.try_wait() {
+            match self.reap() {
                 Ok(Some(status)) => return self.exit_error(status, deadline),
                 Ok(None) if Instant::now() < deadline && !cancelled() => {
                     thread::sleep(WORKER_POLL_INTERVAL);
@@ -1067,11 +1068,10 @@ impl PersistentHandler {
 
     /// The handler's exit status and the start of its standard error. The
     /// stderr reader gets until `deadline` to reach end of file, so what the
-    /// handler wrote just before exiting is included. The handler is being
-    /// discarded, so its process group is killed first: a descendant still
-    /// holding the pipe would otherwise keep the reader from finishing.
+    /// handler wrote just before exiting is included. Reaping the handler
+    /// already killed its process group, so no descendant still holds the
+    /// pipe and keeps the reader from finishing.
     fn exit_error(&mut self, status: std::process::ExitStatus, deadline: Instant) -> String {
-        terminate_handler_group(self.child.id());
         while self
             .stderr_thread
             .as_ref()
@@ -1221,21 +1221,11 @@ fn drain_persistent_stderr(mut stream: impl Read, target: &Mutex<BoundedStderr>)
     }
 }
 
+/// Kill a handler and its process group, so timed-out descendants neither
+/// survive nor keep its output pipes open, and reap it.
 fn terminate_handler(child: &mut std::process::Child) {
-    terminate_handler_group(child.id());
-    let _ = child.kill();
+    crate::process_group::signal(child, crate::process_group::Signal::Kill);
     let _ = child.wait();
-}
-
-fn terminate_handler_group(process_id: u32) {
-    if let Ok(process_group) = libc::pid_t::try_from(process_id) {
-        // The child is started as its own process-group leader. A negative PID
-        // targets that complete group and prevents timed-out descendants from
-        // surviving or retaining captured output pipes.
-        unsafe {
-            libc::kill(-process_group, libc::SIGKILL);
-        }
-    }
 }
 
 /// Parse one handler response, which must echo `expected_request_id`.
@@ -1940,6 +1930,71 @@ done"#,
         assert!(error.contains("cancelled"));
         assert!(started.elapsed() < Duration::from_secs(1));
         assert!(handler.is_none());
+    }
+
+    /// A handler fixture that leaves a command running in its process group
+    /// and writes that command's process id to `pid_file`, then runs `rest`.
+    fn handler_leaving_a_command(
+        pid_file: &std::path::Path,
+        rest: &str,
+    ) -> StructuredHandlerInvocation {
+        persistent_fixture(
+            "leaving-fixture",
+            &format!(
+                "sleep 30 </dev/null >/dev/null 2>&1 & echo $! > '{}'\n{rest}",
+                pid_file.display()
+            ),
+        )
+    }
+
+    #[test]
+    fn a_handler_that_exits_has_its_group_ended_before_it_is_reaped() {
+        use crate::process_group::{Leader, leader_state};
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("left");
+        let mut handler =
+            PersistentHandler::spawn(&handler_leaving_a_command(&pid_file, "exit 0")).unwrap();
+        assert!(crate::test_support::poll_until(
+            Duration::from_secs(5),
+            || { leader_state(&handler.child) == Leader::Exited }
+        ));
+        let left: libc::pid_t = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(crate::test_support::process_is_alive(left));
+
+        assert!(!handler.is_running());
+        assert_eq!(leader_state(&handler.child), Leader::Reaped);
+        // Ended before the reap, not by dropping the handler afterwards.
+        assert!(
+            crate::test_support::process_ends(left),
+            "the handler's leftover command {left} still runs"
+        );
+    }
+
+    #[test]
+    fn a_handler_that_times_out_is_killed_with_its_group() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("left");
+        let invocation = handler_leaving_a_command(&pid_file, "IFS= read -r event\nsleep 10");
+        let mut handler = None;
+        let shutdown = AtomicBool::new(false);
+        let generation = AtomicU64::new(1);
+        let error = run_persistent_handler(&mut handler, &invocation, 1, &shutdown, &generation, 1)
+            .unwrap_err();
+        assert!(error.contains("exceeded"), "{error}");
+        assert!(handler.is_none());
+        let left: libc::pid_t = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(
+            crate::test_support::process_ends(left),
+            "the handler's leftover command {left} still runs"
+        );
     }
 
     #[test]

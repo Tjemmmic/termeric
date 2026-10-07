@@ -23,6 +23,7 @@ mod notifications;
 mod panes;
 mod paths;
 mod plugin;
+mod process_group;
 mod renderer;
 mod safe_fs;
 mod safe_text;
