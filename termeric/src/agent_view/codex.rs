@@ -29,8 +29,8 @@ use super::event::{
 use super::present::PATCH_TOOL;
 use super::protocol::{
     Exchange, Incoming, Protocol, client_info, failed_turn, finished_turn, incoming, line,
-    method_not_found, request_key, settled, stream_piece, stream_started, text, tool_result,
-    tool_use,
+    method_not_found, plan, request_key, settled, stream_piece, stream_started, text, todo,
+    tool_result, tool_use,
 };
 
 /// The mode Codex asks in: it reads freely and asks before changing
@@ -853,13 +853,10 @@ impl CodexCodec {
                             Some("inProgress") => "in_progress",
                             _ => "pending",
                         };
-                        Some(json!({ "content": content, "status": status, "activeForm": content }))
+                        Some(todo(&content, status))
                     })
                     .collect();
-                vec![
-                    tool_use(&id, "TodoWrite", json!({ "todos": todos })),
-                    tool_result(&id, String::new(), false),
-                ]
+                plan(&id, todos)
             }
             "turn/started" => {
                 if let Some(turn) = params.pointer("/turn/id").and_then(Value::as_str) {
@@ -1673,6 +1670,36 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn a_plan_reads_as_a_settled_todo_list() {
+        let mut codec = with_turn();
+        let updated = decode(
+            &mut codec,
+            json!({ "method": "turn/plan/updated", "params": { "threadId": "t1", "turnId": "u1",
+                    "plan": [
+                        { "step": "Read", "status": "completed" },
+                        { "step": "Edit", "status": "inProgress" },
+                        { "step": "Test", "status": "pending" },
+                        { "status": "pending" },
+                    ] } }),
+        );
+        assert_eq!(
+            updated.events,
+            [
+                tool_use(
+                    "plan-u1",
+                    "TodoWrite",
+                    json!({ "todos": [
+                        { "content": "Read", "status": "completed", "activeForm": "Read" },
+                        { "content": "Edit", "status": "in_progress", "activeForm": "Edit" },
+                        { "content": "Test", "status": "pending", "activeForm": "Test" },
+                    ] })
+                ),
+                tool_result("plan-u1", String::new(), false),
+            ]
+        );
     }
 
     #[test]

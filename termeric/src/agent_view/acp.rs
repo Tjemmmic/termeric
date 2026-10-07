@@ -33,8 +33,8 @@ use super::event::{
 use super::present::PATCH_TOOL;
 use super::protocol::{
     Exchange, Incoming, Protocol, client_info, failed_turn, finished_turn, incoming, line,
-    method_not_found, request_key, settled, stream_piece, stream_started, text, tool_result,
-    tool_use,
+    method_not_found, plan, request_key, settled, stream_piece, stream_started, text, todo,
+    tool_result, tool_use,
 };
 use crate::safe_text::capitalized;
 
@@ -1009,20 +1009,10 @@ impl AcpCodec {
             Some(kind @ ("tool_call" | "tool_call_update")) => {
                 self.tool_update(update, kind == "tool_call")
             }
-            Some("plan") => {
-                let id = format!("plan-{}", self.turns);
-                let todos: Vec<Value> = update
-                    .get("entries")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|entry| todo(&text(entry, "content")?, text(entry, "status")))
-                    .collect();
-                vec![
-                    tool_use(&id, "TodoWrite", json!({ "todos": todos })),
-                    tool_result(&id, String::new(), false),
-                ]
-            }
+            Some("plan") => plan(
+                &format!("plan-{}", self.turns),
+                todos(update.get("entries")),
+            ),
             Some("available_commands_update") => {
                 self.commands = update
                     .get("availableCommands")
@@ -1318,14 +1308,22 @@ fn mode_choice(id: &str, name: &str, description: &str) -> ModeChoice {
     }
 }
 
-/// One to-do as the panel reads it; a cancelled one counts as done.
-fn todo(content: &str, status: Option<String>) -> Option<Value> {
-    let status = match status.as_deref() {
-        Some("completed" | "cancelled") => "completed",
-        Some("in_progress") => "in_progress",
-        _ => "pending",
-    };
-    Some(json!({ "content": content, "status": status, "activeForm": content }))
+/// The to-dos in a list of ACP plan entries, as the panel reads them; a
+/// cancelled one counts as done.
+fn todos(entries: Option<&Value>) -> Vec<Value> {
+    entries
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let status = match text(entry, "status").as_deref() {
+                Some("completed" | "cancelled") => "completed",
+                Some("in_progress") => "in_progress",
+                _ => "pending",
+            };
+            Some(todo(&text(entry, "content")?, status))
+        })
+        .collect()
 }
 
 /// A tool call in the panel's vocabulary: its name and input, from the
@@ -1407,14 +1405,7 @@ fn present_tool(state: &ToolState) -> (String, Value) {
             )
         }
         _ if named == "todowrite" || input.get("todos").is_some_and(Value::is_array) => {
-            let todos: Vec<Value> = input
-                .get("todos")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(|entry| todo(&text(entry, "content")?, text(entry, "status")))
-                .collect();
-            named_tool("TodoWrite", json!({ "todos": todos }))
+            named_tool("TodoWrite", json!({ "todos": todos(input.get("todos")) }))
         }
         // Anything else reads as its own title, e.g. an MCP tool's name.
         _ => {
@@ -1961,6 +1952,38 @@ mod tests {
         assert!(end.outcome.success);
         assert_eq!(end.outcome.cost_usd, Some(0.25));
         assert_eq!(end.outcome.session_id.as_deref(), Some("ses_1"));
+    }
+
+    #[test]
+    fn a_plan_reads_as_a_settled_todo_list_with_cancelled_steps_done() {
+        let mut codec = codec();
+        with_turn(&mut codec);
+        let events = update(
+            &mut codec,
+            json!({ "sessionUpdate": "plan", "entries": [
+                { "content": "Read", "status": "completed", "priority": "high" },
+                { "content": "Edit", "status": "in_progress" },
+                { "content": "Skip", "status": "cancelled" },
+                { "content": "Test", "status": "pending" },
+                { "status": "pending" },
+            ] }),
+        );
+        assert_eq!(
+            events,
+            [
+                tool_use(
+                    "plan-1",
+                    "TodoWrite",
+                    json!({ "todos": [
+                        { "content": "Read", "status": "completed", "activeForm": "Read" },
+                        { "content": "Edit", "status": "in_progress", "activeForm": "Edit" },
+                        { "content": "Skip", "status": "completed", "activeForm": "Skip" },
+                        { "content": "Test", "status": "pending", "activeForm": "Test" },
+                    ] })
+                ),
+                tool_result("plan-1", String::new(), false),
+            ]
+        );
     }
 
     #[test]

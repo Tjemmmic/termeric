@@ -244,6 +244,21 @@ fn main_stream(delta: StreamDelta) -> AgentEvent {
     }
 }
 
+/// One to-do as the panel reads it, in the shape of Claude Code's to-do
+/// list; `status` is `pending`, `in_progress`, or `completed`.
+pub fn todo(content: &str, status: &str) -> Value {
+    json!({ "content": content, "status": status, "activeForm": content })
+}
+
+/// The agent's plan for the turn as to-do list `id`, already settled: a plan
+/// is a report, not a tool call that runs.
+pub fn plan(id: &str, todos: Vec<Value>) -> Vec<AgentEvent> {
+    vec![
+        tool_use(id, "TodoWrite", json!({ "todos": todos })),
+        tool_result(id, String::new(), false),
+    ]
+}
+
 /// The result of the main-thread tool call `id`.
 pub fn tool_result(id: &str, content: String, is_error: bool) -> AgentEvent {
     AgentEvent::ToolResult {
