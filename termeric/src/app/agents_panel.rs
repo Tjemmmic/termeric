@@ -40,13 +40,11 @@ impl App {
                             AgentActivity::NeedsInput | AgentActivity::Failed => {
                                 status.detail.clone()
                             }
-                            AgentActivity::Finished => status.last_message.as_deref().map(|text| {
-                                text.lines()
-                                    .map(str::trim)
-                                    .find(|line| !line.is_empty())
-                                    .unwrap_or_default()
-                                    .to_owned()
-                            }),
+                            AgentActivity::Finished => status
+                                .last_message
+                                .as_deref()
+                                .and_then(crate::safe_text::first_line)
+                                .map(str::to_owned),
                             AgentActivity::Idle | AgentActivity::Working => None,
                         };
                         let mut summary = format!(

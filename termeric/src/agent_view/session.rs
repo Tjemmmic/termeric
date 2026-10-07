@@ -421,7 +421,7 @@ impl AgentSession {
         }
         self.transcript
             .first_prompt()
-            .and_then(|prompt| prompt.lines().map(str::trim).find(|line| !line.is_empty()))
+            .and_then(crate::safe_text::first_line)
             .map_or_else(|| "New session".to_owned(), str::to_owned)
     }
 

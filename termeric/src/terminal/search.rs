@@ -958,10 +958,7 @@ fn describe_regex_error(error: &regex::Error) -> String {
                 .find(|line| !line.is_empty())
                 .unwrap_or_default();
             let reason = line.strip_prefix("error:").map_or(line, str::trim);
-            let mut chars = reason.chars();
-            chars.next().map_or_else(String::new, |first| {
-                first.to_uppercase().chain(chars).collect()
-            })
+            crate::safe_text::capitalized(reason)
         }
     }
 }

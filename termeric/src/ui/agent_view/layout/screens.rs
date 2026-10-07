@@ -817,7 +817,7 @@ pub fn session_summary(session: &AgentSession) -> String {
         Activity::Stopped => "Stopped".to_owned(),
         Activity::Idle | Activity::Finished { success: true } | Activity::NeedsYou => transcript
             .last_answer()
-            .and_then(|answer| answer.lines().map(str::trim).find(|line| !line.is_empty()))
+            .and_then(crate::safe_text::first_line)
             .map_or_else(|| "Ready".to_owned(), str::to_owned),
     }
 }

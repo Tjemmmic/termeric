@@ -99,11 +99,7 @@ pub fn model_name(models: &[ModelChoice], value: &str) -> String {
     if value == "default" {
         return "Default model".to_owned();
     }
-    let mut characters = value.chars();
-    characters
-        .next()
-        .map(|first| first.to_uppercase().chain(characters).collect())
-        .unwrap_or_default()
+    crate::safe_text::capitalized(value)
 }
 
 /// One slash command the agent offers.

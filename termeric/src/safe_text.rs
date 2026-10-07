@@ -47,16 +47,27 @@ pub fn truncate_with_ellipsis(text: &str, max_chars: usize) -> String {
     kept
 }
 
-/// The first line of `text` that is not blank, trimmed, within `max_chars`
-/// characters as [`truncate_with_ellipsis`] cuts them: how a message or
-/// command is quoted in a title, log, or notification.
+/// The first line of `text` that is not blank, trimmed; `None` when every
+/// line is blank.
+pub fn first_line(text: &str) -> Option<&str> {
+    text.lines().map(str::trim).find(|line| !line.is_empty())
+}
+
+/// [`first_line`] within `max_chars` characters as [`truncate_with_ellipsis`]
+/// cuts them, empty when there is none: how a message or command is quoted
+/// in a title, log, or notification.
 pub fn first_line_truncated(text: &str, max_chars: usize) -> String {
-    let line = text
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or_default();
-    truncate_with_ellipsis(line, max_chars)
+    truncate_with_ellipsis(first_line(text).unwrap_or_default(), max_chars)
+}
+
+/// `text` with its first character in upper case, as a lowercase name or
+/// message reads at the start of a label: `build` as `Build`.
+pub fn capitalized(text: &str) -> String {
+    let mut characters = text.chars();
+    characters
+        .next()
+        .map(|first| first.to_uppercase().chain(characters).collect())
+        .unwrap_or_default()
 }
 
 /// One displayed line of untrusted text: a tab becomes `tab_width` spaces
@@ -112,9 +123,22 @@ mod tests {
 
     #[test]
     fn first_lines_skip_blank_lines_and_are_trimmed_and_cut() {
+        assert_eq!(first_line("\n  \n  first  \nsecond"), Some("first"));
+        assert_eq!(first_line(" \n\t\n"), None);
+        assert_eq!(first_line(""), None);
         assert_eq!(first_line_truncated("\n  \n  first  \nsecond", 10), "first");
         assert_eq!(first_line_truncated("abcdefgh\nmore", 4), "abc…");
         assert_eq!(first_line_truncated("  \n", 4), "");
+    }
+
+    #[test]
+    fn capitalizing_raises_only_the_first_character() {
+        assert_eq!(capitalized("build mode"), "Build mode");
+        assert_eq!(capitalized("Already"), "Already");
+        assert_eq!(capitalized("éclair"), "Éclair");
+        // Some capitals are longer than their lowercase letter.
+        assert_eq!(capitalized("ßa"), "SSa");
+        assert_eq!(capitalized(""), "");
     }
 
     #[test]

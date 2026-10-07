@@ -35,6 +35,7 @@ use super::present::PATCH_TOOL;
 use super::protocol::{
     Exchange, Incoming, Protocol, failed_turn, incoming, line, preview, text, tool_result, tool_use,
 };
+use crate::safe_text::capitalized;
 
 /// The protocol version this host speaks.
 const PROTOCOL_VERSION: u64 = 1;
@@ -1372,16 +1373,6 @@ fn mode_choice(id: &str, name: &str, description: &str) -> ModeChoice {
         "yolo" => mode.unrestricted(),
         _ => mode,
     }
-}
-
-/// `text` starting with a capital, as agents' lowercase names read in a
-/// menu: `build` as Build.
-fn capitalized(text: &str) -> String {
-    let mut characters = text.chars();
-    characters
-        .next()
-        .map(|first| first.to_uppercase().chain(characters).collect())
-        .unwrap_or_default()
 }
 
 /// One to-do as the panel reads it; a cancelled one counts as done.

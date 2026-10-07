@@ -1006,12 +1006,7 @@ impl Builder<'_, '_> {
         let Some(result) = &tool.result else {
             return 0.0;
         };
-        let first = result
-            .content
-            .lines()
-            .map(str::trim)
-            .find(|line| !line.is_empty())
-            .unwrap_or("It failed");
+        let first = crate::safe_text::first_line(&result.content).unwrap_or("It failed");
         let text = strip_tool_error(first);
         self.read_paragraph(
             region,
