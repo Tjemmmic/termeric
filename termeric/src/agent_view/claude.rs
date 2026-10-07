@@ -810,21 +810,13 @@ fn rule_subject(rule: &Map<String, Value>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn decode(codec: &mut ClaudeCodec, value: Value) -> Exchange {
-        codec.decode(&value.to_string())
-    }
+    use crate::agent_view::protocol::testing::{decode, parse};
 
     fn only_event(codec: &mut ClaudeCodec, value: Value) -> AgentEvent {
         let mut decoded = decode(codec, value);
         assert!(decoded.lines.is_empty(), "{:?}", decoded.lines);
         assert_eq!(decoded.events.len(), 1, "{:?}", decoded.events);
         decoded.events.remove(0)
-    }
-
-    fn parse(line: &str) -> Value {
-        assert!(line.ends_with('\n'));
-        serde_json::from_str(line).unwrap()
     }
 
     /// The one line `command` sends.

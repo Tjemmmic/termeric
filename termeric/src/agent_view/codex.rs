@@ -1399,6 +1399,7 @@ fn unquote(text: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::agent_view::event::EARLIER_TITLE_CHARS;
+    use crate::agent_view::protocol::testing::{decode, parse};
 
     fn codec() -> CodexCodec {
         CodexCodec::new(Setup {
@@ -1407,15 +1408,6 @@ mod tests {
             model: None,
             resume: None,
         })
-    }
-
-    fn parse(line: &str) -> Value {
-        assert!(line.ends_with('\n'));
-        serde_json::from_str(line).unwrap()
-    }
-
-    fn decode(codec: &mut CodexCodec, value: Value) -> Exchange {
-        codec.decode(&value.to_string())
     }
 
     /// Answers the handshake and opens a thread with a turn running.

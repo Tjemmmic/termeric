@@ -1572,19 +1572,11 @@ fn earlier(listed: Option<&Value>) -> Vec<EarlierConversation> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_view::protocol::testing::{decode, parse};
     use crate::agent_view::transcript::{Item, Transcript};
 
     fn codec() -> AcpCodec {
         AcpCodec::new(codec_setup())
-    }
-
-    fn parse(line: &str) -> Value {
-        assert!(line.ends_with('\n'));
-        serde_json::from_str(line).unwrap()
-    }
-
-    fn decode(codec: &mut AcpCodec, value: Value) -> Exchange {
-        codec.decode(&value.to_string())
     }
 
     fn methods(exchange: &Exchange) -> Vec<String> {

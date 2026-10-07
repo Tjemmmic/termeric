@@ -167,6 +167,25 @@ pub fn failed_turn(error: &str) -> AgentEvent {
     })
 }
 
+/// What the protocols' tests share.
+#[cfg(test)]
+pub(super) mod testing {
+    use serde_json::Value;
+
+    use super::{Exchange, Protocol};
+
+    /// One line sent to the agent, which must end its message.
+    pub fn parse(line: &str) -> Value {
+        assert!(line.ends_with('\n'), "{line:?}");
+        serde_json::from_str(line).unwrap()
+    }
+
+    /// What `protocol` makes of `value` written as one output line.
+    pub fn decode(protocol: &mut impl Protocol, value: Value) -> Exchange {
+        protocol.decode(&value.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
