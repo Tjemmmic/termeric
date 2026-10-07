@@ -54,6 +54,9 @@ pub enum ControlCommand {
     },
 }
 
+/// The longest a launch wait may be told to wait, in seconds: one day.
+pub const MAX_WAIT_SECONDS: u32 = 86_400;
+
 /// `--wait`, and how long it may wait.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Wait {

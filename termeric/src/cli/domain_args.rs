@@ -587,6 +587,6 @@ fn window_geometry(value: &str) -> anyhow::Result<(u32, u32)> {
 }
 
 fn app_id(value: &str) -> anyhow::Result<String> {
-    super::validate_identifier("application identity", value)?;
+    model::validate_id("application identity", value)?;
     Ok(value.to_owned())
 }

@@ -145,7 +145,7 @@ fn process_id_from_socket_name(name: &std::ffi::OsStr) -> Option<u32> {
     digits
         .parse()
         .ok()
-        .filter(|process_id| *process_id != 0 && *process_id <= i32::MAX as u32)
+        .filter(|process_id| super::protocol::valid_process_id(*process_id))
 }
 
 #[cfg(test)]

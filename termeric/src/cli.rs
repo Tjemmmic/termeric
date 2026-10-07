@@ -6,6 +6,7 @@ mod plugin_args;
 mod spec;
 mod workspace_args;
 
+use crate::domain::model::validate_id;
 use crate::panes::SplitDirection;
 use anyhow::Context;
 use std::collections::HashMap;
@@ -246,7 +247,7 @@ fn parse_mcp(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
                     value
                         .parse::<u32>()
                         .ok()
-                        .filter(|pid| *pid != 0 && *pid <= i32::MAX as u32)
+                        .filter(|pid| crate::control::protocol::valid_process_id(*pid))
                         .context("--process expects a Termeric process ID")?,
                 );
             }
@@ -272,13 +273,9 @@ fn parse_agent_event(arguments: &[OsString]) -> Option<crate::agents::hook::Hook
         return None;
     };
     let agent_id = agent_id.to_str()?;
-    let valid_id = !agent_id.is_empty()
-        && agent_id.len() <= 64
-        && agent_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_');
     Some(crate::agents::hook::HookInvocation {
-        agent_id: valid_id.then(|| agent_id.to_owned())?,
+        agent_id: crate::control::protocol::valid_agent_id(agent_id)
+            .then(|| agent_id.to_owned())?,
         event: crate::agents::hook::HookEvent::parse(event.to_str()?)?,
     })
 }
@@ -398,7 +395,7 @@ fn parse_collected(
                 let (plugin_id, profile) = value.split_once(':').ok_or_else(|| {
                     anyhow::anyhow!("--profile expects AGENT:PROFILE (for example codex:review)")
                 })?;
-                validate_identifier("plugin", plugin_id)?;
+                validate_id("plugin", plugin_id)?;
                 validate_single_line("profile", profile)?;
                 let window = current_window(&mut plan);
                 reject_workspace_mix(window, "--profile")?;
@@ -428,7 +425,7 @@ fn parse_collected(
             }
             "--class" | "--app-id" => {
                 let value = option_utf8(&arguments, &mut index, &mut inline, argument)?;
-                validate_identifier("application identity", &value)?;
+                validate_id("application identity", &value)?;
                 current_window(&mut plan).app_id = Some(value);
             }
             "--renderer" => {
@@ -583,28 +580,22 @@ fn option_utf8(
         .map_err(|_| anyhow::anyhow!("{option} value must be valid UTF-8"))
 }
 
+/// A window size: the sizes a running GUI's windows may be resized to.
 fn parse_geometry(value: &str) -> anyhow::Result<(u32, u32)> {
+    use crate::control::protocol::{MAX_WINDOW_DIMENSION, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH};
     let (width, height) = value
         .split_once(['x', 'X'])
         .ok_or_else(|| anyhow::anyhow!("--geometry expects WIDTHxHEIGHT in physical pixels"))?;
     let width: u32 = width.parse().context("invalid --geometry width")?;
     let height: u32 = height.parse().context("invalid --geometry height")?;
-    if !(160..=16_384).contains(&width) || !(120..=16_384).contains(&height) {
-        anyhow::bail!("--geometry must be between 160x120 and 16384x16384 pixels");
+    if !(MIN_WINDOW_WIDTH..=MAX_WINDOW_DIMENSION).contains(&width)
+        || !(MIN_WINDOW_HEIGHT..=MAX_WINDOW_DIMENSION).contains(&height)
+    {
+        anyhow::bail!(
+            "--geometry must be between {MIN_WINDOW_WIDTH}x{MIN_WINDOW_HEIGHT} and {MAX_WINDOW_DIMENSION}x{MAX_WINDOW_DIMENSION} pixels"
+        );
     }
     Ok((width, height))
-}
-
-fn validate_identifier(label: &str, value: &str) -> anyhow::Result<()> {
-    if value.is_empty()
-        || value.len() > 128
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-    {
-        anyhow::bail!("invalid {label} {value:?}");
-    }
-    Ok(())
 }
 
 fn validate_single_line(label: &str, value: &str) -> anyhow::Result<()> {
@@ -712,8 +703,9 @@ fn parse_cell_geometry(value: &str) -> anyhow::Result<(u16, u16)> {
         .context("--size expects COLSxROWS")?;
     let cols: u16 = cols.parse().context("invalid --size columns")?;
     let rows: u16 = rows.parse().context("invalid --size rows")?;
-    if cols == 0 || rows == 0 || cols > 1_000 || rows > 1_000 {
-        anyhow::bail!("--size must be between 1x1 and 1000x1000 cells");
+    const MAX: u16 = crate::domain::model::MAX_TERMINAL_CELLS_PER_SIDE;
+    if !(1..=MAX).contains(&cols) || !(1..=MAX).contains(&rows) {
+        anyhow::bail!("--size must be between 1x1 and {MAX}x{MAX} cells");
     }
     Ok((cols, rows))
 }

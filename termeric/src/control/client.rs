@@ -238,7 +238,7 @@ fn ask(process_id: u32, request: &Request) -> anyhow::Result<Response> {
 
 /// The GUI's validated reply to `request`, which may be a refusal.
 fn reply(process_id: u32, request: &Request) -> anyhow::Result<Response> {
-    if process_id == 0 || process_id > i32::MAX as u32 {
+    if !protocol::valid_process_id(process_id) {
         anyhow::bail!("process IDs must be nonzero runtime IDs");
     }
     request.validate().map_err(anyhow::Error::msg)?;

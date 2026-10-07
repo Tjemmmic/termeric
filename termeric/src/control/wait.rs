@@ -3,7 +3,7 @@
 use super::{
     ControlOutput, client,
     paths::ControlEndpoint,
-    protocol::{LaunchState, Request, Response},
+    protocol::{self, LaunchState, Request, Response},
 };
 use crate::deadline_io::{self, remaining};
 use anyhow::Context;
@@ -68,9 +68,8 @@ fn overall_deadline(
     process_id: u32,
     timeout_seconds: Option<u32>,
 ) -> anyhow::Result<Option<Instant>> {
-    if process_id == 0
-        || process_id > i32::MAX as u32
-        || timeout_seconds.is_some_and(|seconds| !(1..=86400).contains(&seconds))
+    if !protocol::valid_process_id(process_id)
+        || timeout_seconds.is_some_and(|seconds| !(1..=super::MAX_WAIT_SECONDS).contains(&seconds))
     {
         anyhow::bail!("invalid wait-launch process ID or timeout");
     }

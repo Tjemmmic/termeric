@@ -621,8 +621,8 @@ fn process_id(value: &str) -> Result<u32, String> {
     value
         .parse::<u32>()
         .ok()
-        .filter(|process| (1..=i32::MAX as u32).contains(process))
-        .ok_or_else(|| format!("GUI process IDs are 1 to {}", i32::MAX))
+        .filter(|process| protocol::valid_process_id(*process))
+        .ok_or_else(|| format!("GUI process IDs are 1 to {}", protocol::MAX_PROCESS_ID))
 }
 
 fn window_id(value: &str) -> Result<u64, String> {
@@ -645,8 +645,13 @@ fn timeout(value: &str) -> Result<u32, String> {
     value
         .parse::<u32>()
         .ok()
-        .filter(|seconds| (1..=86_400).contains(seconds))
-        .ok_or_else(|| "--timeout must be 1-86400 whole seconds".into())
+        .filter(|seconds| (1..=crate::control::MAX_WAIT_SECONDS).contains(seconds))
+        .ok_or_else(|| {
+            format!(
+                "--timeout must be 1-{} whole seconds",
+                crate::control::MAX_WAIT_SECONDS
+            )
+        })
 }
 
 fn environment_variable(value: &str) -> Result<EnvironmentVariable, String> {

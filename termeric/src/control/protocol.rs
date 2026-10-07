@@ -17,6 +17,8 @@ pub const MAX_TOTAL_TABS: usize = 256;
 pub const MAX_TOTAL_PANES: usize = 1_024;
 pub const MAX_TOTAL_DIVIDERS: usize = MAX_TOTAL_PANES - 1;
 pub const MAX_METADATA_BYTES: usize = 32 * 1024;
+/// The largest process ID: Linux process IDs are positive `pid_t` values.
+pub const MAX_PROCESS_ID: u32 = i32::MAX as u32;
 pub const MIN_WINDOW_WIDTH: u32 = 160;
 pub const MIN_WINDOW_HEIGHT: u32 = 120;
 pub const MAX_WINDOW_DIMENSION: u32 = 16_384;
@@ -344,7 +346,13 @@ pub fn validate_agent_summaries(agents: &[AgentSummary]) -> anyhow::Result<()> {
     agents.iter().try_for_each(AgentSummary::validate)
 }
 
-fn valid_agent_id(agent_id: &str) -> bool {
+/// Whether `process_id` can name a running process.
+pub fn valid_process_id(process_id: u32) -> bool {
+    (1..=MAX_PROCESS_ID).contains(&process_id)
+}
+
+/// Whether `agent_id` is 1 to 64 ASCII letters, digits, `-`, or `_`.
+pub fn valid_agent_id(agent_id: &str) -> bool {
     !agent_id.is_empty()
         && agent_id.len() <= MAX_AGENT_ID_BYTES
         && agent_id
@@ -726,9 +734,8 @@ impl Response {
             );
             return Ok(());
         }
-        let process_id = self.process_id().unwrap_or_default();
         anyhow::ensure!(
-            process_id != 0 && process_id <= i32::MAX as u32,
+            valid_process_id(self.process_id().unwrap_or_default()),
             "GUI control reply names an invalid process"
         );
         if let Some(request_id) = self.request_id() {
@@ -1567,7 +1574,7 @@ pub enum DividerKind {
 
 impl ProcessInventory {
     pub fn validate(&self) -> anyhow::Result<()> {
-        if self.process_id == 0 || self.process_id > i32::MAX as u32 {
+        if !valid_process_id(self.process_id) {
             anyhow::bail!("GUI inventory has an invalid process ID");
         }
         if self.windows.len() > MAX_WINDOWS {
@@ -1691,6 +1698,24 @@ mod tests {
             token: "secret".into(),
             request,
         });
+    }
+
+    #[test]
+    fn process_and_agent_ids_have_one_rule_everywhere() {
+        assert!(!valid_process_id(0));
+        assert!(valid_process_id(1));
+        assert!(valid_process_id(MAX_PROCESS_ID));
+        assert!(!valid_process_id(MAX_PROCESS_ID + 1));
+        assert!(valid_agent_id("claude-code_2"));
+        assert!(valid_agent_id(&"a".repeat(MAX_AGENT_ID_BYTES)));
+        for invalid in [
+            "",
+            "co dex",
+            "codex.v2",
+            &"a".repeat(MAX_AGENT_ID_BYTES + 1),
+        ] {
+            assert!(!valid_agent_id(invalid), "{invalid:?}");
+        }
     }
 
     #[test]

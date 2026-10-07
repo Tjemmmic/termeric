@@ -2072,7 +2072,9 @@ fn attachment_input_loop(
                 rows,
                 pixel_width,
                 pixel_height,
-            } if cols > 0 && rows > 0 && cols <= 1_000 && rows <= 1_000 => {
+            } if (1..=MAX_TERMINAL_CELLS_PER_SIDE).contains(&cols)
+                && (1..=MAX_TERMINAL_CELLS_PER_SIDE).contains(&rows) =>
+            {
                 if pane
                     .resize(PtySize {
                         rows,
