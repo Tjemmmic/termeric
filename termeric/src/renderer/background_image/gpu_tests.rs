@@ -4,6 +4,7 @@
 use super::*;
 use crate::renderer::{image::ImagePipeline, rect::RectPipeline};
 use anyhow::{Result, ensure};
+use std::sync::Arc;
 use wgpu::*;
 
 const CLEAR: [f32; 4] = [0.02, 0.03, 0.04, 1.0];
@@ -158,7 +159,7 @@ fn snapshot(
     case: Case,
 ) -> Result<Vec<u8>> {
     images.resize(queue, case.size.0, case.size.1);
-    state.queue(device, queue, images, case.viewport);
+    state.queue(images, case.viewport);
     images.upload(device, queue);
     let mut rects = RectPipeline::new(device, FORMAT)?;
     rects.resize(queue, case.size.0, case.size.1);
@@ -286,7 +287,7 @@ pub(crate) fn headless_background_render_smoke(device: &Device, queue: &Queue) -
         }
         state.clear(&mut images);
         ensure!(
-            images.retained_image_count() == 0 && state.image.is_none(),
+            images.retained_image_count() == 0 && state.image_size.is_none(),
             "clearing retained background resources"
         );
         verify(

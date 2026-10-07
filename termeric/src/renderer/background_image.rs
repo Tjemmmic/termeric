@@ -1,7 +1,5 @@
 //! The background image: its viewport geometry, GPU state, and drawing.
 
-use std::sync::Arc;
-
 use termeric_core::{ImageId, StoredImage};
 
 use super::Renderer;
@@ -17,7 +15,8 @@ pub(crate) use load::{
 const BACKGROUND_IMAGE_KEY: ImageKey = (0, ImageId(0));
 
 pub(super) struct BackgroundImageState {
-    image: Option<StoredImage>,
+    /// The installed image's size; its pixels live only on the GPU.
+    image_size: Option<(u32, u32)>,
     fit: BackgroundImageFit,
     opacity: f32,
     revision: u64,
@@ -26,7 +25,7 @@ pub(super) struct BackgroundImageState {
 impl Default for BackgroundImageState {
     fn default() -> Self {
         Self {
-            image: None,
+            image_size: None,
             fit: BackgroundImageFit::Cover,
             opacity: 0.2,
             revision: 0,
@@ -142,12 +141,8 @@ impl Renderer {
             self.content_width_for(self.size.0 as f32),
             (self.size.1 as f32 - content_top).max(0.0),
         );
-        self.background_image.queue(
-            &self.device,
-            &self.queue,
-            &mut self.background_image_pipeline,
-            viewport,
-        );
+        self.background_image
+            .queue(&mut self.background_image_pipeline, viewport);
     }
 }
 
@@ -160,46 +155,38 @@ impl BackgroundImageState {
         pipeline: &mut super::image::ImagePipeline,
     ) {
         self.revision = self.revision.wrapping_add(1).max(1);
-        let mut image = StoredImage {
+        let image = StoredImage {
             id: BACKGROUND_IMAGE_KEY.1,
             width: decoded.width,
             height: decoded.height,
             data: decoded.rgba,
             revision: self.revision,
         };
+        // The dedicated GPU cache owns the steady-state pixels from here on,
+        // so frames only queue the uploaded texture. A renderer recreation
+        // starts a fresh bounded decode, so retaining a second CPU RGBA copy
+        // for the lifetime of every window is unnecessary.
         pipeline.upload_image(device, queue, BACKGROUND_IMAGE_KEY, &image);
-        // The dedicated GPU cache owns the steady-state pixels. A renderer
-        // recreation starts a fresh bounded decode, so retaining a second CPU
-        // RGBA copy for the lifetime of every window is unnecessary.
-        image.data = Arc::from([]);
-        self.image = Some(image);
+        self.image_size = Some((image.width, image.height));
     }
 
     fn clear(&mut self, pipeline: &mut super::image::ImagePipeline) {
-        self.image = None;
+        self.image_size = None;
         pipeline.remove_image(BACKGROUND_IMAGE_KEY);
         pipeline.clear();
     }
 
-    fn queue(
-        &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        pipeline: &mut super::image::ImagePipeline,
-        viewport: (f32, f32, f32, f32),
-    ) {
+    fn queue(&self, pipeline: &mut super::image::ImagePipeline, viewport: (f32, f32, f32, f32)) {
         pipeline.clear();
-        let Some(image) = self.image.as_ref() else {
+        let Some(image_size) = self.image_size else {
             return;
         };
         if self.opacity <= 0.0 {
             return;
         }
-        let Some(geometry) = background_geometry(self.fit, (image.width, image.height), viewport)
-        else {
+        let Some(geometry) = background_geometry(self.fit, image_size, viewport) else {
             return;
         };
-        pipeline.upload_image(device, queue, BACKGROUND_IMAGE_KEY, image);
         pipeline.push_image(BACKGROUND_IMAGE_KEY, geometry, self.opacity, -1);
     }
 }
