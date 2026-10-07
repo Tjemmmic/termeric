@@ -133,12 +133,15 @@ pub struct CellarLayout {
 }
 
 impl CellarLayout {
+    /// The panel slid `progress` of the way in. Callers pass the cellar
+    /// animation's `progress()`, which is already eased, so it is used as
+    /// given.
     pub fn calculate(
         window_width: f32,
         window_height: f32,
         cell_width: f32,
         cell_height: f32,
-        animation: f32,
+        progress: f32,
         visible_ids: impl IntoIterator<Item = u64>,
     ) -> Self {
         let panel_width = (cell_width * 35.0).min(350.0).min(window_width.max(0.0));
@@ -146,8 +149,7 @@ impl CellarLayout {
             .max(cell_height * 8.0)
             .min(window_height);
         let panel_y = ((window_height - panel_height) / 2.0).max(0.0);
-        let eased = 1.0 - (1.0 - animation.clamp(0.0, 1.0)).powi(3);
-        let panel_x = -panel_width + panel_width * eased;
+        let panel_x = -panel_width + panel_width * progress.clamp(0.0, 1.0);
         let header_y = panel_y + cell_height * 0.5;
         let separator_y = header_y + cell_height * 2.5;
         let list_y = separator_y + cell_height * 0.5;
@@ -837,5 +839,16 @@ mod tests {
             CellarAction::Close
         );
         assert_eq!(layout.hit_test(799.0, 599.0, true), CellarAction::Close);
+    }
+
+    #[test]
+    fn the_panel_slides_by_the_eased_progress_it_is_given() {
+        let panel_at = |progress| {
+            CellarLayout::calculate(800.0, 600.0, 8.0, 16.0, progress, std::iter::empty()).panel
+        };
+        let width = panel_at(1.0).width;
+        assert_eq!(panel_at(0.0).x, -width);
+        assert_eq!(panel_at(0.5).x, -width / 2.0);
+        assert_eq!(panel_at(1.0).x, 0.0);
     }
 }
