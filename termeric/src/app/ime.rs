@@ -223,13 +223,13 @@ impl App {
             let layout = self.info_overlay_layout();
             let row = layout.source_line_rect(
                 input.source_line,
-                self.info_overlay.scroll_offset(),
+                self.info_overlay.viewport().row(),
                 self.info_overlay.lines().len(),
             )?;
             let cursor_column =
                 input.label.chars().count() + input.value[..input.cursor_byte].chars().count();
             let x = row.x
-                + cursor_column.saturating_sub(self.info_overlay.horizontal_offset()) as f32
+                + cursor_column.saturating_sub(self.info_overlay.viewport().column()) as f32
                     * layout.char_scale;
             let y = row.y;
             return self.ime_target(

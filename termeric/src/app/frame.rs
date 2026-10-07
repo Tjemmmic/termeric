@@ -189,8 +189,8 @@ impl App {
         let layout = self.info_overlay_layout();
         self.info_overlay
             .set_viewport(layout.rows_that_fit, layout.columns_that_fit);
-        let scroll_offset = self.info_overlay.scroll_offset();
-        let horizontal_offset = self.info_overlay.horizontal_offset();
+        let scroll_offset = self.info_overlay.viewport().row();
+        let horizontal_offset = self.info_overlay.viewport().column();
         let visible_lines = self
             .info_overlay
             .visible_lines()
@@ -246,8 +246,8 @@ impl App {
                 .map(|(source_row, row)| (source_row, row.clone()))
                 .collect(),
             total_rows: self.diff_review.rows().len(),
-            scroll_offset: self.diff_review.scroll_offset(),
-            horizontal_offset: self.diff_review.horizontal_offset(),
+            scroll_offset: self.diff_review.viewport().row(),
+            horizontal_offset: self.diff_review.viewport().column(),
             awaiting: self.diff_review.is_awaiting_current(),
             animation: self.diff_review.animation(),
             layout,

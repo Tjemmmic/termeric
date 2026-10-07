@@ -32,25 +32,18 @@ impl App {
             self.info_overlay.animation(),
             self.info_overlay.title(),
             self.info_overlay.lines().len(),
-            self.info_overlay.max_line_chars(),
+            self.info_overlay.viewport().content_columns(),
         )
     }
 
     /// Keys for the info overlay: focus, its text field, scrolling, copy, and choice shortcuts.
     pub(super) fn handle_info_overlay_key(&mut self, key: &winit::keyboard::Key, repeat: bool) {
-        use super::overlay_scroll::{OverlayScroll, overlay_scroll_for_key};
+        use super::overlay_scroll::overlay_scroll_for_key;
         use crate::ui::info_overlay::InfoOverlayAction;
         use winit::keyboard::{Key, NamedKey};
         let request_id = self.info_overlay.request_id();
-        let scroll = overlay_scroll_for_key(key, self.modifiers, self.info_overlay.viewport_rows());
-        let scroll_action = |scroll| match scroll {
-            OverlayScroll::Rows(delta) => InfoOverlayAction::ScrollLines { request_id, delta },
-            OverlayScroll::Columns(delta) => InfoOverlayAction::ScrollColumns { request_id, delta },
-            OverlayScroll::Top => InfoOverlayAction::ScrollToTop { request_id },
-            OverlayScroll::Bottom => InfoOverlayAction::ScrollToBottom { request_id },
-            OverlayScroll::LineStart => InfoOverlayAction::ScrollToLeft { request_id },
-            OverlayScroll::LineEnd => InfoOverlayAction::ScrollToRight { request_id },
-        };
+        let scroll =
+            overlay_scroll_for_key(key, self.modifiers, self.info_overlay.viewport().rows());
         let action = if *key == Key::Named(NamedKey::Tab) {
             self.ime.clear_preedit();
             self.info_overlay
@@ -74,7 +67,7 @@ impl App {
             } else {
                 match key {
                     Key::Named(NamedKey::Escape) => InfoOverlayAction::CancelInput { request_id },
-                    _ if let Some(scroll) = scroll => scroll_action(scroll),
+                    _ if let Some(by) = scroll => InfoOverlayAction::Scroll { request_id, by },
                     Key::Character(character)
                         if control && character.as_str().eq_ignore_ascii_case("c") =>
                     {
@@ -116,7 +109,7 @@ impl App {
                         InfoOverlayAction::Dismiss { request_id }
                     }
                 }
-                _ if let Some(scroll) = scroll => scroll_action(scroll),
+                _ if let Some(by) = scroll => InfoOverlayAction::Scroll { request_id, by },
                 Key::Character(character) => {
                     let choice = character.as_str().chars().next().and_then(|shortcut| {
                         self.info_overlay.choice_for_shortcut(request_id, shortcut)
@@ -299,23 +292,8 @@ impl App {
                     self.cancel_pending_revert(request_id);
                 }
             }
-            InfoOverlayAction::ScrollLines { request_id, delta } => {
-                self.info_overlay.scroll_lines(request_id, delta);
-            }
-            InfoOverlayAction::ScrollColumns { request_id, delta } => {
-                self.info_overlay.scroll_columns(request_id, delta);
-            }
-            InfoOverlayAction::ScrollToTop { request_id } => {
-                self.info_overlay.scroll_to_top(request_id);
-            }
-            InfoOverlayAction::ScrollToBottom { request_id } => {
-                self.info_overlay.scroll_to_bottom(request_id);
-            }
-            InfoOverlayAction::ScrollToLeft { request_id } => {
-                self.info_overlay.scroll_to_left(request_id);
-            }
-            InfoOverlayAction::ScrollToRight { request_id } => {
-                self.info_overlay.scroll_to_right(request_id);
+            InfoOverlayAction::Scroll { request_id, by } => {
+                self.info_overlay.scroll(request_id, by);
             }
             InfoOverlayAction::None => {}
         }

@@ -3,7 +3,7 @@
 //! staged or reverted from here.
 
 use super::animation::OverlayAnimation;
-use super::text_card::{TextCard, TextViewport};
+use super::text_card::{OverlayScroll, TextCard, TextViewport};
 use crate::terminal::diff_detector::{DetectedDiff, DiffLine};
 use crate::ui::geometry::Bounds;
 
@@ -87,25 +87,9 @@ pub enum DiffReviewAction {
     Dismiss {
         request_id: u64,
     },
-    ScrollRows {
+    Scroll {
         request_id: u64,
-        delta: isize,
-    },
-    ScrollColumns {
-        request_id: u64,
-        delta: isize,
-    },
-    ScrollToTop {
-        request_id: u64,
-    },
-    ScrollToBottom {
-        request_id: u64,
-    },
-    ScrollToLeft {
-        request_id: u64,
-    },
-    ScrollToRight {
-        request_id: u64,
+        by: OverlayScroll,
     },
     None,
 }
@@ -347,62 +331,18 @@ impl DiffReviewOverlay {
         &self.rows
     }
 
-    pub fn max_line_chars(&self) -> usize {
-        self.viewport.content_columns()
-    }
-
     pub fn set_viewport(&mut self, rows: usize, columns: usize) {
         self.viewport.resize(rows, columns);
     }
 
-    pub fn scroll_rows(&mut self, request_id: u64, delta: isize) -> bool {
-        self.is_awaiting(request_id) && self.viewport.scroll_by(delta, 0)
+    /// Scroll for the current request; whether anything moved.
+    pub fn scroll(&mut self, request_id: u64, by: OverlayScroll) -> bool {
+        self.is_awaiting(request_id) && self.viewport.apply(by)
     }
 
-    pub fn scroll_columns(&mut self, request_id: u64, delta: isize) -> bool {
-        self.is_awaiting(request_id) && self.viewport.scroll_by(0, delta)
-    }
-
-    pub fn scroll_to_top(&mut self, request_id: u64) -> bool {
-        self.is_awaiting(request_id) && self.viewport.scroll_to(Some(0), None)
-    }
-
-    pub fn scroll_to_bottom(&mut self, request_id: u64) -> bool {
-        let bottom = self.viewport.max_row();
-        self.is_awaiting(request_id) && self.viewport.scroll_to(Some(bottom), None)
-    }
-
-    pub fn scroll_to_left(&mut self, request_id: u64) -> bool {
-        self.is_awaiting(request_id) && self.viewport.scroll_to(None, Some(0))
-    }
-
-    pub fn scroll_to_right(&mut self, request_id: u64) -> bool {
-        let right = self.viewport.max_column();
-        self.is_awaiting(request_id) && self.viewport.scroll_to(None, Some(right))
-    }
-
-    pub fn scroll_offset(&self) -> usize {
-        self.viewport.row()
-    }
-
-    pub fn horizontal_offset(&self) -> usize {
-        self.viewport.column()
-    }
-
-    pub fn viewport_rows(&self) -> usize {
-        self.viewport.rows()
-    }
-
-    pub fn viewport_columns(&self) -> usize {
-        self.viewport.columns()
-    }
-
-    pub fn max_scroll_offset(&self) -> usize {
-        self.viewport.max_row()
-    }
-
-    pub fn max_horizontal_offset(&self) -> usize {
-        self.viewport.max_column()
+    /// The part of the diff in view.
+    pub fn viewport(&self) -> &TextViewport {
+        &self.viewport
     }
 
     pub fn visible_rows(&self) -> impl Iterator<Item = (usize, &DiffReviewRow)> {
@@ -643,7 +583,10 @@ mod tests {
         let raw = diff.raw.clone();
         let request = overlay.show(&diff, 12, crate::panes::PaneId(0));
         assert_eq!(overlay.rows().len(), MAX_DIFF_REVIEW_ROWS);
-        assert_eq!(overlay.max_line_chars(), MAX_DIFF_REVIEW_LINE_CHARS);
+        assert_eq!(
+            overlay.viewport().content_columns(),
+            MAX_DIFF_REVIEW_LINE_CHARS
+        );
         assert!(matches!(
             overlay.rows().last(),
             Some(DiffReviewRow::Omitted(_))
@@ -658,10 +601,10 @@ mod tests {
         let first_diff = fixture(1, 20, 100);
         let first = overlay.show(&first_diff, 9, crate::panes::PaneId(0));
         overlay.set_viewport(4, 10);
-        assert!(overlay.scroll_rows(first, 100));
-        assert_eq!(overlay.scroll_offset(), overlay.max_scroll_offset());
-        assert!(overlay.scroll_columns(first, 100));
-        assert_eq!(overlay.horizontal_offset(), overlay.max_horizontal_offset());
+        assert!(overlay.scroll(first, OverlayScroll::Rows(100)));
+        assert_eq!(overlay.viewport().row(), overlay.viewport().max_row());
+        assert!(overlay.scroll(first, OverlayScroll::Columns(100)));
+        assert_eq!(overlay.viewport().column(), overlay.viewport().max_column());
 
         let current_diff = fixture(2, 1, 1);
         let current = overlay.show(&current_diff, 10, crate::panes::PaneId(0));

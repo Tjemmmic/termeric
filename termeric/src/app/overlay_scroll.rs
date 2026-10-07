@@ -1,17 +1,7 @@
 //! The scrolling keys the info overlay and diff review share.
 
+use crate::ui::text_card::OverlayScroll;
 use winit::keyboard::{Key, ModifiersState, NamedKey};
-
-/// How far one key scrolls a two-axis text viewport.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum OverlayScroll {
-    Rows(isize),
-    Columns(isize),
-    Top,
-    Bottom,
-    LineStart,
-    LineEnd,
-}
 
 /// Columns one horizontal arrow press scrolls.
 const COLUMN_STEP: isize = 4;

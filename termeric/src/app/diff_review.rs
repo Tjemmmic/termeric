@@ -16,42 +16,35 @@ impl App {
             self.diff_review.animation(),
             self.diff_review.filename(),
             self.diff_review.rows().len(),
-            self.diff_review.max_line_chars(),
+            self.diff_review.viewport().content_columns(),
             self.diff_review.has_change_actions(),
         )
     }
 
     /// Keys for diff review: scrolling, copy, and staging or reverting an agent change.
     pub(super) fn handle_diff_review_key(&mut self, key: &winit::keyboard::Key) {
-        use super::overlay_scroll::{OverlayScroll, overlay_scroll_for_key};
+        use super::overlay_scroll::overlay_scroll_for_key;
         use crate::ui::diff_review::DiffReviewAction;
+        use crate::ui::text_card::OverlayScroll;
         use winit::keyboard::{Key, NamedKey};
         let request_id = self.diff_review.request_id();
-        let scroll = overlay_scroll_for_key(key, self.modifiers, self.diff_review.viewport_rows());
+        let scroll =
+            overlay_scroll_for_key(key, self.modifiers, self.diff_review.viewport().rows());
         let action = match (scroll, key) {
-            (Some(OverlayScroll::Rows(delta)), _) => {
-                DiffReviewAction::ScrollRows { request_id, delta }
-            }
-            (Some(OverlayScroll::Columns(delta)), _) => {
-                DiffReviewAction::ScrollColumns { request_id, delta }
-            }
-            (Some(OverlayScroll::Top), _) => DiffReviewAction::ScrollToTop { request_id },
-            (Some(OverlayScroll::Bottom), _) => DiffReviewAction::ScrollToBottom { request_id },
-            (Some(OverlayScroll::LineStart), _) => DiffReviewAction::ScrollToLeft { request_id },
-            (Some(OverlayScroll::LineEnd), _) => DiffReviewAction::ScrollToRight { request_id },
+            (Some(by), _) => DiffReviewAction::Scroll { request_id, by },
             (None, Key::Named(NamedKey::Enter | NamedKey::Escape)) => {
                 DiffReviewAction::Dismiss { request_id }
             }
             (None, Key::Character(key)) if key.as_str().eq_ignore_ascii_case("k") => {
-                DiffReviewAction::ScrollRows {
+                DiffReviewAction::Scroll {
                     request_id,
-                    delta: -3,
+                    by: OverlayScroll::Rows(-3),
                 }
             }
             (None, Key::Character(key)) if key.as_str().eq_ignore_ascii_case("j") => {
-                DiffReviewAction::ScrollRows {
+                DiffReviewAction::Scroll {
                     request_id,
-                    delta: 3,
+                    by: OverlayScroll::Rows(3),
                 }
             }
             (None, Key::Character(key)) if key.as_str().eq_ignore_ascii_case("c") => {
@@ -122,23 +115,8 @@ impl App {
                     state.diff_detector.mark_reviewed(target.diff_id);
                 }
             }
-            DiffReviewAction::ScrollRows { request_id, delta } => {
-                self.diff_review.scroll_rows(request_id, delta);
-            }
-            DiffReviewAction::ScrollColumns { request_id, delta } => {
-                self.diff_review.scroll_columns(request_id, delta);
-            }
-            DiffReviewAction::ScrollToTop { request_id } => {
-                self.diff_review.scroll_to_top(request_id);
-            }
-            DiffReviewAction::ScrollToBottom { request_id } => {
-                self.diff_review.scroll_to_bottom(request_id);
-            }
-            DiffReviewAction::ScrollToLeft { request_id } => {
-                self.diff_review.scroll_to_left(request_id);
-            }
-            DiffReviewAction::ScrollToRight { request_id } => {
-                self.diff_review.scroll_to_right(request_id);
+            DiffReviewAction::Scroll { request_id, by } => {
+                self.diff_review.scroll(request_id, by);
             }
             DiffReviewAction::None => {}
         }

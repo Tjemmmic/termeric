@@ -14,6 +14,7 @@ use winit::{
 
 use super::App;
 use super::redraw_scheduler::RedrawReason;
+use crate::ui::text_card::OverlayScroll;
 
 impl App {
     pub(super) fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -621,10 +622,10 @@ impl App {
                     } else if let Some(line) = layout.content_row_at(
                         mx,
                         my,
-                        self.info_overlay.scroll_offset(),
+                        self.info_overlay.viewport().row(),
                         self.info_overlay.lines().len(),
                     ) {
-                        let column = self.info_overlay.horizontal_offset().saturating_add(
+                        let column = self.info_overlay.viewport().column().saturating_add(
                             ((mx - layout.content.x) / layout.char_scale)
                                 .floor()
                                 .max(0.0) as usize,
@@ -804,14 +805,14 @@ impl App {
                 use crate::ui::info_overlay::InfoOverlayAction;
                 let request_id = self.info_overlay.request_id();
                 self.apply_info_overlay_action(if sideways {
-                    InfoOverlayAction::ScrollColumns {
+                    InfoOverlayAction::Scroll {
                         request_id,
-                        delta: two_axis_columns,
+                        by: OverlayScroll::Columns(two_axis_columns),
                     }
                 } else {
-                    InfoOverlayAction::ScrollLines {
+                    InfoOverlayAction::Scroll {
                         request_id,
-                        delta: two_axis_rows,
+                        by: OverlayScroll::Rows(two_axis_rows),
                     }
                 });
             }
@@ -819,14 +820,14 @@ impl App {
                 use crate::ui::diff_review::DiffReviewAction;
                 let request_id = self.diff_review.request_id();
                 self.apply_diff_review_action(if sideways {
-                    DiffReviewAction::ScrollColumns {
+                    DiffReviewAction::Scroll {
                         request_id,
-                        delta: two_axis_columns,
+                        by: OverlayScroll::Columns(two_axis_columns),
                     }
                 } else {
-                    DiffReviewAction::ScrollRows {
+                    DiffReviewAction::Scroll {
                         request_id,
-                        delta: two_axis_rows,
+                        by: OverlayScroll::Rows(two_axis_rows),
                     }
                 });
             }
@@ -1020,7 +1021,7 @@ mod wheel_tests {
         app.info_overlay.show("Long notice", lines);
         app.info_overlay.set_viewport(5, 80);
         app.handle_mouse_wheel(MouseScrollDelta::LineDelta(0.0, -3.0));
-        assert_eq!(app.info_overlay.scroll_offset(), 3);
+        assert_eq!(app.info_overlay.viewport().row(), 3);
 
         app.guardrail.show(
             crate::terminal::guardrails::GuardrailMatch {
@@ -1037,7 +1038,7 @@ mod wheel_tests {
             )],
         );
         app.handle_mouse_wheel(MouseScrollDelta::LineDelta(0.0, -3.0));
-        assert_eq!(app.info_overlay.scroll_offset(), 3);
+        assert_eq!(app.info_overlay.viewport().row(), 3);
     }
 
     #[test]
@@ -1081,7 +1082,7 @@ mod wheel_tests {
         app.info_overlay.show("Wide notice", lines);
         app.info_overlay.set_viewport(5, 80);
         app.handle_mouse_wheel(MouseScrollDelta::LineDelta(0.0, -3.0));
-        assert_eq!(app.info_overlay.scroll_offset(), 0);
-        assert_eq!(app.info_overlay.horizontal_offset(), 3);
+        assert_eq!(app.info_overlay.viewport().row(), 0);
+        assert_eq!(app.info_overlay.viewport().column(), 3);
     }
 }

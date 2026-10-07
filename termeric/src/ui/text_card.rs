@@ -101,6 +101,17 @@ impl TextCard {
     }
 }
 
+/// One scroll of a card's text: by rows or columns, or to an edge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OverlayScroll {
+    Rows(isize),
+    Columns(isize),
+    Top,
+    Bottom,
+    LineStart,
+    LineEnd,
+}
+
 /// The part of a card's text in view: `rows` × `columns` cells scrolled
 /// over `content_rows` lines at most `content_columns` wide.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -164,6 +175,18 @@ impl TextViewport {
         self.column = column.unwrap_or(self.column);
         self.clamp();
         before != (self.row, self.column)
+    }
+
+    /// Apply one scroll; whether anything moved.
+    pub fn apply(&mut self, scroll: OverlayScroll) -> bool {
+        match scroll {
+            OverlayScroll::Rows(delta) => self.scroll_by(delta, 0),
+            OverlayScroll::Columns(delta) => self.scroll_by(0, delta),
+            OverlayScroll::Top => self.scroll_to(Some(0), None),
+            OverlayScroll::Bottom => self.scroll_to(Some(self.max_row()), None),
+            OverlayScroll::LineStart => self.scroll_to(None, Some(0)),
+            OverlayScroll::LineEnd => self.scroll_to(None, Some(self.max_column())),
+        }
     }
 
     /// Scroll as little as possible to show `row`.
@@ -238,6 +261,27 @@ mod tests {
         assert_eq!((viewport.row(), viewport.column()), (2, 0));
         viewport.reset(3, 3);
         assert_eq!((viewport.max_row(), viewport.max_column()), (0, 0));
+    }
+
+    #[test]
+    fn each_scroll_moves_its_axis_to_the_step_or_edge() {
+        let mut viewport = TextViewport::default();
+        viewport.reset(100, 40);
+        viewport.resize(10, 30);
+        let at = |viewport: &TextViewport| (viewport.row(), viewport.column());
+        assert!(viewport.apply(OverlayScroll::Rows(3)));
+        assert!(viewport.apply(OverlayScroll::Columns(2)));
+        assert_eq!(at(&viewport), (3, 2));
+        assert!(viewport.apply(OverlayScroll::Bottom));
+        assert!(viewport.apply(OverlayScroll::LineEnd));
+        assert_eq!(at(&viewport), (90, 10));
+        assert!(
+            !viewport.apply(OverlayScroll::Bottom),
+            "already at the bottom"
+        );
+        assert!(viewport.apply(OverlayScroll::Top));
+        assert!(viewport.apply(OverlayScroll::LineStart));
+        assert_eq!(at(&viewport), (0, 0));
     }
 
     #[test]

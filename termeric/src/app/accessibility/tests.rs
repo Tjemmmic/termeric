@@ -3671,7 +3671,7 @@ fn info_overlay_keyboard_and_assistive_focus_share_the_same_owner_and_bounds() {
         .unwrap();
     let expected = bounds_rect(
         layout
-            .source_line_rect(1, app.info_overlay.scroll_offset(), 40)
+            .source_line_rect(1, app.info_overlay.viewport().row(), 40)
             .unwrap(),
     );
     assert_eq!(bounds, expected);
@@ -3780,7 +3780,7 @@ fn info_overlay_is_one_scrollable_modal_tree_with_shared_geometry() {
         target_node: content,
         data: None,
     });
-    assert!(app.info_overlay.scroll_offset() > 0);
+    assert!(app.info_overlay.viewport().row() > 0);
     let scrolled = app.accessibility_snapshot();
     let scrolled_content = &scrolled
         .nodes
@@ -3892,7 +3892,7 @@ fn info_overlay_input_is_editable_focused_and_uses_shared_row_geometry() {
     assert_eq!(snapshot.focus, input_id);
     let actual = input.bounds().unwrap();
     let expected = layout
-        .source_line_rect(1, app.info_overlay.scroll_offset(), 3)
+        .source_line_rect(1, app.info_overlay.viewport().row(), 3)
         .map(bounds_rect)
         .unwrap();
     assert_eq!(actual, expected);
@@ -3996,8 +3996,8 @@ fn diff_review_is_one_scrollable_modal_tree_with_shared_geometry() {
         target_node: content,
         data: None,
     });
-    assert!(app.diff_review.scroll_offset() > 0);
-    assert!(app.diff_review.horizontal_offset() > 0);
+    assert!(app.diff_review.viewport().row() > 0);
+    assert!(app.diff_review.viewport().column() > 0);
 }
 
 #[test]

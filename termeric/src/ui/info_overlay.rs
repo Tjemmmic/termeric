@@ -1,7 +1,7 @@
 //! Bounded modal notices used for application information, errors, and choices.
 
 use super::animation::OverlayAnimation;
-use super::text_card::{TextCard, TextViewport};
+use super::text_card::{OverlayScroll, TextCard, TextViewport};
 use super::text_input::{TextInput, TextInputEdit, TextLimit, grapheme_boundary};
 use crate::ui::geometry::Bounds;
 
@@ -96,12 +96,7 @@ pub enum InfoOverlayAction {
     Choose { request_id: u64, choice_id: String },
     SubmitInput { request_id: u64 },
     CancelInput { request_id: u64 },
-    ScrollLines { request_id: u64, delta: isize },
-    ScrollColumns { request_id: u64, delta: isize },
-    ScrollToTop { request_id: u64 },
-    ScrollToBottom { request_id: u64 },
-    ScrollToLeft { request_id: u64 },
-    ScrollToRight { request_id: u64 },
+    Scroll { request_id: u64, by: OverlayScroll },
     None,
 }
 
@@ -617,78 +612,24 @@ impl InfoOverlay {
         self.ensure_focus_visible();
     }
 
-    pub fn scroll_lines(&mut self, request_id: u64, delta: isize) -> bool {
-        self.set_scroll(request_id, |viewport| viewport.scroll_by(delta, 0))
-    }
-
-    pub fn scroll_columns(&mut self, request_id: u64, delta: isize) -> bool {
-        self.set_scroll(request_id, |viewport| viewport.scroll_by(0, delta))
-    }
-
-    pub fn scroll_to_top(&mut self, request_id: u64) -> bool {
-        self.set_scroll(request_id, |viewport| viewport.scroll_to(Some(0), None))
-    }
-
-    pub fn scroll_to_bottom(&mut self, request_id: u64) -> bool {
-        self.set_scroll(request_id, |viewport| {
-            viewport.scroll_to(Some(viewport.max_row()), None)
-        })
-    }
-
-    pub fn scroll_to_left(&mut self, request_id: u64) -> bool {
-        self.set_scroll(request_id, |viewport| viewport.scroll_to(None, Some(0)))
-    }
-
-    pub fn scroll_to_right(&mut self, request_id: u64) -> bool {
-        self.set_scroll(request_id, |viewport| {
-            viewport.scroll_to(None, Some(viewport.max_column()))
-        })
-    }
-
-    /// Scroll for the current request. A choice scrolled out of view loses
-    /// keyboard focus, so Enter cannot act on something no longer shown.
-    fn set_scroll(
-        &mut self,
-        request_id: u64,
-        scroll: impl FnOnce(&mut TextViewport) -> bool,
-    ) -> bool {
+    /// Scroll for the current request; whether anything moved. A choice
+    /// scrolled out of view loses keyboard focus, so Enter cannot act on
+    /// something no longer shown.
+    pub fn scroll(&mut self, request_id: u64, by: OverlayScroll) -> bool {
         if !self.is_awaiting(request_id) {
             return false;
         }
         let row = self.viewport.row();
-        let moved = scroll(&mut self.viewport);
+        let moved = self.viewport.apply(by);
         if self.viewport.row() != row && matches!(self.focus(), Some(InfoOverlayFocus::Choice(_))) {
             self.focus = None;
         }
         moved
     }
 
-    pub fn scroll_offset(&self) -> usize {
-        self.viewport.row()
-    }
-
-    pub fn horizontal_offset(&self) -> usize {
-        self.viewport.column()
-    }
-
-    pub fn viewport_rows(&self) -> usize {
-        self.viewport.rows()
-    }
-
-    pub fn viewport_columns(&self) -> usize {
-        self.viewport.columns()
-    }
-
-    pub fn max_scroll_offset(&self) -> usize {
-        self.viewport.max_row()
-    }
-
-    pub fn max_horizontal_offset(&self) -> usize {
-        self.viewport.max_column()
-    }
-
-    pub fn max_line_chars(&self) -> usize {
-        self.viewport.content_columns()
+    /// The part of the text in view.
+    pub fn viewport(&self) -> &TextViewport {
+        &self.viewport
     }
 
     pub fn visible_lines(&self) -> impl Iterator<Item = (usize, &str)> {
@@ -818,7 +759,7 @@ mod tests {
                 }
             );
             assert!(
-                (overlay.scroll_offset()..overlay.scroll_offset() + overlay.viewport_rows())
+                (overlay.viewport().row()..overlay.viewport().row() + overlay.viewport().rows())
                     .contains(&(i * 2))
             );
         }
@@ -842,8 +783,8 @@ mod tests {
         assert_eq!(overlay.focus(), Some(&InfoOverlayFocus::Copy));
         overlay.cycle_focus(request, true);
         overlay.set_viewport(1, 20);
-        assert_eq!(overlay.scroll_offset(), 62);
-        overlay.scroll_to_top(request);
+        assert_eq!(overlay.viewport().row(), 62);
+        overlay.scroll(request, OverlayScroll::Top);
         assert!(overlay.focus().is_none());
         assert_eq!(
             overlay.activate_focused(request),
@@ -892,10 +833,10 @@ mod tests {
         );
         assert!(overlay.input_focused());
         overlay.set_viewport(1, 2);
-        assert!(overlay.horizontal_offset() > 0);
+        assert!(overlay.viewport().column() > 0);
         overlay.cycle_focus(request, false);
         assert!(!overlay.input_focused());
-        assert_eq!(overlay.horizontal_offset(), 0);
+        assert_eq!(overlay.viewport().column(), 0);
         assert_eq!(
             overlay.activate_focused(request),
             InfoOverlayAction::Choose {
@@ -941,7 +882,7 @@ mod tests {
         );
         assert!(overlay.title().chars().count() <= MAX_INFO_TITLE_CHARS);
         assert_eq!(overlay.lines().len(), MAX_INFO_LINES);
-        assert_eq!(overlay.max_line_chars(), MAX_INFO_LINE_CHARS);
+        assert_eq!(overlay.viewport().content_columns(), MAX_INFO_LINE_CHARS);
         assert!(
             overlay
                 .lines()
@@ -958,7 +899,7 @@ mod tests {
         assert!(overlay.is_active());
         assert!(!overlay.is_awaiting(request));
         assert_eq!(overlay.copy_text(request), None);
-        assert!(!overlay.scroll_lines(request, 1));
+        assert!(!overlay.scroll(request, OverlayScroll::Rows(1)));
     }
 
     #[test]
@@ -986,14 +927,14 @@ mod tests {
                 .collect(),
         );
         overlay.set_viewport(3, 8);
-        assert!(overlay.scroll_lines(request, 100));
-        assert_eq!(overlay.scroll_offset(), 7);
-        assert!(overlay.scroll_columns(request, 100));
-        assert_eq!(overlay.horizontal_offset(), overlay.max_horizontal_offset());
-        assert!(overlay.scroll_to_top(request));
-        assert!(overlay.scroll_to_left(request));
+        assert!(overlay.scroll(request, OverlayScroll::Rows(100)));
+        assert_eq!(overlay.viewport().row(), 7);
+        assert!(overlay.scroll(request, OverlayScroll::Columns(100)));
+        assert_eq!(overlay.viewport().column(), overlay.viewport().max_column());
+        assert!(overlay.scroll(request, OverlayScroll::Top));
+        assert!(overlay.scroll(request, OverlayScroll::LineStart));
         assert_eq!(
-            (overlay.scroll_offset(), overlay.horizontal_offset()),
+            (overlay.viewport().row(), overlay.viewport().column()),
             (0, 0)
         );
     }
@@ -1143,12 +1084,12 @@ mod tests {
         let (mut overlay, request) = input_overlay(&"x".repeat(40), 64);
         overlay.set_viewport(5, 10);
         let label = "Value: ".chars().count();
-        assert!(overlay.horizontal_offset() > label);
+        assert!(overlay.viewport().column() > label);
 
         assert!(overlay.edit_input(request, TextInputEdit::Home));
-        assert_eq!(overlay.horizontal_offset(), label);
+        assert_eq!(overlay.viewport().column(), label);
         assert!(overlay.edit_input(request, TextInputEdit::End));
-        assert!(overlay.horizontal_offset() > label);
+        assert!(overlay.viewport().column() > label);
     }
 
     #[test]

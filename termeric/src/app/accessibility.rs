@@ -19,6 +19,7 @@ use crate::ui::commands::navigation::{
     command_keys as custom_command_keys,
 };
 use crate::ui::geometry::Bounds;
+use crate::ui::text_card::OverlayScroll;
 
 const ROOT: NodeId = NodeId(1);
 const TAB_LIST: NodeId = NodeId(2);
@@ -1202,27 +1203,27 @@ impl App {
                 choice_id,
             },
             (Action::ScrollUp, InfoSemanticTarget::Content(request_id)) => {
-                InfoOverlayAction::ScrollLines {
+                InfoOverlayAction::Scroll {
                     request_id,
-                    delta: -(self.info_overlay.viewport_rows() as isize),
+                    by: OverlayScroll::Rows(-(self.info_overlay.viewport().rows() as isize)),
                 }
             }
             (Action::ScrollDown, InfoSemanticTarget::Content(request_id)) => {
-                InfoOverlayAction::ScrollLines {
+                InfoOverlayAction::Scroll {
                     request_id,
-                    delta: self.info_overlay.viewport_rows() as isize,
+                    by: OverlayScroll::Rows(self.info_overlay.viewport().rows() as isize),
                 }
             }
             (Action::ScrollLeft, InfoSemanticTarget::Content(request_id)) => {
-                InfoOverlayAction::ScrollColumns {
+                InfoOverlayAction::Scroll {
                     request_id,
-                    delta: -(self.info_overlay.viewport_columns() as isize),
+                    by: OverlayScroll::Columns(-(self.info_overlay.viewport().columns() as isize)),
                 }
             }
             (Action::ScrollRight, InfoSemanticTarget::Content(request_id)) => {
-                InfoOverlayAction::ScrollColumns {
+                InfoOverlayAction::Scroll {
                     request_id,
-                    delta: self.info_overlay.viewport_columns() as isize,
+                    by: OverlayScroll::Columns(self.info_overlay.viewport().columns() as isize),
                 }
             }
             _ => InfoOverlayAction::None,
@@ -1272,27 +1273,27 @@ impl App {
                 DiffReviewAction::Revert { request_id }
             }
             (Action::ScrollUp, DiffSemanticTarget::Content(request_id)) => {
-                DiffReviewAction::ScrollRows {
+                DiffReviewAction::Scroll {
                     request_id,
-                    delta: -(self.diff_review.viewport_rows() as isize),
+                    by: OverlayScroll::Rows(-(self.diff_review.viewport().rows() as isize)),
                 }
             }
             (Action::ScrollDown, DiffSemanticTarget::Content(request_id)) => {
-                DiffReviewAction::ScrollRows {
+                DiffReviewAction::Scroll {
                     request_id,
-                    delta: self.diff_review.viewport_rows() as isize,
+                    by: OverlayScroll::Rows(self.diff_review.viewport().rows() as isize),
                 }
             }
             (Action::ScrollLeft, DiffSemanticTarget::Content(request_id)) => {
-                DiffReviewAction::ScrollColumns {
+                DiffReviewAction::Scroll {
                     request_id,
-                    delta: -(self.diff_review.viewport_columns() as isize),
+                    by: OverlayScroll::Columns(-(self.diff_review.viewport().columns() as isize)),
                 }
             }
             (Action::ScrollRight, DiffSemanticTarget::Content(request_id)) => {
-                DiffReviewAction::ScrollColumns {
+                DiffReviewAction::Scroll {
                     request_id,
-                    delta: self.diff_review.viewport_columns() as isize,
+                    by: OverlayScroll::Columns(self.diff_review.viewport().columns() as isize),
                 }
             }
             _ => DiffReviewAction::None,
@@ -3349,8 +3350,8 @@ impl App {
             .set_viewport(layout.rows_that_fit, layout.columns_that_fit);
         let request_id = self.info_overlay.request_id();
         let awaiting = self.info_overlay.is_awaiting_current();
-        let scroll_offset = self.info_overlay.scroll_offset();
-        let horizontal_offset = self.info_overlay.horizontal_offset();
+        let scroll_offset = self.info_overlay.viewport().row();
+        let horizontal_offset = self.info_overlay.viewport().column();
         let total_lines = self.info_overlay.lines().len();
         let input_info = self.info_overlay.input_info(request_id);
         let input_visible = input_info.as_ref().is_some_and(|input| {
@@ -3455,16 +3456,16 @@ impl App {
         content.set_children(content_children);
         if awaiting {
             content.add_action(Action::Focus);
-            if self.info_overlay.scroll_offset() > 0 {
+            if self.info_overlay.viewport().row() > 0 {
                 content.add_action(Action::ScrollUp);
             }
-            if self.info_overlay.scroll_offset() < self.info_overlay.max_scroll_offset() {
+            if self.info_overlay.viewport().row() < self.info_overlay.viewport().max_row() {
                 content.add_action(Action::ScrollDown);
             }
-            if self.info_overlay.horizontal_offset() > 0 {
+            if self.info_overlay.viewport().column() > 0 {
                 content.add_action(Action::ScrollLeft);
             }
-            if self.info_overlay.horizontal_offset() < self.info_overlay.max_horizontal_offset() {
+            if self.info_overlay.viewport().column() < self.info_overlay.viewport().max_column() {
                 content.add_action(Action::ScrollRight);
             }
         } else {
@@ -3864,8 +3865,8 @@ impl App {
             .set_viewport(layout.rows_that_fit, layout.columns_that_fit);
         let request_id = self.diff_review.request_id();
         let awaiting = self.diff_review.is_awaiting_current();
-        let scroll_offset = self.diff_review.scroll_offset();
-        let horizontal_offset = self.diff_review.horizontal_offset();
+        let scroll_offset = self.diff_review.viewport().row();
+        let horizontal_offset = self.diff_review.viewport().column();
         let total_rows = self.diff_review.rows().len();
 
         let content_target = DiffSemanticTarget::Content(request_id);
@@ -3937,16 +3938,16 @@ impl App {
         content.set_bounds(bounds_rect(layout.content));
         if awaiting {
             content.add_action(Action::Focus);
-            if self.diff_review.scroll_offset() > 0 {
+            if self.diff_review.viewport().row() > 0 {
                 content.add_action(Action::ScrollUp);
             }
-            if self.diff_review.scroll_offset() < self.diff_review.max_scroll_offset() {
+            if self.diff_review.viewport().row() < self.diff_review.viewport().max_row() {
                 content.add_action(Action::ScrollDown);
             }
-            if self.diff_review.horizontal_offset() > 0 {
+            if self.diff_review.viewport().column() > 0 {
                 content.add_action(Action::ScrollLeft);
             }
-            if self.diff_review.horizontal_offset() < self.diff_review.max_horizontal_offset() {
+            if self.diff_review.viewport().column() < self.diff_review.viewport().max_column() {
                 content.add_action(Action::ScrollRight);
             }
         } else {
