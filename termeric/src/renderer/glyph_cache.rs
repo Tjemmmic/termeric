@@ -1726,37 +1726,6 @@ impl GlyphCache {
         );
     }
 
-    /// Change font family, clearing the cache and recalculating metrics
-    pub fn set_font_family(&mut self, font_family: String, queue: &Queue) {
-        if self.font_family == font_family {
-            return;
-        }
-
-        self.font_family = font_family;
-        self.configured_families = collect_configured_families(
-            &self.font_system,
-            &self.font_family,
-            &self.fallback_families,
-        );
-
-        let cell = measure_cell(
-            &mut self.font_system,
-            &self.metrics,
-            &self.font_family,
-            self.font_weight,
-        );
-        self.apply_cell_metrics(cell);
-
-        self.clear_atlas(queue);
-
-        log::info!(
-            "Font family changed to {}, cell size: {}x{}",
-            self.font_family,
-            cell.width,
-            cell.height
-        );
-    }
-
     /// Apply primary/fallback family selection. The first installed configured
     /// primary wins for cell metrics, while the complete ordered chain is used
     /// for each scalar or grapheme before platform fallback.
@@ -1776,12 +1745,25 @@ impl GlyphCache {
             collect_configured_families(&self.font_system, &resolved, fallbacks);
         self.configured_range_overrides =
             collect_configured_range_overrides(&self.font_system, range_overrides);
-        if self.font_family == resolved {
-            if fallbacks_changed || ranges_changed {
-                self.clear_atlas(queue);
-            }
-        } else {
-            self.set_font_family(resolved, queue);
+        if self.font_family != resolved {
+            // A new primary family measures new cells.
+            self.font_family = resolved;
+            let cell = measure_cell(
+                &mut self.font_system,
+                &self.metrics,
+                &self.font_family,
+                self.font_weight,
+            );
+            self.apply_cell_metrics(cell);
+            self.clear_atlas(queue);
+            log::info!(
+                "Font family changed to {}, cell size: {}x{}",
+                self.font_family,
+                cell.width,
+                cell.height
+            );
+        } else if fallbacks_changed || ranges_changed {
+            self.clear_atlas(queue);
         }
     }
 
