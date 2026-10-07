@@ -16,7 +16,6 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 /// The one declarative plugin API version. Manifests must declare it exactly;
@@ -24,8 +23,8 @@ use std::path::{Path, PathBuf};
 pub const PLUGIN_API_VERSION: u32 = 1;
 pub const REGISTRY_SCHEMA_VERSION: u32 = 1;
 pub const MANIFEST_NAME: &str = "termeric-plugin.toml";
-const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
-const MAX_REGISTRY_BYTES: u64 = 512 * 1024;
+const MAX_MANIFEST_BYTES: usize = 64 * 1024;
+const MAX_REGISTRY_BYTES: usize = 512 * 1024;
 const MAX_SOURCE_PATH_BYTES: usize = 16 * 1024;
 const MAX_PROFILES: usize = 32;
 const MAX_HANDLER_COMMANDS: usize = 32;
@@ -239,15 +238,8 @@ impl PluginManifest {
             bail!("plugin source {} is not a directory", directory.display());
         }
         let path = directory.join(MANIFEST_NAME);
-        let metadata =
-            fs::symlink_metadata(&path).with_context(|| format!("missing {}", path.display()))?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            bail!("plugin manifest must be a regular, non-symlink file");
-        }
-        if metadata.len() > MAX_MANIFEST_BYTES {
-            bail!("plugin manifest exceeds {MAX_MANIFEST_BYTES} bytes");
-        }
-        let bytes = read_bounded(&path, MAX_MANIFEST_BYTES, "plugin manifest")?;
+        let bytes = crate::safe_fs::read_bytes(&path, MAX_MANIFEST_BYTES)
+            .with_context(|| format!("failed to read plugin manifest {}", path.display()))?;
         let text = std::str::from_utf8(&bytes).context("plugin manifest must be UTF-8")?;
         let manifest: Self = toml::from_str(text).context("invalid plugin manifest TOML")?;
         manifest.validate()?;
@@ -466,20 +458,16 @@ impl Default for PluginRegistry {
 
 impl PluginRegistry {
     fn load_from(path: &Path) -> Result<Self> {
-        let metadata = match fs::symlink_metadata(path) {
-            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
-                bail!("plugin registry must be a regular, non-symlink file")
-            }
-            Ok(metadata) => metadata,
+        let bytes = match crate::safe_fs::read_bytes(path, MAX_REGISTRY_BYTES) {
+            Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Self::default());
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to read plugin registry {}", path.display()));
+            }
         };
-        if metadata.len() > MAX_REGISTRY_BYTES {
-            bail!("plugin registry exceeds {MAX_REGISTRY_BYTES} bytes");
-        }
-        let bytes = read_bounded(path, MAX_REGISTRY_BYTES, "plugin registry")?;
         let text = std::str::from_utf8(&bytes).context("plugin registry must be UTF-8")?;
         let registry: Self = toml::from_str(text).with_context(|| {
             format!(
@@ -545,10 +533,9 @@ impl PluginRegistry {
             .parent()
             .ok_or_else(|| anyhow::anyhow!("plugin registry path has no parent"))?;
         ensure_real_directory(parent, "plugin registry directory")?;
-        let temporary = path.with_extension("toml.tmp");
-        write_new_temporary(&temporary, toml::to_string_pretty(self)?.as_bytes())?;
-        fs::rename(&temporary, path)?;
-        Ok(())
+        let text = toml::to_string_pretty(self)?;
+        crate::safe_fs::atomic_replace(path, |writer| writer.write_all(text.as_bytes()))
+            .with_context(|| format!("failed to write plugin registry {}", path.display()))
     }
 }
 
@@ -1655,9 +1642,7 @@ fn install_manifest(
             destination_manifest.display()
         );
     }
-    let temporary = destination.join(format!("{MANIFEST_NAME}.tmp"));
     let backup = destination.join(format!("{MANIFEST_NAME}.previous"));
-    write_new_temporary(&temporary, &bytes)?;
     let had_previous = destination_metadata.is_some();
     if had_previous {
         let metadata = destination_metadata.expect("previous manifest metadata was inspected");
@@ -1674,11 +1659,18 @@ fn install_manifest(
         }
         fs::rename(&destination_manifest, &backup)?;
     }
-    if let Err(error) = fs::rename(&temporary, &destination_manifest) {
+    if let Err(error) =
+        crate::safe_fs::atomic_replace(&destination_manifest, |writer| writer.write_all(&bytes))
+    {
         if had_previous {
             let _ = fs::rename(&backup, &destination_manifest);
         }
-        return Err(error.into());
+        return Err(error).with_context(|| {
+            format!(
+                "failed to write installed plugin manifest {}",
+                destination_manifest.display()
+            )
+        });
     }
     let default_profile = previous
         .as_ref()
@@ -1734,43 +1726,6 @@ fn install_manifest(
         source.display(),
         manifest.permissions,
     ))
-}
-
-fn write_new_temporary(path: &Path, bytes: &[u8]) -> Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
-            bail!(
-                "refusing to replace non-regular temporary file {}",
-                path.display()
-            )
-        }
-        Ok(_) => fs::remove_file(path)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
-    }
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .with_context(|| format!("failed to create temporary file {}", path.display()))?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    Ok(())
-}
-
-fn read_bounded(path: &Path, max_bytes: u64, label: &str) -> Result<Vec<u8>> {
-    let file =
-        fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
-    let mut bytes = Vec::with_capacity(
-        file.metadata()
-            .map(|metadata| metadata.len().min(max_bytes) as usize)
-            .unwrap_or(0),
-    );
-    file.take(max_bytes + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > max_bytes {
-        bail!("{label} exceeds {max_bytes} bytes");
-    }
-    Ok(bytes)
 }
 
 fn ensure_real_directory(path: &Path, label: &str) -> Result<()> {
@@ -3002,9 +2957,14 @@ events = ["command-invoked"]
                 .is_some_and(|error| error.contains("fingerprint"))
         );
 
-        fs::write(&registry_path, vec![b'x'; MAX_REGISTRY_BYTES as usize + 1]).unwrap();
+        fs::write(&registry_path, vec![b'x'; MAX_REGISTRY_BYTES + 1]).unwrap();
         let error = PluginRegistry::load_from(&registry_path).unwrap_err();
-        assert!(format!("{error:#}").contains("registry exceeds"));
+        assert_eq!(
+            error
+                .downcast_ref::<std::io::Error>()
+                .map(std::io::Error::kind),
+            Some(std::io::ErrorKind::InvalidData)
+        );
 
         fs::write(&registry_path, "schema_version = 99\nplugins = []\n").unwrap();
         assert!(PluginRegistry::load_from(&registry_path).is_err());
@@ -3961,36 +3921,50 @@ events = ["command-invoked"]
     }
 
     #[test]
-    fn administrative_temporary_symlinks_are_never_followed() {
-        use std::os::unix::fs::symlink;
+    fn administrative_files_are_staged_privately_and_never_written_through_links() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
 
         let (temp, source, root, registry_path) = fixture();
-        let installed = root.join("sample-tools");
-        fs::create_dir_all(&installed).unwrap();
-        let sentinel = temp.path().join("sentinel");
-        fs::write(&sentinel, "do-not-replace").unwrap();
-        symlink(&sentinel, installed.join(format!("{MANIFEST_NAME}.tmp"))).unwrap();
-
-        let error = execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source,
-                grants: permissions(&["process-spawn"]),
-                enable: true,
-                replace: false,
-            },
+        install(
+            &source,
+            permissions(&["process-spawn"]),
+            true,
             &registry_path,
             &root,
         )
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("non-regular temporary file"));
-        assert_eq!(fs::read_to_string(&sentinel).unwrap(), "do-not-replace");
-        assert!(!registry_path.exists());
-        assert!(!installed.join(MANIFEST_NAME).exists());
+        .unwrap();
+        let installed = root.join("sample-tools");
+        for file in [installed.join(MANIFEST_NAME), registry_path.clone()] {
+            let metadata = fs::symlink_metadata(&file).unwrap();
+            assert!(metadata.is_file(), "{}", file.display());
+            assert_eq!(
+                metadata.permissions().mode() & 0o077,
+                0,
+                "{}",
+                file.display()
+            );
+        }
+        // Nothing staged is left beside either file.
+        assert_eq!(fs::read_dir(&installed).unwrap().count(), 1);
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 3);
 
+        // A link planted at the registry is refused when read, and replaced
+        // rather than written through when saved.
+        let sentinel = temp.path().join("sentinel");
+        fs::write(&sentinel, "do-not-replace").unwrap();
+        let registry = PluginRegistry::load_from(&registry_path).unwrap();
+        fs::remove_file(&registry_path).unwrap();
         symlink(&sentinel, &registry_path).unwrap();
         let error = PluginRegistry::load_from(&registry_path).unwrap_err();
-        assert!(format!("{error:#}").contains("non-symlink file"));
+        assert_eq!(
+            error
+                .downcast_ref::<std::io::Error>()
+                .and_then(std::io::Error::raw_os_error),
+            Some(libc::ELOOP)
+        );
+        registry.save_to(&registry_path).unwrap();
         assert_eq!(fs::read_to_string(&sentinel).unwrap(), "do-not-replace");
+        assert!(fs::symlink_metadata(&registry_path).unwrap().is_file());
     }
 
     #[test]
