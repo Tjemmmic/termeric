@@ -173,7 +173,51 @@ impl UiPalette {
         }
         self.scrim[3] = self.scrim[3].max(0.65);
         self.palette_scrim[3] = self.palette_scrim[3].max(0.72);
+
+        // Status colors mean something by their hue (a warning is yellow, a
+        // failure red), so rather than turn them black or white they lighten
+        // or darken just enough to read on every surface they are drawn on:
+        // the terminal (pane outlines, growth indicators), the tab strip and
+        // tabs (activity and agent dots), menus and side panels (agent rows),
+        // and cards (toasts, diff review).
+        let surfaces = [
+            background,
+            self.tab_bar_bg,
+            self.tab_active,
+            self.tab_inactive,
+            self.menu_bg,
+            self.menu_highlight,
+            self.palette_bg,
+        ];
+        for status in [
+            &mut self.warning,
+            &mut self.error,
+            &mut self.success,
+            &mut self.info,
+        ] {
+            *status = readable_on(*status, &surfaces);
+        }
     }
+}
+
+/// `color`, mixed toward black or white (whichever high-contrast text uses
+/// on `surfaces`) by the least step that gives it 4.5:1 on all of them, so
+/// it keeps as much of its hue as legibility allows. The mix is not
+/// monotonic in contrast when `color` sits between surfaces, so it is
+/// searched in order rather than bisected; the far end is the high-contrast
+/// text color itself.
+fn readable_on(color: [f32; 4], surfaces: &[[f32; 4]]) -> [f32; 4] {
+    const STEPS: u16 = 64;
+    let target = high_contrast_text_on(surfaces);
+    let readable = |candidate: [f32; 4]| {
+        surfaces
+            .iter()
+            .all(|surface| contrast_ratio(candidate, *surface) >= 4.5)
+    };
+    (0..=STEPS)
+        .map(|step| with_alpha(mix(color, target, f32::from(step) / f32::from(STEPS)), 1.0))
+        .find(|candidate| readable(*candidate))
+        .unwrap_or(target)
 }
 
 /// Termeric composes in display-encoded sRGB space, as Qt, GTK and browsers
@@ -435,11 +479,76 @@ mod ui_palette_accessibility_tests {
                 // Command palette matches, on plain and selected rows.
                 (palette.palette_match_highlight, palette.menu_bg),
                 (palette.palette_match_highlight, palette.menu_highlight),
-            ] {
+            ]
+            .into_iter()
+            .chain(status_on_surfaces(&palette, terminal_background))
+            {
                 assert!(
                     contrast_ratio(foreground, background) >= 4.5,
                     "{theme_name} contrast was {}",
                     contrast_ratio(foreground, background)
+                );
+            }
+        }
+    }
+
+    /// Every status color against every surface it is drawn on.
+    fn status_on_surfaces(
+        palette: &UiPalette,
+        terminal_background: [f32; 4],
+    ) -> Vec<([f32; 4], [f32; 4])> {
+        let surfaces = [
+            terminal_background,
+            palette.tab_bar_bg,
+            palette.tab_active,
+            palette.tab_inactive,
+            palette.menu_bg,
+            palette.menu_highlight,
+            palette.palette_bg,
+        ];
+        [
+            palette.warning,
+            palette.error,
+            palette.success,
+            palette.info,
+        ]
+        .into_iter()
+        .flat_map(|status| surfaces.map(|surface| (status, surface)))
+        .collect()
+    }
+
+    #[test]
+    fn high_contrast_status_colors_keep_their_hue() {
+        let hue = |color: [f32; 4]| {
+            let [red, green, blue, _] = color;
+            let max = red.max(green).max(blue);
+            let min = red.min(green).min(blue);
+            let chroma = max - min;
+            let degrees = if max == red {
+                60.0 * ((green - blue) / chroma).rem_euclid(6.0)
+            } else if max == green {
+                60.0 * ((blue - red) / chroma + 2.0)
+            } else {
+                60.0 * ((red - green) / chroma + 4.0)
+            };
+            (degrees, chroma)
+        };
+        for theme_name in Theme::list_available() {
+            let theme = Theme::load_builtin(theme_name).unwrap();
+            let plain = UiPalette::from_theme_with_contrast(&theme, false);
+            let contrast = UiPalette::from_theme_with_contrast(&theme, true);
+            for (before, after) in [
+                (plain.warning, contrast.warning),
+                (plain.error, contrast.error),
+                (plain.success, contrast.success),
+                (plain.info, contrast.info),
+            ] {
+                let (before_hue, _) = hue(before);
+                let (after_hue, after_chroma) = hue(after);
+                let distance = (before_hue - after_hue).abs();
+                assert!(
+                    after_chroma > 0.05 && distance.min(360.0 - distance) < 1.0,
+                    "{theme_name}: {before:?} became {after:?}"
                 );
             }
         }
