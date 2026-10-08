@@ -12,7 +12,7 @@ pub use tab::{CommandLaunch, SavedSnapshot, Tab, TabType};
 pub(crate) use tab::{LiveDomainTab, TabAgentView};
 
 use crate::config::ShellConfig;
-use crate::panes::{PaneId, usable_workspace_cwd};
+use crate::panes::{PaneId, WorkspacePaneLaunches, usable_primary_workspace_cwd};
 use anyhow::Context;
 use std::collections::HashMap;
 use std::io;
@@ -1217,44 +1217,12 @@ impl TabManager {
     pub(crate) fn new_shell_tab_from_workspace(
         &mut self,
         snapshot: &crate::workspace::WorkspaceTabSnapshot,
-        pane_launches: &HashMap<
-            u32,
-            (
-                crate::workspace::WorkspaceLaunch,
-                crate::config::ShellConfig,
-            ),
-        >,
+        pane_launches: &WorkspacePaneLaunches,
     ) -> anyhow::Result<(usize, Vec<String>)> {
-        let primary = snapshot
-            .panes
-            .iter()
-            .find(|pane| pane.id == snapshot.primary_pane)
-            .ok_or_else(|| anyhow::anyhow!("workspace tab {} has no primary pane", snapshot.id))?;
         let mut warnings = Vec::new();
-        let cwd = usable_workspace_cwd(
-            primary.working_directory.as_deref(),
-            snapshot.id,
-            snapshot.primary_pane,
-            &mut warnings,
-        );
-        let id = self.next_id;
-        self.next_id += 1;
-        let mut tab = Tab::new_shell(
-            id,
-            self.area,
-            &self.shell,
-            &self.policy,
-            cwd.as_deref(),
-            Some(&snapshot.title),
-        )?;
-        tab.user_title.clone_from(&snapshot.user_title);
-        tab.pinned = snapshot.pinned;
-        if let Some(title) = &tab.user_title {
-            tab.title.clone_from(title);
-        }
-        self.tabs.push(tab);
+        let cwd = usable_primary_workspace_cwd(snapshot, &mut warnings)?;
+        self.new_tab_with_cwd(cwd.as_deref(), Some(&snapshot.title))?;
         let index = self.tabs.len() - 1;
-        self.active = index;
         warnings.extend(self.apply_workspace_layout(index, snapshot, pane_launches)?);
         Ok((index, warnings))
     }
@@ -1264,43 +1232,23 @@ impl TabManager {
         snapshot: &crate::workspace::WorkspaceTabSnapshot,
         name: &str,
         shell: ShellConfig,
-        pane_launches: &HashMap<
-            u32,
-            (
-                crate::workspace::WorkspaceLaunch,
-                crate::config::ShellConfig,
-            ),
-        >,
+        pane_launches: &WorkspacePaneLaunches,
     ) -> anyhow::Result<(usize, Vec<String>)> {
-        let primary = snapshot
-            .panes
-            .iter()
-            .find(|pane| pane.id == snapshot.primary_pane)
-            .ok_or_else(|| anyhow::anyhow!("workspace tab {} has no primary pane", snapshot.id))?;
         let mut warnings = Vec::new();
-        let cwd = usable_workspace_cwd(
-            primary.working_directory.as_deref(),
-            snapshot.id,
-            snapshot.primary_pane,
-            &mut warnings,
-        );
+        let cwd = usable_primary_workspace_cwd(snapshot, &mut warnings)?;
         self.new_tab_with_profile(name, shell, cwd.as_deref(), Some(&snapshot.title))?;
         let index = self.tabs.len() - 1;
         warnings.extend(self.apply_workspace_layout(index, snapshot, pane_launches)?);
         Ok((index, warnings))
     }
 
+    /// Give the tab at `index` the saved tab's titles, pin, and pane
+    /// layout, relaunching its other panes.
     pub(crate) fn apply_workspace_layout(
         &mut self,
         index: usize,
         snapshot: &crate::workspace::WorkspaceTabSnapshot,
-        pane_launches: &HashMap<
-            u32,
-            (
-                crate::workspace::WorkspaceLaunch,
-                crate::config::ShellConfig,
-            ),
-        >,
+        pane_launches: &WorkspacePaneLaunches,
     ) -> anyhow::Result<Vec<String>> {
         let tab = self
             .tabs

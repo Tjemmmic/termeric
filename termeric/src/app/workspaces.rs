@@ -387,16 +387,7 @@ impl App {
             }
             WorkspaceLaunch::Plugin { plugin_id, .. } => {
                 let mut warnings = Vec::new();
-                let primary = snapshot
-                    .panes
-                    .iter()
-                    .find(|pane| pane.id == snapshot.primary_pane);
-                let cwd = crate::panes::usable_workspace_cwd(
-                    primary.and_then(|pane| pane.working_directory.as_deref()),
-                    snapshot.id,
-                    snapshot.primary_pane,
-                    &mut warnings,
-                );
+                let cwd = crate::panes::usable_primary_workspace_cwd(snapshot, &mut warnings)?;
                 let (_, shell) = &pane_launches[&snapshot.primary_pane];
                 tabs.new_tab_with_command(
                     shell.program.as_deref().expect("validated plugin program"),
@@ -428,9 +419,8 @@ impl App {
         &mut self,
         snapshot: &WorkspaceTabSnapshot,
         tabs: &TabManager,
-    ) -> anyhow::Result<std::collections::HashMap<u32, (WorkspaceLaunch, crate::config::ShellConfig)>>
-    {
-        let mut launches = std::collections::HashMap::new();
+    ) -> anyhow::Result<crate::panes::WorkspacePaneLaunches> {
+        let mut launches = crate::panes::WorkspacePaneLaunches::new();
         for pane in &snapshot.panes {
             let launch = &pane.launch;
             let (resolved, shell) = match launch {

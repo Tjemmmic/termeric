@@ -482,9 +482,32 @@ pub(crate) fn replay_workspace_scrollback(terminal: &mut Terminal, lines: &[Stri
     }
 }
 
+/// The launch and shell each saved pane relaunches with, by saved pane ID.
+pub(crate) type WorkspacePaneLaunches =
+    HashMap<u32, (crate::workspace::WorkspaceLaunch, ShellConfig)>;
+
+/// The saved tab's primary pane's working directory, as
+/// [`usable_workspace_cwd`] finds it.
+pub(crate) fn usable_primary_workspace_cwd(
+    snapshot: &crate::workspace::WorkspaceTabSnapshot,
+    warnings: &mut Vec<String>,
+) -> anyhow::Result<Option<String>> {
+    let primary = snapshot
+        .panes
+        .iter()
+        .find(|pane| pane.id == snapshot.primary_pane)
+        .with_context(|| format!("workspace tab {} has no primary pane", snapshot.id))?;
+    Ok(usable_workspace_cwd(
+        primary.working_directory.as_deref(),
+        snapshot.id,
+        snapshot.primary_pane,
+        warnings,
+    ))
+}
+
 /// A saved pane's working directory if it still exists; otherwise a warning
 /// and `None`, so the relaunch starts in the process default.
-pub(crate) fn usable_workspace_cwd(
+fn usable_workspace_cwd(
     cwd: Option<&str>,
     tab_id: u32,
     pane_id: u32,
@@ -643,7 +666,7 @@ impl PaneManager {
     pub(crate) fn restore_workspace_layout(
         &mut self,
         snapshot: &crate::workspace::WorkspaceTabSnapshot,
-        pane_launches: &HashMap<u32, (crate::workspace::WorkspaceLaunch, ShellConfig)>,
+        pane_launches: &WorkspacePaneLaunches,
     ) -> anyhow::Result<Vec<String>> {
         snapshot.validate()?;
         anyhow::ensure!(
