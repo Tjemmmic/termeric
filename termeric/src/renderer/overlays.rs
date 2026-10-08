@@ -1,12 +1,13 @@
 //! Overlay rendering — diff review, context picker, guardrail confirmation
 //!
 //! These are centered modal overlays that dim the background with a scrim.
-//! Their chrome text is drawn in the UI face; text addressed by column
-//! (diff rows, the file-path field, and the guarded command) keeps the
-//! monospace grid it is laid out and hit-tested in.
+//! Their chrome text is drawn in the UI face; text addressed by column (diff
+//! rows and the guarded command) keeps the monospace grid it is laid out and
+//! hit-tested in, and the file-path field is drawn like every other
+//! single-line field.
 
 use super::Renderer;
-use super::draw::ButtonState;
+use super::draw::{ButtonState, FieldTextColors};
 use super::icons::draw_icon;
 use super::types::*;
 use crate::ui::color::{mix, scale_alpha, with_alpha};
@@ -149,7 +150,6 @@ impl Renderer {
         let anim = snapshot.animation;
         let cell_height = self.cell_height();
         let layout = info.layout;
-        let char_scale = layout.char_scale;
 
         // Scrim
         let scrim = scale_alpha(self.ui.palette_scrim, anim);
@@ -263,32 +263,7 @@ impl Renderer {
                     label_size,
                     dim_color,
                 );
-                self.rect_pipeline.push_rounded_rect(
-                    layout.file_input.x,
-                    layout.file_input.y,
-                    layout.file_input.width,
-                    layout.file_input.height,
-                    with_alpha(self.ui.palette_input_bg, anim),
-                    self.px(BUTTON_CORNER_RADIUS),
-                );
-                let columns = (layout.file_input.width / char_scale).floor().max(1.0) as usize;
-                let total = snapshot.file_input.chars().count();
-                let visible: String = snapshot
-                    .file_input
-                    .chars()
-                    .skip(total.saturating_sub(columns))
-                    .collect();
-                for (column, character) in visible.chars().enumerate() {
-                    if !character.is_whitespace() {
-                        self.text_pipeline.push_char(
-                            character,
-                            layout.file_input.x + column as f32 * char_scale,
-                            layout.file_input.y
-                                + ((layout.file_input.height - cell_height) / 2.0).round(),
-                            text_color,
-                        );
-                    }
-                }
+                self.build_context_file_field(info);
             }
             ContextPickerPhase::Gathering => {
                 let status = snapshot.status.as_deref().unwrap_or("Gathering context…");
@@ -353,6 +328,59 @@ impl Renderer {
                 layout.status.width,
                 label_size,
                 with_alpha(self.ui.dialog_text, anim),
+            );
+        }
+    }
+
+    /// The context picker's file-path field, drawn like the dialog's: an
+    /// inset box with a hairline border, its text through the layout's
+    /// viewport, and the caret and focus ring while it is focused.
+    fn build_context_file_field(&mut self, info: &ContextPickerInfo) {
+        use crate::ui::context_picker::ContextPickerFocus;
+
+        let snapshot = &info.snapshot;
+        let anim = snapshot.animation;
+        let field = info.layout.file_input;
+        let focused = snapshot.awaiting && snapshot.focus == ContextPickerFocus::FileInput;
+        let radius = self.px(BUTTON_CORNER_RADIUS);
+        self.rect_pipeline.push_rounded_rect(
+            field.x,
+            field.y,
+            field.width,
+            field.height,
+            scale_alpha(self.ui.inset_bg, anim),
+            radius,
+        );
+        self.rect_pipeline.push_rounded_outline(
+            field.x,
+            field.y,
+            field.width,
+            field.height,
+            scale_alpha(self.ui.menu_border, anim),
+            radius,
+            self.px(BORDER_WIDTH),
+        );
+        if let Some(view) = info
+            .layout
+            .file_input_viewport(&snapshot.file_input, snapshot.file_cursor)
+        {
+            self.draw_field_text(
+                field,
+                &view,
+                &snapshot.file_input,
+                "",
+                FieldTextColors {
+                    text: scale_alpha(self.ui.palette_text, anim),
+                    placeholder: scale_alpha(self.ui.palette_text_dim, anim),
+                },
+                focused.then(|| with_alpha(self.ui.palette_accent, anim)),
+            );
+        }
+        if focused {
+            self.draw_focus_ring(
+                field,
+                with_alpha(self.ui.focus_ring, anim),
+                BUTTON_CORNER_RADIUS,
             );
         }
     }

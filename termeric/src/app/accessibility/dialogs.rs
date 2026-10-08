@@ -899,7 +899,12 @@ impl App {
             input.set_description(
                 "Comma-separated paths; files must remain inside the context working directory",
             );
-            input.set_value(snapshot.file_input.as_str());
+            set_text_value(
+                &mut input,
+                input_id,
+                &snapshot.file_input,
+                Some(snapshot.file_cursor),
+            );
             input.set_bounds(bounds_rect(layout.file_input));
             if snapshot.awaiting {
                 input.add_action(Action::Focus);

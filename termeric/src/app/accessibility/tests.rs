@@ -4144,6 +4144,7 @@ fn context_picker_is_one_modal_checkbox_tree_with_shared_geometry() {
 
 #[test]
 fn context_file_editor_is_settable_and_workspace_bounded_semantically() {
+    use winit::keyboard::{Key, NamedKey};
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(directory.path().join("fixture.rs"), "fn fixture() {}\n").unwrap();
     let mut app = App::new_headless(Config::default()).unwrap();
@@ -4210,6 +4211,32 @@ fn context_file_editor_is_settable_and_workspace_bounded_semantically() {
         target_node: input,
         data: Some(ActionData::Value("fixture.rs".into())),
     });
+    // The field publishes its value and caret, in the bounds it is drawn in.
+    for (key, caret) in [(None, 10), (Some(NamedKey::ArrowLeft), 9)] {
+        if let Some(key) = key {
+            app.handle_context_picker_key(&Key::Named(key), false);
+        }
+        let form = app.accessibility_snapshot();
+        let input_node = &form
+            .nodes
+            .iter()
+            .find(|(node_id, _)| *node_id == input)
+            .unwrap()
+            .1;
+        assert_eq!(input_node.value(), Some("fixture.rs"));
+        let selection = input_node.text_selection().unwrap();
+        assert_eq!(
+            (
+                selection.anchor.character_index,
+                selection.focus.character_index
+            ),
+            (caret, caret)
+        );
+        assert_eq!(
+            input_node.bounds(),
+            Some(bounds_rect(app.context_picker_layout().file_input))
+        );
+    }
     app.handle_accessibility_action(ActionRequest {
         action: Action::Click,
         target_tree: TreeId::ROOT,

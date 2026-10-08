@@ -1339,6 +1339,35 @@ mod tests {
     }
 
     #[test]
+    fn the_file_fields_text_and_caret_stay_inside_it_and_a_press_finds_the_caret() {
+        for (cell_width, cell_height) in [(10.0, 20.0), (7.3, 15.6)] {
+            let layout = ContextPickerLayout::calculate(
+                901.0,
+                701.0,
+                cell_width,
+                cell_height,
+                1.0,
+                ContextPickerPhase::FilePaths,
+                MAX_CONTEXT_SOURCES,
+            );
+            let field = layout.file_input;
+            let long = "src/".repeat(80);
+            for (text, cursor) in [("", 0), ("a b.rs", 3), (long.as_str(), long.len())] {
+                let view = layout.file_input_viewport(text, cursor).unwrap();
+                assert!(view.text_x > field.x && view.right < field.right());
+                assert!(view.cursor_x >= view.text_x && view.cursor_x <= view.right);
+                assert!(view.text_y >= field.y);
+                assert!(view.text_y + cell_height <= field.bottom());
+                assert_eq!([view.text_x, view.text_y].map(f32::fract), [0.0; 2]);
+                assert_eq!(view.text_range.end, text.len(), "the caret's end shows");
+            }
+            // Just past the middle of the second character: after it.
+            let x = layout.file_input_viewport("a b.rs", 0).unwrap().text_x + cell_width * 1.6;
+            assert_eq!(layout.file_caret_at("a b.rs", 0, x), Some(2));
+        }
+    }
+
+    #[test]
     fn source_rows_answer_exactly_where_they_are_drawn() {
         // 19.5-pixel cells give rows 42.9 pixels tall.
         for phase in [1.0, 0.875, 0.5, 0.125, 0.0] {
