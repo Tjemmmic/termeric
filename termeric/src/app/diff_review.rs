@@ -75,17 +75,18 @@ impl App {
         use crate::ui::diff_review::DiffReviewAction;
 
         match action {
-            DiffReviewAction::Copy { request_id }
-                if self.diff_review.change_text(request_id).is_some() =>
-            {
-                let text = self.diff_review.change_text(request_id).unwrap_or_default();
-                self.copy_to_clipboard(text.to_owned(), "Copied diff to clipboard");
-            }
             DiffReviewAction::Stage { request_id } => self.stage_reviewed_change(request_id),
             DiffReviewAction::Revert { request_id } => {
                 self.confirm_revert_reviewed_change(request_id)
             }
             DiffReviewAction::Copy { request_id } => {
+                // An agent's change carries its own diff; a diff seen in
+                // the terminal is read back from the pane that showed it.
+                if let Some(text) = self.diff_review.change_text(request_id) {
+                    let text = text.to_owned();
+                    self.copy_to_clipboard(text, "Copied diff to clipboard");
+                    return;
+                }
                 let raw = self.diff_review.target(request_id).and_then(|target| {
                     let tabs = self.tabs.as_ref()?;
                     tabs.origin_for_pane(target.tab_id, target.pane_id)?;
