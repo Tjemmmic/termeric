@@ -187,6 +187,10 @@ pub(crate) enum AppEvent {
         request_id: u64,
         result: std::result::Result<String, String>,
     },
+    /// An agent change job's worker ended; its result waits in the job.
+    AgentChangesReady {
+        window: WindowKey,
+    },
     FileUploadCompleted {
         window: WindowKey,
         request_id: u64,
@@ -235,6 +239,7 @@ impl AppEvent {
             | Self::LiveDomainTopology { window, .. }
             | Self::DomainPickerLoaded { window, .. }
             | Self::ContextGathered { window, .. }
+            | Self::AgentChangesReady { window }
             | Self::FileUploadCompleted { window, .. }
             | Self::FileUploadProgress { window, .. }
             | Self::KittyFileTransferCompleted { window, .. }
@@ -277,6 +282,10 @@ impl App {
             AppEvent::ContextGathered {
                 request_id, result, ..
             } => self.handle_context_gathered(request_id, result),
+            AppEvent::AgentChangesReady { .. } => {
+                // The redraw that routed it here shows whatever changed.
+                self.poll_agent_change_job();
+            }
             AppEvent::FileUploadCompleted {
                 request_id, result, ..
             } => self.handle_file_upload_completed(request_id, result),
@@ -2823,10 +2832,6 @@ impl App {
             self.redraw_scheduler
                 .request(redraw_scheduler::RedrawReason::WindowEvent);
         }
-        if self.poll_agent_change_job() {
-            self.redraw_scheduler
-                .request(redraw_scheduler::RedrawReason::WindowEvent);
-        }
         if self.acknowledge_focused_agent() {
             self.redraw_scheduler
                 .request(redraw_scheduler::RedrawReason::WindowEvent);
@@ -2906,7 +2911,6 @@ impl App {
         deadlines.extend(self.next_agent_scan_deadline());
         deadlines.extend(self.next_agent_submit_deadline());
         deadlines.extend(self.agents_panel.refresh_deadline());
-        deadlines.extend(self.next_agent_change_deadline(now));
         deadlines.extend(self.next_agent_view_deadline(now));
         if self.unicode_picker.search_pending() {
             deadlines.push(now + Duration::from_millis(16));

@@ -928,6 +928,7 @@ impl ApplicationHandler<AppEvent> for Application {
             | AppEvent::LiveDomainTopology { .. }
             | AppEvent::DomainPickerLoaded { .. }
             | AppEvent::ContextGathered { .. }
+            | AppEvent::AgentChangesReady { .. }
             | AppEvent::FileUploadCompleted { .. }
             | AppEvent::FileUploadProgress { .. }
             | AppEvent::KittyFileTransferCompleted { .. }

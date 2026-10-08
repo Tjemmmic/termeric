@@ -123,13 +123,6 @@ impl AgentViewWindow {
         }
     }
 
-    /// Whether a snapshot is still being taken.
-    pub fn capturing(&self) -> bool {
-        self.tracking.values().any(|tracking| {
-            tracking.baseline().is_none() && tracking.unavailable_reason().is_none()
-        })
-    }
-
     /// Takes a session out of this window with its view and change
     /// tracking, forgetting what was said about it here.
     pub fn detach_session(
@@ -453,7 +446,10 @@ impl App {
             return false;
         }
         let mut tracking = crate::agents::changes::ChangeTracking::default();
-        tracking.start_capture((agent.catalog_id(), None), Some(cwd));
+        // The agent view's own wake reaches every window, as the tracking
+        // moves with its session from one window to another.
+        let wake = super::agent_view_event_waker();
+        tracking.start_capture_then((agent.catalog_id(), None), Some(cwd), move || wake());
         self.agent_view.tracking.insert(id, tracking);
         self.agent_view.state.new_session.composer.clear();
         self.agent_view.state.show(id);
@@ -769,9 +765,6 @@ impl App {
             .iter()
             .filter_map(AgentSession::handshake_deadline)
             .collect();
-        if self.agent_view.capturing() {
-            deadlines.push(now + std::time::Duration::from_millis(50));
-        }
         if self.agent_view.state.is_open() {
             if self.agent_view_animating() {
                 // Spinners and slides at 30 frames a second.

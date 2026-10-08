@@ -61,6 +61,17 @@ impl ChangeTracking {
     /// Snapshot `directory` on a worker thread for `agent`, replacing the
     /// previous agent's baseline.
     pub fn start_capture(&mut self, agent: (&str, Option<i64>), directory: Option<PathBuf>) {
+        self.start_capture_then(agent, directory, || {});
+    }
+
+    /// [`Self::start_capture`], with the worker calling `done` once the
+    /// snapshot is ready for [`Self::poll`] to collect.
+    pub fn start_capture_then(
+        &mut self,
+        agent: (&str, Option<i64>),
+        directory: Option<PathBuf>,
+        done: impl FnOnce() + Send + 'static,
+    ) {
         self.captured_for = Some((agent.0.to_owned(), agent.1));
         let Some(directory) = directory else {
             self.baseline =
@@ -72,6 +83,7 @@ impl ChangeTracking {
             .name("termeric-agent-baseline".into())
             .spawn(move || {
                 let _ = sender.send(capture(&directory).map_err(|error| format!("{error:#}")));
+                done();
             });
         self.baseline = match spawned {
             Ok(_) => BaselineState::Capturing(receiver),
@@ -742,6 +754,23 @@ mod tests {
         let kept = index.get_path(Path::new("kept.txt"), 0).unwrap();
         assert_eq!(repo.find_blob(kept.id).unwrap().content(), b"changed\n");
         assert!(index.get_path(Path::new("script.sh"), 0).is_none());
+    }
+
+    #[test]
+    fn a_finished_capture_says_so_once_it_can_be_collected() {
+        let (temp, _repo) = repository();
+        let mut tracking = ChangeTracking::default();
+        let (done, finished) = std::sync::mpsc::channel();
+        tracking.start_capture_then(
+            ("codex", None),
+            Some(temp.path().to_path_buf()),
+            move || done.send(()).unwrap(),
+        );
+        finished
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert!(tracking.poll());
+        assert!(tracking.baseline().is_some());
     }
 
     #[test]

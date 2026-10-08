@@ -15,8 +15,6 @@ use crate::ui::info_overlay::push_keyless_choice;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
-/// How often a running job is checked for completion.
-const JOB_POLL_INTERVAL: Duration = Duration::from_millis(30);
 const REVERT_CHOICE: &str = "agent-change-revert";
 const KEEP_CHOICE: &str = "agent-change-keep";
 
@@ -40,6 +38,25 @@ pub(super) struct ChangeJob {
     owner: ChangeOwner,
     baseline: Baseline,
     receiver: mpsc::Receiver<Result<ChangeResult, String>>,
+}
+
+/// The worker's end of a job. Dropped as the worker ends, however it ends,
+/// it wakes the window that started the job to collect the result, so a
+/// worker that panicked is noticed too.
+struct JobEnd {
+    sender: Option<mpsc::SyncSender<Result<ChangeResult, String>>>,
+    /// `None` without an event loop, as in tests, which collect by hand.
+    wake: Option<(winit::event_loop::EventLoopProxy<AppEvent>, WindowKey)>,
+}
+
+impl Drop for JobEnd {
+    fn drop(&mut self) {
+        // Closed first, so a worker that ended without a result reads as one.
+        self.sender = None;
+        if let Some((proxy, window)) = self.wake.take() {
+            let _ = proxy.send_event(AppEvent::AgentChangesReady { window });
+        }
+    }
 }
 
 /// The terminal whose changes the open picker lists.
@@ -150,10 +167,18 @@ impl App {
             return;
         }
         let (sender, receiver) = mpsc::sync_channel(1);
+        let end = JobEnd {
+            sender: Some(sender),
+            wake: super::EVENT_LOOP_PROXY
+                .get()
+                .cloned()
+                .map(|proxy| (proxy, self.window_key())),
+        };
         let worker_baseline = baseline.clone();
         let spawned = std::thread::Builder::new()
             .name("termeric-agent-changes".into())
             .spawn(move || {
+                let end = end;
                 let baseline = worker_baseline;
                 let result = match task {
                     ChangeTask::List => changes::changes_since(&baseline).map(ChangeResult::List),
@@ -170,7 +195,9 @@ impl App {
                         changes::revert(&baseline, &path).map(|()| ChangeResult::Reverted(path))
                     }
                 };
-                let _ = sender.send(result.map_err(|error| format!("{error:#}")));
+                if let Some(sender) = &end.sender {
+                    let _ = sender.send(result.map_err(|error| format!("{error:#}")));
+                }
             });
         match spawned {
             Ok(_) => {
@@ -184,12 +211,6 @@ impl App {
                 .toasts
                 .error(format!("Could not compare agent changes: {error}")),
         }
-    }
-
-    pub(super) fn next_agent_change_deadline(&self, now: Instant) -> Option<Instant> {
-        self.agent_change_job
-            .as_ref()
-            .map(|_| now + JOB_POLL_INTERVAL)
     }
 
     /// Act on a finished job. Returns whether anything changed on screen.
