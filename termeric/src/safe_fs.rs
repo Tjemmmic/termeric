@@ -42,18 +42,25 @@ pub(crate) fn read_bytes(path: &Path, limit: usize) -> io::Result<Vec<u8>> {
 /// Open `path` for reading only if it is a regular file of at most `limit`
 /// bytes, without following a symlink or waiting on a FIFO.
 pub(crate) fn open_regular(path: &Path, limit: usize) -> io::Result<fs::File> {
+    let file = open_regular_any_size(path)?;
+    if file.metadata()?.len() > limit as u64 {
+        return Err(size_error(limit));
+    }
+    // The read itself is capped: metadata alone does not bound a growing file.
+    Ok(file)
+}
+
+/// Open `path` for reading only if it is a regular file, without following
+/// a symlink or waiting on a FIFO, whatever its size: for a reader that
+/// streams it rather than holding it in memory.
+pub(crate) fn open_regular_any_size(path: &Path) -> io::Result<fs::File> {
     let file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(path)?;
-    let metadata = file.metadata()?;
-    if !metadata.is_file() {
+    if !file.metadata()?.is_file() {
         return Err(io::Error::other("input must be a regular file"));
     }
-    if metadata.len() > limit as u64 {
-        return Err(size_error(limit));
-    }
-    // The read itself is capped: metadata alone does not bound a growing file.
     Ok(file)
 }
 

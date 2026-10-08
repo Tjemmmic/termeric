@@ -5,7 +5,6 @@
 //! the new one.
 
 use std::fs;
-use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -102,10 +101,13 @@ pub fn save(path: &Path, baseline: &toml::Table, live: &Config) -> Result<toml::
 /// `config.toml.<seconds>.bak` (from `now`) without replacing an earlier
 /// copy. Returns the copy's path, or `None` when there was no file. A
 /// symbolic link is followed and its file replaced.
+///
+/// Reset is the way out of a configuration that cannot load, so the copy is
+/// streamed and has no size limit: a file too large to load still resets.
 pub fn reset(path: &Path, now: SystemTime) -> Result<Option<PathBuf>> {
     let target = link_target(path)?;
-    let backup = match crate::safe_fs::read_bytes(&target, super::MAX_CONFIG_FILE_BYTES) {
-        Ok(bytes) => Some(keep_copy(path, &target, &bytes, now)?),
+    let backup = match crate::safe_fs::open_regular_any_size(&target) {
+        Ok(old) => Some(keep_copy(path, old, now)?),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(error).with_context(|| format!("read {}", target.display())),
     };
@@ -456,10 +458,10 @@ fn replace_file(target: &Path, text: &str) -> Result<()> {
     .with_context(|| format!("write {}", target.display()))
 }
 
-/// Copy `bytes`, the file at `target`, beside `path` under the first free
-/// name of `<name>.<seconds>.bak`, `<name>.<seconds>-2.bak`, and so on, so
-/// a copy never replaces another.
-fn keep_copy(path: &Path, target: &Path, bytes: &[u8], now: SystemTime) -> Result<PathBuf> {
+/// Copy `old`, the open configuration file, beside `path` under the first
+/// free name of `<name>.<seconds>.bak`, `<name>.<seconds>-2.bak`, and so on,
+/// so a copy never replaces another.
+fn keep_copy(path: &Path, mut old: fs::File, now: SystemTime) -> Result<PathBuf> {
     let seconds = now
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs());
@@ -468,7 +470,9 @@ fn keep_copy(path: &Path, target: &Path, bytes: &[u8], now: SystemTime) -> Resul
         .with_context(|| format!("{} has no file name", path.display()))?
         .to_string_lossy()
         .into_owned();
-    let mode = fs::metadata(target).map_or(0o600, |metadata| metadata.permissions().mode() & 0o777);
+    let mode = old
+        .metadata()
+        .map_or(0o600, |metadata| metadata.permissions().mode() & 0o777);
     for attempt in 1..=MAX_BACKUP_NAMES {
         let suffix = if attempt == 1 {
             seconds.to_string()
@@ -483,7 +487,7 @@ fn keep_copy(path: &Path, target: &Path, bytes: &[u8], now: SystemTime) -> Resul
                 return Err(error).with_context(|| format!("create {}", backup.display()));
             }
         };
-        if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+        if let Err(error) = std::io::copy(&mut old, &mut file).and_then(|_| file.sync_all()) {
             // A partial copy must not pass for the old file.
             if let Err(removal) = fs::remove_file(&backup) {
                 log::warn!(
@@ -891,6 +895,30 @@ action = { type = \"send_text\", text = \"first\" }
                 directory.path().join("config.toml.1700000000-2.bak"),
             ]
         );
+    }
+
+    /// Reset is how a configuration too large to load is recovered, so it
+    /// keeps a copy of any size; a pipe in the file's place is refused
+    /// rather than waited on.
+    #[test]
+    fn a_reset_keeps_a_file_too_large_to_load_and_refuses_a_pipe() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        let large = "#".repeat(super::super::MAX_CONFIG_FILE_BYTES + 1);
+        fs::write(&path, &large).unwrap();
+        assert!(Config::load_from(&path).is_err());
+        let backup = reset(&path, SystemTime::now()).unwrap().unwrap();
+        assert_eq!(fs::read_to_string(&backup).unwrap(), large);
+        assert_eq!(fs::read_to_string(&path).unwrap(), RESET_TEXT);
+
+        fs::remove_file(&path).unwrap();
+        let fifo = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: `fifo` is a valid NUL-terminated path.
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        assert!(reset(&path, SystemTime::now()).is_err());
+        assert!(std::os::unix::fs::FileTypeExt::is_fifo(
+            &fs::symlink_metadata(&path).unwrap().file_type()
+        ));
     }
 
     #[test]
