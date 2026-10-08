@@ -154,29 +154,33 @@ impl ContextPickerLayout {
         } else {
             source_count.max(1)
         };
+        // Every length is whole, so the card and everything placed from it
+        // land on whole pixels; rows tile through `Bounds::row`.
         let row_height = cell_height * 2.2;
-        let padding = (cell_width * 2.0).max(12.0);
-        let title_height = cell_height * 2.5;
+        let padding = (cell_width * 2.0).max(12.0).round();
+        let title_height = (cell_height * 2.5).round();
         // The button row and the status line under it.
-        let footer_height = cell_height * 4.5;
-        let outer_margin = (cell_width * 2.0).max(12.0);
-        let scrollbar_gutter = cell_width.max(6.0);
+        let footer_height = (cell_height * 4.5).round();
+        let bottom_margin = (padding * 0.5).round();
+        let outer_margin = (cell_width * 2.0).max(12.0).round();
+        let scrollbar_gutter = cell_width.max(6.0).round();
 
         // A fixed width: the rows are labels and checkboxes, not text that
         // asks for columns.
-        let available_width = (window_width - outer_margin * 2.0).max(1.0);
-        let card_width = (cell_width * 58.0).max(440.0).min(available_width);
+        let available_width = (window_width - outer_margin * 2.0).floor().max(1.0);
+        let card_width = (cell_width * 58.0).round().max(440.0).min(available_width);
 
-        let fixed_height = padding + title_height + footer_height + padding * 0.5;
+        let fixed_height = padding + title_height + footer_height + bottom_margin;
         let available_height = (window_height - outer_margin * 2.0).max(row_height);
         let content_budget = (available_height - fixed_height).max(row_height);
         let rows_that_fit = ((content_budget / row_height).floor() as usize).max(1);
         let visible_count = desired_rows.min(rows_that_fit);
-        let content_height = visible_count as f32 * row_height;
+        let content_height = (visible_count as f32 * row_height).round();
         let card_height = fixed_height + content_height;
+        let slide = ((1.0 - animation) * -20.0).round();
         let card = Bounds::new(
-            (window_width - card_width) / 2.0,
-            (window_height - card_height) / 2.0 + (1.0 - animation) * -20.0,
+            ((window_width - card_width) / 2.0).round(),
+            ((window_height - card_height) / 2.0).round() + slide,
             card_width,
             card_height,
         );
@@ -184,16 +188,16 @@ impl ContextPickerLayout {
         let content = Bounds::new(
             card.x + padding,
             card.y + padding + title_height,
-            (card_width - padding * 2.0 - scrollbar_gutter).max(char_scale),
+            (card_width - padding * 2.0 - scrollbar_gutter).max(char_scale.ceil()),
             content_height,
         );
 
-        let button_y = content.bottom() + cell_height * 1.3;
-        let button_height = cell_height * 1.8;
-        let button_gap = cell_width * 1.5;
+        let button_y = content.bottom() + (cell_height * 1.3).round();
+        let button_height = (cell_height * 1.8).round();
+        let button_gap = (cell_width * 1.5).round();
         let button = |x: f32, width: f32| Bounds::new(x, button_y, width.max(1.0), button_height);
         let available_button_width = (card_width - padding * 2.0 - button_gap).max(2.0);
-        let cancel_width = (available_button_width * 0.38).max(1.0);
+        let cancel_width = (available_button_width * 0.38).round().max(1.0);
         let primary_width = (available_button_width - cancel_width).max(1.0);
         let cancel_x = card.x + padding;
         let primary_x = cancel_x + cancel_width + button_gap;
@@ -203,9 +207,9 @@ impl ContextPickerLayout {
             content,
             file_input: Bounds {
                 x: content.x,
-                y: content.y + row_height * 0.75,
+                y: content.y + (row_height * 0.75).round(),
                 width: content.width,
-                height: row_height,
+                height: row_height.round(),
             },
             cancel_button: button(cancel_x, cancel_width),
             primary_button: button(primary_x, primary_width),
@@ -213,9 +217,9 @@ impl ContextPickerLayout {
             // centred in it.
             status: Bounds::new(
                 content.x,
-                button_y + button_height + cell_height * 0.5,
+                button_y + button_height + (cell_height * 0.5).round(),
                 card_width - padding * 2.0,
-                cell_height,
+                cell_height.round(),
             ),
             padding,
             title_height,
@@ -764,14 +768,59 @@ mod tests {
     }
 
     #[test]
+    fn the_card_and_everything_placed_from_it_land_on_whole_pixels() {
+        // Fractional cells, an odd window, and a mid-slide phase would each
+        // put a centred card between pixels.
+        for (cell_width, cell_height) in [(10.0, 20.0), (7.3, 15.6), (9.6, 19.5)] {
+            for animation in [1.0, 0.875, 0.37, 0.0] {
+                for phase in [ContextPickerPhase::Sources, ContextPickerPhase::FilePaths] {
+                    let layout = ContextPickerLayout::calculate(
+                        901.0,
+                        701.0,
+                        cell_width,
+                        cell_height,
+                        animation,
+                        phase,
+                        MAX_CONTEXT_SOURCES,
+                    );
+                    let mut placed = vec![
+                        layout.card,
+                        layout.content,
+                        layout.file_input,
+                        layout.cancel_button,
+                        layout.primary_button,
+                        layout.status,
+                    ];
+                    placed.extend((0..=layout.visible_count).map(|index| layout.row(index)));
+                    for bounds in placed {
+                        assert_eq!(
+                            [bounds.x, bounds.y, bounds.width, bounds.height].map(f32::fract),
+                            [0.0; 4],
+                            "{cell_width}x{cell_height} at {animation}: {bounds:?}"
+                        );
+                    }
+                    assert_eq!(
+                        [layout.padding, layout.title_height].map(f32::fract),
+                        [0.0; 2]
+                    );
+                    assert_eq!(
+                        layout.row(layout.visible_count - 1).bottom(),
+                        layout.content.bottom()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn source_rows_answer_exactly_where_they_are_drawn() {
-        // The opening slide puts the content at fractional heights.
+        // 19.5-pixel cells give rows 42.9 pixels tall.
         for phase in [1.0, 0.875, 0.5, 0.125, 0.0] {
             let layout = ContextPickerLayout::calculate(
                 900.0,
                 300.0,
                 10.0,
-                20.0,
+                19.5,
                 phase,
                 ContextPickerPhase::Sources,
                 MAX_CONTEXT_SOURCES,

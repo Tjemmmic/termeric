@@ -277,7 +277,8 @@ impl Renderer {
                         self.text_pipeline.push_char(
                             character,
                             layout.file_input.x + column as f32 * char_scale,
-                            layout.file_input.y + (layout.file_input.height - cell_height) / 2.0,
+                            layout.file_input.y
+                                + ((layout.file_input.height - cell_height) / 2.0).round(),
                             text_color,
                         );
                     }

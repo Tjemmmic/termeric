@@ -295,36 +295,41 @@ impl DiffReviewLayout {
         max_line_chars: usize,
         change_actions: bool,
     ) -> Self {
+        // Every length is whole, so the card and everything placed from it
+        // land on whole pixels; rows tile through `Bounds::row`.
         let line_height = (cell_height * 1.5).max(1.0);
         let char_scale = (cell_width * CONTENT_CHAR_SCALE).max(1.0);
-        let padding = (cell_width * 2.0).max(12.0);
-        let title_height = cell_height * 2.5;
+        let padding = (cell_width * 2.0).max(12.0).round();
+        let title_height = (cell_height * 2.5).round();
         // The button row and the space below it.
-        let footer_height = cell_height * 4.5;
-        let outer_margin = (cell_width * 2.0).max(12.0);
-        let scrollbar_gutter = cell_width.max(6.0);
+        let footer_height = (cell_height * 4.5).round();
+        let bottom_margin = (padding * 0.5).round();
+        let outer_margin = (cell_width * 2.0).max(12.0).round();
+        let scrollbar_gutter = cell_width.max(6.0).round();
 
         let columns = max_line_chars
             .clamp(50, 100)
             .max("Changes in ".chars().count() + filename.chars().count());
-        let preferred_width = columns as f32 * char_scale + padding * 2.0 + scrollbar_gutter;
-        let available_width = (window_width - outer_margin * 2.0).max(1.0);
+        let preferred_width =
+            (columns as f32 * char_scale + padding * 2.0 + scrollbar_gutter).round();
+        let available_width = (window_width - outer_margin * 2.0).floor().max(1.0);
         let card_width = preferred_width.max(500.0).min(available_width);
 
-        let fixed_height = padding + title_height + footer_height + padding * 0.5;
+        let fixed_height = padding + title_height + footer_height + bottom_margin;
         let available_height = (window_height - outer_margin * 2.0).max(line_height);
         let content_budget = (available_height - fixed_height).max(line_height);
         let rows_that_fit = ((content_budget / line_height).floor() as usize).max(1);
-        let content_height = total_rows.max(1).min(rows_that_fit) as f32 * line_height;
+        let content_height = (total_rows.max(1).min(rows_that_fit) as f32 * line_height).round();
         let card_height = fixed_height + content_height;
+        let slide = ((1.0 - animation) * -20.0).round();
         let card = Bounds::new(
-            (window_width - card_width) / 2.0,
-            (window_height - card_height) / 2.0 + (1.0 - animation) * -20.0,
+            ((window_width - card_width) / 2.0).round(),
+            ((window_height - card_height) / 2.0).round() + slide,
             card_width,
             card_height,
         );
 
-        let content_width = (card_width - padding * 2.0 - scrollbar_gutter).max(char_scale);
+        let content_width = (card_width - padding * 2.0 - scrollbar_gutter).max(char_scale.ceil());
         let content = Bounds::new(
             card.x + padding,
             card.y + padding + title_height,
@@ -332,9 +337,9 @@ impl DiffReviewLayout {
             content_height,
         );
 
-        let button_y = content.bottom() + cell_height * 1.3;
-        let button_height = cell_height * 1.8;
-        let button_gap = cell_width * 1.5;
+        let button_y = content.bottom() + (cell_height * 1.3).round();
+        let button_height = (cell_height * 1.8).round();
+        let button_gap = (cell_width * 1.5).round();
         let button = |x: f32, width: f32| Bounds::new(x, button_y, width.max(1.0), button_height);
         // The row inside the padding, less the gaps between `buttons` buttons.
         let row_width = |buttons: usize| {
@@ -344,7 +349,7 @@ impl DiffReviewLayout {
         let (stage_button, revert_button, copy_button, done_button) = if change_actions {
             // Stage, Revert, and Copy share the row equally with a wider Done.
             let available = row_width(4).max(4.0);
-            let small = available * 0.22;
+            let small = (available * 0.22).round();
             let done = available - small * 3.0;
             let step = small + button_gap;
             (
@@ -355,7 +360,7 @@ impl DiffReviewLayout {
             )
         } else {
             let available = row_width(2).max(2.0);
-            let copy = available * 0.38;
+            let copy = (available * 0.38).round();
             (
                 None,
                 None,
@@ -771,7 +776,7 @@ mod tests {
         let settled = calculate(1.0);
         for phase in [0.0, 0.125, 0.5, 0.875, 1.0, 0.875, 0.5, 0.125, 0.0] {
             let layout = calculate(phase);
-            let translation = (1.0 - phase) * -20.0;
+            let translation = ((1.0 - phase) * -20.0_f32).round();
             assert_eq!(layout.rows_that_fit, settled.rows_that_fit);
             assert_eq!(layout.columns_that_fit, settled.columns_that_fit);
             for (actual, expected) in [
@@ -783,7 +788,7 @@ mod tests {
                 assert_eq!(actual.x, expected.x);
                 assert_eq!(actual.width, expected.width);
                 assert_eq!(actual.height, expected.height);
-                assert!((actual.y - expected.y - translation).abs() < 0.001);
+                assert_eq!(actual.y, expected.y + translation);
                 assert!(actual.contains(
                     actual.x + actual.width / 2.0,
                     actual.y + actual.height / 2.0
@@ -872,28 +877,63 @@ mod tests {
     }
 
     #[test]
-    fn rows_land_on_whole_pixels_and_tile_the_content() {
-        // A 20-pixel cell gives 30-pixel lines; an odd window height puts
-        // the centred card, and so its content, between pixels.
-        let layout = DiffReviewLayout::calculate(
-            901.0,
-            501.0,
-            10.0,
-            20.0,
-            0.37,
-            "fixture.rs",
-            40,
-            80,
-            false,
-        );
-        assert_ne!(layout.content.y.fract(), 0.0);
+    fn the_card_and_everything_placed_from_it_land_on_whole_pixels() {
+        // Fractional cells, an odd window, and a mid-slide phase would each
+        // put a centred card between pixels.
+        for (cell_width, cell_height) in [(10.0, 20.0), (7.3, 15.6), (9.6, 19.5)] {
+            for phase in [1.0, 0.875, 0.37, 0.0] {
+                for change_actions in [false, true] {
+                    let layout = DiffReviewLayout::calculate(
+                        901.0,
+                        501.0,
+                        cell_width,
+                        cell_height,
+                        phase,
+                        "fixture.rs",
+                        40,
+                        80,
+                        change_actions,
+                    );
+                    let mut placed = vec![layout.card, layout.content];
+                    placed.extend(
+                        DiffReviewButton::row(change_actions)
+                            .iter()
+                            .filter_map(|button| layout.button(*button)),
+                    );
+                    placed.extend((0..=layout.rows_that_fit).map(|index| layout.row(index)));
+                    for bounds in placed {
+                        assert_eq!(
+                            [bounds.x, bounds.y, bounds.width, bounds.height].map(f32::fract),
+                            [0.0; 4],
+                            "{cell_width}x{cell_height} at {phase}: {bounds:?}"
+                        );
+                    }
+                    assert_eq!(
+                        [layout.padding, layout.title_height].map(f32::fract),
+                        [0.0; 2]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rows_tile_the_content() {
+        // 19.5-pixel cells give lines 29.25 pixels tall.
+        let layout =
+            DiffReviewLayout::calculate(901.0, 501.0, 9.6, 19.5, 0.37, "fixture.rs", 40, 80, false);
+        assert_ne!(layout.line_height.fract(), 0.0);
+        assert_eq!(layout.row(0).y, layout.content.y);
         for index in 0..layout.rows_that_fit {
             let row = layout.row(index);
-            assert_eq!([row.y.fract(), row.height.fract()], [0.0, 0.0]);
             assert_eq!((row.x, row.width), (layout.content.x, layout.content.width));
             assert_eq!(layout.row(index + 1).y, row.bottom());
             assert!((row.y - (layout.content.y + index as f32 * layout.line_height)).abs() <= 0.5);
         }
+        assert_eq!(
+            layout.row(layout.rows_that_fit - 1).bottom(),
+            layout.content.bottom()
+        );
     }
 
     #[test]
