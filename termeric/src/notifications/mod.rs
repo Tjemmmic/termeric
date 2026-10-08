@@ -441,6 +441,40 @@ impl Notifications {
         self.rate_limit = Duration::ZERO;
     }
 
+    /// Wait until the worker has handled everything sent to it so far, and
+    /// return what [`Self::drain_completions`] gave meanwhile. The worker
+    /// takes commands in order, so once it answers a query sent last, it has
+    /// handled the rest, including ones that produce nothing to report.
+    #[cfg(test)]
+    pub(crate) fn settle_for_test(&mut self) -> Vec<NotificationCompletion> {
+        let probe = crate::tabs::TerminalIdentity {
+            tab_id: usize::MAX,
+            pane_id: crate::panes::PaneId(u32::MAX),
+        };
+        self.tracked
+            .as_ref()
+            .expect("a delivery worker is running")
+            .alive(probe, "termeric-settle-probe".into(), false)
+            .expect("the worker takes the probe");
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut settled = Vec::new();
+        loop {
+            for completion in self.drain_completions() {
+                match completion {
+                    NotificationCompletion::ProtocolReply { origin, .. } if origin == probe => {
+                        return settled;
+                    }
+                    other => settled.push(other),
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the notification worker did not settle"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn capture_tracked_commands_for_test(
         &mut self,

@@ -59,7 +59,7 @@ fn desktop_delivery_failures_become_deduplicated_visible_toasts() {
     // The manager suppresses repeats of the same integration failure instead
     // of letting a hostile terminal fill the bounded toast stack.
     notify(&mut app, "Again");
-    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(app.notifications.settle_for_test(), []);
     app.process_pty_events();
     assert_eq!(app.toasts.iter().count(), 2);
 }
