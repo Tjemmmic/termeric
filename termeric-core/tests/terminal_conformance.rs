@@ -199,6 +199,55 @@ fn real_program_traces_replay_against_pinned_reference_snapshots() {
     }
 }
 
+/// The installed git's colored diff, as people see one, keeps its bold
+/// header and its text. Git is required: without it the test fails rather
+/// than passing unexercised.
+#[test]
+fn installed_git_color_diff_maps_to_bold_cells_and_its_text() {
+    let directory = tempfile::tempdir().unwrap();
+    let added = directory.path().join("added.txt");
+    std::fs::write(&added, "added line\n").unwrap();
+    let output = std::process::Command::new("git")
+        .args([
+            "-c",
+            "color.ui=always",
+            "-c",
+            "color.diff=always",
+            "diff",
+            "--no-index",
+            "--",
+            "/dev/null",
+        ])
+        .arg(&added)
+        // The person's own git configuration cannot recolor the diff.
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .expect("git must be installed to run this test");
+    // `diff --no-index` exits 1 when the files differ.
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let mut terminal = Terminal::new(120, 20);
+    terminal.process(&output.stdout);
+    let has_bold = (0..terminal.rows()).any(|row| {
+        (0..terminal.cols()).any(|col| {
+            terminal
+                .grid()
+                .cell(row, col)
+                .is_some_and(|cell| cell.attrs.contains(termeric_core::CellAttrs::BOLD))
+        })
+    });
+    assert!(has_bold);
+    let text = terminal.rows_text(0, 19);
+    assert!(text.contains("diff --git"), "{text}");
+    assert!(text.contains("+added line"), "{text}");
+}
+
 #[test]
 fn parser_streaming_is_independent_of_chunk_boundaries() {
     let suite: FixtureSuite = toml::from_str(CONFORMANCE_CASES).unwrap();

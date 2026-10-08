@@ -716,7 +716,6 @@ mod overlay_clipboard_tests;
 mod pane_tests;
 mod plugin_host_tests;
 mod pointer_gesture_tests;
-mod real_pty_tests;
 mod search_tests;
 mod selection_tests;
 mod workspace_launch_tests;

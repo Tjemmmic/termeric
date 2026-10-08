@@ -3,6 +3,8 @@
 //! Provides support for tabbed terminal sessions within a single window.
 
 mod plugin_panes;
+#[cfg(test)]
+mod real_pty_tests;
 mod tab;
 mod title;
 
