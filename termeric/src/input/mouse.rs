@@ -124,15 +124,10 @@ impl MouseState {
         None
     }
 
-    /// Handle mouse button release
-    pub fn handle_release(&mut self, button: MouseButton) -> Option<Selection> {
-        if button != MouseButton::Left {
-            return None;
-        }
-
+    /// Finish the selection the primary button was making.
+    pub fn handle_release(&mut self) {
         if let Some(ref mut selection) = self.selection {
             selection.finish();
-            let result = selection.clone();
             // Clear trivial (zero-length) selections so they don't
             // consume Escape keypresses intended for the terminal/PTY.
             // A click without drag creates a selection where start == end,
@@ -143,10 +138,7 @@ impl MouseState {
             if selection.is_empty() && selection.ty == SelectionType::Simple {
                 self.selection = None;
             }
-            return Some(result);
         }
-
-        None
     }
 
     /// Clear current selection

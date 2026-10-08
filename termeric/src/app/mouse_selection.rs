@@ -157,7 +157,7 @@ impl App {
         self.reconcile_mouse_selection_presentation();
         let was_pressed = self.mouse_pressed;
         self.mouse_pressed = false;
-        let _ = self.mouse_state.handle_release(MouseButton::Left);
+        self.mouse_state.handle_release();
         if was_pressed
             && self.mouse_selection_source.is_some()
             && self.mouse_selection_source == self.mouse_selection_presentation()
