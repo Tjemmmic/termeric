@@ -4,7 +4,12 @@
 use super::redraw_scheduler::RedrawReason;
 use super::*;
 
-const MAX_COMMAND_REGION_OUTPUT_BYTES: usize = 64 * 1024;
+use crate::harvest::{CommandEntry, MAX_HARVEST_COMMAND_BYTES, MAX_HARVEST_OUTPUT_BYTES};
+use termeric_core::{CommandRegion, Terminal};
+
+/// Live reads keep as much output as the cellar's snapshot does, so a
+/// command's output reads the same before and after its rows scroll away.
+const MAX_COMMAND_REGION_OUTPUT_BYTES: usize = MAX_HARVEST_OUTPUT_BYTES;
 
 fn harvest_explain_context(
     command: &str,
@@ -13,14 +18,20 @@ fn harvest_explain_context(
     output_truncated: bool,
 ) -> String {
     let command_note = if command_truncated {
-        "\n\n[Command text truncated at 4 KiB; this is not the complete command.]"
+        format!(
+            "\n\n[Command text truncated at {} KiB; this is not the complete command.]",
+            MAX_HARVEST_COMMAND_BYTES / 1024
+        )
     } else {
-        ""
+        String::new()
     };
     let output_note = if output_truncated {
-        "\n\n[Only the last 64 KiB of output is included.]"
+        format!(
+            "\n\n[Only the last {} KiB of output is included.]",
+            MAX_COMMAND_REGION_OUTPUT_BYTES / 1024
+        )
     } else {
-        ""
+        String::new()
     };
     format!(
         "Please explain this command and its output.\n\n$ {}{command_note}\n\n{}{output_note}",
@@ -68,55 +79,21 @@ impl App {
     /// Keys for the Harvest cellar list.
     pub(super) fn handle_cellar_key(&mut self, key: &winit::keyboard::Key) {
         use winit::keyboard::{Key, NamedKey};
-        let activate = match key {
-            Key::Named(NamedKey::Escape) => {
-                if let Some(harvest) = &mut self.harvest {
-                    harvest.cellar.close();
-                }
-                None
+        let activate = self.harvest.as_mut().and_then(|harvest| {
+            let cellar = &mut harvest.cellar;
+            match key {
+                Key::Named(NamedKey::Escape) => cellar.close(),
+                Key::Named(NamedKey::ArrowUp) => cellar.select_up(),
+                Key::Named(NamedKey::ArrowDown) => cellar.select_down(),
+                Key::Named(NamedKey::PageUp) => cellar.select_page(-1),
+                Key::Named(NamedKey::PageDown) => cellar.select_page(1),
+                Key::Named(NamedKey::Home) => cellar.select_first(),
+                Key::Named(NamedKey::End) => cellar.select_last(),
+                Key::Named(NamedKey::Enter) => return cellar.selected_id(),
+                _ => {}
             }
-            Key::Named(NamedKey::ArrowUp) => {
-                if let Some(harvest) = &mut self.harvest {
-                    harvest.cellar.select_up();
-                }
-                None
-            }
-            Key::Named(NamedKey::ArrowDown) => {
-                if let Some(harvest) = &mut self.harvest {
-                    harvest.cellar.select_down();
-                }
-                None
-            }
-            Key::Named(NamedKey::PageUp) => {
-                if let Some(harvest) = &mut self.harvest {
-                    harvest.cellar.select_page(-1);
-                }
-                None
-            }
-            Key::Named(NamedKey::PageDown) => {
-                if let Some(harvest) = &mut self.harvest {
-                    harvest.cellar.select_page(1);
-                }
-                None
-            }
-            Key::Named(NamedKey::Home) => {
-                if let Some(harvest) = &mut self.harvest {
-                    harvest.cellar.select_first();
-                }
-                None
-            }
-            Key::Named(NamedKey::End) => {
-                if let Some(harvest) = &mut self.harvest {
-                    harvest.cellar.select_last();
-                }
-                None
-            }
-            Key::Named(NamedKey::Enter) => self
-                .harvest
-                .as_ref()
-                .and_then(|harvest| harvest.cellar.selected_id()),
-            _ => None,
-        };
+            None
+        });
         if let Some(id) = activate {
             self.apply_cellar_action(crate::harvest::CellarAction::Activate(id));
         }
@@ -163,23 +140,9 @@ impl App {
     /// Resolve command action text independently of its presentation caption.
     /// An incomplete live extraction remains incomplete even when a snapshot
     /// exists; never silently substitute a plausible shorter command.
-    pub(super) fn harvest_command_text(
-        &self,
-        target: &crate::harvest::CommandEntry,
-    ) -> (String, bool) {
-        self.terminal_for_harvest_source(target.source)
-            .filter(|terminal| {
-                !terminal
-                    .mode()
-                    .contains(termeric_core::term::TerminalMode::ALT_SCREEN)
-            })
-            .and_then(|terminal| {
-                terminal
-                    .prompt_tracker()
-                    .completed_region_by_id(target.region_id)
-                    .filter(|region| region.content_available)
-                    .map(Self::region_command_text)
-            })
+    pub(super) fn harvest_command_text(&self, target: &CommandEntry) -> (String, bool) {
+        self.live_region(target)
+            .map(|(_, region)| Self::region_command_text(region))
             .filter(|(text, _)| !text.trim().is_empty())
             .unwrap_or_else(|| {
                 (
@@ -195,25 +158,11 @@ impl App {
 
     pub(super) fn sprout_availability_for_entry(
         &self,
-        target: &crate::harvest::CommandEntry,
+        target: &CommandEntry,
     ) -> crate::harvest::SproutAvailability {
-        let terminal = self.terminal_for_harvest_source(target.source);
-        let source_terminal_available = terminal.is_some();
-        let source_alternate_screen = terminal.is_some_and(|terminal| {
-            terminal
-                .mode()
-                .contains(termeric_core::term::TerminalMode::ALT_SCREEN)
-        });
-        let live_region = terminal.and_then(|terminal| {
-            if source_alternate_screen {
-                return None;
-            }
-            terminal
-                .prompt_tracker()
-                .completed_region_by_id(target.region_id)
-                .filter(|region| region.content_available)
-                .map(|region| (terminal, region))
-        });
+        let source_terminal_available = self.terminal_for_harvest_source(target.source).is_some();
+        let source_alternate_screen = self.harvest_source_on_alternate_screen(target.source);
+        let live_region = self.live_region(target);
         let live_output_available = live_region.is_some_and(|(terminal, region)| {
             !Self::extract_output_text(terminal, region)
                 .0
@@ -237,57 +186,36 @@ impl App {
     /// Keys for the sprout menu of request `request_id`.
     pub(super) fn handle_sprout_menu_key(&mut self, request_id: u64, key: &winit::keyboard::Key) {
         use winit::keyboard::{Key, NamedKey};
-        match key {
-            Key::Named(NamedKey::Escape) => {
-                self.dismiss_sprout_request(request_id);
-            }
-            Key::Named(NamedKey::ArrowUp) => {
-                if let Some(menu) = self
-                    .harvest
-                    .as_mut()
-                    .and_then(|harvest| harvest.sprout_menu.as_mut())
-                {
+        if matches!(key, Key::Named(NamedKey::Escape)) {
+            self.dismiss_sprout_request(request_id);
+        } else if let Some(menu) = self
+            .harvest
+            .as_mut()
+            .and_then(|harvest| harvest.sprout_menu.as_mut())
+        {
+            let chosen = match key {
+                Key::Named(NamedKey::ArrowUp) => {
                     menu.select_up();
+                    None
                 }
-            }
-            Key::Named(NamedKey::ArrowDown) => {
-                if let Some(menu) = self
-                    .harvest
-                    .as_mut()
-                    .and_then(|harvest| harvest.sprout_menu.as_mut())
-                {
+                Key::Named(NamedKey::ArrowDown) => {
                     menu.select_down();
+                    None
                 }
-            }
-            Key::Named(NamedKey::Home) => {
-                if let Some(menu) = self
-                    .harvest
-                    .as_mut()
-                    .and_then(|harvest| harvest.sprout_menu.as_mut())
-                {
+                Key::Named(NamedKey::Home) => {
                     menu.select_first();
+                    None
                 }
-            }
-            Key::Named(NamedKey::End) => {
-                if let Some(menu) = self
-                    .harvest
-                    .as_mut()
-                    .and_then(|harvest| harvest.sprout_menu.as_mut())
-                {
+                Key::Named(NamedKey::End) => {
                     menu.select_last();
+                    None
                 }
+                Key::Named(NamedKey::Enter) => menu.selected_action().copied(),
+                _ => None,
+            };
+            if let Some(action) = chosen {
+                self.execute_sprout_request(request_id, action);
             }
-            Key::Named(NamedKey::Enter) => {
-                let action = self
-                    .harvest
-                    .as_ref()
-                    .and_then(|harvest| harvest.sprout_menu.as_ref())
-                    .and_then(|menu| menu.selected_action().copied());
-                if let Some(action) = action {
-                    self.execute_sprout_request(request_id, action);
-                }
-            }
-            _ => {}
         }
         self.request_redraw(RedrawReason::KeyboardInput);
     }
@@ -350,29 +278,10 @@ impl App {
             return;
         };
 
-        let source_alternate_screen =
-            self.terminal_for_harvest_source(target.source)
-                .is_some_and(|terminal| {
-                    terminal
-                        .mode()
-                        .contains(termeric_core::term::TerminalMode::ALT_SCREEN)
-                });
+        let source_alternate_screen = self.harvest_source_on_alternate_screen(target.source);
         let (region, (live_output, live_output_truncated)) = self
-            .terminal_for_harvest_source(target.source)
-            .and_then(|terminal| {
-                if source_alternate_screen {
-                    return None;
-                }
-                let region = terminal
-                    .prompt_tracker()
-                    .completed_region_by_id(target.region_id)?;
-                if !region.content_available {
-                    return None;
-                }
-                let region = region.clone();
-                let output = Self::extract_output_text(terminal, &region);
-                Some((region, output))
-            })
+            .live_region(&target)
+            .map(|(terminal, region)| (region.clone(), Self::extract_output_text(terminal, region)))
             .map_or_else(
                 || (None, (String::new(), false)),
                 |(region, output)| (Some(region), output),
@@ -393,14 +302,15 @@ impl App {
                     self.toasts.warning("Command text is empty");
                     return;
                 }
-                self.copy_to_clipboard(
-                    text,
-                    if command_truncated {
-                        "Copied partial command (truncated at 4 KiB)"
-                    } else {
-                        "Copied command"
-                    },
-                );
+                let message = if command_truncated {
+                    format!(
+                        "Copied partial command (truncated at {} KiB)",
+                        MAX_HARVEST_COMMAND_BYTES / 1024
+                    )
+                } else {
+                    "Copied command".to_owned()
+                };
+                self.copy_to_clipboard(text, &message);
             }
             SproutAction::CopyOutput => {
                 let text = output_text;
@@ -409,11 +319,14 @@ impl App {
                     return;
                 }
                 let message = if output_truncated {
-                    "Copied the last 64 KiB of output"
+                    format!(
+                        "Copied the last {} KiB of output",
+                        MAX_COMMAND_REGION_OUTPUT_BYTES / 1024
+                    )
                 } else {
-                    "Copied output"
+                    "Copied output".to_owned()
                 };
-                self.copy_to_clipboard(text, message);
+                self.copy_to_clipboard(text, &message);
             }
             SproutAction::Rerun => {
                 if command_truncated {
@@ -516,15 +429,12 @@ impl App {
                         .warning("The command's terminal is no longer open");
                     return;
                 }
-                let first = region
-                    .output_row
-                    .or(region.command_row)
-                    .unwrap_or(region.prompt_row);
-                let last = region
-                    .finish_row
-                    .map(|row| row.saturating_sub(1))
-                    .unwrap_or(first)
-                    .max(first);
+                // The tracker drops a cycle that finishes before its output
+                // starts, so a completed region always has output rows.
+                let Some((first, last)) = region_output_rows(region) else {
+                    self.toasts.warning("That command has no output to search");
+                    return;
+                };
                 if !self.start_command_output_search(first, last) {
                     return;
                 }
@@ -575,9 +485,34 @@ impl App {
     pub(super) fn terminal_for_harvest_source(
         &self,
         source: crate::harvest::HarvestSource,
-    ) -> Option<&termeric_core::Terminal> {
+    ) -> Option<&Terminal> {
         let origin = self.origin_for_harvest_source(source)?;
         self.tabs.as_ref()?.terminal_for_origin(origin)
+    }
+
+    fn harvest_source_on_alternate_screen(&self, source: crate::harvest::HarvestSource) -> bool {
+        self.terminal_for_harvest_source(source)
+            .is_some_and(|terminal| {
+                terminal
+                    .mode()
+                    .contains(termeric_core::term::TerminalMode::ALT_SCREEN)
+            })
+    }
+
+    /// The terminal that ran `target` and its region, while the region's
+    /// rows are still on that terminal's primary screen: `None` once the
+    /// terminal is closed, while a full-screen program has the screen, or
+    /// after the rows were evicted.
+    fn live_region(&self, target: &CommandEntry) -> Option<(&Terminal, &CommandRegion)> {
+        if self.harvest_source_on_alternate_screen(target.source) {
+            return None;
+        }
+        let terminal = self.terminal_for_harvest_source(target.source)?;
+        let region = terminal
+            .prompt_tracker()
+            .completed_region_by_id(target.region_id)
+            .filter(|region| region.content_available)?;
+        Some((terminal, region))
     }
 
     /// Focus the exact live terminal that produced a harvested command before
@@ -647,7 +582,7 @@ impl App {
 
     /// The command a region ran, as the terminal read it when its output
     /// began; empty once the region's rows are no longer retained.
-    pub(super) fn region_command_text(region: &termeric_core::CommandRegion) -> (String, bool) {
+    pub(super) fn region_command_text(region: &CommandRegion) -> (String, bool) {
         if !region.content_available {
             return (String::new(), false);
         }
@@ -657,22 +592,28 @@ impl App {
     /// Extract the output block of a command (between output start and
     /// finish), keeping its end when it is longer than the budget.
     pub(super) fn extract_output_text(
-        terminal: &termeric_core::Terminal,
-        region: &termeric_core::CommandRegion,
+        terminal: &Terminal,
+        region: &CommandRegion,
     ) -> (String, bool) {
         if !region.content_available {
             return (String::new(), false);
         }
-        let Some(start) = region.output_row else {
+        let Some((start, end)) = region_output_rows(region) else {
             return (String::new(), false);
         };
-        let end = region
-            .finish_row
-            .map(|r| r.saturating_sub(1))
-            .unwrap_or(start);
-        let end = end.max(start);
         terminal.bounded_rows_text_tail(start, end, MAX_COMMAND_REGION_OUTPUT_BYTES)
     }
+}
+
+/// The first and last rows of a region's output: from its output-start mark
+/// to the row before its finish mark, and at least one row.
+fn region_output_rows(region: &CommandRegion) -> Option<(i32, i32)> {
+    let start = region.output_row?;
+    let end = region
+        .finish_row
+        .map_or(start, |row| row.saturating_sub(1))
+        .max(start);
+    Some((start, end))
 }
 
 #[cfg(test)]

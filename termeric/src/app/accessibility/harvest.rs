@@ -325,7 +325,7 @@ impl App {
             let mut node = Node::new(Role::MenuItem);
             node.set_label(label.as_str());
             if let Some(description) = description {
-                node.set_description(*description);
+                node.set_description(description.as_str());
             }
             node.set_selected(index == selected);
             node.set_bounds(bounds_rect(*row));

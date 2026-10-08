@@ -6,7 +6,7 @@
 //! - Search in output
 //! - Explain, by asking a running coding agent
 
-use super::cellar::CommandEntry;
+use super::cellar::{CommandEntry, MAX_HARVEST_COMMAND_BYTES, MAX_HARVEST_OUTPUT_BYTES};
 use crate::ui::geometry::Bounds;
 use crate::ui::icon::Icon;
 use std::time::Instant;
@@ -131,50 +131,56 @@ impl SproutAvailability {
         format!("{}{suffix}", action.name())
     }
 
-    pub fn action_description(self, action: SproutAction) -> Option<&'static str> {
-        match action {
+    pub fn action_description(self, action: SproutAction) -> Option<String> {
+        let description = match action {
             SproutAction::Rerun if self.command_truncated => {
-                Some("The command text is incomplete; a truncated prefix cannot be rerun")
+                "The command text is incomplete; a truncated prefix cannot be rerun".into()
             }
-            SproutAction::CopyCommand if self.command_truncated => {
-                Some("Copies only a partial command snapshot, limited to 4 KiB")
-            }
-            SproutAction::Explain if self.command_truncated => Some(
-                "Pastes the partial command text, marked as truncated, into the focused agent terminal, or the only one open",
+            SproutAction::CopyCommand if self.command_truncated => format!(
+                "Copies only a partial command snapshot, limited to {} KiB",
+                MAX_HARVEST_COMMAND_BYTES / 1024
             ),
+            SproutAction::Explain if self.command_truncated => {
+                "Pastes the partial command text, marked as truncated, into the focused agent terminal, or the only one open".into()
+            }
             SproutAction::CopyOutput if !self.output_available => {
-                Some("No live or retained command output is available")
+                "No live or retained command output is available".into()
             }
             SproutAction::CopyCommand | SproutAction::Explain if !self.command_available => {
-                Some("Command text is unavailable")
+                "Command text is unavailable".into()
             }
             SproutAction::Rerun if !self.source_terminal_available => {
-                Some("The terminal that produced this command is closed")
+                "The terminal that produced this command is closed".into()
             }
-            SproutAction::Rerun if !self.command_available => Some("Command text is unavailable"),
+            SproutAction::Rerun if !self.command_available => "Command text is unavailable".into(),
             SproutAction::SearchOutput | SproutAction::ScrollTo if self.source_alternate_screen => {
-                Some("Leave the source terminal's alternate screen to use its primary scrollback")
+                "Leave the source terminal's alternate screen to use its primary scrollback".into()
             }
             SproutAction::SearchOutput | SproutAction::ScrollTo if !self.live_content_available => {
-                Some("The command is no longer present in terminal scrollback")
+                "The command is no longer present in terminal scrollback".into()
             }
             SproutAction::CopyOutput
                 if self.retained_output_truncated && !self.live_content_available =>
             {
-                Some("Uses the last 64 KiB of the retained output")
+                format!(
+                    "Uses the last {} KiB of the retained output",
+                    MAX_HARVEST_OUTPUT_BYTES / 1024
+                )
             }
             SproutAction::Explain
                 if self.retained_output_truncated && !self.live_content_available =>
             {
-                Some(
-                    "Pastes the command and the last 64 KiB of its retained output into the focused agent terminal, or the only one open",
+                format!(
+                    "Pastes the command and the last {} KiB of its retained output into the focused agent terminal, or the only one open",
+                    MAX_HARVEST_OUTPUT_BYTES / 1024
                 )
             }
-            SproutAction::Explain => Some(
-                "Pastes the command and its output into the focused agent terminal, or the only one open",
-            ),
-            _ => None,
-        }
+            SproutAction::Explain => {
+                "Pastes the command and its output into the focused agent terminal, or the only one open".into()
+            }
+            _ => return None,
+        };
+        Some(description)
     }
 }
 
@@ -328,7 +334,7 @@ impl SproutMenu {
         self.availability.action_label(action)
     }
 
-    pub fn action_description(&self, action: SproutAction) -> Option<&'static str> {
+    pub fn action_description(&self, action: SproutAction) -> Option<String> {
         self.availability.action_description(action)
     }
 }
