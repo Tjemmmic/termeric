@@ -1886,13 +1886,6 @@ impl SettingsPanel {
             return self.handle_dropdown_key(key, config, registry);
         }
 
-        // Text edits do not need to rebuild the settings inventory, and a
-        // rejected edit must not alter result selection or scrolling.
-        if matches!(key, SettingsKey::FilterBackspace) {
-            self.backspace_filter();
-            return SettingsAction::None;
-        }
-
         let entries = self.build_entries(config, registry);
         let selectable_count = Self::count_selectable(&entries);
 
@@ -1947,8 +1940,6 @@ impl SettingsPanel {
                 return SettingsAction::None;
             }
             SettingsKey::Save => SettingsAction::SaveConfig,
-            SettingsKey::Delete => SettingsAction::None,
-            SettingsKey::FilterBackspace => unreachable!(),
         };
 
         // Keep the selected entry visible after any navigation.
@@ -1978,10 +1969,6 @@ impl SettingsPanel {
         self.scroll_offset = 0;
         self.selection_visibility_pending = false;
         true
-    }
-
-    pub fn backspace_filter(&mut self) -> bool {
-        self.edit_filter(TextInputEdit::Backspace)
     }
 
     /// Edit without rebuilding the inventory or resetting results on caret moves.
@@ -2538,10 +2525,6 @@ pub enum SettingsKey {
     /// Previous sidebar page.
     BackTab,
     Save,
-    /// Backspace in filter
-    FilterBackspace,
-    /// Delete key
-    Delete,
 }
 
 /// Display info passed from the settings panel to the renderer
@@ -2936,11 +2919,11 @@ mod tests {
         assert!(!panel.insert_filter_text("x"));
         assert_eq!((panel.selected, panel.scroll_offset), (0, 0));
         panel.dropdown_open = true;
-        assert!(!panel.backspace_filter());
+        assert!(!panel.edit_filter(TextInputEdit::Backspace));
         assert!(!panel.insert_filter_text("x"));
         assert_eq!(panel.filter.cursor(), 1024);
         panel.close();
-        assert!(!panel.backspace_filter());
+        assert!(!panel.edit_filter(TextInputEdit::Backspace));
     }
 
     #[test]
@@ -2949,20 +2932,20 @@ mod tests {
         panel.open();
         for cluster in ["e\u{301}", "👩\u{200d}💻", "🇺🇸"] {
             assert!(panel.insert_filter_text(cluster));
-            assert!(panel.backspace_filter());
+            assert!(panel.edit_filter(TextInputEdit::Backspace));
             assert!(panel.filter.text().is_empty());
             assert_eq!(panel.filter.cursor(), 0);
         }
         panel.selected = 2;
         panel.scroll_offset = 1;
-        assert!(!panel.backspace_filter());
+        assert!(!panel.edit_filter(TextInputEdit::Backspace));
         assert_eq!((panel.selected, panel.scroll_offset), (2, 1));
         assert!(panel.insert_filter_text("a界z"));
         assert!(panel.filter.place_caret(1));
         assert!(panel.insert_filter_text("e\u{301}"));
         assert_eq!(panel.filter.text(), "ae\u{301}界z");
         assert_eq!(panel.filter.cursor(), 4);
-        assert!(panel.backspace_filter());
+        assert!(panel.edit_filter(TextInputEdit::Backspace));
         assert_eq!(panel.filter.text(), "a界z");
         assert!(!panel.filter.place_caret(2), "inside 界");
     }

@@ -44,7 +44,6 @@ impl App {
             Key::Named(NamedKey::ArrowUp) => Some(ShortcutsKey::Up),
             Key::Named(NamedKey::ArrowDown) => Some(ShortcutsKey::Down),
             Key::Named(NamedKey::Enter) => Some(ShortcutsKey::Enter),
-            Key::Named(NamedKey::Backspace) => Some(ShortcutsKey::Backspace),
             Key::Named(NamedKey::Delete) => Some(ShortcutsKey::Delete),
             _ => None,
         };

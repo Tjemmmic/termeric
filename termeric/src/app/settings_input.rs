@@ -30,8 +30,6 @@ impl App {
             Key::Named(NamedKey::Enter) => Some(SettingsKey::Enter),
             Key::Named(NamedKey::Tab) if self.modifiers.shift_key() => Some(SettingsKey::BackTab),
             Key::Named(NamedKey::Tab) => Some(SettingsKey::Tab),
-            Key::Named(NamedKey::Backspace) => Some(SettingsKey::FilterBackspace),
-            Key::Named(NamedKey::Delete) => Some(SettingsKey::Delete),
             Key::Character(c) if self.modifiers.control_key() => match c.as_str() {
                 "s" | "S" => Some(SettingsKey::Save),
                 _ => None,

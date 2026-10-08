@@ -38,8 +38,6 @@ pub enum ShortcutsKey {
     Delete,
     /// A captured key chord during recording mode
     RecordedChord(KeyChord),
-    /// Backspace in search filter (non-recording mode)
-    Backspace,
 }
 
 /// A single entry in the shortcuts list for display
@@ -531,10 +529,6 @@ impl ShortcutsPanel {
                         };
                     }
                 }
-                ShortcutsAction::None
-            }
-            ShortcutsKey::Backspace => {
-                self.edit_filter(TextInputEdit::Backspace);
                 ShortcutsAction::None
             }
             ShortcutsKey::RecordedChord(_) => ShortcutsAction::None,
@@ -1256,14 +1250,10 @@ mod tests {
     #[test]
     fn filter_backspace_removes_complete_graphemes() {
         let mut panel = ShortcutsPanel::new();
-        let registry = ShortcutRegistry::new();
         panel.open();
         for cluster in ["e\u{301}", "👩\u{200d}💻", "🇺🇸"] {
             assert!(panel.insert_filter_text(cluster));
-            assert_eq!(
-                panel.handle_key(ShortcutsKey::Backspace, &registry),
-                ShortcutsAction::None
-            );
+            assert!(panel.edit_filter(TextInputEdit::Backspace));
             assert!(panel.filter.text().is_empty());
             assert_eq!(panel.filter.cursor(), 0);
         }
