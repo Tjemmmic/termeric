@@ -515,11 +515,6 @@ impl Renderer {
         self.visible_text_blink
     }
 
-    /// Get current padding
-    pub fn padding(&self) -> f32 {
-        self.padding
-    }
-
     /// Get current window size in physical pixels
     pub fn window_size(&self) -> (u32, u32) {
         self.size

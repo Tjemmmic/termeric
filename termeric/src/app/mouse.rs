@@ -25,7 +25,36 @@ impl DividerDrag {
     }
 }
 
+/// Where the terminal area sits and how large its cells are: all that maps
+/// the pointer to panes, cells, dividers, and scrollbars.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct PointerMetrics {
+    pub(super) placement: PanePlacement,
+    pub(super) cell_size: (f32, f32),
+}
+
+impl PointerMetrics {
+    /// `position` in the coordinates of the tab's pane layout, where split
+    /// panes and dividers sit: from the area's left padding and top edge.
+    pub(super) fn pane_area_point(self, position: (f64, f64)) -> (f32, f32) {
+        (
+            position.0 as f32 - self.placement.left - self.placement.padding,
+            position.1 as f32 - self.placement.top,
+        )
+    }
+}
+
 impl App {
+    /// The pointer geometry of what is drawn. A headless window, like
+    /// [`App::ui_metrics`]'s, has a nominal window with 8×16 cells.
+    pub(super) fn pointer_metrics(&self) -> PointerMetrics {
+        let metrics = self.ui_metrics();
+        PointerMetrics {
+            placement: self.pane_placement(),
+            cell_size: (metrics.cell_width, metrics.cell_height),
+        }
+    }
+
     /// A divider belongs to a tab, not its focused pane. Switching panes in
     /// that tab may continue the drag; hiding/closing its tab must finish it.
     pub(super) fn reconcile_divider_drag(&mut self) {
@@ -293,13 +322,10 @@ impl App {
                 return;
             }
         }
-        let Some(renderer) = &self.renderer else {
+        if self.renderer.is_none() {
             return;
-        };
-        let (cell_width, cell_height) = renderer.cell_size();
-        let padding = renderer.padding();
-        let content_left = renderer.tab_bar_width();
-        let content_top = renderer.content_top();
+        }
+        let metrics = self.pointer_metrics();
         if state == ElementState::Pressed
             && button != MouseButton::Left
             && self.pointer_panel_owns_input()
@@ -311,7 +337,7 @@ impl App {
                 let chrome = self.floating_chrome_at(position);
                 if button == MouseButton::Left && !self.pointer_panel_owns_input() {
                     if matches!(chrome, Some(FloatingChrome::Scrollbar(_))) {
-                        if self.focus_pane_at(position, content_top, padding) {
+                        if self.focus_pane_at(position, metrics) {
                             self.refresh_focused_terminal_surfaces();
                         }
                         self.begin_scrollbar_drag();
@@ -321,10 +347,8 @@ impl App {
                     }
 
                     // A press on a pane divider starts a drag-to-resize.
-                    if self.press_pane_divider(
-                        position.0 as f32 - content_left - padding,
-                        position.1 as f32 - content_top,
-                    ) {
+                    let (area_x, area_y) = metrics.pane_area_point(position);
+                    if self.press_pane_divider(area_x, area_y) {
                         return;
                     }
                 }
@@ -373,8 +397,8 @@ impl App {
                                         &self.shortcut_registry,
                                         size.width as f32,
                                         size.height as f32,
-                                        cell_width,
-                                        cell_height,
+                                        metrics.cell_size.0,
+                                        metrics.cell_size.1,
                                     );
                                     self.apply_settings_action(action);
                                     self.request_redraw(RedrawReason::PointerInput);
@@ -487,26 +511,12 @@ impl App {
                 if self.press_floating_chrome(button, chrome) {
                     return;
                 }
-                if self.press_terminal(
-                    button,
-                    position,
-                    cell_width,
-                    cell_height,
-                    content_top,
-                    padding,
-                ) {
+                if self.press_terminal(button, position, metrics) {
                     return;
                 }
             }
             ElementState::Released => {
-                if self.try_report_mouse_release(
-                    button,
-                    position,
-                    cell_width,
-                    cell_height,
-                    content_top,
-                    padding,
-                ) {
+                if self.try_report_mouse_release(button, position, metrics) {
                     self.refresh_terminal_pointer_cursor();
                     return;
                 }
@@ -700,23 +710,17 @@ impl App {
         &mut self,
         button: MouseButton,
         position: (f64, f64),
-        cell_width: f32,
-        cell_height: f32,
-        content_top: f32,
-        padding: f32,
+        metrics: PointerMetrics,
     ) -> bool {
-        if button == MouseButton::Left
-            && self.toggle_armed_broadcast_target_at(position, content_top, padding)
-        {
+        if button == MouseButton::Left && self.toggle_armed_broadcast_target_at(position, metrics) {
             self.request_redraw(RedrawReason::PointerInput);
             return true;
         }
-        if self.focus_pane_at(position, content_top, padding) {
+        if self.focus_pane_at(position, metrics) {
             self.refresh_focused_terminal_surfaces();
         }
 
-        let grid_pos =
-            self.focused_grid_position(position, cell_width, cell_height, content_top, padding);
+        let grid_pos = self.focused_grid_position(position, metrics);
 
         // Ctrl+Click opens links from the pane selected by this click.
         if self.modifiers.control_key()
@@ -727,23 +731,12 @@ impl App {
             return true;
         }
 
-        if self.try_report_mouse_press(
-            button,
-            position,
-            cell_width,
-            cell_height,
-            content_top,
-            padding,
-        ) {
+        if self.try_report_mouse_press(button, position, metrics) {
             return true;
         }
 
         self.begin_native_selection(button, grid_pos);
-        if button == MouseButton::Middle
-            && self
-                .pane_at_pointer(position, content_top, padding)
-                .is_some()
-        {
+        if button == MouseButton::Middle && self.pane_at_pointer(position, metrics).is_some() {
             self.paste_primary_selection();
         }
         false
@@ -763,13 +756,9 @@ impl App {
         let Some(renderer) = &self.renderer else {
             return;
         };
-        let (cell_width, cell_height) = renderer.cell_size();
         let tab_bar_height = renderer.tab_bar_height();
-        let padding = renderer.padding();
-        let content_left = renderer.tab_bar_width();
-        let content_top = renderer.content_top();
-        let grid_pos =
-            self.focused_grid_position(position, cell_width, cell_height, content_top, padding);
+        let metrics = self.pointer_metrics();
+        let grid_pos = self.focused_grid_position(position, metrics);
 
         // ── Tab bar hover detection for icon animations ──
         {
@@ -818,9 +807,8 @@ impl App {
 
         // Handle pane divider dragging
         if self.divider_dragging.is_some() {
-            let local_x = position.0 as f32 - content_left - padding;
-            let local_y = position.1 as f32 - content_top;
-            self.apply_divider_drag_position(local_x, local_y);
+            let (area_x, area_y) = metrics.pane_area_point(position);
+            self.apply_divider_drag_position(area_x, area_y);
             self.request_redraw(RedrawReason::PointerInput);
             return;
         }
@@ -847,9 +835,8 @@ impl App {
         {
             if let Some(tab) = tabs.active_tab() {
                 if let Some(pm) = tab.split_panes() {
-                    let local_x = position.0 as f32 - content_left - padding;
-                    let local_y = position.1 as f32 - content_top;
-                    if let Some(is_vertical) = pm.hit_test_divider(local_x, local_y) {
+                    let (area_x, area_y) = metrics.pane_area_point(position);
+                    if let Some(is_vertical) = pm.hit_test_divider(area_x, area_y) {
                         if let Some(window) = &self.window {
                             let cursor = if is_vertical {
                                 winit::window::CursorIcon::EwResize
@@ -916,14 +903,7 @@ impl App {
         self.refresh_terminal_pointer_cursor();
 
         let chrome = self.floating_chrome_at(position);
-        if self.try_report_mouse_motion(
-            position,
-            chrome,
-            cell_width,
-            cell_height,
-            content_top,
-            padding,
-        ) {
+        if self.try_report_mouse_motion(position, chrome, metrics) {
             return;
         }
 
@@ -1066,17 +1046,13 @@ impl App {
     }
 
     fn wheel_route(&self) -> WheelRoute {
-        let Some((position, renderer)) = self.last_cursor_pos.zip(self.renderer.as_ref()) else {
+        let (Some(position), Some(_)) = (self.last_cursor_pos, &self.renderer) else {
             return WheelRoute::Terminal(None);
         };
-        let (cell_width, cell_height) = renderer.cell_size();
         self.wheel_route_at(
             position,
             self.floating_chrome_at(position),
-            cell_width,
-            cell_height,
-            renderer.content_top(),
-            renderer.padding(),
+            self.pointer_metrics(),
         )
     }
 
@@ -1087,10 +1063,7 @@ impl App {
         &self,
         position: (f64, f64),
         chrome: Option<FloatingChrome>,
-        cell_width: f32,
-        cell_height: f32,
-        content_top: f32,
-        padding: f32,
+        metrics: PointerMetrics,
     ) -> WheelRoute {
         match chrome {
             Some(FloatingChrome::Scrollbar(identity)) => WheelRoute::Terminal(Some(WheelTarget {
@@ -1098,12 +1071,12 @@ impl App {
                 cell: None,
             })),
             Some(FloatingChrome::Toast | FloatingChrome::FindBox(_)) => WheelRoute::Chrome,
-            None => WheelRoute::Terminal(self.pane_at_pointer(position, content_top, padding).map(
-                |pane| WheelTarget {
+            None => WheelRoute::Terminal(self.pane_at_pointer(position, metrics).map(|pane| {
+                WheelTarget {
                     identity: pane.identity,
-                    cell: self.pane_protocol_cell(pane, position, cell_width, cell_height),
-                },
-            )),
+                    cell: self.pane_protocol_cell(pane, position, metrics),
+                }
+            })),
         }
     }
 
@@ -1227,10 +1200,7 @@ impl App {
         &mut self,
         button: MouseButton,
         position: (f64, f64),
-        cell_width: f32,
-        cell_height: f32,
-        content_top: f32,
-        padding: f32,
+        metrics: PointerMetrics,
     ) -> bool {
         if self.modifiers.shift_key() {
             return false;
@@ -1242,9 +1212,7 @@ impl App {
         if !mode.has_mouse_mode() {
             return false;
         }
-        let Some((col, row)) =
-            self.protocol_grid_position(position, cell_width, cell_height, content_top, padding)
-        else {
+        let Some((col, row)) = self.protocol_grid_position(position, metrics) else {
             return false;
         };
         let Some(bytes) = crate::input::encode_mouse_report(
@@ -1275,10 +1243,7 @@ impl App {
         &mut self,
         button: MouseButton,
         position: (f64, f64),
-        cell_width: f32,
-        cell_height: f32,
-        content_top: f32,
-        padding: f32,
+        metrics: PointerMetrics,
     ) -> bool {
         let Some(button) = report_button(button) else {
             return false;
@@ -1296,9 +1261,7 @@ impl App {
             return true;
         }
         let mode = self.active_keyboard_mode();
-        let Some((col, row)) =
-            self.protocol_grid_position(position, cell_width, cell_height, content_top, padding)
-        else {
+        let Some((col, row)) = self.protocol_grid_position(position, metrics) else {
             return true;
         };
         if let Some(bytes) = crate::input::encode_mouse_report(
@@ -1320,10 +1283,7 @@ impl App {
         &mut self,
         position: (f64, f64),
         chrome: Option<FloatingChrome>,
-        cell_width: f32,
-        cell_height: f32,
-        content_top: f32,
-        padding: f32,
+        metrics: PointerMetrics,
     ) -> bool {
         self.reconcile_terminal_mouse_capture();
         let mode = self.active_keyboard_mode();
@@ -1335,9 +1295,7 @@ impl App {
         {
             return false;
         }
-        let Some((col, row)) =
-            self.protocol_grid_position(position, cell_width, cell_height, content_top, padding)
-        else {
+        let Some((col, row)) = self.protocol_grid_position(position, metrics) else {
             return true;
         };
         if let Some(bytes) = crate::input::encode_mouse_report(
@@ -1370,18 +1328,11 @@ impl App {
         };
         let icon = self.last_cursor_pos.zip(self.renderer.as_ref()).map_or(
             winit::window::CursorIcon::Default,
-            |(position, renderer)| {
+            |(position, _)| {
                 if self.floating_chrome_at(position).is_some() {
                     return winit::window::CursorIcon::Default;
                 }
-                let (cell_width, cell_height) = renderer.cell_size();
-                self.terminal_pointer_icon_at(
-                    position,
-                    cell_width,
-                    cell_height,
-                    renderer.content_top(),
-                    renderer.padding(),
-                )
+                self.terminal_pointer_icon_at(position, self.pointer_metrics())
             },
         );
         window.set_cursor(icon);
@@ -1418,28 +1369,18 @@ impl App {
         if previous.control_key() == self.modifiers.control_key() {
             return;
         }
-        let Some((position, renderer)) = self.last_cursor_pos.zip(self.renderer.as_ref()) else {
+        let (Some(position), Some(_)) = (self.last_cursor_pos, &self.renderer) else {
             return;
         };
-        let (content_top, padding) = (renderer.content_top(), renderer.padding());
+        let metrics = self.pointer_metrics();
+        let (area_x, area_y) = metrics.pane_area_point(position);
         let on_divider = self
             .tabs
             .as_ref()
             .and_then(TabManager::active_tab)
             .and_then(|tab| tab.split_panes())
-            .is_some_and(|panes| {
-                panes
-                    .hit_test_divider(
-                        position.0 as f32 - renderer.tab_bar_width() - padding,
-                        position.1 as f32 - content_top,
-                    )
-                    .is_some()
-            });
-        if !on_divider
-            && self
-                .pane_at_pointer(position, content_top, padding)
-                .is_some()
-        {
+            .is_some_and(|panes| panes.hit_test_divider(area_x, area_y).is_some());
+        if !on_divider && self.pane_at_pointer(position, metrics).is_some() {
             self.refresh_terminal_pointer_cursor();
         }
     }
@@ -1450,24 +1391,19 @@ impl App {
     fn terminal_pointer_icon_at(
         &self,
         position: (f64, f64),
-        cell_width: f32,
-        cell_height: f32,
-        content_top: f32,
-        padding: f32,
+        metrics: PointerMetrics,
     ) -> winit::window::CursorIcon {
-        let hovered = self
-            .pane_at_pointer(position, content_top, padding)
-            .and_then(|pane| {
-                let terminal = self.pointer_terminal(pane.identity)?;
-                let cell = terminal_protocol_cell(
-                    terminal,
-                    pane.bounds,
-                    pane.lone,
-                    position,
-                    (cell_width, cell_height),
-                )?;
-                Some((pane.identity, terminal, cell))
-            });
+        let hovered = self.pane_at_pointer(position, metrics).and_then(|pane| {
+            let terminal = self.pointer_terminal(pane.identity)?;
+            let cell = terminal_protocol_cell(
+                terminal,
+                pane.bounds,
+                pane.lone,
+                position,
+                metrics.cell_size,
+            )?;
+            Some((pane.identity, terminal, cell))
+        });
         let Some((identity, terminal, (col, row))) = hovered else {
             return terminal_pointer_icon(None, self.mouse_pressed, false);
         };
@@ -1517,14 +1453,11 @@ impl App {
     fn protocol_grid_position(
         &self,
         position: (f64, f64),
-        cell_width: f32,
-        cell_height: f32,
-        content_top: f32,
-        padding: f32,
+        metrics: PointerMetrics,
     ) -> Option<(usize, usize)> {
         let terminal = self.active_terminal()?;
-        let (bounds, lone) = self.focused_pane_bounds(content_top, padding)?;
-        terminal_protocol_cell(terminal, bounds, lone, position, (cell_width, cell_height))
+        let (bounds, lone) = self.focused_pane_bounds(metrics)?;
+        terminal_protocol_cell(terminal, bounds, lone, position, metrics.cell_size)
     }
 
     /// The visible, zero-based cell of `pane`'s terminal under `position`.
@@ -1532,8 +1465,7 @@ impl App {
         &self,
         pane: PointerPane,
         position: (f64, f64),
-        cell_width: f32,
-        cell_height: f32,
+        metrics: PointerMetrics,
     ) -> Option<(usize, usize)> {
         let terminal = self.pointer_terminal(pane.identity)?;
         terminal_protocol_cell(
@@ -1541,7 +1473,7 @@ impl App {
             pane.bounds,
             pane.lone,
             position,
-            (cell_width, cell_height),
+            metrics.cell_size,
         )
     }
 
@@ -1549,12 +1481,11 @@ impl App {
     pub(super) fn pane_at_pointer(
         &self,
         position: (f64, f64),
-        content_top: f32,
-        padding: f32,
+        metrics: PointerMetrics,
     ) -> Option<PointerPane> {
         let tab = self.tabs.as_ref()?.active_tab()?;
         let lone = tab.panes.pane_count() == 1;
-        let placement = self.pointer_pane_placement(content_top, padding);
+        let placement = metrics.placement;
         let (pane_id, bounds) = pane_at(placement, tab.panes.calculate_layout(), lone, position)?;
         Some(PointerPane {
             identity: crate::tabs::TerminalIdentity {
@@ -1571,46 +1502,31 @@ impl App {
     fn focused_grid_position(
         &self,
         position: (f64, f64),
-        cell_width: f32,
-        cell_height: f32,
-        content_top: f32,
-        padding: f32,
+        metrics: PointerMetrics,
     ) -> termeric_core::Point {
         let (origin, scroll_offset) = self
-            .focused_pane_bounds(content_top, padding)
+            .focused_pane_bounds(metrics)
             .zip(self.active_terminal())
             .map_or_else(
                 // With no tab, the area's top-left cell.
                 || {
-                    let placement = self.pointer_pane_placement(content_top, padding);
+                    let placement = metrics.placement;
                     let bounds = placement.pane_bounds(Bounds::default(), true);
                     ((bounds.x, bounds.y), 0)
                 },
                 |((bounds, _), terminal)| ((bounds.x, bounds.y), terminal.grid().scroll_offset()),
             );
-        screen_to_pane_grid(position, cell_width, cell_height, origin, scroll_offset)
+        screen_to_pane_grid(position, metrics.cell_size, origin, scroll_offset)
     }
 
     /// The focused pane's window rectangle, as drawn, and whether it is the
-    /// tab's only pane. `content_top` and `padding` are as the caller
-    /// measured them.
-    fn focused_pane_bounds(&self, content_top: f32, padding: f32) -> Option<(Bounds, bool)> {
+    /// tab's only pane.
+    fn focused_pane_bounds(&self, metrics: PointerMetrics) -> Option<(Bounds, bool)> {
         let panes = &self.tabs.as_ref()?.active_tab()?.panes;
         let rect = *panes.calculate_layout().get(&panes.focused_id())?;
         let lone = panes.pane_count() == 1;
-        let placement = self.pointer_pane_placement(content_top, padding);
+        let placement = metrics.placement;
         Some((placement.pane_bounds(rect, lone), lone))
-    }
-
-    fn pointer_pane_placement(&self, content_top: f32, padding: f32) -> PanePlacement {
-        let renderer = self.renderer.as_ref();
-        PanePlacement {
-            left: renderer.map_or(0.0, crate::renderer::Renderer::tab_bar_width),
-            top: content_top,
-            right: renderer.map_or(0.0, crate::renderer::Renderer::content_right),
-            bottom: renderer.map_or(0.0, |renderer| renderer.window_size().1 as f32),
-            padding,
-        }
     }
 
     pub(super) fn focused_hyperlink_open_context(
@@ -1665,21 +1581,20 @@ impl App {
     fn toggle_armed_broadcast_target_at(
         &mut self,
         position: (f64, f64),
-        content_top: f32,
-        padding: f32,
+        metrics: PointerMetrics,
     ) -> bool {
         if !matches!(self.broadcast, BroadcastState::Armed { .. }) {
             return false;
         }
         let target = self
-            .pane_at_pointer(position, content_top, padding)
+            .pane_at_pointer(position, metrics)
             .filter(|pane| !pane.lone);
         target.is_some_and(|pane| self.toggle_armed_broadcast_target(pane.identity.pane_id))
     }
 
     /// Focus the pane under a content click. Returns whether focus moved.
-    fn focus_pane_at(&mut self, position: (f64, f64), content_top: f32, padding: f32) -> bool {
-        let Some(target) = self.pane_at_pointer(position, content_top, padding) else {
+    fn focus_pane_at(&mut self, position: (f64, f64), metrics: PointerMetrics) -> bool {
+        let Some(target) = self.pane_at_pointer(position, metrics) else {
             return false;
         };
         let target = target.identity.pane_id;
@@ -1753,16 +1668,18 @@ impl App {
     /// The pane of the active tab whose scrollbar takes the pointer at
     /// `position`, by the geometry the renderer draws it with.
     fn scrollbar_at(&self, position: (f64, f64)) -> Option<crate::tabs::TerminalIdentity> {
-        let renderer = self.renderer.as_ref()?;
+        // A window without a renderer has drawn no scrollbar to hit.
+        self.renderer.as_ref()?;
         let tab = self.tabs.as_ref()?.active_tab()?;
         let lone = tab.panes.pane_count() == 1;
-        let placement = self.pointer_pane_placement(renderer.content_top(), renderer.padding());
+        let metrics = self.pointer_metrics();
         let (x, y) = (position.0 as f32, position.1 as f32);
         let layout = tab.panes.calculate_layout();
         let pane_id = layout.into_iter().find_map(|(pane_id, rect)| {
             let grid = tab.panes.get_pane(pane_id)?.terminal.presentation_grid();
-            placement
-                .pane_scrollbar(rect, lone, grid, renderer.cell_size())
+            metrics
+                .placement
+                .pane_scrollbar(rect, lone, grid, metrics.cell_size)
                 .filter(|scrollbar| scrollbar.hit.contains(x, y))
                 .map(|_| pane_id)
         })?;
@@ -1774,23 +1691,21 @@ impl App {
 
     /// Map a vertical mouse position to a scroll offset and apply it
     pub(super) fn scroll_to_scrollbar_position(&mut self, y: f64) {
-        let Some(renderer) = &self.renderer else {
+        if self.renderer.is_none() {
             return;
-        };
-        let placement = self.pointer_pane_placement(renderer.content_top(), renderer.padding());
-        let cell_size = renderer.cell_size();
-        self.drag_scrollbar_to(placement, cell_size, y as f32);
+        }
+        self.drag_scrollbar_to(self.pointer_metrics(), y as f32);
     }
 
     /// Scroll the dragged pane to `y` along the scrollbar track it is drawn
     /// with: the track's top is the oldest scrollback, its bottom the live
     /// screen.
-    fn drag_scrollbar_to(&mut self, placement: PanePlacement, cell_size: (f32, f32), y: f32) {
+    fn drag_scrollbar_to(&mut self, metrics: PointerMetrics, y: f32) {
         if !self.reconcile_scrollbar_drag() {
             return;
         }
         let Some(track) = self
-            .focused_pane_scrollbar(placement, cell_size)
+            .focused_pane_scrollbar(metrics)
             .map(|scrollbar| scrollbar.track)
         else {
             return;
@@ -1802,14 +1717,15 @@ impl App {
     /// The scrollbar of the active tab's focused pane, as it is drawn.
     fn focused_pane_scrollbar(
         &self,
-        placement: PanePlacement,
-        cell_size: (f32, f32),
+        metrics: PointerMetrics,
     ) -> Option<crate::renderer::PaneScrollbar> {
         let tab = self.tabs.as_ref()?.active_tab()?;
         let rect = *tab.panes.calculate_layout().get(&tab.panes.focused_id())?;
         let lone = tab.panes.pane_count() == 1;
         let grid = tab.focused_terminal()?.presentation_grid();
-        placement.pane_scrollbar(rect, lone, grid, cell_size)
+        metrics
+            .placement
+            .pane_scrollbar(rect, lone, grid, metrics.cell_size)
     }
 }
 
@@ -2018,8 +1934,7 @@ fn protocol_cell_from_viewport(
 /// scrollback coordinates.
 fn screen_to_pane_grid(
     position: (f64, f64),
-    cell_width: f32,
-    cell_height: f32,
+    (cell_width, cell_height): (f32, f32),
     origin: (f32, f32),
     scroll_offset: usize,
 ) -> termeric_core::Point {
@@ -2075,6 +1990,19 @@ mod tests {
         assert_eq!(PointerShape::ALL.map(native_pointer_icon), expected);
     }
 
+    /// A window with no tab bar or padding and 10×20 cells, as the test
+    /// panes are laid out.
+    const TEST_METRICS: PointerMetrics = PointerMetrics {
+        placement: PanePlacement {
+            left: 0.0,
+            top: 0.0,
+            right: 800.0,
+            bottom: 480.0,
+            padding: 0.0,
+        },
+        cell_size: (10.0, 20.0),
+    };
+
     fn mouse_report_position(app: &App) -> (f64, f64) {
         let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
         let (x, y) = tab.split_panes().map_or((0.0, 0.0), |panes| {
@@ -2110,14 +2038,7 @@ mod tests {
                 let mode = TerminalMode::MOUSE_BUTTON_EVENT | TerminalMode::MOUSE_SGR;
                 app.active_terminal_mut().unwrap().set_mode(mode, true);
                 let position = mouse_report_position(&app);
-                assert!(app.try_report_mouse_press(
-                    MouseButton::Left,
-                    position,
-                    10.0,
-                    20.0,
-                    0.0,
-                    0.0
-                ));
+                assert!(app.try_report_mouse_press(MouseButton::Left, position, TEST_METRICS));
                 // Change ownership without a refresh callback: the write boundary
                 // itself must prevent stale presses reaching another application.
                 if split {
@@ -2134,9 +2055,9 @@ mod tests {
                 app.active_terminal_mut().unwrap().set_mode(mode, true);
                 let position = mouse_report_position(&app);
                 if motion {
-                    app.try_report_mouse_motion(position, None, 10.0, 20.0, 0.0, 0.0);
+                    app.try_report_mouse_motion(position, None, TEST_METRICS);
                 }
-                app.try_report_mouse_release(MouseButton::Left, position, 10.0, 20.0, 0.0, 0.0);
+                app.try_report_mouse_release(MouseButton::Left, position, TEST_METRICS);
                 let bytes = fenced_harvest_capture(&mut app, &captures);
                 assert_eq!(bytes[0], b"\x1b[<0;2;2M");
                 assert!(
@@ -2157,24 +2078,24 @@ mod tests {
             true,
         );
         let position = mouse_report_position(&app);
-        assert!(app.try_report_mouse_press(MouseButton::Left, position, 10.0, 20.0, 0.0, 0.0));
+        assert!(app.try_report_mouse_press(MouseButton::Left, position, TEST_METRICS));
         let capture = app.terminal_mouse_capture;
         app.refresh_focused_terminal_surfaces();
         assert_eq!(app.terminal_mouse_capture, capture);
-        assert!(!app.try_report_mouse_release(MouseButton::Right, position, 10.0, 20.0, 0.0, 0.0));
+        assert!(!app.try_report_mouse_release(MouseButton::Right, position, TEST_METRICS));
         assert_eq!(app.terminal_mouse_capture, capture);
         // Modifier changes must not turn a captured application drag into selection.
         app.modifiers = ModifiersState::SHIFT | ModifiersState::ALT;
-        assert!(app.try_report_mouse_motion(position, None, 10.0, 20.0, 0.0, 0.0));
-        assert!(app.try_report_mouse_release(MouseButton::Left, position, 10.0, 20.0, 0.0, 0.0));
+        assert!(app.try_report_mouse_motion(position, None, TEST_METRICS));
+        assert!(app.try_report_mouse_release(MouseButton::Left, position, TEST_METRICS));
         assert!(app.terminal_mouse_capture.is_none());
-        assert!(!app.try_report_mouse_release(MouseButton::Left, position, 10.0, 20.0, 0.0, 0.0));
+        assert!(!app.try_report_mouse_release(MouseButton::Left, position, TEST_METRICS));
         app.modifiers = ModifiersState::empty();
         // DECSET 1003 hover remains allowed without a captured button.
         app.active_terminal_mut()
             .unwrap()
             .set_mode(TerminalMode::MOUSE_ANY_EVENT, true);
-        assert!(app.try_report_mouse_motion(position, None, 10.0, 20.0, 0.0, 0.0));
+        assert!(app.try_report_mouse_motion(position, None, TEST_METRICS));
         assert_eq!(
             fenced_harvest_capture(&mut app, &captures)[0],
             b"\x1b[<0;2;2M\x1b[<44;2;2M\x1b[<12;2;2m\x1b[<35;2;2M"
@@ -2204,7 +2125,7 @@ mod tests {
                 true,
             );
             let position = mouse_report_position(&app);
-            assert!(app.try_report_mouse_press(MouseButton::Left, position, 10.0, 20.0, 0.0, 0.0));
+            assert!(app.try_report_mouse_press(MouseButton::Left, position, TEST_METRICS));
             let panes = &mut app.tabs.as_mut().unwrap().active_tab_mut().unwrap().panes;
             if closed {
                 panes.get_pane_mut(original).unwrap().closed = true;
@@ -2221,8 +2142,8 @@ mod tests {
             let panes = &mut app.tabs.as_mut().unwrap().active_tab_mut().unwrap().panes;
             panes.get_pane_mut(original).unwrap().closed = false;
             panes.focus(original);
-            app.try_report_mouse_motion(position, None, 10.0, 20.0, 0.0, 0.0);
-            app.try_report_mouse_release(MouseButton::Left, position, 10.0, 20.0, 0.0, 0.0);
+            app.try_report_mouse_motion(position, None, TEST_METRICS);
+            app.try_report_mouse_release(MouseButton::Left, position, TEST_METRICS);
             let bytes = fenced_harvest_capture(&mut app, &captures);
             for (index, bytes) in bytes.iter().enumerate() {
                 assert_eq!(
@@ -2253,11 +2174,11 @@ mod tests {
             height: 160.0,
         };
         let split = placement.pane_bounds(rect, false);
-        let point = screen_to_pane_grid((196.0, 174.0), 10.0, 20.0, (split.x, split.y), 3);
+        let point = screen_to_pane_grid((196.0, 174.0), (10.0, 20.0), (split.x, split.y), 3);
         assert_eq!(point, termeric_core::Point::new(0, 4));
         // A lone pane's grid starts one padding below the area's top.
         let lone = placement.pane_bounds(rect, true);
-        let point = screen_to_pane_grid((96.0, 96.0), 10.0, 20.0, (lone.x, lone.y), 0);
+        let point = screen_to_pane_grid((96.0, 96.0), (10.0, 20.0), (lone.x, lone.y), 0);
         assert_eq!(point, termeric_core::Point::new(2, 4));
     }
 
@@ -2337,7 +2258,7 @@ mod tests {
 
     /// Where a wheel step at `position` goes with no chrome there.
     fn terminal_wheel_target(app: &App, position: (f64, f64)) -> Option<WheelTarget> {
-        match app.wheel_route_at(position, None, 10.0, 20.0, 0.0, 0.0) {
+        match app.wheel_route_at(position, None, TEST_METRICS) {
             WheelRoute::Terminal(target) => target,
             WheelRoute::Chrome => panic!("no chrome lies at {position:?}"),
         }
@@ -2514,16 +2435,16 @@ mod tests {
 
         // Hover over chrome is the chrome's.
         for chrome in chrome {
-            assert!(!app.try_report_mouse_motion(position, Some(chrome), 10.0, 20.0, 0.0, 0.0));
+            assert!(!app.try_report_mouse_motion(position, Some(chrome), TEST_METRICS));
         }
         // The wheel over the find box or a toast scrolls nothing; over a
         // scrollbar it scrolls that pane's scrollback, though its program
         // asks for the wheel.
         for chrome in &chrome[..3] {
-            let route = app.wheel_route_at(position, Some(*chrome), 10.0, 20.0, 0.0, 0.0);
+            let route = app.wheel_route_at(position, Some(*chrome), TEST_METRICS);
             assert_eq!(route, WheelRoute::Chrome, "{chrome:?}");
         }
-        let route = app.wheel_route_at(position, Some(chrome[3]), 10.0, 20.0, 0.0, 0.0);
+        let route = app.wheel_route_at(position, Some(chrome[3]), TEST_METRICS);
         let WheelRoute::Terminal(target) = route else {
             panic!("a scrollbar's wheel goes to its pane: {route:?}");
         };
@@ -2534,9 +2455,9 @@ mod tests {
 
         // Beside chrome, hover is reported; a drag the program holds keeps
         // reporting across chrome. These are all the program receives.
-        assert!(app.try_report_mouse_motion(position, None, 10.0, 20.0, 0.0, 0.0));
-        assert!(app.try_report_mouse_press(MouseButton::Left, position, 10.0, 20.0, 0.0, 0.0));
-        assert!(app.try_report_mouse_motion(position, Some(chrome[1]), 10.0, 20.0, 0.0, 0.0));
+        assert!(app.try_report_mouse_motion(position, None, TEST_METRICS));
+        assert!(app.try_report_mouse_press(MouseButton::Left, position, TEST_METRICS));
+        assert!(app.try_report_mouse_motion(position, Some(chrome[1]), TEST_METRICS));
         assert_only_pane_received(
             &captures,
             fenced_harvest_capture(&mut app, &captures),
@@ -2555,7 +2476,10 @@ mod tests {
             bottom: 600.0,
             padding: 12.0,
         };
-        let cell = (10.0, 20.0);
+        let metrics = PointerMetrics {
+            placement,
+            cell_size: (10.0, 20.0),
+        };
         for split in [false, true] {
             let (mut app, _directory, _, _) = harvest_rerun_capture_fixture_in(split);
             let focused = app.active_panes().focused_id();
@@ -2573,18 +2497,18 @@ mod tests {
                 .scrollback_len();
             assert!(scrollback > 0);
             let track = app
-                .focused_pane_scrollbar(placement, cell)
+                .focused_pane_scrollbar(metrics)
                 .expect("a pane with scrollback draws a scrollbar")
                 .track;
             app.begin_scrollbar_drag();
 
             // The track's top is the oldest scrollback, its bottom the live
             // screen, and its middle half way.
-            app.drag_scrollbar_to(placement, cell, track.y);
+            app.drag_scrollbar_to(metrics, track.y);
             assert_eq!(pane_scroll_offset(&app, focused), scrollback, "{split}");
-            app.drag_scrollbar_to(placement, cell, track.bottom());
+            app.drag_scrollbar_to(metrics, track.bottom());
             assert_eq!(pane_scroll_offset(&app, focused), 0, "{split}");
-            app.drag_scrollbar_to(placement, cell, track.y + track.height / 2.0);
+            app.drag_scrollbar_to(metrics, track.y + track.height / 2.0);
             assert_eq!(pane_scroll_offset(&app, focused), scrollback / 2, "{split}");
         }
     }
@@ -2599,7 +2523,10 @@ mod tests {
             bottom: 600.0,
             padding: 12.0,
         };
-        let cell = (10.0, 20.0);
+        let metrics = PointerMetrics {
+            placement,
+            cell_size: (10.0, 20.0),
+        };
         let (mut app, _directory, _, _) = harvest_rerun_capture_fixture_in(false);
         let focused = app.active_panes().focused_id();
         let terminal = &mut app
@@ -2609,7 +2536,7 @@ mod tests {
             .terminal;
         terminal.process(b"history\r\n".repeat(80).as_slice());
         let track = app
-            .focused_pane_scrollbar(placement, cell)
+            .focused_pane_scrollbar(metrics)
             .expect("a pane with scrollback draws a scrollbar")
             .track;
         app.begin_scrollbar_drag();
@@ -2621,8 +2548,8 @@ mod tests {
             .unwrap()
             .terminal
             .process(b"\x1b[?2026h");
-        assert!(app.focused_pane_scrollbar(placement, cell).is_none());
-        app.drag_scrollbar_to(placement, cell, track.y);
+        assert!(app.focused_pane_scrollbar(metrics).is_none());
+        app.drag_scrollbar_to(metrics, track.y);
         assert_eq!(pane_scroll_offset(&app, focused), 0);
 
         // Once the frame is released, the drawn scrollbar takes the drag.
@@ -2631,8 +2558,8 @@ mod tests {
             .unwrap()
             .terminal
             .process(b"\x1b[?2026l");
-        assert!(app.focused_pane_scrollbar(placement, cell).is_some());
-        app.drag_scrollbar_to(placement, cell, track.y);
+        assert!(app.focused_pane_scrollbar(metrics).is_some());
+        app.drag_scrollbar_to(metrics, track.y);
         assert!(pane_scroll_offset(&app, focused) > 0);
     }
 
@@ -2720,7 +2647,7 @@ mod tests {
             .terminal
             .set_mode(TerminalMode::BRACKETED_PASTE, true);
         let position = pane_position(&app, target);
-        assert!(!app.press_terminal(MouseButton::Middle, position, 10.0, 20.0, 0.0, 0.0));
+        assert!(!app.press_terminal(MouseButton::Middle, position, TEST_METRICS));
         assert_eq!(app.active_panes().focused_id(), target);
         let bytes = fenced_harvest_capture(&mut app, &captures);
         assert_only_pane_received(&captures, bytes, target, b"\x1b[200~hello\x1b[201~");
@@ -2740,10 +2667,10 @@ mod tests {
                 true,
             );
         let position = pane_position(&app, target);
-        assert!(app.press_terminal(MouseButton::Middle, position, 10.0, 20.0, 0.0, 0.0));
-        assert!(app.try_report_mouse_release(MouseButton::Middle, position, 10.0, 20.0, 0.0, 0.0));
+        assert!(app.press_terminal(MouseButton::Middle, position, TEST_METRICS));
+        assert!(app.try_report_mouse_release(MouseButton::Middle, position, TEST_METRICS));
         app.modifiers = ModifiersState::SHIFT;
-        assert!(!app.press_terminal(MouseButton::Middle, position, 10.0, 20.0, 0.0, 0.0));
+        assert!(!app.press_terminal(MouseButton::Middle, position, TEST_METRICS));
         let bytes = fenced_harvest_capture(&mut app, &captures);
         assert_only_pane_received(&captures, bytes, target, b"\x1b[<1;2;2M\x1b[<1;2;2mhello");
     }
@@ -2791,7 +2718,7 @@ mod tests {
         // pastes nowhere.
         memory.lock().unwrap().primary = Some("hello".into());
         let position = pane_position(&app, target);
-        assert!(!app.press_terminal(MouseButton::Middle, position, 10.0, 20.0, 0.0, 0.0));
+        assert!(!app.press_terminal(MouseButton::Middle, position, TEST_METRICS));
         assert_eq!(app.search.query(), "ahellob");
         let bytes = fenced_harvest_capture(&mut app, &captures);
         assert!(bytes.iter().all(Vec::is_empty), "{bytes:?}");
@@ -2860,17 +2787,17 @@ mod tests {
             let plain = (link.0 + 250.0, link.1);
             app.modifiers = ModifiersState::empty();
             assert_eq!(
-                app.terminal_pointer_icon_at(link, 10.0, 20.0, 0.0, 0.0),
+                app.terminal_pointer_icon_at(link, TEST_METRICS),
                 CursorIcon::Text
             );
             app.modifiers = ModifiersState::CONTROL;
             assert_eq!(
-                app.terminal_pointer_icon_at(link, 10.0, 20.0, 0.0, 0.0),
+                app.terminal_pointer_icon_at(link, TEST_METRICS),
                 CursorIcon::Pointer,
                 "{pane:?}"
             );
             assert_eq!(
-                app.terminal_pointer_icon_at(plain, 10.0, 20.0, 0.0, 0.0),
+                app.terminal_pointer_icon_at(plain, TEST_METRICS),
                 CursorIcon::Text,
                 "{pane:?}"
             );
