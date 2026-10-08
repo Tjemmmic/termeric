@@ -982,8 +982,9 @@ action = { type = \"send_text\", text = \"first\" }
         let baseline = config_table(&config).unwrap();
         let mut live = config;
         live.window.padding = 3;
-        let error = save(&path, &baseline, &live).unwrap_err();
-        assert!(error.to_string().contains("does not exist"), "{error}");
+        // A link whose file is gone is refused, not replaced by a file.
+        assert!(save(&path, &baseline, &live).is_err());
         assert!(fs::symlink_metadata(&path).unwrap().is_symlink());
+        assert!(!real.exists());
     }
 }
