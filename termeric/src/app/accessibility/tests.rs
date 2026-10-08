@@ -4441,3 +4441,55 @@ fn a_text_caret_counts_characters_and_an_off_boundary_one_goes_to_the_end() {
     assert_eq!(caret(Some(2)), Some(4), "inside é");
     assert_eq!(caret(Some(99)), Some(4), "past the end");
 }
+
+/// A tab being renamed is a text field to assistive technology too: it has
+/// focus, shows the draft, and takes a new value as a paste would.
+#[test]
+fn a_tab_being_renamed_exposes_its_draft_as_a_focused_text_field() {
+    let mut tabs = TabManager::for_test(crate::test_support::sleeping_shell());
+    tabs.new_tab().unwrap();
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.tabs = Some(tabs);
+    app.begin_tab_rename();
+    app.tab_rename.as_mut().unwrap().input.replace("");
+
+    let snapshot = app.accessibility_snapshot();
+    let node = |id| {
+        snapshot
+            .nodes
+            .iter()
+            .find(|(node_id, _)| *node_id == id)
+            .map(|(_, node)| node.clone())
+    };
+    assert_eq!(snapshot.focus, TAB_RENAME_INPUT);
+    let input = node(TAB_RENAME_INPUT).unwrap();
+    assert_eq!(input.role(), Role::TextInput);
+    assert_eq!(input.value(), Some(""));
+    assert!(input.supports_action(Action::SetValue));
+    assert!(
+        node(tab_node(0))
+            .unwrap()
+            .children()
+            .contains(&TAB_RENAME_INPUT)
+    );
+
+    let set = |app: &mut App, value: &str| {
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::SetValue,
+            target_node: TAB_RENAME_INPUT,
+            target_tree: accesskit::TreeId::ROOT,
+            data: Some(ActionData::Value(value.into())),
+        });
+    };
+    set(&mut app, "Roots");
+    assert_eq!(app.tab_rename.as_ref().unwrap().input.text(), "Roots");
+    set(&mut app, "two\nlines");
+    assert_eq!(app.tab_rename.as_ref().unwrap().input.text(), "Roots");
+
+    app.handle_tab_rename_key(&winit::keyboard::Key::Named(
+        winit::keyboard::NamedKey::Escape,
+    ));
+    let snapshot = app.accessibility_snapshot();
+    assert_ne!(snapshot.focus, TAB_RENAME_INPUT);
+    assert!(snapshot.nodes.iter().all(|(id, _)| *id != TAB_RENAME_INPUT));
+}

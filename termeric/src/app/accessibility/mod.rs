@@ -44,6 +44,7 @@ const COMMANDS: NodeId = NodeId(5);
 const SETTINGS: NodeId = NodeId(6);
 const PREVIOUS_TAB: NodeId = NodeId(7);
 const NEXT_TAB: NodeId = NodeId(8);
+const TAB_RENAME_INPUT: NodeId = NodeId(9);
 const PALETTE_DIALOG: NodeId = NodeId(20);
 const PALETTE_INPUT: NodeId = NodeId(21);
 const PALETTE_LIST: NodeId = NodeId(22);
@@ -614,6 +615,11 @@ impl App {
             self.request_redraw(RedrawReason::Accessibility);
             return;
         }
+        if request.target_node == TAB_RENAME_INPUT {
+            self.handle_tab_rename_accessibility_action(&request);
+            self.request_redraw(RedrawReason::Accessibility);
+            return;
+        }
         if self.search_is_visible() && is_search_node(request.target_node) {
             self.handle_search_accessibility_action(request);
             self.request_redraw(RedrawReason::Accessibility);
@@ -650,6 +656,22 @@ impl App {
             self.accessibility.focus_override = Some(request.target_node);
         }
         self.request_redraw(RedrawReason::Accessibility);
+    }
+
+    /// Focus or a new value for the field of the tab being renamed; a value
+    /// replaces the draft only when the field would take all of it, as a
+    /// paste does.
+    fn handle_tab_rename_accessibility_action(&mut self, request: &ActionRequest) {
+        let Some(rename) = &mut self.tab_rename else {
+            return;
+        };
+        match (request.action, request.data.as_ref()) {
+            (Action::Focus, _) => self.accessibility.focus_override = Some(TAB_RENAME_INPUT),
+            (Action::SetValue, Some(ActionData::Value(value))) if rename.input.replace(value) => {
+                self.ime.clear_preedit();
+            }
+            _ => {}
+        }
     }
 
     fn handle_search_accessibility_action(&mut self, request: ActionRequest) {
@@ -782,6 +804,10 @@ impl App {
         if !self.search.is_active() && self.accessibility.focus_override == Some(SEARCH_INPUT) {
             self.accessibility.focus_override = None;
         }
+        if self.tab_rename.is_none() && self.accessibility.focus_override == Some(TAB_RENAME_INPUT)
+        {
+            self.accessibility.focus_override = None;
+        }
         // The top modal layer is all assistive technology sees; focus left on
         // a layer above it has closed.
         let top = self.top_modal_layer();
@@ -796,11 +822,7 @@ impl App {
         let mut root_children = vec![TAB_LIST, NEW_TAB, WORKSPACES, COMMANDS, SETTINGS];
         let mut root = self.window_root_node();
 
-        let tab_info = self
-            .tabs
-            .as_ref()
-            .map(TabManager::tab_info)
-            .unwrap_or_default();
+        let tab_info = self.tab_bar_info();
         let mut tab_children = Vec::new();
         let (broadcast_tab, broadcast_panes, broadcast_state) = match &self.broadcast {
             super::BroadcastState::Armed {
@@ -847,7 +869,29 @@ impl App {
             node.set_selected(tab.is_active);
             node.add_action(Action::Click);
             node.add_action(Action::Focus);
-            node.set_children([close_id]);
+            if tab.renaming {
+                node.set_children([close_id, TAB_RENAME_INPUT]);
+                let mut input = Node::new(Role::TextInput);
+                input.set_label("Tab name");
+                input.add_action(Action::Focus);
+                input.add_action(Action::SetValue);
+                set_text_value(
+                    &mut input,
+                    TAB_RENAME_INPUT,
+                    &tab.title,
+                    Some(tab.title.len()),
+                );
+                if let Some(bounds) = self
+                    .renderer
+                    .as_mut()
+                    .and_then(|renderer| renderer.tab_rename_field(&tab_info, width, height))
+                {
+                    input.set_bounds(bounds_rect(bounds));
+                }
+                nodes.push((TAB_RENAME_INPUT, input));
+            } else {
+                node.set_children([close_id]);
+            }
             if let Some(bounds) = self.renderer.as_ref().and_then(|renderer| {
                 renderer.tab_bar_element_rect(
                     crate::renderer::TabBarClick::Tab(index),
@@ -1079,7 +1123,12 @@ impl App {
                 );
             }
         }
-        if self.search.is_active() {
+        // Tab rename takes typing ahead of the find box, as `text_target`
+        // decides.
+        if self.tab_rename.is_some() {
+            semantic_focus = TAB_RENAME_INPUT;
+            self.accessibility.focus_override = Some(semantic_focus);
+        } else if self.search.is_active() {
             semantic_focus = self
                 .accessibility
                 .focus_override

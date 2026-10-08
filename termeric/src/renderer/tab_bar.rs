@@ -467,6 +467,30 @@ impl TabChrome {
         }
     }
 
+    /// The inline text field a tab being renamed shows around its title
+    /// span in `label`: the title keeps its place, and the field reaches a
+    /// little past it on each side, staying inside `surface`.
+    fn rename_field(
+        self,
+        label: &TabLabelLayout,
+        surface: Bounds,
+        metrics: UiFontMetrics,
+    ) -> Bounds {
+        let (pad_x, pad_y, margin) = (self.px(4.0), self.px(3.0), self.px(2.0));
+        let text_top =
+            metrics.centered_baseline(surface.y, surface.height) - metrics.ascent.round();
+        let text_height = (metrics.ascent + metrics.descent).round();
+        let top = (text_top - pad_y).max(surface.y + margin).round();
+        let bottom = (text_top + text_height + pad_y)
+            .min(surface.bottom() - margin)
+            .round();
+        let left = (label.text_x - pad_x).max(surface.x + margin).round();
+        let right = (label.text_right + pad_x)
+            .min(surface.right() - margin)
+            .round();
+        Bounds::new(left, top, (right - left).max(0.0), (bottom - top).max(0.0))
+    }
+
     /// The caret after a title `title_width` pixels wide laid out in
     /// `label`: as tall as the UI face's `metrics`, centred in `surface`
     /// as the title is.
@@ -490,6 +514,10 @@ impl TabChrome {
         )
     }
 }
+
+/// What a tab being renamed shows while its draft is empty, which Enter
+/// saves as the automatic title.
+const TAB_RENAME_PLACEHOLDER: &str = "Tab name";
 
 /// Where a tab's plugin dot, status marker, and title sit in its surface.
 /// Drawing the tab and placing its rename caret, which the input method
@@ -835,30 +863,25 @@ impl Renderer {
 
         let size_px = self.ui_label_px();
         let text_x = label.text_x;
-        let (title, _) = self.fitted_tab_title(tab, &label);
-        let drawn = self.push_ui_label(
-            &title,
-            text_x,
-            y,
-            height,
-            label.text_right - text_x,
-            size_px,
-            text_color,
-        );
-        if tab.renaming {
-            let caret = self.tab_rename_caret_in(tab, &label, surface);
-            self.rect_pipeline.push_rect(
-                caret.x,
-                caret.y,
-                caret.width,
-                caret.height,
-                with_alpha(self.ui.palette_accent, 0.9 * text_alpha),
-            );
-        }
+        let drawn = if tab.renaming {
+            self.build_tab_rename_field(tab, &label, surface, text_alpha)
+        } else {
+            let (title, _) = self.fitted_tab_title(tab, &label);
+            self.push_ui_label(
+                &title,
+                text_x,
+                y,
+                height,
+                label.text_right - text_x,
+                size_px,
+                text_color,
+            )
+        };
 
         let badge_width = label.badge_width;
-        let badge_text =
-            (tab.unreviewed_diff_count > 0).then(|| tab.unreviewed_diff_count.to_string());
+        // The rename field takes the title's place, badge included.
+        let badge_text = (tab.unreviewed_diff_count > 0 && !tab.renaming)
+            .then(|| tab.unreviewed_diff_count.to_string());
         if let Some(count) = badge_text {
             let badge_height = chrome.px(16.0).min(height);
             let badge_x = (text_x + drawn + chrome.px(6.0)).round();
@@ -1292,6 +1315,74 @@ impl Renderer {
         }
     }
 
+    /// Draws the inline field of `tab`, which is being renamed, over its
+    /// title span in `label`: the draft (or a placeholder while it is empty)
+    /// in field colors, its outline in the focus color, and the caret after
+    /// the draft. Returns the drawn draft's width.
+    fn build_tab_rename_field(
+        &mut self,
+        tab: &TabInfo,
+        label: &TabLabelLayout,
+        surface: Bounds,
+        alpha: f32,
+    ) -> f32 {
+        let size_px = self.ui_label_px();
+        let metrics = self.glyph_cache.ui_font_metrics(size_px);
+        let chrome = self.tab_chrome();
+        let field = chrome.rename_field(label, surface, metrics);
+        let radius = chrome.px(BUTTON_CORNER_RADIUS);
+        self.rect_pipeline.push_rounded_rect(
+            field.x,
+            field.y,
+            field.width,
+            field.height,
+            scale_alpha(self.ui.palette_input_bg, alpha),
+            radius,
+        );
+        self.rect_pipeline.push_rounded_outline(
+            field.x,
+            field.y,
+            field.width,
+            field.height,
+            scale_alpha(self.ui.focus_ring, alpha),
+            radius,
+            chrome.px(1.0),
+        );
+        let max_width = label.text_right - label.text_x;
+        let drawn = if tab.title.is_empty() {
+            self.push_ui_label(
+                TAB_RENAME_PLACEHOLDER,
+                label.text_x,
+                surface.y,
+                surface.height,
+                max_width,
+                size_px,
+                scale_alpha(self.ui.palette_text_dim, 0.7 * alpha),
+            );
+            0.0
+        } else {
+            let (title, _) = self.fitted_tab_title(tab, label);
+            self.push_ui_label(
+                &title,
+                label.text_x,
+                surface.y,
+                surface.height,
+                max_width,
+                size_px,
+                scale_alpha(self.ui.palette_text, alpha),
+            )
+        };
+        let caret = self.tab_rename_caret_in(tab, label, surface);
+        self.rect_pipeline.push_rect(
+            caret.x,
+            caret.y,
+            caret.width,
+            caret.height,
+            scale_alpha(self.ui.palette_accent, alpha),
+        );
+        drawn
+    }
+
     /// The caret at the end of `tab`'s title as it is drawn in `label`.
     fn tab_rename_caret_in(
         &mut self,
@@ -1315,6 +1406,31 @@ impl Renderer {
         window_width: f32,
         window_height: f32,
     ) -> Option<Bounds> {
+        let (tab, label, surface) = self.renamed_tab_label(tabs, window_width, window_height)?;
+        Some(self.tab_rename_caret_in(tab, &label, surface))
+    }
+
+    /// The inline field of the tab being renamed where the tab bar draws
+    /// it; `None` while that tab is out of view or shows no title.
+    pub fn tab_rename_field(
+        &mut self,
+        tabs: &[TabInfo],
+        window_width: f32,
+        window_height: f32,
+    ) -> Option<Bounds> {
+        let (_, label, surface) = self.renamed_tab_label(tabs, window_width, window_height)?;
+        let metrics = self.glyph_cache.ui_font_metrics(self.ui_label_px());
+        Some(self.tab_chrome().rename_field(&label, surface, metrics))
+    }
+
+    /// The tab marked `renaming`, its label layout, and its drawn surface,
+    /// while it shows its title.
+    fn renamed_tab_label<'a>(
+        &mut self,
+        tabs: &'a [TabInfo],
+        window_width: f32,
+        window_height: f32,
+    ) -> Option<(&'a TabInfo, TabLabelLayout, Bounds)> {
         let index = tabs.iter().position(|tab| tab.renaming)?;
         let tab = &tabs[index];
         let (_, surface) = self
@@ -1325,7 +1441,7 @@ impl Renderer {
             return None;
         }
         let label = self.tab_label_layout(tab, surface);
-        Some(self.tab_rename_caret_in(tab, &label, surface))
+        Some((tab, label, surface))
     }
 
     fn is_dragged_tab(&self, index: usize) -> bool {
@@ -1858,6 +1974,19 @@ mod tests {
             assert!(caret.y >= surface.y && caret.bottom() <= surface.bottom());
             for value in [caret.x, caret.y, caret.width, caret.height] {
                 assert_eq!(value.fract(), 0.0, "scale={scale} caret={caret:?}");
+            }
+
+            // The field holds the title span and its caret, leaves the
+            // markers before it and the close button after it outside, and
+            // stays inside the tab on whole pixels.
+            let field = chrome.rename_field(&label, surface, metrics);
+            assert!(field.x < label.text_x && field.right() > label.text_right);
+            assert!(field.x > status.right() && field.right() < chrome.close_rect(surface).x);
+            assert!(field.contains(caret.x, caret.y));
+            assert!(field.y <= caret.y && field.bottom() >= caret.bottom());
+            assert!(field.y > surface.y && field.bottom() < surface.bottom());
+            for value in [field.x, field.y, field.width, field.height] {
+                assert_eq!(value.fract(), 0.0, "scale={scale} field={field:?}");
             }
         }
     }
