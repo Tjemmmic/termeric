@@ -38,7 +38,7 @@ impl App {
         let size = self.window.as_ref()?.inner_size();
         let (width, height) = (size.width as f32, size.height as f32);
         let button =
-            renderer.tab_bar_element_rect(TabBarClick::SessionDropdown, &[], width, height)?;
+            renderer.tab_bar_element_rect(TabBarClick::WorkspacesMenu, &[], width, height)?;
         Some(PopupMenuLayout::calculate(
             menu.rows(),
             button.right(),

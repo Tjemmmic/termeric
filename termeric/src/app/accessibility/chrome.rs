@@ -234,7 +234,7 @@ impl ChromeFocus {
             Self::PreviousTab => Some(TabBarClick::PreviousTab),
             Self::NextTab => Some(TabBarClick::NextTab),
             Self::NewTab => Some(TabBarClick::NewTab),
-            Self::Workspaces => Some(TabBarClick::SessionDropdown),
+            Self::Workspaces => Some(TabBarClick::WorkspacesMenu),
             Self::Commands => Some(TabBarClick::CommandsButton),
             Self::Settings => Some(TabBarClick::Gear),
         }

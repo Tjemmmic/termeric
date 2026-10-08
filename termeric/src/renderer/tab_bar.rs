@@ -548,7 +548,7 @@ enum AccentEdge {
 fn toolbar_control_rect(target: TabBarClick, window_width: f32, height: f32) -> Option<Bounds> {
     let offset = match target {
         TabBarClick::CommandsButton => 3.0,
-        TabBarClick::SessionDropdown => 2.0,
+        TabBarClick::WorkspacesMenu => 2.0,
         TabBarClick::Gear => 1.0,
         _ => return None,
     };
@@ -581,7 +581,7 @@ fn horizontal_tab_bar_element_rect(
         TabBarClick::PreviousTab | TabBarClick::NextTab => layout
             .enabled_arrow_x(target)
             .map(|x| Bounds::new(x, 0.0, height, height)),
-        TabBarClick::CommandsButton | TabBarClick::SessionDropdown | TabBarClick::Gear => {
+        TabBarClick::CommandsButton | TabBarClick::WorkspacesMenu | TabBarClick::Gear => {
             toolbar_control_rect(target, window_width, height)
         }
         TabBarClick::None => None,
@@ -611,7 +611,7 @@ fn horizontal_toolbar_buttons(
     let buttons = [
         TabBarClick::NewTab,
         TabBarClick::CommandsButton,
-        TabBarClick::SessionDropdown,
+        TabBarClick::WorkspacesMenu,
         TabBarClick::Gear,
     ]
     .into_iter()
@@ -636,7 +636,7 @@ fn horizontal_tab_bar_hit_test(
     }
     for target in [
         TabBarClick::Gear,
-        TabBarClick::SessionDropdown,
+        TabBarClick::WorkspacesMenu,
         TabBarClick::CommandsButton,
         TabBarClick::PreviousTab,
         TabBarClick::NextTab,
@@ -1077,7 +1077,7 @@ impl Renderer {
             TabBarClick::NextTab if vertical => Icon::ChevronDown,
             TabBarClick::PreviousTab => Icon::Back,
             TabBarClick::NextTab => Icon::ChevronRight,
-            TabBarClick::SessionDropdown => Icon::ChevronDown,
+            TabBarClick::WorkspacesMenu => Icon::ChevronDown,
             TabBarClick::CommandsButton => Icon::Prompt,
             TabBarClick::Gear => Icon::Menu,
             TabBarClick::Tab(_) | TabBarClick::CloseTab(_) | TabBarClick::None => return,
@@ -1128,7 +1128,7 @@ impl Renderer {
         }
         for target in [
             TabBarClick::CommandsButton,
-            TabBarClick::SessionDropdown,
+            TabBarClick::WorkspacesMenu,
             TabBarClick::Gear,
         ] {
             if let Some(rect) = toolbar_control_rect(target, window_width, row_height) {
@@ -1194,7 +1194,7 @@ impl Renderer {
                 TabBarClick::NewTab | TabBarClick::PreviousTab | TabBarClick::NextTab => {
                     layout.control_rect(target, rail_width)
                 }
-                TabBarClick::CommandsButton | TabBarClick::SessionDropdown | TabBarClick::Gear => {
+                TabBarClick::CommandsButton | TabBarClick::WorkspacesMenu | TabBarClick::Gear => {
                     toolbar_control_rect(target, window_width, height)
                 }
                 TabBarClick::None => None,
@@ -1219,7 +1219,7 @@ impl Renderer {
             if y < tab_bar_height {
                 return [
                     TabBarClick::Gear,
-                    TabBarClick::SessionDropdown,
+                    TabBarClick::WorkspacesMenu,
                     TabBarClick::CommandsButton,
                 ]
                 .into_iter()
@@ -1855,7 +1855,7 @@ mod tests {
                 let mut targets = vec![
                     TabBarClick::NewTab,
                     TabBarClick::CommandsButton,
-                    TabBarClick::SessionDropdown,
+                    TabBarClick::WorkspacesMenu,
                     TabBarClick::Gear,
                     TabBarClick::PreviousTab,
                     TabBarClick::NextTab,

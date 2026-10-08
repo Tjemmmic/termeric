@@ -493,7 +493,7 @@ impl App {
                                         self.request_close_tab(idx);
                                     }
                                     TabBarClick::Tab(idx) => self.press_tab(idx),
-                                    TabBarClick::SessionDropdown => {
+                                    TabBarClick::WorkspacesMenu => {
                                         self.toggle_workspace_menu(false);
                                     }
                                     TabBarClick::CommandsButton => {

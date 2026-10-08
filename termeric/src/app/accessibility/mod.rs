@@ -946,7 +946,7 @@ impl App {
             (
                 WORKSPACES,
                 "Workspaces",
-                crate::renderer::TabBarClick::SessionDropdown,
+                crate::renderer::TabBarClick::WorkspacesMenu,
             ),
             (
                 COMMANDS,

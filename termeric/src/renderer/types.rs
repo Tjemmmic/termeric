@@ -136,8 +136,8 @@ pub enum TabBarClick {
     PreviousTab,
     /// Move to the next tab from the overflow strip
     NextTab,
-    /// Clicked the session dropdown (▾) button
-    SessionDropdown,
+    /// Clicked the Workspaces menu (▾) button
+    WorkspacesMenu,
     /// Clicked the commands (›_) button
     CommandsButton,
     /// Clicked the gear icon
