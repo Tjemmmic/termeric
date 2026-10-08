@@ -434,7 +434,7 @@ impl App {
                     .native_for_window(self.launch.quick_access),
             );
         }
-        self.cursor_blink_period = (self.config.cursor.blink_rate as f32 / 1000.0) * 2.0;
+        self.cursor_blink_half_period = cursor_blink_half_period(&self.config.cursor);
         self.reset_cursor_blink();
         self.bell.set_config(self.config.bell.clone());
         self.load_configured_theme();

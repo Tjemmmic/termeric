@@ -1184,8 +1184,8 @@ pub struct App {
     rows: usize,
     /// Cursor animation start time (for smooth blink)
     cursor_blink_start: Instant,
-    /// Cursor blink period in seconds
-    cursor_blink_period: f32,
+    /// How long the cursor stays shown, then hidden, in one blink.
+    cursor_blink_half_period: Duration,
     /// Blink phase drawn in the most recent frame.
     last_cursor_blink_visible: bool,
     /// Stable origin for SGR slow/rapid blink paint phases.
@@ -1516,7 +1516,7 @@ impl App {
             .as_deref()
             .and_then(crate::renderer::resolve_background_image_path)
             .and_then(|path| crate::renderer::BackgroundImageStamp::for_path(&path));
-        let cursor_blink_period = (config.cursor.blink_rate as f32 / 1000.0) * 2.0;
+        let cursor_blink_half_period = cursor_blink_half_period(&config.cursor);
         // A configured theme that does not load stays configured, so a save
         // never replaces it; turmeric is shown meanwhile, and applying the
         // configuration below says why.
@@ -1583,7 +1583,7 @@ impl App {
             cols: 80,
             rows: 24,
             cursor_blink_start: Instant::now(),
-            cursor_blink_period,
+            cursor_blink_half_period,
             last_cursor_blink_visible: true,
             text_blink_start: Instant::now(),
             last_text_blink_phases: TextBlinkPhases::default(),
@@ -2307,10 +2307,10 @@ impl App {
                 AGENT_VIEW_RESTING_CURSOR
             }
         };
-        let cursor_elapsed = self.cursor_blink_start.elapsed().as_secs_f32();
+        let cursor_elapsed = self.cursor_blink_start.elapsed();
         let configured_cursor_style = self.config.cursor.style;
         let configured_cursor_blink = self.config.cursor.blink;
-        let cursor_blink_period = self.cursor_blink_period;
+        let cursor_blink_half_period = self.cursor_blink_half_period;
         let copy_flash = self.copy_flash_intensity();
         let focus_dim = self.focus_dim();
         let text_blink = self.text_blink_phases(Instant::now());
@@ -2471,7 +2471,7 @@ impl App {
                     cursor_opacity: resting_cursor(cursor_opacity_at(
                         pane_cursor_blink,
                         cursor_elapsed,
-                        cursor_blink_period,
+                        cursor_blink_half_period,
                     )),
                     url_cache: if *focused {
                         &self.url_cache
@@ -2650,32 +2650,29 @@ impl App {
     }
 
     fn cursor_blink_phase(&self, now: Instant) -> bool {
-        if !self.cursor_blink_required() {
-            return true;
-        }
-        let half_period = (self.cursor_blink_period / 2.0).max(0.001);
-        let elapsed = now
-            .saturating_duration_since(self.cursor_blink_start)
-            .as_secs_f32();
-        ((elapsed / half_period) as u64).is_multiple_of(2)
+        !self.cursor_blink_required()
+            || blink_phase_visible(
+                now.saturating_duration_since(self.cursor_blink_start),
+                self.cursor_blink_half_period,
+            )
     }
 
     fn next_cursor_blink_deadline(&self, now: Instant) -> Option<Instant> {
         if !self.cursor_blink_required() || !self.window_focused || self.presentation_suspended() {
             return None;
         }
-        let half_period =
-            std::time::Duration::from_secs_f32((self.cursor_blink_period / 2.0).max(0.001));
-        let elapsed = now.saturating_duration_since(self.cursor_blink_start);
-        let completed = elapsed.as_nanos() / half_period.as_nanos();
-        Some(self.cursor_blink_start + half_period.mul_f64((completed + 1) as f64))
+        Some(next_blink_boundary(
+            self.cursor_blink_start,
+            now,
+            self.cursor_blink_half_period,
+        ))
     }
 
     fn text_blink_phases(&self, now: Instant) -> TextBlinkPhases {
         let elapsed = now.saturating_duration_since(self.text_blink_start);
         TextBlinkPhases {
-            slow_visible: blink_phase_visible(elapsed, std::time::Duration::from_millis(500)),
-            rapid_visible: blink_phase_visible(elapsed, std::time::Duration::from_millis(250)),
+            slow_visible: blink_phase_visible(elapsed, SLOW_TEXT_BLINK_HALF_PERIOD),
+            rapid_visible: blink_phase_visible(elapsed, RAPID_TEXT_BLINK_HALF_PERIOD),
         }
     }
 
@@ -2696,14 +2693,14 @@ impl App {
             deadlines.push(next_blink_boundary(
                 self.text_blink_start,
                 now,
-                std::time::Duration::from_millis(500),
+                SLOW_TEXT_BLINK_HALF_PERIOD,
             ));
         }
         if visible.rapid {
             deadlines.push(next_blink_boundary(
                 self.text_blink_start,
                 now,
-                std::time::Duration::from_millis(250),
+                RAPID_TEXT_BLINK_HALF_PERIOD,
             ));
         }
         deadlines.into_iter().min()
@@ -3965,12 +3962,20 @@ fn update_visible_url_cache(
 /// The terminal cursor's opacity while the agent view has the keyboard.
 const AGENT_VIEW_RESTING_CURSOR: f32 = 0.35;
 
-fn cursor_opacity_at(blink: bool, elapsed_seconds: f32, period_seconds: f32) -> f32 {
-    if !blink {
-        return 1.0;
-    }
-    let half_period = (period_seconds / 2.0).max(0.001);
-    if ((elapsed_seconds / half_period) as u64).is_multiple_of(2) {
+/// How long SGR slow and rapid blinking text stays shown, then hidden.
+const SLOW_TEXT_BLINK_HALF_PERIOD: Duration = Duration::from_millis(500);
+const RAPID_TEXT_BLINK_HALF_PERIOD: Duration = Duration::from_millis(250);
+
+/// How long the cursor stays shown, then hidden: `cursor.blink_rate`, which
+/// validation keeps from 100 ms to 5 s.
+fn cursor_blink_half_period(cursor: &crate::config::CursorConfig) -> Duration {
+    Duration::from_millis(u64::from(cursor.blink_rate))
+}
+
+/// A blinking cursor dims for the hidden half of each blink, `elapsed` into
+/// the blink clock.
+fn cursor_opacity_at(blink: bool, elapsed: Duration, half_period: Duration) -> f32 {
+    if !blink || blink_phase_visible(elapsed, half_period) {
         1.0
     } else {
         0.3
@@ -4010,11 +4015,13 @@ fn resolve_cursor_presentation(
     (style, terminal_blink.unwrap_or(blink))
 }
 
-fn blink_phase_visible(elapsed: std::time::Duration, half_period: std::time::Duration) -> bool {
+/// Whether a blink that started `elapsed` ago is in a shown half.
+fn blink_phase_visible(elapsed: Duration, half_period: Duration) -> bool {
     (elapsed.as_nanos() / half_period.as_nanos()).is_multiple_of(2)
 }
 
-fn next_blink_boundary(start: Instant, now: Instant, half_period: std::time::Duration) -> Instant {
+/// When a blink that started at `start` next turns on or off.
+fn next_blink_boundary(start: Instant, now: Instant, half_period: Duration) -> Instant {
     let elapsed = now.saturating_duration_since(start);
     let completed = elapsed.as_nanos() / half_period.as_nanos();
     start + half_period.mul_f64((completed + 1) as f64)
@@ -4075,13 +4082,29 @@ mod helper_tests {
 
     #[test]
     fn disabled_cursor_blink_is_fully_opaque() {
-        assert_eq!(cursor_opacity_at(false, 50.0, 0.2), 1.0);
+        let half = Duration::from_millis(100);
+        assert_eq!(
+            cursor_opacity_at(false, Duration::from_millis(150), half),
+            1.0
+        );
     }
 
     #[test]
     fn cursor_blink_rate_controls_the_cycle() {
-        assert!((cursor_opacity_at(true, 0.0, 1.0) - 1.0).abs() < f32::EPSILON);
-        assert!((cursor_opacity_at(true, 0.5, 1.0) - 0.3).abs() < f32::EPSILON);
+        let half = Duration::from_millis(500);
+        assert_eq!(cursor_opacity_at(true, Duration::ZERO, half), 1.0);
+        assert_eq!(
+            cursor_opacity_at(true, Duration::from_millis(499), half),
+            1.0
+        );
+        assert_eq!(
+            cursor_opacity_at(true, Duration::from_millis(500), half),
+            0.3
+        );
+        assert_eq!(
+            cursor_opacity_at(true, Duration::from_millis(1_000), half),
+            1.0
+        );
     }
 
     #[test]
