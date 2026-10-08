@@ -500,14 +500,14 @@ impl ContextPicker {
             ),
         ];
         debug_assert_eq!(self.sources.len(), MAX_CONTEXT_SOURCES);
-        self.selected_index = 0;
+        // The next measure scrolls the selection into view.
+        (self.selected_index, self.focus) = initial_selection(&self.sources);
         self.scroll_offset = 0;
         self.target = Some(target);
         self.phase = ContextPickerPhase::Sources;
         self.file_input.clear();
         self.specific_files.clear();
         self.status = None;
-        self.focus = ContextPickerFocus::Sources;
         self.animation.open();
         request_id
     }
@@ -981,6 +981,16 @@ impl ContextPicker {
     }
 }
 
+/// Where a fresh picker's selection and focus start: on the first source
+/// that can be chosen, or on Cancel when none can, so focus never starts on
+/// a row that does nothing.
+fn initial_selection(sources: &[ContextSource]) -> (usize, ContextPickerFocus) {
+    match sources.iter().position(|source| source.available) {
+        Some(index) => (index, ContextPickerFocus::Sources),
+        None => (0, ContextPickerFocus::Button(ContextPickerButton::Cancel)),
+    }
+}
+
 fn source(id: ContextSourceId, label: &str, selected: bool, available: bool) -> ContextSource {
     ContextSource {
         id,
@@ -1036,6 +1046,11 @@ mod tests {
         let snapshot = picker.snapshot();
         assert!(layout.card.height < 300.0);
         assert!(layout.visible_count < picker.sources().len());
+        // Without a working folder the selection starts below the rows that
+        // fit, and the list scrolls to show it.
+        let first = snapshot.scroll_offset;
+        assert!(first > 0);
+        assert!((first..first + layout.visible_count).contains(&snapshot.selected_index));
         for button in ContextPickerButton::row(ContextPickerPhase::Sources) {
             let [x, y] = layout.button(*button).unwrap().center();
             assert_eq!(
@@ -1045,7 +1060,7 @@ mod tests {
         }
         assert_eq!(
             layout.target_at(layout.content.x + 1.0, layout.content.y + 1.0, &snapshot),
-            Some(ContextPickerTarget::Source(0))
+            Some(ContextPickerTarget::Source(first))
         );
         assert_eq!(
             layout.target_at(layout.card.x + 1.0, layout.card.y + 1.0, &snapshot),
@@ -1058,7 +1073,7 @@ mod tests {
                 picker.snapshot().scroll_offset,
                 picker.sources().len(),
             ),
-            Some(0)
+            Some(first)
         );
         picker.apply(ContextPickerAction::Scroll {
             request_id: request,
@@ -1171,7 +1186,7 @@ mod tests {
             picker.space_action(request),
             ContextPickerAction::Toggle {
                 request_id: request,
-                source: ContextSourceId::GitDiffUnstaged
+                source: picker.selected_source().unwrap()
             }
         );
         let newer = picker.open(None, target(4));
@@ -1188,6 +1203,37 @@ mod tests {
             picker.press(newer, ContextPickerTarget::Button(B::ChooseFiles)),
             ContextPickerAction::None,
             "a disabled button answers nothing"
+        );
+    }
+
+    #[test]
+    fn the_selection_starts_on_the_first_source_that_can_be_chosen() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut picker = ContextPicker::new();
+        for cwd in [Some(directory.path().display().to_string()), None] {
+            picker.open(cwd, target(8));
+            let first_available = picker.sources().iter().find(|entry| entry.available);
+            assert_eq!(
+                picker.selected_source(),
+                first_available.map(|entry| entry.id)
+            );
+            assert_eq!(picker.focus(), ContextPickerFocus::Sources);
+        }
+        assert_eq!(
+            picker.selected_source(),
+            Some(ContextSourceId::TerminalOutput),
+            "without a working folder, neither Git nor the file tree is available"
+        );
+
+        // With nothing to choose, focus starts on Cancel.
+        let unavailable: Vec<_> = picker
+            .sources()
+            .iter()
+            .map(|entry| source(entry.id, &entry.label, false, false))
+            .collect();
+        assert_eq!(
+            initial_selection(&unavailable),
+            (0, ContextPickerFocus::Button(ContextPickerButton::Cancel))
         );
     }
 
