@@ -210,14 +210,13 @@ impl SettingsModalLayout {
             .map(|(_, page)| *page)
     }
 
-    /// Bounds of the `row`th visible entry, spanning the content column.
+    /// Bounds of the `row`th visible entry, spanning the content column, on
+    /// whole pixels: each row's bottom is the next row's top, so the rows
+    /// tile as drawn and hit.
     pub fn row_rect(&self, row: usize) -> Bounds {
-        Bounds {
-            x: self.content_x - self.padding * 0.5,
-            y: self.list_y + row as f32 * self.row_height,
-            width: self.content_width + self.padding,
-            height: self.row_height,
-        }
+        let left = (self.content_x - self.padding * 0.5).round();
+        let right = (self.content_x + self.content_width + self.padding * 0.5).round();
+        Bounds::new(left, self.list_y, right - left, self.row_height).row(self.row_height, row)
     }
 
     /// Map a point to a 0-based row within the visible window, if any. A
@@ -283,7 +282,7 @@ impl SettingsModalLayout {
             return None;
         }
 
-        let anchor_y = self.list_y + visible_row as f32 * self.row_height + self.row_height;
+        let anchor_y = self.row_rect(visible_row).bottom();
         let option_h = self.row_height * 0.85;
         let max_visible_options = 8usize;
         let visible_options = option_count.min(max_visible_options);
@@ -3637,6 +3636,24 @@ mod tests {
             [panel.x, panel.y, panel.width, panel.height].map(f32::fract),
             [0.0; 4]
         );
+    }
+
+    #[test]
+    fn rows_land_on_whole_pixels_and_tile_whatever_the_cell_size() {
+        let layout = SettingsModalLayout::calculate(1001.0, 801.0, 7.3, 15.7, 1.0);
+        for index in 0..layout.rows_that_fit {
+            let row = layout.row_rect(index);
+            assert_eq!(
+                [row.x, row.y, row.width, row.height].map(f32::fract),
+                [0.0; 4]
+            );
+            assert_eq!(row.bottom(), layout.row_rect(index + 1).y);
+            // A point anywhere in a row, its last pixel included, hits it.
+            assert_eq!(
+                layout.visible_row_at(row.x, row.bottom() - 0.5),
+                Some(index)
+            );
+        }
     }
 
     #[test]

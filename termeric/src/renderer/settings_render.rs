@@ -166,12 +166,11 @@ impl Renderer {
             .enumerate()
         {
             let row = layout.row_rect(row_index);
-            let row_y = row.y.round();
             if entry.is_header {
                 self.push_ui_label(
                     entry.label,
                     layout.content_x,
-                    row_y,
+                    row.y,
                     row.height,
                     layout.content_width,
                     size * 0.9,
@@ -185,7 +184,7 @@ impl Renderer {
             if selected || hovered {
                 self.rect_pipeline.push_rounded_rect(
                     row.x,
-                    row_y,
+                    row.y,
                     row.width,
                     row.height,
                     if selected {
@@ -199,14 +198,14 @@ impl Renderer {
             self.push_ui_label(
                 entry.label,
                 layout.content_x,
-                row_y,
+                row.y,
                 row.height,
                 layout.value_x - layout.content_x - padding,
                 size,
                 text,
             );
             let value_width = value_right - layout.value_x;
-            let center_y = row_y + row.height / 2.0;
+            let center_y = row.y + row.height / 2.0;
             match &entry.kind {
                 SettingKind::Numeric { .. } => {
                     let button = layout.value_text_x() - layout.numeric_decrement_x();
@@ -229,7 +228,7 @@ impl Renderer {
                     self.push_ui_label_centered(
                         &entry.value,
                         layout.value_text_x() + box_width / 2.0,
-                        row_y,
+                        row.y,
                         row.height,
                         box_width,
                         size,
@@ -241,7 +240,7 @@ impl Renderer {
                     let drawn = self.push_ui_label(
                         &entry.value,
                         layout.value_x,
-                        row_y,
+                        row.y,
                         row.height,
                         value_width - chevron,
                         size,
@@ -259,7 +258,7 @@ impl Renderer {
                     let drawn = self.push_ui_label(
                         &entry.value,
                         layout.value_x,
-                        row_y,
+                        row.y,
                         row.height,
                         value_width - chevron,
                         size,
@@ -276,7 +275,7 @@ impl Renderer {
                     self.push_ui_label(
                         &entry.value,
                         layout.value_x,
-                        row_y,
+                        row.y,
                         row.height,
                         value_width,
                         size,
