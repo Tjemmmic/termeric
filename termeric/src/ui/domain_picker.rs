@@ -4,7 +4,8 @@ use crate::config::DomainsConfig;
 use crate::domain::model::DomainSummary;
 use crate::domain::{DomainAuthority, DomainTarget};
 use crate::ui::command_palette::palette::{CommandSource, RegisteredCommand};
-use crate::ui::command_palette::{CommandPalette, PaletteLayout, PaletteOwner, PaletteResult};
+use crate::ui::command_palette::{CommandPalette, PaletteOwner, PaletteResult};
+use crate::ui::list_dialog::ListDialogLayout;
 use std::collections::HashSet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,9 +172,9 @@ impl DomainPicker {
         &mut self,
         x: f32,
         y: f32,
-        layout: &PaletteLayout,
+        layout: &ListDialogLayout,
     ) -> Option<DomainPickerCommand> {
-        if !self.can_filter() && layout.input().contains(x, y) {
+        if !self.can_filter() && layout.input.contains(x, y) {
             return None;
         }
         let result = self.palette.handle_click(x, y, layout)?;
@@ -460,6 +461,7 @@ fn command(id: String, title: String, category: String) -> RegisteredCommand {
 mod tests {
     use super::*;
     use crate::config::SshHostProfile;
+    use crate::ui::command_palette::PALETTE_DIALOG;
     use std::collections::BTreeMap;
 
     fn summary(id: &str, name: &str) -> DomainSummary {
@@ -588,9 +590,17 @@ mod tests {
         let mut picker = DomainPicker::new();
         picker.open(&config);
         let info = picker.build_info();
-        let layout = PaletteLayout::calculate(900.0, 700.0, 10.0, 20.0, info.animation, 2);
-        let x = layout.panel_x + layout.padding;
-        let y = layout.list_y + layout.row_height * 1.5;
+        let layout = ListDialogLayout::calculate(
+            PALETTE_DIALOG,
+            900.0,
+            700.0,
+            10.0,
+            20.0,
+            info.animation,
+            2,
+        );
+        let x = layout.panel.x + layout.padding;
+        let y = layout.list.y + layout.row_height * 1.5;
         assert!(matches!(
             picker.handle_click(x, y, &layout),
             Some(DomainPickerCommand::Discover {
@@ -689,7 +699,15 @@ mod tests {
         picker.open(&DomainsConfig::default());
         assert!(picker.set_query("local"));
         let info = picker.build_info();
-        let layout = PaletteLayout::calculate(800.0, 600.0, 10.0, 20.0, 1.0, info.entries.len());
+        let layout = ListDialogLayout::calculate(
+            PALETTE_DIALOG,
+            800.0,
+            600.0,
+            10.0,
+            20.0,
+            1.0,
+            info.entries.len(),
+        );
         let view = layout.input_viewport(&info.input, info.cursor).unwrap();
         assert!(
             picker

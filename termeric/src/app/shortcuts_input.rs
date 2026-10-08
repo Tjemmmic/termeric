@@ -2,7 +2,8 @@
 
 use super::*;
 use crate::input::keybindings::KeyChord;
-use crate::ui::shortcuts_panel::ShortcutsPanelLayout;
+use crate::ui::list_dialog::ListDialogLayout;
+use crate::ui::shortcuts_panel::SHORTCUTS_DIALOG;
 use crate::ui::text_input::TextInputEdit;
 use winit::keyboard::{Key, NamedKey};
 
@@ -59,10 +60,11 @@ impl App {
 
     /// The geometry pointer presses on the Shortcuts panel are resolved
     /// against.
-    pub(super) fn shortcuts_panel_layout(&self) -> ShortcutsPanelLayout {
+    pub(super) fn shortcuts_panel_layout(&self) -> ListDialogLayout {
         let metrics = self.ui_metrics();
         let info = self.shortcuts_panel.build_info(&self.shortcut_registry);
-        ShortcutsPanelLayout::calculate(
+        ListDialogLayout::calculate(
+            SHORTCUTS_DIALOG,
             metrics.width,
             metrics.height,
             metrics.cell_width,
@@ -78,17 +80,12 @@ impl App {
         &mut self,
         x: f32,
         y: f32,
-        layout: &ShortcutsPanelLayout,
-        cell_width: f32,
-        cell_height: f32,
+        layout: &ListDialogLayout,
     ) -> bool {
         if !self.shortcuts_panel.is_active() || !layout.input.contains(x, y) {
             return false;
         }
-        if self
-            .shortcuts_panel
-            .place_filter_caret_at(x, y, layout, cell_width, cell_height)
-        {
+        if self.shortcuts_panel.place_filter_caret_at(x, y, layout) {
             self.shortcut_filter_changed();
         }
         true
@@ -156,6 +153,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::shortcuts_panel::SHORTCUTS_DIALOG;
 
     #[test]
     fn filter_keeps_complete_text_events_and_consumes_unsupported_modifiers() {
@@ -224,14 +222,9 @@ mod tests {
             "e\u{301}界👩\u{200d}💻"
         );
         assert!(app.handle_shortcuts_filter_key(&Key::Named(NamedKey::Backspace)));
-        let layout = ShortcutsPanelLayout::calculate(1000.0, 700.0, 8.0, 16.0, 1.0, 0);
-        assert!(app.handle_shortcuts_filter_click(
-            layout.input.x,
-            layout.input.y,
-            &layout,
-            8.0,
-            16.0
-        ));
+        let layout =
+            ListDialogLayout::calculate(SHORTCUTS_DIALOG, 1000.0, 700.0, 8.0, 16.0, 1.0, 0);
+        assert!(app.handle_shortcuts_filter_click(layout.input.x, layout.input.y, &layout));
         app.handle_ime_event(winit::event::Ime::Commit("@".into()));
         assert_eq!(
             app.shortcuts_panel
@@ -285,13 +278,14 @@ mod tests {
     #[test]
     fn shortcut_filter_pointer_click_clears_preedit_without_changing_recording() {
         let mut app = App::new_headless(Config::default()).unwrap();
-        let layout = ShortcutsPanelLayout::calculate(1000.0, 700.0, 8.0, 16.0, 1.0, 0);
+        let layout =
+            ListDialogLayout::calculate(SHORTCUTS_DIALOG, 1000.0, 700.0, 8.0, 16.0, 1.0, 0);
         let (x, y) = (layout.input.x, layout.input.y);
-        assert!(!app.handle_shortcuts_filter_click(x, y, &layout, 8.0, 16.0));
+        assert!(!app.handle_shortcuts_filter_click(x, y, &layout));
         app.shortcuts_panel.open();
         assert!(app.shortcuts_panel.insert_filter_text("e\u{301}界"));
         app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
-        assert!(app.handle_shortcuts_filter_click(x, y, &layout, 8.0, 16.0));
+        assert!(app.handle_shortcuts_filter_click(x, y, &layout));
         assert!(app.ime.preedit().is_none());
         assert!(app.redraw_scheduler.has_pending());
         assert_eq!(
@@ -309,7 +303,7 @@ mod tests {
         );
         app.shortcuts_panel
             .start_recording(crate::input::keybindings::BindableAction::Copy);
-        assert!(app.handle_shortcuts_filter_click(x, y, &layout, 8.0, 16.0));
+        assert!(app.handle_shortcuts_filter_click(x, y, &layout));
         assert!(app.shortcuts_panel.is_recording());
         assert_eq!(
             app.shortcuts_panel
@@ -317,15 +311,14 @@ mod tests {
                 .cursor,
             1
         );
-        assert!(!app.handle_shortcuts_filter_click(x, y - 1.0, &layout, 8.0, 16.0));
-        let collapsed = ShortcutsPanelLayout::calculate(60.0, 200.0, 8.0, 16.0, 1.0, 0);
+        assert!(!app.handle_shortcuts_filter_click(x, y - 1.0, &layout));
+        let collapsed =
+            ListDialogLayout::calculate(SHORTCUTS_DIALOG, 60.0, 200.0, 8.0, 16.0, 1.0, 0);
         app.shortcuts_panel.open();
         assert!(app.handle_shortcuts_filter_click(
             collapsed.input.x,
             collapsed.input.y,
-            &collapsed,
-            8.0,
-            16.0
+            &collapsed
         ));
         assert_eq!(
             app.shortcuts_panel

@@ -69,7 +69,7 @@ impl App {
             }
             Some(ModalLayer::ShortcutsPanel) => {
                 let layout = self.shortcuts_panel_layout();
-                if !self.handle_shortcuts_filter_click(x, y, &layout, cell_width, cell_height) {
+                if !self.handle_shortcuts_filter_click(x, y, &layout) {
                     return true;
                 }
                 TextTarget::ShortcutsFilter

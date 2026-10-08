@@ -3,9 +3,10 @@
 use super::Renderer;
 use super::draw::FieldTextColors;
 use crate::ui::color::scale_alpha;
-use crate::ui::command_palette::{PaletteInfo, PaletteLayout};
+use crate::ui::command_palette::{PALETTE_DIALOG, PaletteInfo};
 use crate::ui::constants::{BUTTON_CORNER_RADIUS, MODAL_CORNER_RADIUS};
 use crate::ui::geometry::Bounds;
+use crate::ui::list_dialog::ListDialogLayout;
 
 impl Renderer {
     /// A centred modal's soft shadow, hairline border, and raised surface,
@@ -29,7 +30,7 @@ impl Renderer {
     }
 
     /// Build command palette render data — centered modal with a light scrim.
-    /// The query field keeps the shared `PaletteLayout` geometry that caret,
+    /// The query field keeps the shared `ListDialogLayout` geometry that caret,
     /// IME, pointer, and accessibility code use; rows draw in the UI face.
     pub(super) fn build_command_palette(
         &mut self,
@@ -46,7 +47,8 @@ impl Renderer {
         self.rect_pipeline
             .push_rect(0.0, 0.0, window_width, window_height, scrim);
 
-        let layout = PaletteLayout::calculate(
+        let layout = ListDialogLayout::calculate(
+            PALETTE_DIALOG,
             window_width,
             window_height,
             cell_width,
@@ -54,8 +56,12 @@ impl Renderer {
             anim,
             info.entries.len(),
         );
-        let (panel_x, panel_y) = (layout.panel_x.round(), layout.panel_y.round());
-        let (panel_width, panel_height) = (layout.panel_width.round(), layout.panel_height.round());
+        let Bounds {
+            x: panel_x,
+            y: panel_y,
+            width: panel_width,
+            height: panel_height,
+        } = layout.panel;
         let padding = layout.padding;
         let row_height = layout.row_height;
 
@@ -63,11 +69,7 @@ impl Renderer {
         let line = self.px(1.0);
 
         // ── Query field ──
-        let input_x = panel_x + padding;
-        let input_y = panel_y + padding;
-        let input_w = panel_width - padding * 2.0;
-        let input_height = layout.input_height;
-        let field = Bounds::new(input_x, input_y, input_w, input_height);
+        let field = layout.input;
         self.draw_filter_field(
             field,
             fade(self.ui.palette_input_bg, 0.8),
@@ -89,7 +91,7 @@ impl Renderer {
         }
 
         // ── Separator ──
-        let sep_y = input_y + input_height + layout.gap;
+        let sep_y = field.bottom() + layout.gap;
         self.rect_pipeline.push_rect(
             panel_x + line,
             sep_y.round(),
@@ -101,7 +103,7 @@ impl Renderer {
         // ── Results ──
         // `info.entries` is already sliced to the visible window.
         let size = self.ui_label_px();
-        let list_y = layout.list_y;
+        let list_y = layout.list.y;
         let text_x = panel_x + padding + cell_width * 0.5;
         let scrollbar_width = self.px(3.0);
         let right = panel_x + panel_width - padding - scrollbar_width - self.px(6.0);
@@ -161,7 +163,7 @@ impl Renderer {
                 panel_x + panel_width - padding * 0.5 - scrollbar_width,
                 list_y,
                 scrollbar_width,
-                layout.list_height,
+                layout.list.height,
             ),
             layout.visible_count,
             info.total_entries,

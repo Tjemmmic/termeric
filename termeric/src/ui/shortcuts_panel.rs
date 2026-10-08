@@ -7,7 +7,7 @@ use super::animation::OverlayAnimation;
 use super::text_input::{TextInput, TextInputEdit, TextLimit};
 use super::text_input_viewport::TextInputViewport;
 use crate::input::keybindings::{BindableAction, KeyChord, ShortcutCategory, ShortcutRegistry};
-use crate::ui::geometry::Bounds;
+use crate::ui::list_dialog::{ListDialogLayout, ListDialogShape};
 
 const MAX_FILTER_CHARACTERS: usize = 128;
 
@@ -93,135 +93,16 @@ impl ShortcutNotice {
     }
 }
 
-/// Shared shortcuts-modal geometry for rendering and outside-click routing.
-#[derive(Debug, Clone, Copy)]
-pub struct ShortcutsPanelLayout {
-    pub panel_x: f32,
-    pub panel_y: f32,
-    pub panel_width: f32,
-    pub panel_height: f32,
-    pub padding: f32,
-    pub row_height: f32,
-    pub footer_height: f32,
-    pub gap: f32,
-    pub separator_height: f32,
-    pub list_height: f32,
-    pub rows_that_fit: usize,
-    pub input: Bounds,
-    pub list: Bounds,
-}
-
-impl ShortcutsPanelLayout {
-    /// The editable text area excludes the prompt and keeps one caret column.
-    pub fn input_viewport(
-        &self,
-        text: &str,
-        cursor: usize,
-        cell_width: f32,
-        cell_height: f32,
-    ) -> Option<TextInputViewport> {
-        crate::ui::filter_field::text_viewport(text, cursor, self.input, cell_width, cell_height)
-    }
-
-    /// Resolve only input clicks, using the exact visible whole-grapheme slice.
-    pub fn input_cursor_at(
-        &self,
-        text: &str,
-        cursor: usize,
-        position: (f32, f32),
-        cell_width: f32,
-        cell_height: f32,
-    ) -> Option<usize> {
-        let (x, y) = position;
-        if !self.input.contains(x, y) {
-            return None;
-        }
-        self.input_viewport(text, cursor, cell_width, cell_height)?
-            .cursor_at(text, x, cell_width)
-    }
-
-    pub fn calculate(
-        window_width: f32,
-        window_height: f32,
-        cell_width: f32,
-        cell_height: f32,
-        animation: f32,
-        entry_count: usize,
-    ) -> Self {
-        let panel_width = (cell_width * 60.0).max(500.0).min(window_width * 0.7);
-        let panel_x = (window_width - panel_width) / 2.0;
-        let padding = cell_width * 1.5;
-        let row_height = cell_height * 2.0;
-        let input_height = cell_height * 2.0;
-        let footer_height = cell_height * 1.6;
-        let gap = 6.0;
-        let separator_height = 1.0;
-        let header_area =
-            padding + cell_height * 1.4 + gap + input_height + gap + separator_height + gap;
-        let footer_area = footer_height + padding * 0.5;
-        let max_list_height = window_height * 0.75 - header_area - footer_area;
-        let rows_that_fit = (max_list_height / row_height).floor().max(1.0) as usize;
-        let list_height = entry_count.min(rows_that_fit) as f32 * row_height;
-        let panel_height = header_area + list_height + footer_area;
-        let panel_y = window_height * 0.10 + (1.0 - animation) * -30.0;
-
-        let title_y = panel_y + padding;
-        let input_y = title_y + cell_height * 1.4 + gap;
-        let list_y = input_y + input_height + gap + separator_height + gap;
-        Self {
-            panel_x,
-            panel_y,
-            panel_width,
-            panel_height,
-            padding,
-            row_height,
-            footer_height,
-            gap,
-            separator_height,
-            list_height,
-            rows_that_fit,
-            input: Bounds {
-                x: panel_x + padding,
-                y: input_y,
-                width: panel_width - padding * 2.0,
-                height: input_height,
-            },
-            list: Bounds {
-                x: panel_x + padding * 0.5,
-                y: list_y,
-                width: panel_width - padding,
-                height: list_height,
-            },
-        }
-    }
-
-    pub fn contains(&self, x: f32, y: f32) -> bool {
-        Bounds::new(
-            self.panel_x,
-            self.panel_y,
-            self.panel_width,
-            self.panel_height,
-        )
-        .contains(x, y)
-    }
-
-    pub fn row(&self, visible_index: usize) -> Bounds {
-        Bounds {
-            x: self.list.x,
-            y: self.list.y + visible_index as f32 * self.row_height,
-            width: self.list.width,
-            height: self.row_height,
-        }
-    }
-
-    pub fn row_at(&self, x: f32, y: f32, visible_rows: usize) -> Option<usize> {
-        if !self.list.contains(x, y) || self.row_height <= 0.0 {
-            return None;
-        }
-        let row = ((y - self.list.y) / self.row_height).floor() as usize;
-        (row < visible_rows).then_some(row)
-    }
-}
+/// The Keyboard Shortcuts list dialog.
+pub const SHORTCUTS_DIALOG: ListDialogShape = ListDialogShape {
+    width_cells: 60.0,
+    min_width: 500.0,
+    max_window_share: 0.7,
+    top_share: 0.10,
+    title_cells: 1.4,
+    row_cells: 2.0,
+    footer_cells: 1.6,
+};
 
 /// The shortcuts panel state
 pub struct ShortcutsPanel {
@@ -576,24 +457,12 @@ impl ShortcutsPanel {
 
     /// Place the caret without changing the filter, result selection, or scroll.
     /// Hidden/recording/collapsed fields cannot acquire a pointer caret.
-    pub fn place_filter_caret_at(
-        &mut self,
-        x: f32,
-        y: f32,
-        layout: &ShortcutsPanelLayout,
-        cell_width: f32,
-        cell_height: f32,
-    ) -> bool {
+    pub fn place_filter_caret_at(&mut self, x: f32, y: f32, layout: &ListDialogLayout) -> bool {
         if !self.is_active() || self.recording {
             return false;
         }
-        let Some(cursor) = layout.input_cursor_at(
-            self.filter.text(),
-            self.filter.cursor(),
-            (x, y),
-            cell_width,
-            cell_height,
-        ) else {
+        let Some(cursor) = layout.input_cursor_at(self.filter.text(), self.filter.cursor(), x, y)
+        else {
             return false;
         };
         self.filter.place_caret(cursor)
@@ -611,7 +480,8 @@ impl ShortcutsPanel {
             return None;
         }
         // Result count changes panel height, never the filter rectangle.
-        ShortcutsPanelLayout::calculate(
+        ListDialogLayout::calculate(
+            SHORTCUTS_DIALOG,
             width,
             height,
             cell_width,
@@ -619,12 +489,7 @@ impl ShortcutsPanel {
             self.animation.eased(),
             0,
         )
-        .input_viewport(
-            self.filter.text(),
-            self.filter.cursor(),
-            cell_width,
-            cell_height,
-        )
+        .input_viewport(self.filter.text(), self.filter.cursor())
     }
 
     /// Enter recording mode for a stable action identity.
@@ -658,11 +523,11 @@ impl ShortcutsPanel {
         &mut self,
         x: f32,
         y: f32,
-        layout: &ShortcutsPanelLayout,
+        layout: &ListDialogLayout,
         registry: &ShortcutRegistry,
     ) -> ShortcutsAction {
         let info = self.build_info(registry);
-        let Some(row) = layout.row_at(x, y, info.entries.len()) else {
+        let Some(row) = layout.row_at(x, y) else {
             return ShortcutsAction::None;
         };
         let Some(entry) = info.entries.get(row) else {
@@ -812,16 +677,11 @@ mod tests {
 
     #[test]
     fn shared_layout_uses_rendered_height_for_outside_clicks() {
-        let layout = ShortcutsPanelLayout::calculate(1200.0, 800.0, 10.0, 20.0, 1.0, 2);
-        assert!(layout.contains(
-            layout.panel_x + layout.panel_width / 2.0,
-            layout.panel_y + layout.panel_height - 1.0,
-        ));
-        assert!(!layout.contains(
-            layout.panel_x + layout.panel_width / 2.0,
-            layout.panel_y + layout.panel_height + 1.0,
-        ));
-        assert!(layout.panel_height < 800.0 * 0.75);
+        let layout =
+            ListDialogLayout::calculate(SHORTCUTS_DIALOG, 1200.0, 800.0, 10.0, 20.0, 1.0, 2);
+        assert!(layout.contains(layout.panel.center()[0], layout.panel.bottom() - 1.0));
+        assert!(!layout.contains(layout.panel.center()[0], layout.panel.bottom() + 1.0));
+        assert!(layout.panel.height < 800.0 * 0.75);
     }
 
     #[test]
@@ -951,8 +811,15 @@ mod tests {
             .position(|entry| !entry.is_header)
             .unwrap();
         let expected = info.entries[action_row].action;
-        let layout =
-            ShortcutsPanelLayout::calculate(1200.0, 800.0, 10.0, 20.0, 1.0, info.entries.len());
+        let layout = ListDialogLayout::calculate(
+            SHORTCUTS_DIALOG,
+            1200.0,
+            800.0,
+            10.0,
+            20.0,
+            1.0,
+            info.entries.len(),
+        );
         let row = layout.row(action_row);
         let action = panel.handle_click(
             row.x + row.width / 2.0,
@@ -989,21 +856,34 @@ mod tests {
         let text = "界e\u{301}👩\u{200d}💻".repeat(20);
         for (width, cell) in [(240.0, 8.0), (800.0, 8.0), (1600.0, 16.0)] {
             for animation in [0.25, 1.0] {
-                let layout =
-                    ShortcutsPanelLayout::calculate(width, 800.0, cell, cell * 2.0, animation, 5);
+                let layout = ListDialogLayout::calculate(
+                    SHORTCUTS_DIALOG,
+                    width,
+                    800.0,
+                    cell,
+                    cell * 2.0,
+                    animation,
+                    5,
+                );
                 assert_eq!(
                     layout.input,
-                    ShortcutsPanelLayout::calculate(width, 800.0, cell, cell * 2.0, animation, 0)
-                        .input
+                    ListDialogLayout::calculate(
+                        SHORTCUTS_DIALOG,
+                        width,
+                        800.0,
+                        cell,
+                        cell * 2.0,
+                        animation,
+                        0
+                    )
+                    .input
                 );
                 for cursor in text
                     .grapheme_indices(true)
                     .map(|(i, _)| i)
                     .chain([text.len()])
                 {
-                    let view = layout
-                        .input_viewport(&text, cursor, cell, cell * 2.0)
-                        .unwrap();
+                    let view = layout.input_viewport(&text, cursor).unwrap();
                     assert!(view.text_range.start <= cursor && cursor <= view.text_range.end);
                     assert!(view.text_x > layout.input.x);
                     assert!(
@@ -1021,15 +901,11 @@ mod tests {
                         assert!(view.text_range.start > 0);
                     }
                 }
-                assert!(layout.input_viewport(&text, 1, cell, cell * 2.0).is_none());
+                assert!(layout.input_viewport(&text, 1).is_none());
             }
         }
-        let layout = ShortcutsPanelLayout::calculate(40.0, 800.0, 8.0, 16.0, 1.0, 0);
-        assert!(
-            layout
-                .input_viewport(&text, text.len(), 8.0, 16.0)
-                .is_none()
-        );
+        let layout = ListDialogLayout::calculate(SHORTCUTS_DIALOG, 40.0, 800.0, 8.0, 16.0, 1.0, 0);
+        assert!(layout.input_viewport(&text, text.len()).is_none());
     }
 
     #[test]
@@ -1081,13 +957,21 @@ mod tests {
         use unicode_segmentation::UnicodeSegmentation;
         for (width, height, cw, ch) in [(1000.0, 700.0, 8.0, 16.0), (500.0, 400.0, 15.0, 30.0)] {
             for animation in [0.2, 0.7, 1.0] {
-                let layout = ShortcutsPanelLayout::calculate(width, height, cw, ch, animation, 8);
+                let layout = ListDialogLayout::calculate(
+                    SHORTCUTS_DIALOG,
+                    width,
+                    height,
+                    cw,
+                    ch,
+                    animation,
+                    8,
+                );
                 for text in [
                     "e\u{301}界👩\u{200d}💻🇺🇸".to_string(),
                     "a界e\u{301}👩\u{200d}💻".repeat(16),
                 ] {
                     let cursor = text.len();
-                    let view = layout.input_viewport(&text, cursor, cw, ch).unwrap();
+                    let view = layout.input_viewport(&text, cursor).unwrap();
                     let mut x = view.text_x;
                     for (offset, grapheme) in text[view.text_range.clone()].grapheme_indices(true) {
                         let pixels = termeric_core::unicode::grapheme_width(grapheme) as f32 * cw;
@@ -1099,9 +983,8 @@ mod tests {
                                 layout.input_cursor_at(
                                     &text,
                                     cursor,
-                                    (x + fraction * pixels, view.text_y),
-                                    cw,
-                                    ch
+                                    x + fraction * pixels,
+                                    view.text_y
                                 ),
                                 Some(expected)
                             );
@@ -1109,22 +992,15 @@ mod tests {
                         x += pixels;
                     }
                     assert_eq!(
-                        layout.input_cursor_at(
-                            &text,
-                            cursor,
-                            (layout.input.x, view.text_y),
-                            cw,
-                            ch
-                        ),
+                        layout.input_cursor_at(&text, cursor, layout.input.x, view.text_y),
                         Some(view.text_range.start)
                     );
                     assert_eq!(
                         layout.input_cursor_at(
                             &text,
                             cursor,
-                            (layout.input.right() - 0.5, view.text_y),
-                            cw,
-                            ch
+                            layout.input.right() - 0.5,
+                            view.text_y
                         ),
                         Some(view.text_range.end)
                     );
@@ -1134,7 +1010,7 @@ mod tests {
                         (view.text_x, f32::INFINITY),
                     ] {
                         assert_eq!(
-                            layout.input_cursor_at(&text, cursor, position, cw, ch),
+                            layout.input_cursor_at(&text, cursor, position.0, position.1),
                             None
                         );
                     }
@@ -1146,17 +1022,18 @@ mod tests {
     #[test]
     fn filter_pointer_caret_preserves_results_and_refuses_recording_or_collapsed_input() {
         let mut panel = ShortcutsPanel::new();
-        let layout = ShortcutsPanelLayout::calculate(1000.0, 700.0, 8.0, 16.0, 1.0, 8);
+        let layout =
+            ListDialogLayout::calculate(SHORTCUTS_DIALOG, 1000.0, 700.0, 8.0, 16.0, 1.0, 8);
         let (x, y) = (
             layout.input.x + crate::ui::constants::FILTER_TEXT_INSET_CELLS * 8.0,
             layout.input.y + 8.0,
         );
-        assert!(!panel.place_filter_caret_at(x, y, &layout, 8.0, 16.0));
+        assert!(!panel.place_filter_caret_at(x, y, &layout));
         panel.open();
         assert!(panel.insert_filter_text("e\u{301}界👩\u{200d}💻"));
         panel.selected = 2;
         panel.scroll_offset = 1;
-        assert!(panel.place_filter_caret_at(x + 6.0, y, &layout, 8.0, 16.0));
+        assert!(panel.place_filter_caret_at(x + 6.0, y, &layout));
         assert_eq!(panel.filter.cursor(), "e\u{301}".len());
         assert_eq!((panel.selected, panel.scroll_offset), (2, 1));
         assert_eq!(panel.filter.text(), "e\u{301}界👩\u{200d}💻");
@@ -1164,22 +1041,17 @@ mod tests {
         assert_eq!(panel.filter.text(), "e\u{301}@界👩\u{200d}💻");
         let before = panel.filter.cursor();
         panel.start_recording(BindableAction::Copy);
-        assert!(!panel.place_filter_caret_at(x, y, &layout, 8.0, 16.0));
+        assert!(!panel.place_filter_caret_at(x, y, &layout));
         assert_eq!(panel.filter.cursor(), before);
         panel.open();
-        assert!(panel.place_filter_caret_at(x, y, &layout, 8.0, 16.0));
+        assert!(panel.place_filter_caret_at(x, y, &layout));
         assert_eq!(panel.filter.cursor(), 0);
-        let collapsed = ShortcutsPanelLayout::calculate(60.0, 200.0, 8.0, 16.0, 1.0, 0);
+        let collapsed =
+            ListDialogLayout::calculate(SHORTCUTS_DIALOG, 60.0, 200.0, 8.0, 16.0, 1.0, 0);
         assert!(collapsed.input.width > 0.0);
-        assert!(!panel.place_filter_caret_at(
-            collapsed.input.x,
-            collapsed.input.y,
-            &collapsed,
-            8.0,
-            16.0
-        ));
+        assert!(!panel.place_filter_caret_at(collapsed.input.x, collapsed.input.y, &collapsed));
         panel.close_immediately();
-        assert!(!panel.place_filter_caret_at(x, y, &layout, 8.0, 16.0));
+        assert!(!panel.place_filter_caret_at(x, y, &layout));
     }
 
     #[test]

@@ -1215,7 +1215,8 @@ fn headless_sgr_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
 
 fn headless_palette_input_smoke(device: &wgpu::Device, queue: &wgpu::Queue) -> anyhow::Result<()> {
     use super::{GlyphCache, TextPipeline, text::TextClip};
-    use crate::ui::command_palette::PaletteLayout;
+    use crate::ui::command_palette::PALETTE_DIALOG;
+    use crate::ui::list_dialog::ListDialogLayout;
     let mut glyphs = GlyphCache::for_test(device, queue, 16.0, false)?;
     glyphs.install_test_font(
         super::glyph_cache::deterministic_test_font_data(),
@@ -1224,7 +1225,7 @@ fn headless_palette_input_smoke(device: &wgpu::Device, queue: &wgpu::Queue) -> a
     );
     let mut text = TextPipeline::new(device, wgpu::TextureFormat::Rgba8Unorm, &glyphs)?;
     for width in [320.0, 800.0] {
-        let layout = PaletteLayout::calculate(width, 600.0, 10.0, 24.0, 1.0, 0);
+        let layout = ListDialogLayout::calculate(PALETTE_DIALOG, width, 600.0, 10.0, 24.0, 1.0, 0);
         for query in [
             "ASCII query ".repeat(20),
             "界e\u{301}👩\u{200d}💻 ASCII ".repeat(15),
@@ -1245,10 +1246,16 @@ fn headless_palette_input_smoke(device: &wgpu::Device, queue: &wgpu::Queue) -> a
             for view in [
                 layout.input_viewport(&query, query.len()).unwrap(),
                 search_layout.input_viewport(&info, 10.0).unwrap(),
-                crate::ui::shortcuts_panel::ShortcutsPanelLayout::calculate(
-                    width, 600.0, 10.0, 24.0, 1.0, 0,
+                crate::ui::list_dialog::ListDialogLayout::calculate(
+                    crate::ui::shortcuts_panel::SHORTCUTS_DIALOG,
+                    width,
+                    600.0,
+                    10.0,
+                    24.0,
+                    1.0,
+                    0,
                 )
-                .input_viewport(&query, query.len(), 10.0, 24.0)
+                .input_viewport(&query, query.len())
                 .unwrap(),
                 crate::ui::settings::SettingsModalLayout::calculate(
                     width, 600.0, 10.0, 24.0, 1.0, 0,

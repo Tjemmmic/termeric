@@ -437,29 +437,13 @@ fn command_palette_is_one_modal_search_and_result_tree_with_shared_geometry() {
     assert_eq!(node(PALETTE_INPUT).controls(), &[PALETTE_LIST]);
     assert!(node(PALETTE_INPUT).supports_action(Action::SetValue));
     assert_eq!(snapshot.focus, PALETTE_INPUT);
-    assert_rect_close(
-        node(PALETTE_INPUT).bounds(),
-        rect(
-            layout.panel_x + layout.padding,
-            layout.panel_y + layout.padding,
-            layout.panel_width - layout.padding * 2.0,
-            layout.input_height,
-        ),
-    );
+    assert_rect_close(node(PALETTE_INPUT).bounds(), bounds_rect(layout.input));
 
     let selected = node(PALETTE_INPUT).active_descendant().unwrap();
     assert_eq!(node(selected).role(), Role::ListBoxOption);
     assert_eq!(node(selected).is_selected(), Some(true));
     assert!(node(selected).supports_action(Action::Click));
-    assert_rect_close(
-        node(selected).bounds(),
-        rect(
-            layout.panel_x + layout.padding * 0.5,
-            layout.list_y,
-            layout.panel_width - layout.padding,
-            layout.row_height,
-        ),
-    );
+    assert_rect_close(node(selected).bounds(), bounds_rect(layout.row(0)));
 }
 
 #[test]
@@ -3005,8 +2989,8 @@ fn shortcuts_editor_is_one_bounded_modal_tree_with_shared_geometry() {
     let dialog = node(SHORTCUTS_DIALOG).bounds().unwrap();
     let first_action = layout.row(1);
     let expected_row = rect(
-        dialog.x0 as f32 + (first_action.x - layout.panel_x),
-        dialog.y0 as f32 + (first_action.y - layout.panel_y),
+        dialog.x0 as f32 + (first_action.x - layout.panel.x),
+        dialog.y0 as f32 + (first_action.y - layout.panel.y),
         first_action.width,
         first_action.height,
     );
@@ -3313,7 +3297,7 @@ fn domain_picker_is_one_bounded_modal_tree_with_stable_host_actions() {
     let first = node(node(DOMAIN_LIST).children()[0]).bounds().unwrap();
     let dialog = node(DOMAIN_DIALOG).bounds().unwrap();
     assert!((first.x0 - (dialog.x0 + f64::from(layout.padding * 0.5))).abs() < 0.1);
-    assert!((first.y0 - (dialog.y0 + f64::from(layout.list_y - layout.panel_y))).abs() < 0.1);
+    assert!((first.y0 - (dialog.y0 + f64::from(layout.list.y - layout.panel.y))).abs() < 0.1);
 }
 
 #[test]
@@ -3428,7 +3412,7 @@ fn unicode_picker_is_one_bounded_modal_tree_with_stable_actions() {
     let first = node(node(UNICODE_LIST).children()[0]).bounds().unwrap();
     let dialog = node(UNICODE_DIALOG).bounds().unwrap();
     assert!((first.x0 - (dialog.x0 + f64::from(layout.padding * 0.5))).abs() < 0.1);
-    assert!((first.y0 - (dialog.y0 + f64::from(layout.list_y - layout.panel_y))).abs() < 0.1);
+    assert!((first.y0 - (dialog.y0 + f64::from(layout.list.y - layout.panel.y))).abs() < 0.1);
 }
 
 #[test]

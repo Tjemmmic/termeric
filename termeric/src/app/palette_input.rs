@@ -6,8 +6,9 @@
 use super::modal_layer::ModalLayer;
 use super::text_field_keys::{FieldKey, types_text};
 use super::*;
-use crate::ui::command_palette::{PaletteLayout, PaletteResult};
+use crate::ui::command_palette::{PALETTE_DIALOG, PaletteResult};
 use crate::ui::domain_picker::DomainPickerCommand;
+use crate::ui::list_dialog::ListDialogLayout;
 use crate::ui::unicode_picker::UnicodePickerSelection;
 use winit::keyboard::{Key, NamedKey};
 
@@ -102,7 +103,7 @@ impl App {
         modal: PaletteModal,
         x: f32,
         y: f32,
-        layout: &PaletteLayout,
+        layout: &ListDialogLayout,
     ) -> Option<PaletteChoice> {
         match modal {
             PaletteModal::Domains => self
@@ -248,10 +249,11 @@ impl App {
     }
 
     /// The geometry pointer presses on `modal` are resolved against.
-    fn palette_modal_layout(&self, modal: PaletteModal) -> PaletteLayout {
+    fn palette_modal_layout(&self, modal: PaletteModal) -> ListDialogLayout {
         let metrics = self.ui_metrics();
         let info = self.palette_owner(modal).build_info();
-        PaletteLayout::calculate(
+        ListDialogLayout::calculate(
+            PALETTE_DIALOG,
             metrics.width,
             metrics.height,
             metrics.cell_width,

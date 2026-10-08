@@ -566,7 +566,7 @@ impl App {
     pub(super) fn shortcuts_accessibility_layout(
         &self,
         info: &crate::ui::shortcuts_panel::ShortcutsPanelInfo,
-    ) -> crate::ui::shortcuts_panel::ShortcutsPanelLayout {
+    ) -> crate::ui::list_dialog::ListDialogLayout {
         let UiMetrics {
             width,
             height,
@@ -574,7 +574,8 @@ impl App {
             cell_height,
             ..
         } = self.ui_metrics();
-        crate::ui::shortcuts_panel::ShortcutsPanelLayout::calculate(
+        crate::ui::list_dialog::ListDialogLayout::calculate(
+            crate::ui::shortcuts_panel::SHORTCUTS_DIALOG,
             width,
             height,
             cell_width,
@@ -692,12 +693,7 @@ impl App {
         dialog.set_label("Keyboard shortcuts");
         dialog.set_description("Search, change, or clear application keyboard shortcuts");
         dialog.set_modal();
-        dialog.set_bounds(rect(
-            layout.panel_x,
-            layout.panel_y,
-            layout.panel_width,
-            layout.panel_height,
-        ));
+        dialog.set_bounds(bounds_rect(layout.panel));
         dialog.set_children(dialog_children);
         nodes.push((SHORTCUTS_DIALOG, dialog));
 

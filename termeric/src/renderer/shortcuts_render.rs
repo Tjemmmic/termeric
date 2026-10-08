@@ -7,11 +7,12 @@ use crate::input::keybindings::BindableAction;
 use crate::ui::color::scale_alpha;
 use crate::ui::constants::BUTTON_CORNER_RADIUS;
 use crate::ui::geometry::Bounds;
-use crate::ui::shortcuts_panel::{ShortcutsPanelInfo, ShortcutsPanelLayout};
+use crate::ui::list_dialog::ListDialogLayout;
+use crate::ui::shortcuts_panel::{SHORTCUTS_DIALOG, ShortcutsPanelInfo};
 
 impl Renderer {
     /// Build shortcuts panel render data — centered modal with a light scrim.
-    /// Geometry comes from `ShortcutsPanelLayout`, which the filter caret,
+    /// Geometry comes from `ListDialogLayout`, which the filter caret,
     /// IME, pointer, and accessibility code share; text uses the UI face.
     pub(super) fn build_shortcuts_panel(
         &mut self,
@@ -28,7 +29,8 @@ impl Renderer {
         self.rect_pipeline
             .push_rect(0.0, 0.0, window_width, window_height, scrim);
 
-        let layout = ShortcutsPanelLayout::calculate(
+        let layout = ListDialogLayout::calculate(
+            SHORTCUTS_DIALOG,
             window_width,
             window_height,
             cell_width,
@@ -36,8 +38,12 @@ impl Renderer {
             anim,
             info.entries.len(),
         );
-        let (panel_x, panel_y) = (layout.panel_x.round(), layout.panel_y.round());
-        let (panel_width, panel_height) = (layout.panel_width.round(), layout.panel_height.round());
+        let Bounds {
+            x: panel_x,
+            y: panel_y,
+            width: panel_width,
+            height: panel_height,
+        } = layout.panel;
         let padding = layout.padding;
         let row_height = layout.row_height;
         self.build_modal_frame(panel_x, panel_y, panel_width, panel_height, anim);
@@ -52,7 +58,7 @@ impl Renderer {
             "Keyboard Shortcuts",
             panel_x + padding,
             panel_y + padding,
-            cell_height * 1.4,
+            layout.title_height,
             panel_width - padding * 2.0,
             size * 1.15,
             text,
@@ -61,9 +67,7 @@ impl Renderer {
         // ── Filter field ──
         let input = layout.input;
         self.draw_filter_field(input, fade(self.ui.palette_input_bg, 0.8), dim);
-        if let Some(view) =
-            layout.input_viewport(&info.filter, info.cursor, cell_width, cell_height)
-        {
+        if let Some(view) = layout.input_viewport(&info.filter, info.cursor) {
             self.draw_field_text(
                 input,
                 &view,
@@ -155,7 +159,7 @@ impl Renderer {
                 panel_x + panel_width - padding * 0.5 - scrollbar_width,
                 list_y,
                 scrollbar_width,
-                layout.list_height,
+                layout.list.height,
             ),
             layout.rows_that_fit,
             info.total_rows,

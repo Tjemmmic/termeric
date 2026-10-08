@@ -156,7 +156,8 @@ impl App {
         cell_height: f32,
     ) -> Option<crate::ui::text_input_viewport::TextInputViewport> {
         let info = self.palette_owner(modal).build_info();
-        crate::ui::command_palette::PaletteLayout::calculate(
+        crate::ui::list_dialog::ListDialogLayout::calculate(
+            crate::ui::command_palette::PALETTE_DIALOG,
             width,
             height,
             cell_width,

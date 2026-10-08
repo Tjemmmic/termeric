@@ -138,7 +138,8 @@ fn shortcut_ime_uses_scrolled_filter_geometry_and_recording_blocks_retained_sett
     );
     for (width, cell) in [(800.0, 8.0), (1600.0, 16.0)] {
         let info = app.shortcuts_panel.build_info(&app.shortcut_registry);
-        let layout = crate::ui::shortcuts_panel::ShortcutsPanelLayout::calculate(
+        let layout = crate::ui::list_dialog::ListDialogLayout::calculate(
+            crate::ui::shortcuts_panel::SHORTCUTS_DIALOG,
             width,
             800.0,
             cell,
@@ -157,9 +158,7 @@ fn shortcut_ime_uses_scrolled_filter_geometry_and_recording_blocks_retained_sett
         .unwrap();
         assert_eq!(
             view,
-            layout
-                .input_viewport(&info.filter, info.cursor, cell, cell * 2.0)
-                .unwrap()
+            layout.input_viewport(&info.filter, info.cursor).unwrap()
         );
         assert!(view.text_range.start > 0);
         assert!(view.cursor_x + cell <= view.right + 0.001);
@@ -469,7 +468,8 @@ fn domain_picker_ime_geometry_uses_its_query_even_over_retained_panels() {
     assert!(app.domain_picker.set_query(&query));
     for (width, cell_width) in [(450.0, 8.0), (800.0, 10.0), (1400.0, 20.0)] {
         let info = app.domain_picker.build_info();
-        let expected = crate::ui::command_palette::PaletteLayout::calculate(
+        let expected = crate::ui::list_dialog::ListDialogLayout::calculate(
+            crate::ui::command_palette::PALETTE_DIALOG,
             width,
             900.0,
             cell_width,
@@ -521,7 +521,8 @@ fn palette_ime_geometry_tracks_the_visible_query_without_a_terminal() {
             } else {
                 app.command_palette.build_info()
             };
-            let expected = crate::ui::command_palette::PaletteLayout::calculate(
+            let expected = crate::ui::list_dialog::ListDialogLayout::calculate(
+                crate::ui::command_palette::PALETTE_DIALOG,
                 width,
                 900.0,
                 cell_width,

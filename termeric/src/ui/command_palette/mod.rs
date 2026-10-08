@@ -3,8 +3,7 @@
 //! agents, supervisor modes), and the domain and Unicode pickers draw and
 //! navigate through it (see [`PaletteOwner`]).
 
-mod input_viewport;
 mod owner;
 pub mod palette;
 pub use owner::PaletteOwner;
-pub use palette::{CommandPalette, PaletteInfo, PaletteLayout, PaletteResult};
+pub use palette::{CommandPalette, PALETTE_DIALOG, PaletteInfo, PaletteResult};

@@ -12,9 +12,8 @@ pub(crate) use benchmark::benchmark_unicode_picker;
 
 use self::annotations::{Annotation, CLDR_LOCALE, CLDR_VERSION};
 use crate::ui::command_palette::palette::{CommandSource, RegisteredCommand};
-use crate::ui::command_palette::{
-    CommandPalette, PaletteInfo, PaletteLayout, PaletteOwner, PaletteResult,
-};
+use crate::ui::command_palette::{CommandPalette, PaletteInfo, PaletteOwner, PaletteResult};
+use crate::ui::list_dialog::ListDialogLayout;
 use search_worker::{Request, SearchWorker};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
@@ -183,7 +182,7 @@ impl UnicodePicker {
         &mut self,
         x: f32,
         y: f32,
-        layout: &PaletteLayout,
+        layout: &ListDialogLayout,
     ) -> Option<UnicodePickerSelection> {
         let result = self.palette.handle_click(x, y, layout)?;
         self.resolve(result)
@@ -884,6 +883,7 @@ const CURATED_CHARACTERS: &[CuratedCharacter] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::command_palette::PALETTE_DIALOG;
 
     /// The match tier of a name: 2 when every term is a whole word, 1 when
     /// the weakest is a word prefix, 0 when it is only a substring.
@@ -1144,11 +1144,19 @@ mod tests {
         let mut picker = UnicodePicker::new();
         picker.open();
         let info = filter(&mut picker, "euro");
-        let layout = PaletteLayout::calculate(900.0, 700.0, 10.0, 20.0, info.animation, 1);
+        let layout = ListDialogLayout::calculate(
+            PALETTE_DIALOG,
+            900.0,
+            700.0,
+            10.0,
+            20.0,
+            info.animation,
+            1,
+        );
         let selection = picker
             .handle_click(
-                layout.panel_x + layout.padding,
-                layout.list_y + layout.row_height * 0.5,
+                layout.panel.x + layout.padding,
+                layout.list.y + layout.row_height * 0.5,
                 &layout,
             )
             .unwrap();
@@ -1157,11 +1165,19 @@ mod tests {
         let mut picker = UnicodePicker::new();
         picker.open();
         let info = filter(&mut picker, "snowman");
-        let layout = PaletteLayout::calculate(900.0, 700.0, 10.0, 20.0, info.animation, 1);
+        let layout = ListDialogLayout::calculate(
+            PALETTE_DIALOG,
+            900.0,
+            700.0,
+            10.0,
+            20.0,
+            info.animation,
+            1,
+        );
         let selection = picker
             .handle_click(
-                layout.panel_x + layout.padding,
-                layout.list_y + layout.row_height * 0.5,
+                layout.panel.x + layout.padding,
+                layout.list.y + layout.row_height * 0.5,
                 &layout,
             )
             .unwrap();

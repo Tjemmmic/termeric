@@ -9,7 +9,7 @@ use super::super::animation::OverlayAnimation;
 use super::super::text_input::{TextInput, TextInputEdit, TextLimit};
 use crate::input::Action;
 use crate::input::keybindings::{BindableAction, ShortcutRegistry};
-use crate::ui::geometry::Bounds;
+use crate::ui::list_dialog::{ListDialogLayout, ListDialogShape};
 use crate::ui::scroll::reveal_row;
 
 const MAX_QUERY_CHARACTERS: usize = 256;
@@ -118,98 +118,17 @@ struct QuickPick {
     item_noun: String,
 }
 
-/// Geometry for the centered command palette modal — single source of truth
-/// shared by the renderer, click hit-test, and scroll logic.
-#[derive(Debug, Clone, Copy)]
-pub struct PaletteLayout {
-    pub panel_x: f32,
-    pub panel_y: f32,
-    pub panel_width: f32,
-    pub panel_height: f32,
-    pub padding: f32,
-    pub gap: f32,
-    pub separator_height: f32,
-    pub row_height: f32,
-    pub input_height: f32,
-    pub footer_height: f32,
-    pub list_y: f32,
-    pub list_height: f32,
-    pub rows_that_fit: usize,
-    pub visible_count: usize,
-    pub cell_width: f32,
-    pub cell_height: f32,
-}
-
-impl PaletteLayout {
-    pub fn calculate(
-        window_width: f32,
-        window_height: f32,
-        cell_width: f32,
-        cell_height: f32,
-        animation: f32,
-        entry_count: usize,
-    ) -> Self {
-        let panel_width = (cell_width * 55.0).max(450.0).min(window_width * 0.65);
-        let panel_x = (window_width - panel_width) / 2.0;
-        let padding = cell_width * 1.5;
-        let row_height = cell_height * 1.6;
-        let input_height = cell_height * 2.0;
-        let footer_height = cell_height * 1.3;
-        let gap = 6.0;
-        let separator_height = 1.0;
-        let header_area = padding + input_height + gap + separator_height + gap;
-        let footer_area = footer_height + padding * 0.5;
-        let max_panel_height = window_height * 0.75;
-        let max_list_height = (max_panel_height - header_area - footer_area).max(row_height);
-        let rows_that_fit = (max_list_height / row_height).floor().max(1.0) as usize;
-        let visible_count = entry_count.min(rows_that_fit);
-        let list_height = visible_count as f32 * row_height;
-        let panel_height = header_area + list_height + footer_area;
-        let panel_y = (window_height * 0.12) + (1.0 - animation) * -30.0;
-        let list_y = panel_y + header_area;
-        Self {
-            panel_x,
-            panel_y,
-            panel_width,
-            panel_height,
-            padding,
-            gap,
-            separator_height,
-            row_height,
-            input_height,
-            footer_height,
-            list_y,
-            list_height,
-            rows_that_fit,
-            visible_count,
-            cell_width,
-            cell_height,
-        }
-    }
-
-    pub fn contains(&self, x: f32, y: f32) -> bool {
-        Bounds::new(
-            self.panel_x,
-            self.panel_y,
-            self.panel_width,
-            self.panel_height,
-        )
-        .contains(x, y)
-    }
-
-    /// Map a y-coordinate to the 0-based visible row, if inside the list area.
-    pub fn visible_row_at(&self, y: f32) -> Option<usize> {
-        if y < self.list_y || y >= self.list_y + self.list_height {
-            return None;
-        }
-        let row = ((y - self.list_y) / self.row_height) as usize;
-        if row < self.visible_count {
-            Some(row)
-        } else {
-            None
-        }
-    }
-}
+/// The command palette's list dialog, which the domain and Unicode pickers
+/// draw through too.
+pub const PALETTE_DIALOG: ListDialogShape = ListDialogShape {
+    width_cells: 55.0,
+    min_width: 450.0,
+    max_window_share: 0.65,
+    top_share: 0.12,
+    title_cells: 0.0,
+    row_cells: 1.6,
+    footer_cells: 1.3,
+};
 
 /// Display snapshot for the renderer
 #[derive(Debug, Clone)]
@@ -586,7 +505,7 @@ impl CommandPalette {
         &mut self,
         x: f32,
         y: f32,
-        layout: &PaletteLayout,
+        layout: &ListDialogLayout,
     ) -> Option<PaletteResult> {
         if !layout.contains(x, y) {
             self.close();
@@ -595,7 +514,7 @@ impl CommandPalette {
         if self.place_caret_at(x, y, layout) {
             return None;
         }
-        if let Some(row) = layout.visible_row_at(y) {
+        if let Some(row) = layout.row_at(x, y) {
             let abs_idx = self.scroll_offset + row;
             if abs_idx < self.entries.len() {
                 self.selected = abs_idx;
@@ -607,7 +526,7 @@ impl CommandPalette {
 
     /// Put the query's caret where a press at `x, y` lands on the query
     /// field. Returns whether it landed on the field.
-    pub fn place_caret_at(&mut self, x: f32, y: f32, layout: &PaletteLayout) -> bool {
+    pub fn place_caret_at(&mut self, x: f32, y: f32, layout: &ListDialogLayout) -> bool {
         let Some(cursor) = layout.input_cursor_at(self.input.text(), self.input.cursor(), x, y)
         else {
             return false;
@@ -1073,7 +992,15 @@ mod tests {
         palette.accessibility_set_input("tab");
         palette.select_next();
         let before = palette.build_info();
-        let layout = PaletteLayout::calculate(800.0, 600.0, 10.0, 20.0, 1.0, before.entries.len());
+        let layout = ListDialogLayout::calculate(
+            PALETTE_DIALOG,
+            800.0,
+            600.0,
+            10.0,
+            20.0,
+            1.0,
+            before.entries.len(),
+        );
         let view = layout.input_viewport(&before.input, before.cursor).unwrap();
         assert!(
             palette

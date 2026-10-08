@@ -72,7 +72,7 @@ impl App {
     pub(super) fn command_palette_accessibility_layout(
         &self,
         info: &crate::ui::command_palette::PaletteInfo,
-    ) -> crate::ui::command_palette::PaletteLayout {
+    ) -> crate::ui::list_dialog::ListDialogLayout {
         let UiMetrics {
             width,
             height,
@@ -80,7 +80,8 @@ impl App {
             cell_height,
             ..
         } = self.ui_metrics();
-        crate::ui::command_palette::PaletteLayout::calculate(
+        crate::ui::list_dialog::ListDialogLayout::calculate(
+            crate::ui::command_palette::PALETTE_DIALOG,
             width,
             height,
             cell_width,
@@ -139,12 +140,7 @@ impl App {
         input.set_label(words.input);
         input.set_placeholder(info.placeholder.clone());
         set_text_value(&mut input, ids.input, &info.input, Some(info.cursor));
-        input.set_bounds(rect(
-            layout.panel_x + layout.padding,
-            layout.panel_y + layout.padding,
-            layout.panel_width - layout.padding * 2.0,
-            layout.input_height,
-        ));
+        input.set_bounds(bounds_rect(layout.input));
         input.set_controls([ids.list]);
         input.add_action(Action::Focus);
         if editable {
@@ -181,12 +177,7 @@ impl App {
             if let Some(shortcut) = &entry.shortcut {
                 node.set_keyboard_shortcut(shortcut.clone());
             }
-            node.set_bounds(rect(
-                layout.panel_x + layout.padding * 0.5,
-                layout.list_y + row as f32 * layout.row_height,
-                layout.panel_width - layout.padding,
-                layout.row_height,
-            ));
+            node.set_bounds(bounds_rect(layout.row(row)));
             if actionable {
                 node.set_selected(row == info.selected);
                 node.add_action(Action::Click);
@@ -204,12 +195,7 @@ impl App {
         });
         list.set_label(words.list);
         list.set_orientation(accesskit::Orientation::Vertical);
-        list.set_bounds(rect(
-            layout.panel_x + layout.padding * 0.5,
-            layout.list_y,
-            layout.panel_width - layout.padding,
-            layout.list_height,
-        ));
+        list.set_bounds(bounds_rect(layout.list));
         if let Some(selected) = selected_action {
             list.set_active_descendant(selected);
         }
@@ -230,12 +216,7 @@ impl App {
             dialog.set_description(description);
         }
         dialog.set_modal();
-        dialog.set_bounds(rect(
-            layout.panel_x,
-            layout.panel_y,
-            layout.panel_width,
-            layout.panel_height,
-        ));
+        dialog.set_bounds(bounds_rect(layout.panel));
         dialog.set_children(dialog_children);
         nodes.push((ids.dialog, dialog));
 

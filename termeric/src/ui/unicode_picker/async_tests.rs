@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui::command_palette::PALETTE_DIALOG;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
@@ -46,7 +47,15 @@ fn cursor_and_noop_edits_preserve_pending_generation_but_delete_replaces_query()
     picker.edit_query(TextInputEdit::WordRight);
     picker.edit_query(TextInputEdit::DeleteWord);
     let info = picker.build_info();
-    let layout = PaletteLayout::calculate(800.0, 600.0, 10.0, 20.0, 1.0, info.entries.len());
+    let layout = ListDialogLayout::calculate(
+        PALETTE_DIALOG,
+        800.0,
+        600.0,
+        10.0,
+        20.0,
+        1.0,
+        info.entries.len(),
+    );
     let view = layout.input_viewport(&info.input, info.cursor).unwrap();
     assert!(
         picker

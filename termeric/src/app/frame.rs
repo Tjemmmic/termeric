@@ -141,7 +141,8 @@ impl App {
     /// The palette-style modals share the palette's renderer and geometry;
     /// only the one that owns input is drawn.
     fn palette_frame_info(&mut self, metrics: &UiMetrics) -> Option<PaletteInfo> {
-        let rows = crate::ui::command_palette::PaletteLayout::calculate(
+        let rows = crate::ui::list_dialog::ListDialogLayout::calculate(
+            crate::ui::command_palette::PALETTE_DIALOG,
             metrics.width,
             metrics.height,
             metrics.cell_width,
@@ -165,7 +166,8 @@ impl App {
         if !self.shortcuts_panel.is_visible() {
             return None;
         }
-        let layout = crate::ui::shortcuts_panel::ShortcutsPanelLayout::calculate(
+        let layout = crate::ui::list_dialog::ListDialogLayout::calculate(
+            crate::ui::shortcuts_panel::SHORTCUTS_DIALOG,
             metrics.width,
             metrics.height,
             metrics.cell_width,
