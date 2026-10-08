@@ -22,3 +22,24 @@ pub mod structured;
 // Re-export core types for convenience
 pub use hooks::{Hook, PluginAction, PluginContext};
 pub use manager::PluginManager;
+
+/// The longest ID a plugin registers under.
+pub const MAX_PLUGIN_ID_BYTES: usize = 64;
+
+/// Checks an ID that names a registered plugin, as a launch does: a catalog
+/// agent (`[agents.<id>]`) or a third-party plugin. Third-party plugins take
+/// a stricter form of their own (`runtime::validate_third_party_identifier`),
+/// so this is the catalog agents' rule.
+pub fn validate_plugin_id(label: &str, value: &str) -> anyhow::Result<()> {
+    if value.is_empty()
+        || value.len() > MAX_PLUGIN_ID_BYTES
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        anyhow::bail!(
+            "{label} {value:?} must be 1-{MAX_PLUGIN_ID_BYTES} ASCII letters, digits, '-' or '_'"
+        );
+    }
+    Ok(())
+}

@@ -211,14 +211,7 @@ fn push_unique(list: &mut Vec<String>, value: Option<String>) {
 /// Reject agent configuration that could not launch or be recognized.
 pub fn validate(agents: &BTreeMap<String, AgentConfig>) -> anyhow::Result<()> {
     for (id, entry) in agents {
-        if id.is_empty()
-            || id.len() > 64
-            || !id
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        {
-            anyhow::bail!("agents: {id:?} must be 1-64 letters, digits, '-' or '_'");
-        }
+        crate::plugin::validate_plugin_id("agent id", id)?;
         if entry.program.as_deref().is_some_and(str::is_empty) {
             anyhow::bail!("agents.{id}.program must not be empty");
         }

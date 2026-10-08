@@ -323,6 +323,30 @@ fn reusable_terminal_profiles_are_distinct_from_plugin_profiles() {
 }
 
 #[test]
+fn profile_agents_follow_the_registered_plugin_id_rule() {
+    // A configured agent's ID may hold capitals and underscores, which a
+    // third-party plugin's may not; either can be launched.
+    let plan = run(&["--profile", "My_Agent:fast"]);
+    assert_eq!(
+        plan.windows[0].tabs[0].target,
+        LaunchTarget::Plugin {
+            plugin_id: "My_Agent".into(),
+            profile: "fast".into()
+        }
+    );
+    let too_long = format!(
+        "{}:fast",
+        "a".repeat(crate::plugin::MAX_PLUGIN_ID_BYTES + 1)
+    );
+    for value in ["agent.v2:fast", ":fast", too_long.as_str()] {
+        assert!(
+            parse(["--profile", value].into_iter().map(OsString::from)).is_err(),
+            "{value:?}"
+        );
+    }
+}
+
+#[test]
 fn unicode_cwd_tabs_splits_windows_identity_and_geometry_are_grouped() {
     let plan = run(&[
         "--working-directory",

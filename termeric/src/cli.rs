@@ -395,7 +395,7 @@ fn parse_collected(
                 let (plugin_id, profile) = value.split_once(':').ok_or_else(|| {
                     anyhow::anyhow!("--profile expects AGENT:PROFILE (for example codex:review)")
                 })?;
-                validate_id("plugin", plugin_id)?;
+                crate::plugin::validate_plugin_id("--profile agent", plugin_id)?;
                 validate_single_line("profile", profile)?;
                 let window = current_window(&mut plan);
                 reject_workspace_mix(window, "--profile")?;

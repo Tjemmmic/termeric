@@ -26,6 +26,7 @@ pub const MANIFEST_NAME: &str = "termeric-plugin.toml";
 const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 const MAX_REGISTRY_BYTES: usize = 512 * 1024;
 const MAX_SOURCE_PATH_BYTES: usize = 16 * 1024;
+const MAX_THIRD_PARTY_ID_BYTES: usize = super::MAX_PLUGIN_ID_BYTES;
 const MAX_PROFILES: usize = 32;
 const MAX_HANDLER_COMMANDS: usize = 32;
 const MAX_SETTINGS: usize = 32;
@@ -253,7 +254,7 @@ impl PluginManifest {
                 self.api_version
             );
         }
-        validate_identifier("plugin id", &self.id)?;
+        validate_third_party_identifier("plugin id", &self.id)?;
         if is_reserved_plugin_id(&self.id) {
             bail!(
                 "plugin id {:?} is reserved for a built-in integration",
@@ -280,7 +281,7 @@ impl PluginManifest {
         }
         let mut ids = BTreeSet::new();
         for profile in &self.profiles {
-            validate_identifier("profile id", &profile.id)?;
+            validate_third_party_identifier("profile id", &profile.id)?;
             if !ids.insert(profile.id.as_str()) {
                 bail!("duplicate profile id {:?}", profile.id);
             }
@@ -294,7 +295,7 @@ impl PluginManifest {
         }
         let mut command_ids = BTreeSet::new();
         for command in &self.commands {
-            validate_identifier("handler command id", &command.id)?;
+            validate_third_party_identifier("handler command id", &command.id)?;
             if !command_ids.insert(command.id.as_str()) {
                 bail!("duplicate handler command id {:?}", command.id);
             }
@@ -319,7 +320,7 @@ impl PluginManifest {
     fn validate_settings(&self) -> Result<()> {
         let mut setting_ids = BTreeSet::new();
         for setting in &self.settings {
-            validate_identifier("setting id", setting.id())?;
+            validate_third_party_identifier("setting id", setting.id())?;
             if !setting_ids.insert(setting.id()) {
                 bail!("duplicate setting id {:?}", setting.id());
             }
@@ -492,7 +493,7 @@ impl PluginRegistry {
         }
         let mut ids = BTreeSet::new();
         for plugin in &self.plugins {
-            validate_identifier("installed plugin id", &plugin.id)?;
+            validate_third_party_identifier("installed plugin id", &plugin.id)?;
             if is_reserved_plugin_id(&plugin.id) {
                 bail!("installed plugin id {:?} is reserved", plugin.id);
             }
@@ -520,7 +521,7 @@ impl PluginRegistry {
                 );
             }
             if let Some(profile) = plugin.default_profile.as_deref() {
-                validate_identifier("default profile id", profile)?;
+                validate_third_party_identifier("default profile id", profile)?;
             }
             validate_stored_settings_shape(&plugin.settings)?;
         }
@@ -634,7 +635,7 @@ pub(crate) fn preview_update_at(
     registry_path: &Path,
     root: &Path,
 ) -> Result<PluginUpdatePreview> {
-    validate_identifier("plugin id", id)?;
+    validate_third_party_identifier("plugin id", id)?;
     let registry = PluginRegistry::load_from(registry_path)?;
     let installed = registry
         .plugins
@@ -710,7 +711,7 @@ pub(crate) fn preview_grants_at(
     registry_path: &Path,
     root: &Path,
 ) -> Result<PluginGrantsPreview> {
-    validate_identifier("plugin id", id)?;
+    validate_third_party_identifier("plugin id", id)?;
     let registry = PluginRegistry::load_from(registry_path)?;
     let installed = registry
         .plugins
@@ -1315,7 +1316,7 @@ pub(crate) fn execute_admin_at(
             )
         }
         PluginAdminCommand::Update { id } => {
-            validate_identifier("plugin id", &id)?;
+            validate_third_party_identifier("plugin id", &id)?;
             let installed = registry
                 .plugins
                 .iter()
@@ -1362,7 +1363,7 @@ pub(crate) fn execute_admin_at(
             grants,
             enable,
         } => {
-            validate_identifier("plugin id", &id)?;
+            validate_third_party_identifier("plugin id", &id)?;
             let installed = registry
                 .plugins
                 .iter()
@@ -1446,7 +1447,7 @@ pub(crate) fn execute_admin_at(
             Some(enable),
         ),
         PluginAdminCommand::Configure { id, change } => {
-            validate_identifier("plugin id", &id)?;
+            validate_third_party_identifier("plugin id", &id)?;
             let installed = registry
                 .plugins
                 .iter_mut()
@@ -1455,7 +1456,7 @@ pub(crate) fn execute_admin_at(
             let manifest = load_installed(installed, root)?;
             let message = match change {
                 PluginConfigurationChange::DefaultProfile(default_profile) => {
-                    validate_identifier("profile id", &default_profile)?;
+                    validate_third_party_identifier("profile id", &default_profile)?;
                     if !manifest
                         .profiles
                         .iter()
@@ -1471,7 +1472,7 @@ pub(crate) fn execute_admin_at(
                     format!("configured {id}: default-profile=manifest-order")
                 }
                 PluginConfigurationChange::Set { key, value } => {
-                    validate_identifier("setting id", &key)?;
+                    validate_third_party_identifier("setting id", &key)?;
                     let setting = manifest
                         .settings
                         .iter()
@@ -1483,7 +1484,7 @@ pub(crate) fn execute_admin_at(
                     format!("configured {id}: setting {key} updated")
                 }
                 PluginConfigurationChange::Unset { key } => {
-                    validate_identifier("setting id", &key)?;
+                    validate_third_party_identifier("setting id", &key)?;
                     if !manifest.settings.iter().any(|setting| setting.id() == key) {
                         bail!("plugin {id:?} has no setting {key:?}");
                     }
@@ -1499,7 +1500,7 @@ pub(crate) fn execute_admin_at(
             Ok(message)
         }
         PluginAdminCommand::Remove { id } => {
-            validate_identifier("plugin id", &id)?;
+            validate_third_party_identifier("plugin id", &id)?;
             let directory = root.join(&id);
             let directory_exists = match fs::symlink_metadata(&directory) {
                 Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
@@ -1547,7 +1548,7 @@ pub(crate) fn execute_admin_at(
         }
         PluginAdminCommand::List { json } => render_registry(&registry, root, None, json),
         PluginAdminCommand::Show { id, json } => {
-            validate_identifier("plugin id", &id)?;
+            validate_third_party_identifier("plugin id", &id)?;
             render_registry(&registry, root, Some(&id), json)
         }
     }
@@ -1758,7 +1759,7 @@ fn require_real_directory(path: &Path, label: &str) -> Result<()> {
 }
 
 fn disable(registry: &mut PluginRegistry, registry_path: &Path, id: &str) -> Result<String> {
-    validate_identifier("plugin id", id)?;
+    validate_third_party_identifier("plugin id", id)?;
     let installed = registry
         .plugins
         .iter_mut()
@@ -1791,7 +1792,7 @@ fn set_grants(
     grants: impl FnOnce(&PluginPermissions) -> PluginPermissions,
     enable: Option<bool>,
 ) -> Result<String> {
-    validate_identifier("plugin id", id)?;
+    validate_third_party_identifier("plugin id", id)?;
     let installed = registry
         .plugins
         .iter_mut()
@@ -2070,16 +2071,20 @@ fn is_reserved_plugin_id(id: &str) -> bool {
     crate::agents::builtin_agent_names().any(|(builtin, _)| builtin == id)
 }
 
-fn validate_identifier(label: &str, value: &str) -> Result<()> {
+/// Checks an ID a third-party plugin declares or is named by: its own, its
+/// profiles', handler commands', and settings'. They are lowercase slugs that
+/// start with a letter, which keeps a plugin's ID within the wider set any
+/// registered plugin may have (`super::validate_plugin_id`).
+fn validate_third_party_identifier(label: &str, value: &str) -> Result<()> {
     if value.is_empty()
-        || value.len() > 64
+        || value.len() > MAX_THIRD_PARTY_ID_BYTES
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
         || !value.as_bytes()[0].is_ascii_lowercase()
     {
         bail!(
-            "{label} must be 1-64 lowercase ASCII letters, digits, or hyphens and start with a letter"
+            "{label} must be 1-{MAX_THIRD_PARTY_ID_BYTES} lowercase ASCII letters, digits, or hyphens and start with a letter"
         );
     }
     Ok(())
@@ -2131,7 +2136,7 @@ fn validate_stored_settings_shape(settings: &BTreeMap<String, PluginSettingValue
         bail!("installed plugins cannot store more than {MAX_SETTINGS} setting overrides");
     }
     for (id, value) in settings {
-        validate_identifier("stored setting id", id)?;
+        validate_third_party_identifier("stored setting id", id)?;
         if let PluginSettingValue::Text(text) = value {
             validate_setting_text(&format!("stored setting {id:?}"), text)?;
         }
