@@ -1,8 +1,8 @@
 //! Process-level ownership for independent native windows.
 
 use super::{
-    App, AppEvent, PendingPluginWindowClose, Requester, WindowKey, clear_agent_view_wake_pending,
-    clear_pty_wake_pending, clear_transcript_wake_pending, redraw_scheduler::RedrawReason,
+    AGENT_VIEW_WAKE_PENDING, App, AppEvent, PTY_WAKE_PENDING, PendingPluginWindowClose, Requester,
+    TRANSCRIPT_WAKE_PENDING, WindowKey, clear_wake_pending, redraw_scheduler::RedrawReason,
 };
 use crate::cli::{LaunchPlan, WindowLaunch};
 use crate::config::Config;
@@ -907,7 +907,7 @@ impl ApplicationHandler<AppEvent> for Application {
                 return;
             }
             AppEvent::AgentView => {
-                clear_agent_view_wake_pending();
+                clear_wake_pending(&AGENT_VIEW_WAKE_PENDING);
                 for window in self.windows.values_mut() {
                     window.process_agent_view_events();
                 }
@@ -915,11 +915,11 @@ impl ApplicationHandler<AppEvent> for Application {
                 return;
             }
             AppEvent::Pty => {
-                clear_pty_wake_pending();
+                clear_wake_pending(&PTY_WAKE_PENDING);
                 true
             }
             AppEvent::Transcript => {
-                clear_transcript_wake_pending();
+                clear_wake_pending(&TRANSCRIPT_WAKE_PENDING);
                 true
             }
             AppEvent::Git => false,

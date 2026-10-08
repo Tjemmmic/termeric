@@ -744,19 +744,11 @@ pub(crate) fn install_event_loop_proxy(proxy: EventLoopProxy<AppEvent>) {
     }
 }
 
+/// Wakes the event loop when a PTY has output, or `None` before the loop
+/// exists.
 pub(crate) fn pty_event_waker() -> Option<Arc<dyn Fn() + Send + Sync>> {
     EVENT_LOOP_PROXY.get()?;
-    Some(Arc::new(|| {
-        if PTY_WAKE_PENDING.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        let sent = EVENT_LOOP_PROXY
-            .get()
-            .is_some_and(|proxy| proxy.send_event(AppEvent::Pty).is_ok());
-        if !sent {
-            PTY_WAKE_PENDING.store(false, Ordering::Release);
-        }
-    }))
+    Some(coalescing_waker(&PTY_WAKE_PENDING, || AppEvent::Pty))
 }
 
 pub(crate) fn git_event_waker() -> Option<Arc<dyn Fn() + Send + Sync>> {
@@ -766,35 +758,45 @@ pub(crate) fn git_event_waker() -> Option<Arc<dyn Fn() + Send + Sync>> {
     }))
 }
 
+/// Wakes the event loop when a transcript or export has work done, or
+/// `None` before the loop exists.
 pub(crate) fn transcript_event_waker() -> Option<Arc<dyn Fn() + Send + Sync>> {
     EVENT_LOOP_PROXY.get()?;
-    Some(Arc::new(|| {
-        if TRANSCRIPT_WAKE_PENDING.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        let sent = EVENT_LOOP_PROXY
-            .get()
-            .is_some_and(|proxy| proxy.send_event(AppEvent::Transcript).is_ok());
-        if !sent {
-            TRANSCRIPT_WAKE_PENDING.store(false, Ordering::Release);
-        }
+    Some(coalescing_waker(&TRANSCRIPT_WAKE_PENDING, || {
+        AppEvent::Transcript
     }))
 }
 
-/// Wakes the event loop when an agent view's agent writes output. Wakes
-/// coalesce until the loop drains every window's sessions.
+/// Wakes the event loop when an agent view's agent writes output.
 pub(crate) fn agent_view_event_waker() -> Arc<dyn Fn() + Send + Sync> {
-    Arc::new(|| {
-        if AGENT_VIEW_WAKE_PENDING.swap(true, Ordering::AcqRel) {
+    coalescing_waker(&AGENT_VIEW_WAKE_PENDING, || AppEvent::AgentView)
+}
+
+/// A waker that sends `event` to the event loop. Wakes coalesce: once one
+/// is sent, the next sends nothing until the loop has drained every window
+/// and called `clear_wake_pending(pending)`. A wake that could not be sent
+/// leaves nothing pending, so a later one tries again.
+fn coalescing_waker(
+    pending: &'static AtomicBool,
+    event: fn() -> AppEvent,
+) -> Arc<dyn Fn() + Send + Sync> {
+    Arc::new(move || {
+        if pending.swap(true, Ordering::AcqRel) {
             return;
         }
         let sent = EVENT_LOOP_PROXY
             .get()
-            .is_some_and(|proxy| proxy.send_event(AppEvent::AgentView).is_ok());
+            .is_some_and(|proxy| proxy.send_event(event()).is_ok());
         if !sent {
-            AGENT_VIEW_WAKE_PENDING.store(false, Ordering::Release);
+            pending.store(false, Ordering::Release);
         }
     })
+}
+
+/// The event loop is handling the wake `pending` coalesces; the next one
+/// sends again.
+fn clear_wake_pending(pending: &AtomicBool) {
+    pending.store(false, Ordering::Release);
 }
 
 #[derive(Debug, Clone)]
@@ -1068,18 +1070,6 @@ struct ActiveFileUpload {
     cancellation: Arc<AtomicBool>,
     cancel_requested: bool,
     progress_toast_id: u64,
-}
-
-fn clear_pty_wake_pending() {
-    PTY_WAKE_PENDING.store(false, Ordering::Release);
-}
-
-fn clear_transcript_wake_pending() {
-    TRANSCRIPT_WAKE_PENDING.store(false, Ordering::Release);
-}
-
-fn clear_agent_view_wake_pending() {
-    AGENT_VIEW_WAKE_PENDING.store(false, Ordering::Release);
 }
 
 /// Main application state
