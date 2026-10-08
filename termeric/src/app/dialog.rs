@@ -246,8 +246,9 @@ impl App {
                 }
                 let claimed = self.handle_kitty_download_choice(request_id, &id)
                     || self.handle_kitty_upload_choice(request_id, &id)
-                    || self.handle_font_feature_manager_choice(request_id, &id)
-                    || self.handle_font_range_manager_choice(request_id, &id)
+                    || self.handle_font_feature_choice(request_id, &id)
+                    || self.handle_font_range_choice(request_id, &id)
+                    || self.handle_font_coverage_choice(request_id, &id)
                     || self.handle_runtime_plugin_manager_choice(request_id, &id)
                     || self.handle_agent_hook_choice(request_id, &id)
                     || self.handle_revert_choice(request_id, &id)

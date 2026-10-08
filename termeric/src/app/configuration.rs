@@ -732,12 +732,20 @@ impl App {
                     return;
                 }
             }
-            SettingsAction::ManageFontRangeOverrides => {
-                self.open_font_range_manager();
+            SettingsAction::OpenSubPage(sub_page) => {
+                self.settings_panel.open_sub_page(sub_page);
                 return;
             }
-            SettingsAction::ManageFontFeatures => {
-                self.open_font_feature_manager();
+            SettingsAction::FontRange(action) => {
+                self.apply_font_range_action(action);
+                return;
+            }
+            SettingsAction::FontFeature(action) => {
+                self.apply_font_feature_action(action);
+                return;
+            }
+            SettingsAction::CheckFontCoverage => {
+                self.ask_font_coverage(String::new(), None);
                 return;
             }
             SettingsAction::SetFontLigatures(enabled) => config.font.ligatures = enabled,

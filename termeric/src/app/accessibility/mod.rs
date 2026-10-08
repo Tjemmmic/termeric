@@ -57,6 +57,7 @@ const SETTINGS_DROPDOWN: NodeId = NodeId(34);
 const SETTINGS_CLOSE: NodeId = NodeId(35);
 const SETTINGS_SAVE: NodeId = NodeId(36);
 const SETTINGS_PAGES: NodeId = NodeId(37);
+const SETTINGS_BACK: NodeId = NodeId(38);
 const COMMANDS_DIALOG: NodeId = NodeId(40);
 const COMMANDS_NEW: NodeId = NodeId(41);
 const COMMANDS_CLOSE: NodeId = NodeId(42);
@@ -157,11 +158,11 @@ enum SettingsSemanticTarget {
     Header(crate::ui::settings::SettingsSection),
     Setting {
         section: crate::ui::settings::SettingsSection,
-        label: &'static str,
+        label: String,
     },
     Option {
         section: crate::ui::settings::SettingsSection,
-        label: &'static str,
+        label: String,
         value: String,
     },
 }
@@ -392,6 +393,7 @@ impl AccessibilityState {
                 | SETTINGS_DROPDOWN
                 | SETTINGS_CLOSE
                 | SETTINGS_SAVE
+                | SETTINGS_BACK
                 | SETTINGS_PAGES
         ) || self.settings.contains(node)
     }

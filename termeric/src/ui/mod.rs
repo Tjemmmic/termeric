@@ -36,6 +36,7 @@ pub mod text_input;
 pub mod text_input_viewport;
 pub mod text_layout;
 pub mod toast;
+pub mod unicode_blocks;
 pub mod unicode_picker;
 pub mod workspace_menu;
 pub mod workspace_panel;

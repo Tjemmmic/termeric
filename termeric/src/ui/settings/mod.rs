@@ -7,6 +7,49 @@ use crate::input::keybindings::ShortcutRegistry;
 use crate::ui::geometry::Bounds;
 use crate::ui::text_input::{TextInput, TextInputEdit, TextLimit};
 use crate::ui::text_input_viewport::TextInputViewport;
+use std::borrow::Cow;
+
+mod font_rules;
+
+use crate::config::FontRangeOverride;
+use crate::ui::dialog::ButtonRole;
+pub use font_rules::{
+    FontFeatureAction, FontRangeAction, format_codepoint, range_label, range_text,
+};
+
+/// A page within a page, shown in its place with a way back: one font
+/// range or OpenType feature, named by what it shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SettingsSubPage {
+    FontRange(FontRangeOverride),
+    /// A feature by its tag.
+    FontFeature(String),
+}
+
+impl SettingsSubPage {
+    /// The sidebar page it belongs to.
+    pub fn page(&self) -> SettingsPage {
+        match self {
+            Self::FontRange(_) | Self::FontFeature(_) => SettingsPage::Font,
+        }
+    }
+
+    /// Its heading.
+    pub fn title(&self) -> String {
+        match self {
+            Self::FontRange(rule) => range_label(rule),
+            Self::FontFeature(tag) => tag.clone(),
+        }
+    }
+
+    /// Whether what it shows still exists: a reload can take it away.
+    fn exists(&self, config: &Config) -> bool {
+        match self {
+            Self::FontRange(rule) => config.font.range_overrides.contains(rule),
+            Self::FontFeature(tag) => config.font.features.contains_key(tag),
+        }
+    }
+}
 
 const MAX_FILTER_CHARACTERS: usize = 256;
 
@@ -54,6 +97,8 @@ pub struct SettingsModalLayout {
     pub content_width: f32,
     /// Top of the page heading above the rows.
     pub content_title_y: f32,
+    /// The way back from a sub-page, left of its heading.
+    pub back_button: Bounds,
     pub row_height: f32,
     pub scrollbar_width: f32,
     pub list_y: f32,
@@ -157,6 +202,13 @@ impl SettingsModalLayout {
         let rows_that_fit = (list_space / row_height).floor().max(1.0) as usize;
         let save_height = cell_height * 1.6;
         let save_width = cell_width * 9.0;
+        // Centred on the heading's line, the height of the close button.
+        let back_button = Bounds::new(
+            content_x.round(),
+            (content_title_y + (Self::HEADING_LINES * cell_height - control) / 2.0).round(),
+            control.round(),
+            control.round(),
+        );
 
         Self {
             input,
@@ -169,6 +221,7 @@ impl SettingsModalLayout {
             content_x,
             content_width,
             content_title_y,
+            back_button,
             row_height,
             scrollbar_width: 3.0,
             list_y,
@@ -187,8 +240,34 @@ impl SettingsModalLayout {
         }
     }
 
+    /// The heading above the rows is this many cells tall.
+    pub const HEADING_LINES: f32 = 2.0;
+
     pub fn contains(&self, x: f32, y: f32) -> bool {
         self.panel.contains(x, y)
+    }
+
+    /// Where the heading above the rows starts: after the back button on a
+    /// sub-page.
+    pub fn heading_x(&self, back: bool) -> f32 {
+        if back {
+            self.back_button.right() + self.cell_width * 0.5
+        } else {
+            self.content_x
+        }
+    }
+
+    /// The push button of a button row, at the start of the row and
+    /// centred in it, as tall as Save.
+    pub fn row_button(&self, row: usize) -> Bounds {
+        let row = self.row_rect(row);
+        let height = (self.cell_height * 1.6).round();
+        Bounds::new(
+            self.content_x.round(),
+            row.y + ((row.height - height) / 2.0).round(),
+            (self.cell_width * 16.0).round(),
+            height,
+        )
     }
 
     /// Sidebar row for the `index`th page.
@@ -439,6 +518,12 @@ impl SettingsPage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SettingsSection {
     Font,
+    FontRanges,
+    FontFeatures,
+    /// A font range's sub-page.
+    FontRange,
+    /// An OpenType feature's sub-page.
+    FontFeature,
     Theme,
     Window,
     Cursor,
@@ -459,6 +544,10 @@ impl SettingsSection {
     pub fn label(&self) -> &'static str {
         match self {
             Self::Font => "Font",
+            Self::FontRanges => "Font Ranges",
+            Self::FontFeatures => "OpenType Features",
+            Self::FontRange => "Font Range",
+            Self::FontFeature => "OpenType Feature",
             Self::Theme => "Theme",
             Self::Window => "Window",
             Self::Cursor => "Cursor",
@@ -480,7 +569,11 @@ impl SettingsSection {
     pub fn page(self) -> SettingsPage {
         match self {
             Self::Theme | Self::Window => SettingsPage::Appearance,
-            Self::Font => SettingsPage::Font,
+            Self::Font
+            | Self::FontRanges
+            | Self::FontFeatures
+            | Self::FontRange
+            | Self::FontFeature => SettingsPage::Font,
             Self::Cursor | Self::Scrollback | Self::Selection | Self::Bell | Self::Shell => {
                 SettingsPage::Terminal
             }
@@ -497,7 +590,7 @@ impl SettingsSection {
 /// A single setting item for display
 #[derive(Debug, Clone)]
 pub struct SettingItem {
-    pub label: &'static str,
+    pub label: Cow<'static, str>,
     pub value: String,
     pub kind: SettingKind,
 }
@@ -528,8 +621,15 @@ pub enum SettingKind {
         set: fn(f64) -> SettingsAction,
     },
     /// A row that invokes a bounded application action instead of changing a
-    /// persisted configuration value.
+    /// persisted configuration value, such as opening a sub-page or a
+    /// prompt. It shows its value dimmed and a trailing chevron.
     Action { action: SettingsAction },
+    /// A push button at the start of the row, such as Delete: only the
+    /// button answers the pointer.
+    Button {
+        action: SettingsAction,
+        role: ButtonRole,
+    },
     /// Read-only display value
     ReadOnly,
 }
@@ -542,6 +642,14 @@ impl SettingKind {
             Self::SteppedList { values, .. } => Some(values.iter().map(f64::to_string).collect()),
             _ => None,
         }
+    }
+
+    /// Whether activating this row opens `sub_page`.
+    fn opens(&self, sub_page: &SettingsSubPage) -> bool {
+        matches!(
+            self,
+            Self::Action { action: SettingsAction::OpenSubPage(opened) } if opened == sub_page
+        )
     }
 }
 
@@ -635,7 +743,7 @@ fn on_off_options() -> Vec<String> {
 /// An On/Off setting.
 fn toggle(label: &'static str, on: bool, set: fn(bool) -> SettingsAction) -> SettingItem {
     SettingItem {
-        label,
+        label: label.into(),
         value: on_off(on).into(),
         kind: SettingKind::Dropdown {
             options: on_off_options(),
@@ -654,7 +762,7 @@ fn choice<T: Copy + PartialEq>(
     set: fn(T) -> SettingsAction,
 ) -> SettingItem {
     SettingItem {
-        label,
+        label: label.into(),
         value: value_label(current).into(),
         kind: SettingKind::Dropdown {
             options: values
@@ -673,8 +781,9 @@ fn choice<T: Copy + PartialEq>(
 /// A flat entry for the settings modal list (item or category header)
 #[derive(Debug, Clone)]
 pub struct SettingEntry {
-    /// Label text (setting name or category header)
-    pub label: &'static str,
+    /// Label text (setting name or category header). With the section, it
+    /// names the row for accessibility, so it is unique within its section.
+    pub label: Cow<'static, str>,
     /// Current value as a display string (empty for headers)
     pub value: String,
     /// Setting kind for interaction (ReadOnly for headers)
@@ -703,10 +812,14 @@ pub enum SettingsAction {
         index: usize,
         family: Option<String>,
     },
-    /// Open the bounded Unicode-range font override manager.
-    ManageFontRangeOverrides,
-    /// Open the bounded explicit OpenType feature manager.
-    ManageFontFeatures,
+    /// Show a font range's or OpenType feature's own page.
+    OpenSubPage(SettingsSubPage),
+    /// Add, change, or delete a font range.
+    FontRange(FontRangeAction),
+    /// Add, change, or delete an OpenType feature value.
+    FontFeature(FontFeatureAction),
+    /// Ask which font draws some text.
+    CheckFontCoverage,
     /// Change font line height
     SetLineHeight(f32),
     /// Enable or disable programming ligatures.
@@ -798,6 +911,8 @@ pub enum SettingsAction {
 pub enum SettingsControl {
     Close,
     Save,
+    /// The way back from a sub-page.
+    Back,
     Page(SettingsPage),
 }
 
@@ -807,6 +922,14 @@ pub struct SettingsPanel {
     animation: super::animation::PanelAnimation,
     /// Sidebar page shown while the filter is empty. Kept across reopenings.
     page: SettingsPage,
+    /// The page's sub-page shown instead of it, such as one font range.
+    sub_page: Option<SettingsSubPage>,
+    /// The selection on the page when the sub-page opened, kept for the way
+    /// back when the row that opened it is gone.
+    page_selection: usize,
+    /// A row to select once the rows are next built: the one that opens
+    /// this sub-page, after leaving it or adding its subject.
+    pending_opener: Option<SettingsSubPage>,
     /// Header, footer, or sidebar control under the pointer.
     hovered_control: Option<SettingsControl>,
     /// Search filter text
@@ -827,6 +950,9 @@ pub struct SettingsPanel {
     dropdown_highlight: usize,
     /// Available monospace fonts (discovered from system)
     available_fonts: Vec<String>,
+    /// Every installed family, symbol and emoji fonts included: what a font
+    /// range may use.
+    installed_families: Vec<String>,
     /// Every selectable theme, supplied by the application because custom
     /// themes are files in the themes directory and rows are rebuilt every
     /// frame Settings is open.
@@ -866,6 +992,9 @@ impl SettingsPanel {
         Self {
             animation: super::animation::PanelAnimation::new(),
             page: SettingsPage::Appearance,
+            sub_page: None,
+            page_selection: 0,
+            pending_opener: None,
             hovered_control: None,
             filter: TextInput::new(TextLimit::Chars(MAX_FILTER_CHARACTERS)),
             selected: 0,
@@ -875,6 +1004,7 @@ impl SettingsPanel {
             dropdown_open: false,
             dropdown_highlight: 0,
             available_fonts: vec![DEFAULT_FONT.to_string()],
+            installed_families: Vec::new(),
             theme_names: Theme::list_available()
                 .iter()
                 .map(|name| (*name).to_string())
@@ -897,6 +1027,11 @@ impl SettingsPanel {
         } else {
             fonts
         };
+    }
+
+    /// Set the families a font range's Font dropdown offers.
+    pub fn set_installed_families(&mut self, families: Vec<String>) {
+        self.installed_families = families;
     }
 
     /// Set the themes the Theme dropdown offers.
@@ -929,8 +1064,10 @@ impl SettingsPanel {
     /// Toggle the panel open/closed
     pub fn toggle(&mut self) {
         if !self.animation.is_open() {
-            // Reset state when opening
+            // Reset state when opening: the page stays, its sub-page doesn't.
             self.filter.clear();
+            self.sub_page = None;
+            self.pending_opener = None;
             self.selected = 0;
             self.scroll_offset = 0;
             self.selection_visibility_pending = true;
@@ -946,6 +1083,14 @@ impl SettingsPanel {
     /// Show `page`, leaving any search. Selection starts at its first row.
     pub fn select_page(&mut self, page: SettingsPage) {
         self.page = page;
+        self.sub_page = None;
+        self.pending_opener = None;
+        self.show_fresh_rows();
+    }
+
+    /// Forget the search, selection, scroll, and open dropdown, for rows
+    /// that replace the ones shown.
+    fn show_fresh_rows(&mut self) {
         self.filter.clear();
         self.selected = 0;
         self.scroll_offset = 0;
@@ -954,10 +1099,61 @@ impl SettingsPanel {
         self.selection_visibility_pending = true;
     }
 
+    /// Show `sub_page` in place of its page, leaving any search.
+    pub fn open_sub_page(&mut self, sub_page: SettingsSubPage) {
+        if self.sub_page.is_none() && self.filter.text().is_empty() {
+            self.page_selection = self.selected;
+        }
+        self.page = sub_page.page();
+        self.sub_page = Some(sub_page);
+        self.pending_opener = None;
+        self.show_fresh_rows();
+    }
+
+    /// Back from the sub-page to its page, selecting the row that opens it.
+    pub fn leave_sub_page(&mut self) {
+        let Some(sub_page) = self.sub_page.take() else {
+            return;
+        };
+        self.show_fresh_rows();
+        self.selected = self.page_selection;
+        self.pending_opener = Some(sub_page);
+    }
+
+    /// The sub-page's subject changed to `to`, such as a font range whose
+    /// start moved: keep showing it.
+    pub fn retarget_sub_page(&mut self, from: &SettingsSubPage, to: SettingsSubPage) {
+        if self.sub_page.as_ref() == Some(from) {
+            self.sub_page = Some(to);
+        }
+    }
+
+    /// `sub_page`'s subject is gone: leave it if it is shown.
+    pub fn close_sub_page(&mut self, sub_page: &SettingsSubPage) {
+        if self.sub_page.as_ref() == Some(sub_page) {
+            self.leave_sub_page();
+        }
+    }
+
+    /// Select the row that opens `sub_page` once it is listed, such as a
+    /// font range just added.
+    pub fn select_opener(&mut self, sub_page: SettingsSubPage) {
+        self.pending_opener = Some(sub_page);
+        self.selection_visibility_pending = true;
+    }
+
+    /// The sub-page shown, if any.
+    #[cfg(test)]
+    pub fn sub_page(&self) -> Option<&SettingsSubPage> {
+        self.sub_page.as_ref()
+    }
+
     /// Open the panel on `section`'s page with its first item selected.
     /// Does not filter — the rest of the page stays browsable.
     pub fn open_to_section(&mut self, section: SettingsSection) {
         self.page = section.page();
+        self.sub_page = None;
+        self.pending_opener = None;
         self.filter.clear();
         self.scroll_offset = 0;
         self.selection_visibility_pending = true;
@@ -1038,7 +1234,7 @@ impl SettingsPanel {
                 .unwrap_or(0);
             let mut items = vec![
                 SettingItem {
-                    label: "Size",
+                    label: "Size".into(),
                     value: format!("{:.1}", config.font.size),
                     kind: SettingKind::Numeric {
                         value: config.font.size,
@@ -1049,7 +1245,7 @@ impl SettingsPanel {
                     },
                 },
                 SettingItem {
-                    label: "Family",
+                    label: "Family".into(),
                     value: config.font.family.clone(),
                     kind: SettingKind::Dropdown {
                         choose: Choose::Text(SettingsAction::SetFontFamily),
@@ -1058,7 +1254,7 @@ impl SettingsPanel {
                     },
                 },
                 SettingItem {
-                    label: "Normal Weight",
+                    label: "Normal Weight".into(),
                     value: config.font.weight.to_string(),
                     kind: SettingKind::Numeric {
                         value: f32::from(config.font.weight),
@@ -1069,7 +1265,7 @@ impl SettingsPanel {
                     },
                 },
                 SettingItem {
-                    label: "Bold Weight",
+                    label: "Bold Weight".into(),
                     value: config.font.bold_weight.to_string(),
                     kind: SettingKind::Numeric {
                         value: f32::from(config.font.bold_weight),
@@ -1124,7 +1320,7 @@ impl SettingsPanel {
                     })
                     .unwrap_or(0);
                 items.push(SettingItem {
-                    label,
+                    label: label.into(),
                     value: current
                         .cloned()
                         .unwrap_or_else(|| NO_FONT_FALLBACK.to_string()),
@@ -1136,31 +1332,9 @@ impl SettingsPanel {
                 });
             }
 
-            items.push(SettingItem {
-                label: "Range Overrides",
-                value: match config.font.range_overrides.len() {
-                    0 => "Manage · none configured".into(),
-                    count => format!("Manage · {count} configured"),
-                },
-                kind: SettingKind::Action {
-                    action: SettingsAction::ManageFontRangeOverrides,
-                },
-            });
-
-            items.push(SettingItem {
-                label: "OpenType Features",
-                value: match config.font.features.len() {
-                    0 => "Manage · none configured".into(),
-                    count => format!("Manage · {count} configured"),
-                },
-                kind: SettingKind::Action {
-                    action: SettingsAction::ManageFontFeatures,
-                },
-            });
-
             items.extend([
                 SettingItem {
-                    label: "Line Height",
+                    label: "Line Height".into(),
                     value: format!("{:.2}", config.font.line_height),
                     kind: SettingKind::Numeric {
                         value: config.font.line_height,
@@ -1180,8 +1354,16 @@ impl SettingsPanel {
                     config.font.bold_is_bright,
                     SettingsAction::SetBoldIsBright,
                 ),
+                SettingItem {
+                    label: "Check which font draws text…".into(),
+                    value: String::new(),
+                    kind: SettingKind::Action {
+                        action: SettingsAction::CheckFontCoverage,
+                    },
+                },
             ]);
             result.push((SettingsSection::Font, items));
+            result.extend(font_rules::page_sections(config));
         }
 
         // Theme
@@ -1200,7 +1382,7 @@ impl SettingsPanel {
                 })
                 .unwrap_or(0);
             let mut items = vec![SettingItem {
-                label: "Theme",
+                label: "Theme".into(),
                 value: config.theme.name.clone(),
                 kind: SettingKind::Dropdown {
                     options,
@@ -1211,21 +1393,21 @@ impl SettingsPanel {
             if let Some(meta) = &self.theme_meta {
                 if !meta.name.is_empty() {
                     items.push(SettingItem {
-                        label: "Name",
+                        label: "Name".into(),
                         value: meta.name.clone(),
                         kind: SettingKind::ReadOnly,
                     });
                 }
                 if !meta.author.is_empty() {
                     items.push(SettingItem {
-                        label: "Author",
+                        label: "Author".into(),
                         value: meta.author.clone(),
                         kind: SettingKind::ReadOnly,
                     });
                 }
                 if !meta.description.is_empty() {
                     items.push(SettingItem {
-                        label: "Description",
+                        label: "Description".into(),
                         value: meta.description.clone(),
                         kind: SettingKind::ReadOnly,
                     });
@@ -1239,7 +1421,7 @@ impl SettingsPanel {
             SettingsSection::Window,
             vec![
                 SettingItem {
-                    label: "Padding",
+                    label: "Padding".into(),
                     value: format!("{}", config.window.padding),
                     kind: SettingKind::Numeric {
                         value: config.window.padding as f32,
@@ -1250,7 +1432,7 @@ impl SettingsPanel {
                     },
                 },
                 SettingItem {
-                    label: "Opacity",
+                    label: "Opacity".into(),
                     value: format!("{:.2}", config.window.opacity),
                     kind: SettingKind::Numeric {
                         value: config.window.opacity,
@@ -1261,7 +1443,7 @@ impl SettingsPanel {
                     },
                 },
                 SettingItem {
-                    label: "Background Image",
+                    label: "Background Image".into(),
                     value: config.window.background_image.path.as_ref().map_or_else(
                         || "Off (set path in config.toml)".into(),
                         |path| path.display().to_string(),
@@ -1269,7 +1451,7 @@ impl SettingsPanel {
                     kind: SettingKind::ReadOnly,
                 },
                 SettingItem {
-                    label: "Background Image Opacity",
+                    label: "Background Image Opacity".into(),
                     value: format!("{:.2}", config.window.background_image.opacity),
                     kind: SettingKind::Numeric {
                         value: config.window.background_image.opacity,
@@ -1321,7 +1503,7 @@ impl SettingsPanel {
                 ),
                 toggle("Blink", config.cursor.blink, SettingsAction::SetCursorBlink),
                 SettingItem {
-                    label: "Blink Rate",
+                    label: "Blink Rate".into(),
                     value: format!("{}ms", config.cursor.blink_rate),
                     kind: SettingKind::Numeric {
                         value: config.cursor.blink_rate as f32,
@@ -1341,7 +1523,7 @@ impl SettingsPanel {
                 toggle("Visual", config.bell.visual, SettingsAction::SetVisualBell),
                 toggle("Audio", config.bell.audio, SettingsAction::SetAudioBell),
                 SettingItem {
-                    label: "Flash Duration",
+                    label: "Flash Duration".into(),
                     value: format!("{}ms", config.bell.visual_duration_ms),
                     kind: SettingKind::Numeric {
                         value: config.bell.visual_duration_ms as f32,
@@ -1359,7 +1541,7 @@ impl SettingsPanel {
             SettingsSection::Scrollback,
             vec![
                 SettingItem {
-                    label: "Lines",
+                    label: "Lines".into(),
                     value: format!("{}", config.scrollback.lines),
                     kind: stepped_list(
                         &SCROLLBACK_LINE_STEPS,
@@ -1368,7 +1550,7 @@ impl SettingsPanel {
                     ),
                 },
                 SettingItem {
-                    label: "Scroll Speed",
+                    label: "Scroll Speed".into(),
                     value: format!("{}", config.scrollback.scroll_speed),
                     kind: stepped_list(
                         &SCROLL_SPEED_STEPS,
@@ -1377,7 +1559,7 @@ impl SettingsPanel {
                     ),
                 },
                 SettingItem {
-                    label: "Memory Limit",
+                    label: "Memory Limit".into(),
                     value: format!("{} MiB", config.scrollback.max_memory_mib),
                     kind: stepped_list(
                         &SCROLLBACK_MEMORY_MIB_STEPS,
@@ -1425,12 +1607,12 @@ impl SettingsPanel {
                 SettingsSection::Shell,
                 vec![
                     SettingItem {
-                        label: "Program",
+                        label: "Program".into(),
                         value: program,
                         kind: SettingKind::ReadOnly,
                     },
                     SettingItem {
-                        label: "Args",
+                        label: "Args".into(),
                         value: args_str,
                         kind: SettingKind::ReadOnly,
                     },
@@ -1444,7 +1626,7 @@ impl SettingsPanel {
             result.push((
                 SettingsSection::Keyboard,
                 vec![SettingItem {
-                    label: "Keyboard Shortcuts",
+                    label: "Keyboard Shortcuts".into(),
                     value: match customized {
                         0 => "Defaults".to_string(),
                         count => format!("{count} changed"),
@@ -1483,7 +1665,7 @@ impl SettingsPanel {
                 SettingsSection::Harvest,
                 vec![
                     SettingItem {
-                        label: "Status",
+                        label: "Status".into(),
                         value: "Experimental beta".into(),
                         kind: SettingKind::ReadOnly,
                     },
@@ -1498,7 +1680,7 @@ impl SettingsPanel {
                         SettingsAction::SetHarvestIndicators,
                     ),
                     SettingItem {
-                        label: "History Limit",
+                        label: "History Limit".into(),
                         value: config.harvest.max_history.to_string(),
                         kind: SettingKind::Numeric {
                             value: config.harvest.max_history as f32,
@@ -1547,13 +1729,13 @@ impl SettingsPanel {
             items.extend(self.agent_rows.iter().map(|row| {
                 if !row.installed {
                     return SettingItem {
-                        label: row.label,
+                        label: row.label.into(),
                         value: "Not installed".into(),
                         kind: SettingKind::ReadOnly,
                     };
                 }
                 SettingItem {
-                    label: row.label,
+                    label: row.label.into(),
                     value: on_off(row.enabled).into(),
                     kind: SettingKind::Dropdown {
                         options: on_off_options(),
@@ -1563,12 +1745,12 @@ impl SettingsPanel {
                 }
             }));
             items.push(SettingItem {
-                label: "Custom Agents",
+                label: "Custom Agents".into(),
                 value: self.custom_agent_summary.clone(),
                 kind: SettingKind::ReadOnly,
             });
             items.push(SettingItem {
-                label: "Agent Status",
+                label: "Agent Status".into(),
                 value: self.agent_status_summary.clone(),
                 kind: SettingKind::Action {
                     action: SettingsAction::SetUpAgentStatus,
@@ -1587,7 +1769,7 @@ impl SettingsPanel {
                 .position(|id| *id == config.supervisor.agent)
                 .unwrap_or(0);
             items.push(SettingItem {
-                label: "Supervisor",
+                label: "Supervisor".into(),
                 value: supervisor_agents[supervisor_index].into(),
                 kind: SettingKind::Dropdown {
                     choose: Choose::Each(
@@ -1637,17 +1819,17 @@ impl SettingsPanel {
                 SettingsSection::Plugins,
                 vec![
                     SettingItem {
-                        label: "Status",
+                        label: "Status".into(),
                         value: "Experimental beta".into(),
                         kind: SettingKind::ReadOnly,
                     },
                     SettingItem {
-                        label: "Third-party Plugins",
+                        label: "Third-party Plugins".into(),
                         value: self.runtime_plugin_summary.clone(),
                         kind: SettingKind::ReadOnly,
                     },
                     SettingItem {
-                        label: "Manage Third-party Plugins",
+                        label: "Manage Third-party Plugins".into(),
                         value: "Open manager".into(),
                         kind: SettingKind::Action {
                             action: SettingsAction::ManageRuntimePlugins,
@@ -1660,12 +1842,16 @@ impl SettingsPanel {
         result
     }
 
-    /// Rows to show: the current page's settings, or while searching every
-    /// page's matches. Section headings appear when a list spans sections.
+    /// Rows to show: the current page's settings, its sub-page's, or while
+    /// searching every page's matches (sub-pages aren't searched). Section
+    /// headings appear when a list spans sections.
     pub fn build_entries(&self, config: &Config, registry: &ShortcutRegistry) -> Vec<SettingEntry> {
-        let all = self.all_items(config, registry);
         let filter_lower = self.filter.text().to_lowercase();
         let has_filter = !filter_lower.is_empty();
+        let all = match self.shown_sub_page(config).filter(|_| !has_filter) {
+            Some(sub_page) => self.sub_page_items(sub_page, config),
+            None => self.all_items(config, registry),
+        };
         // Without a search only the current page shows, and a page made of
         // one section needs no heading beneath the page title.
         let sections_on_page = all
@@ -1705,7 +1891,7 @@ impl SettingsPanel {
 
             if show_headers {
                 entries.push(SettingEntry {
-                    label: section.label(),
+                    label: section.label().into(),
                     value: String::new(),
                     kind: SettingKind::ReadOnly,
                     is_header: true,
@@ -1716,7 +1902,7 @@ impl SettingsPanel {
             // Add matching items
             for (_, item) in matching {
                 entries.push(SettingEntry {
-                    label: item.label,
+                    label: item.label.clone(),
                     value: item.value.clone(),
                     kind: item.kind.clone(),
                     is_header: false,
@@ -1748,6 +1934,78 @@ impl SettingsPanel {
             .map(|(i, _)| i)
     }
 
+    /// The sub-page shown: the one opened, while its subject (a font range,
+    /// a feature) still exists. A reload can take it away.
+    fn shown_sub_page(&self, config: &Config) -> Option<&SettingsSubPage> {
+        self.sub_page
+            .as_ref()
+            .filter(|sub_page| sub_page.exists(config))
+    }
+
+    /// The rows of `sub_page`, by section.
+    fn sub_page_items(
+        &self,
+        sub_page: &SettingsSubPage,
+        config: &Config,
+    ) -> Vec<(SettingsSection, Vec<SettingItem>)> {
+        match sub_page {
+            SettingsSubPage::FontRange(rule) => {
+                font_rules::range_page(rule, &self.installed_families)
+            }
+            SettingsSubPage::FontFeature(tag) => font_rules::feature_page(tag, config),
+        }
+    }
+
+    /// The rows as they are now, after leaving a sub-page whose subject is
+    /// gone and selecting the row a pending opener names.
+    fn settled_entries(
+        &mut self,
+        config: &Config,
+        registry: &ShortcutRegistry,
+    ) -> Vec<SettingEntry> {
+        if self.sub_page.is_some() && self.shown_sub_page(config).is_none() {
+            self.leave_sub_page();
+        }
+        let entries = self.build_entries(config, registry);
+        if let Some(sub_page) = self.pending_opener.take() {
+            if let Some(index) = entries
+                .iter()
+                .filter(|entry| !entry.is_header)
+                .position(|entry| entry.kind.opens(&sub_page))
+            {
+                self.selected = index;
+            }
+            self.selected = self
+                .selected
+                .min(Self::count_selectable(&entries).saturating_sub(1));
+            self.selection_visibility_pending = true;
+        }
+        entries
+    }
+
+    /// The row a press at `x, y` works, as a visible row index: a button
+    /// row only on its button. Hover and presses both ask it.
+    pub fn row_at(
+        &self,
+        layout: &SettingsModalLayout,
+        entries: &[SettingEntry],
+        x: f32,
+        y: f32,
+    ) -> Option<usize> {
+        let row = layout.visible_row_at(x, y)?;
+        let entry = entries.get(self.scroll_offset + row)?;
+        match entry.kind {
+            _ if entry.is_header => None,
+            SettingKind::Button { .. } => layout.row_button(row).contains(x, y).then_some(row),
+            _ => Some(row),
+        }
+    }
+
+    /// Whether the heading shows the way back: on a sub-page, not searching.
+    pub fn shows_back(&self, config: &Config) -> bool {
+        self.filter.text().is_empty() && self.shown_sub_page(config).is_some()
+    }
+
     /// Handle a key press. Returns a SettingsAction if a config change should be applied.
     pub fn handle_key(
         &mut self,
@@ -1760,7 +2018,7 @@ impl SettingsPanel {
             return self.handle_dropdown_key(key, config, registry);
         }
 
-        let entries = self.build_entries(config, registry);
+        let entries = self.settled_entries(config, registry);
         let selectable_count = Self::count_selectable(&entries);
 
         let action = match key {
@@ -1770,6 +2028,10 @@ impl SettingsPanel {
                     self.filter.clear();
                     self.selected = 0;
                     self.scroll_offset = 0;
+                } else if self.sub_page.is_some() {
+                    // Then it steps back out of a sub-page.
+                    self.leave_sub_page();
+                    return SettingsAction::None;
                 } else {
                     self.close();
                 }
@@ -2039,7 +2301,7 @@ impl SettingsPanel {
                     Self::option_action(&entry.kind, index)
                 })
             }
-            SettingKind::Action { action } => {
+            SettingKind::Action { action } | SettingKind::Button { action, .. } => {
                 if direction > 0 {
                     action.clone()
                 } else {
@@ -2109,7 +2371,7 @@ impl SettingsPanel {
             return SettingsAction::None;
         };
         match &entry.kind {
-            SettingKind::Action { action } => action.clone(),
+            SettingKind::Action { action } | SettingKind::Button { action, .. } => action.clone(),
             _ => SettingsAction::None,
         }
     }
@@ -2202,7 +2464,7 @@ impl SettingsPanel {
             return SettingsAction::None;
         }
 
-        let entries = self.build_entries(config, registry);
+        let entries = self.settled_entries(config, registry);
 
         // Click outside panel = close
         if !layout.contains(x, y) {
@@ -2237,6 +2499,10 @@ impl SettingsPanel {
         if layout.save_button.contains(x, y) {
             return SettingsAction::SaveConfig;
         }
+        if self.shows_back(config) && layout.back_button.contains(x, y) {
+            self.leave_sub_page();
+            return SettingsAction::None;
+        }
         if let Some(page) = layout.page_at(x, y) {
             self.select_page(page);
             return SettingsAction::None;
@@ -2251,16 +2517,13 @@ impl SettingsPanel {
         }
 
         // Click on an entry row (respecting scroll).
-        let Some(visible_row) = layout.visible_row_at(x, y) else {
+        let Some(visible_row) = self.row_at(layout, &entries, x, y) else {
             return SettingsAction::None;
         };
         let abs_idx = self.scroll_offset + visible_row;
         let Some(entry) = entries.get(abs_idx) else {
             return SettingsAction::None;
         };
-        if entry.is_header {
-            return SettingsAction::None;
-        }
 
         // Update selection to the clicked entry.
         let sel_idx = entries[..abs_idx].iter().filter(|e| !e.is_header).count();
@@ -2277,7 +2540,7 @@ impl SettingsPanel {
                 .map_or(SettingsAction::None, |direction| {
                     self.adjust_selected_value(&entries, direction)
                 }),
-            SettingKind::Action { action } => action.clone(),
+            SettingKind::Action { action } | SettingKind::Button { action, .. } => action.clone(),
             SettingKind::ReadOnly => SettingsAction::None,
         }
     }
@@ -2375,6 +2638,8 @@ pub struct SettingsPanelInfo {
     pub filter_cursor: usize,
     /// Page marked in the sidebar.
     pub page: SettingsPage,
+    /// The sub-page's heading, while one is shown with the way back.
+    pub sub_page_title: Option<String>,
     /// Header, footer, or sidebar control under the pointer.
     pub hovered_control: Option<SettingsControl>,
     /// Whether the live configuration differs from the saved file. The
@@ -2404,7 +2669,7 @@ impl SettingsPanel {
         config: &Config,
         registry: &ShortcutRegistry,
     ) -> SettingsPanelInfo {
-        let entries = self.build_entries(config, registry);
+        let entries = self.settled_entries(config, registry);
 
         if let Some(section) = self.pending_section_jump.take() {
             if let Some(idx) = Self::first_selectable_in_section(&entries, section) {
@@ -2430,6 +2695,10 @@ impl SettingsPanel {
             filter: self.filter.text().to_string(),
             filter_cursor: self.filter.cursor(),
             page: self.shown_page(&entries),
+            sub_page_title: self
+                .shows_back(config)
+                .then(|| self.sub_page.as_ref().map(SettingsSubPage::title))
+                .flatten(),
             hovered_control: self.hovered_control,
             unsaved: false,
             entries,
@@ -3126,28 +3395,31 @@ mod tests {
             .find(|entry| entry.label == "Fallback 2")
             .expect("empty append slot");
         assert_eq!(next.value, NO_FONT_FALLBACK);
-        let ranges = entries
+        // Each range and feature is a row of its own that opens its page.
+        let range = entries
             .iter()
-            .find(|entry| entry.label == "Range Overrides")
-            .expect("range override summary");
-        assert_eq!(ranges.value, "Manage · 1 configured");
-        assert!(matches!(
-            ranges.kind,
-            SettingKind::Action {
-                action: SettingsAction::ManageFontRangeOverrides
-            }
-        ));
-        let features = entries
+            .find(|entry| entry.section == SettingsSection::FontRanges && !entry.is_header)
+            .expect("range row");
+        assert_eq!(
+            (range.label.as_ref(), range.value.as_str()),
+            ("Private Use Area", "Symbols Nerd Font Mono")
+        );
+        assert!(range.kind.opens(&SettingsSubPage::FontRange(
+            config.font.range_overrides[0].clone()
+        )));
+        let feature = entries
             .iter()
-            .find(|entry| entry.label == "OpenType Features")
-            .expect("OpenType feature summary");
-        assert_eq!(features.value, "Manage · 1 configured");
-        assert!(matches!(
-            features.kind,
-            SettingKind::Action {
-                action: SettingsAction::ManageFontFeatures
-            }
-        ));
+            .find(|entry| entry.section == SettingsSection::FontFeatures && !entry.is_header)
+            .expect("feature row");
+        assert_eq!(
+            (feature.label.as_ref(), feature.value.as_str()),
+            ("ss01", "1")
+        );
+        assert!(
+            feature
+                .kind
+                .opens(&SettingsSubPage::FontFeature("ss01".into()))
+        );
         assert!(matches!(
             SettingsPanel::option_action(&first.kind, 0),
             SettingsAction::SetFontFallback {
@@ -3413,78 +3685,6 @@ mod tests {
     }
 
     #[test]
-    fn font_range_manager_action_has_shared_keyboard_pointer_and_semantic_routing() {
-        let mut panel = SettingsPanel::new();
-        panel.open();
-        let config = Config::default();
-        let registry = default_registry();
-        assert!(panel.insert_filter_text("range overrides"));
-        assert!(matches!(
-            panel.handle_key(SettingsKey::Enter, &config, &registry),
-            SettingsAction::ManageFontRangeOverrides
-        ));
-        assert!(matches!(
-            panel.accessibility_activate_setting(
-                SettingsSection::Font,
-                "Range Overrides",
-                &config,
-                &registry,
-            ),
-            SettingsAction::ManageFontRangeOverrides
-        ));
-
-        let entries = panel.build_entries(&config, &registry);
-        assert_eq!(entries.len(), 2, "filtered list contains header and action");
-        let layout =
-            SettingsModalLayout::calculate(1000.0, 800.0, 10.0, 20.0, panel.animation_progress());
-        let row = layout.row_rect(1);
-        let action = panel.handle_click(
-            row.x + row.width * 0.25,
-            row.y + row.height / 2.0,
-            &config,
-            &registry,
-            &layout,
-        );
-        assert!(matches!(action, SettingsAction::ManageFontRangeOverrides));
-    }
-
-    #[test]
-    fn font_feature_manager_action_has_shared_keyboard_pointer_and_semantic_routing() {
-        let mut panel = SettingsPanel::new();
-        panel.open();
-        let config = Config::default();
-        let registry = default_registry();
-        assert!(panel.insert_filter_text("opentype features"));
-        assert!(matches!(
-            panel.handle_key(SettingsKey::Enter, &config, &registry),
-            SettingsAction::ManageFontFeatures
-        ));
-        assert!(matches!(
-            panel.accessibility_activate_setting(
-                SettingsSection::Font,
-                "OpenType Features",
-                &config,
-                &registry,
-            ),
-            SettingsAction::ManageFontFeatures
-        ));
-
-        let entries = panel.build_entries(&config, &registry);
-        assert_eq!(entries.len(), 2, "filtered list contains header and action");
-        let layout =
-            SettingsModalLayout::calculate(1000.0, 800.0, 10.0, 20.0, panel.animation_progress());
-        let row = layout.row_rect(1);
-        let action = panel.handle_click(
-            row.x + row.width * 0.25,
-            row.y + row.height / 2.0,
-            &config,
-            &registry,
-            &layout,
-        );
-        assert!(matches!(action, SettingsAction::ManageFontFeatures));
-    }
-
-    #[test]
     fn test_theme_dropdown() {
         let mut panel = SettingsPanel::new();
         panel.open();
@@ -3582,7 +3782,14 @@ mod tests {
         );
 
         panel.handle_key(SettingsKey::Tab, &config, &registry);
-        assert_eq!(sections(&panel), [SettingsSection::Font]);
+        assert_eq!(
+            sections(&panel),
+            [
+                SettingsSection::Font,
+                SettingsSection::FontRanges,
+                SettingsSection::FontFeatures
+            ]
+        );
         panel.handle_key(SettingsKey::BackTab, &config, &registry);
         panel.handle_key(SettingsKey::BackTab, &config, &registry);
         assert_eq!(sections(&panel), [SettingsSection::Harvest], "wraps");
@@ -3704,8 +3911,8 @@ mod tests {
         let config = Config::default();
         let registry = default_registry();
 
-        // Appearance holds two sections, so each gets a heading; Font is one
-        // section under its page title and needs none.
+        // Appearance holds two sections, so each gets a heading; Keyboard is
+        // one section under its page title and needs none.
         let entries = panel.build_entries(&config, &registry);
         let headers: Vec<_> = entries.iter().filter(|e| e.is_header).collect();
         assert_eq!(headers.len(), 2);
@@ -3713,7 +3920,7 @@ mod tests {
         panel.handle_key(SettingsKey::Down, &config, &registry);
         let second = SettingsPanel::nth_selectable(&entries, panel.selected).unwrap();
         assert!(!second.is_header);
-        panel.select_page(SettingsPage::Font);
+        panel.select_page(SettingsPage::Keyboard);
         assert!(
             !panel
                 .build_entries(&config, &registry)
@@ -3776,9 +3983,10 @@ mod tests {
         let entries = panel.build_entries(&config, &registry);
         let layout =
             SettingsModalLayout::calculate(1000.0, 800.0, 10.0, 20.0, panel.animation_progress());
-        // The Font page is one section, so Size is the first row.
-        assert_eq!(entries[0].label, "Size");
-        let y = layout.list_y + layout.row_height * 0.5;
+        // Size is the first row under the Font heading.
+        assert!(entries[0].is_header);
+        assert_eq!(entries[1].label, "Size");
+        let y = layout.row_rect(1).center()[1];
 
         let decrease = panel.handle_click(
             layout.numeric_decrement_x() + layout.cell_width * 0.5,
@@ -3874,5 +4082,161 @@ mod tests {
             SettingsPanel::option_action(&high_contrast.kind, 1),
             SettingsAction::SetHighContrast(AccessibilityPreference::On)
         ));
+    }
+
+    fn config_with_ranges() -> Config {
+        let mut config = Config::default();
+        config.font.range_overrides = vec![
+            FontRangeOverride {
+                start: 0x0600,
+                end: 0x06FF,
+                family: "Noto Sans Arabic".into(),
+            },
+            FontRangeOverride {
+                start: 0xE000,
+                end: 0xE0FF,
+                family: "Symbols".into(),
+            },
+        ];
+        config
+    }
+
+    /// The selectable index of the row labelled `label`.
+    fn selectable(panel: &SettingsPanel, config: &Config, label: &str) -> usize {
+        panel
+            .build_entries(config, &default_registry())
+            .iter()
+            .filter(|entry| !entry.is_header)
+            .position(|entry| entry.label == label)
+            .unwrap_or_else(|| panic!("no {label:?} row"))
+    }
+
+    /// Open the sub-page the selected row opens, as the application does.
+    fn enter(panel: &mut SettingsPanel, config: &Config) {
+        match panel.handle_key(SettingsKey::Enter, config, &default_registry()) {
+            SettingsAction::OpenSubPage(sub_page) => panel.open_sub_page(sub_page),
+            other => panic!("Enter did {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_sub_page_replaces_its_page_and_escape_or_back_returns_to_its_row() {
+        let config = config_with_ranges();
+        let registry = default_registry();
+        let mut panel = SettingsPanel::new();
+        panel.open();
+        panel.select_page(SettingsPage::Font);
+        let row = selectable(&panel, &config, "U+E000–U+E0FF");
+        panel.selected = row;
+        enter(&mut panel, &config);
+        let info = panel.build_info(&config, &registry);
+        assert_eq!(info.sub_page_title.as_deref(), Some("U+E000–U+E0FF"));
+        // The sidebar still marks the page the sub-page belongs to.
+        assert_eq!(info.page, SettingsPage::Font);
+        let labels: Vec<_> = info
+            .entries
+            .iter()
+            .map(|entry| entry.label.as_ref())
+            .collect();
+        assert_eq!(labels, ["Start", "End", "Font", "Delete…"]);
+        assert_eq!(info.selected, 0);
+
+        panel.handle_key(SettingsKey::Escape, &config, &registry);
+        let info = panel.build_info(&config, &registry);
+        assert_eq!(info.sub_page_title, None);
+        assert_eq!(info.selected, row);
+        assert!(panel.is_active(), "Escape left the sub-page, not Settings");
+
+        // The back button does the same, and only on a sub-page.
+        let layout = SettingsModalLayout::calculate(1000.0, 800.0, 10.0, 20.0, 1.0);
+        let [x, y] = layout.back_button.center();
+        enter(&mut panel, &config);
+        assert!(panel.shows_back(&config));
+        panel.handle_click(x, y, &config, &registry, &layout);
+        assert!(!panel.shows_back(&config));
+        assert_eq!(panel.build_info(&config, &registry).selected, row);
+        // The heading moves right of the button so they never overlap.
+        assert!(layout.heading_x(true) >= layout.back_button.right());
+    }
+
+    #[test]
+    fn search_from_a_sub_page_spans_the_pages_and_escape_comes_back() {
+        let config = config_with_ranges();
+        let registry = default_registry();
+        let mut panel = SettingsPanel::new();
+        panel.open();
+        panel.select_page(SettingsPage::Font);
+        panel.selected = selectable(&panel, &config, "Arabic");
+        enter(&mut panel, &config);
+        // Ranges are found by their name and font; a sub-page's own rows are not.
+        assert!(panel.insert_filter_text("arabic"));
+        let info = panel.build_info(&config, &registry);
+        assert_eq!(info.sub_page_title, None, "no way back while searching");
+        assert!(info.entries.iter().any(|entry| entry.label == "Arabic"));
+        assert!(panel.accessibility_set_filter("delete…"));
+        assert!(
+            panel
+                .build_entries(&config, &registry)
+                .iter()
+                .all(|entry| entry.label != "Delete…")
+        );
+        panel.handle_key(SettingsKey::Escape, &config, &registry);
+        assert_eq!(
+            panel
+                .build_info(&config, &registry)
+                .sub_page_title
+                .as_deref(),
+            Some("Arabic")
+        );
+    }
+
+    #[test]
+    fn a_button_row_answers_only_on_its_button() {
+        let config = config_with_ranges();
+        let registry = default_registry();
+        let mut panel = SettingsPanel::new();
+        panel.open();
+        panel.open_sub_page(SettingsSubPage::FontRange(
+            config.font.range_overrides[0].clone(),
+        ));
+        let layout = SettingsModalLayout::calculate(1000.0, 800.0, 10.0, 20.0, 1.0);
+        let entries = panel.build_entries(&config, &registry);
+        assert_eq!(entries[3].label, "Delete…");
+        let row = layout.row_rect(3);
+        let button = layout.row_button(3);
+        assert!(row.x <= button.x && button.right() < row.right());
+        let beside = (button.right() + 1.0, button.center()[1]);
+        assert_eq!(panel.row_at(&layout, &entries, beside.0, beside.1), None);
+        assert!(matches!(
+            panel.handle_click(beside.0, beside.1, &config, &registry, &layout),
+            SettingsAction::None
+        ));
+        let [x, y] = button.center();
+        assert_eq!(panel.row_at(&layout, &entries, x, y), Some(3));
+        assert!(matches!(
+            panel.handle_click(x, y, &config, &registry, &layout),
+            SettingsAction::FontRange(FontRangeAction::Delete(_))
+        ));
+        // Enter on it does the same.
+        assert!(matches!(
+            panel.handle_key(SettingsKey::Enter, &config, &registry),
+            SettingsAction::FontRange(FontRangeAction::Delete(_))
+        ));
+    }
+
+    #[test]
+    fn a_sub_page_whose_subject_is_gone_falls_back_to_its_page() {
+        let mut config = config_with_ranges();
+        let registry = default_registry();
+        let mut panel = SettingsPanel::new();
+        panel.open();
+        panel.select_page(SettingsPage::Font);
+        panel.selected = selectable(&panel, &config, "Arabic");
+        enter(&mut panel, &config);
+        config.font.range_overrides.remove(0);
+        let info = panel.build_info(&config, &registry);
+        assert_eq!(info.sub_page_title, None);
+        assert!(info.entries.iter().any(|entry| entry.label == "Size"));
+        assert!(panel.sub_page().is_none());
     }
 }

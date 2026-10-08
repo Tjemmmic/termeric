@@ -141,15 +141,26 @@ impl Renderer {
                 1 => "1 result".to_string(),
                 count => format!("{count} results"),
             }
+        } else if let Some(title) = &info.sub_page_title {
+            title.clone()
         } else {
             info.page.label().to_string()
         };
+        let back = info.sub_page_title.is_some();
+        if back {
+            self.build_header_icon_button(
+                layout.back_button,
+                Icon::Back,
+                info.hovered_control == Some(SettingsControl::Back),
+            );
+        }
+        let heading_x = layout.heading_x(back);
         self.push_ui_label(
             &heading,
-            layout.content_x,
+            heading_x,
             layout.content_title_y,
-            cell_height * 2.0,
-            layout.content_width,
+            cell_height * SettingsModalLayout::HEADING_LINES,
+            layout.content_x + layout.content_width - heading_x,
             size * 1.1,
             if searching { dim } else { text },
         );
@@ -168,7 +179,7 @@ impl Renderer {
             let row = layout.row_rect(row_index);
             if entry.is_header {
                 self.push_ui_label(
-                    entry.label,
+                    &entry.label,
                     layout.content_x,
                     row.y,
                     row.height,
@@ -181,6 +192,21 @@ impl Renderer {
             let selected = selectable_index == info.selected;
             let hovered = info.hovered_item == Some(row_index);
             selectable_index += 1;
+            if let SettingKind::Button { role, .. } = &entry.kind {
+                // The button is the row: it shows hover and keyboard focus.
+                self.draw_button(
+                    layout.row_button(row_index),
+                    &entry.label,
+                    *role,
+                    ButtonState {
+                        hovered,
+                        focused: selected,
+                        ..ButtonState::default()
+                    },
+                    anim,
+                );
+                continue;
+            }
             if selected || hovered {
                 self.rect_pipeline.push_rounded_rect(
                     row.x,
@@ -196,7 +222,7 @@ impl Renderer {
                 );
             }
             self.push_ui_label(
-                entry.label,
+                &entry.label,
                 layout.content_x,
                 row.y,
                 row.height,
@@ -271,6 +297,8 @@ impl Renderer {
                         dim,
                     );
                 }
+                // Drawn above, as the whole row.
+                SettingKind::Button { .. } => {}
                 SettingKind::ReadOnly => {
                     self.push_ui_label(
                         &entry.value,

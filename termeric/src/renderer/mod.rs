@@ -470,6 +470,10 @@ impl Renderer {
         self.glyph_cache.get_monospace_fonts()
     }
 
+    pub fn get_font_families(&self) -> Vec<String> {
+        self.glyph_cache.get_font_families()
+    }
+
     /// Build a bounded read-only report from the same family-selection state
     /// used by terminal rendering.
     pub(crate) fn inspect_font_coverage(

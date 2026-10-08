@@ -280,7 +280,9 @@ fn the_switch_turns_every_entry_point_on_and_off_at_runtime() {
     assert!(app.next_agent_scan_deadline().is_some());
     let page = on_page(&mut app);
     assert_eq!(page[0], "Agent Features");
-    assert!(page.contains(&"Codex") && page.contains(&"Supervisor"));
+    assert!(
+        page.iter().any(|label| label == "Codex") && page.iter().any(|label| label == "Supervisor")
+    );
     app.settings_panel.close();
     app.shortcuts_panel.open();
     assert!(listed_shortcuts(&app));

@@ -858,7 +858,9 @@ impl App {
         // Row and control hover (suppressed while the dropdown
         // overlay is open so nothing behind it lights up).
         let open = !self.settings_panel.is_dropdown_open();
-        let hovered = open.then(|| layout.visible_row_at(px, py)).flatten();
+        let hovered = open
+            .then(|| self.settings_panel.row_at(&layout, &entries, px, py))
+            .flatten();
         self.settings_panel.set_hover(hovered);
         let control = open
             .then(|| {
@@ -867,6 +869,10 @@ impl App {
                     Some(SettingsControl::Close)
                 } else if layout.save_button.contains(px, py) {
                     Some(SettingsControl::Save)
+                } else if self.settings_panel.shows_back(&self.config)
+                    && layout.back_button.contains(px, py)
+                {
+                    Some(SettingsControl::Back)
                 } else {
                     layout.page_at(px, py).map(SettingsControl::Page)
                 }

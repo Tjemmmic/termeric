@@ -23,8 +23,9 @@ mod diff_review;
 mod domain_picker;
 mod event_loop;
 mod file_drop;
-mod font_feature_editor;
-mod font_range_editor;
+mod font_coverage;
+mod font_features;
+mod font_ranges;
 mod frame;
 mod git_completion;
 mod guardrail_input;
@@ -470,10 +471,12 @@ struct PendingUnicodePicker {
 enum DialogFlow {
     /// Navigation and confirmation for installed third-party plugins.
     RuntimePlugins(PendingRuntimePluginManagement),
-    /// Navigation and edits of Unicode-range font overrides.
-    FontRanges(font_range_editor::PendingFontRangeManagement),
-    /// Navigation and edits of OpenType feature overrides.
-    FontFeatures(font_feature_editor::PendingFontFeatureManagement),
+    /// A font range to add, change, or delete, from Settings.
+    FontRange(font_ranges::PendingFontRangeQuestion),
+    /// An OpenType feature to add, change, or delete, from Settings.
+    FontFeature(font_features::PendingFontFeatureQuestion),
+    /// Which font draws some text: the prompt or its report.
+    FontCoverage(font_coverage::PendingFontCoverage),
     /// An exact source and live-domain destination awaiting upload consent.
     FileUpload(PendingFileUpload),
     /// Reset Configuration awaiting confirmation.
@@ -1248,6 +1251,8 @@ impl App {
         let fonts = renderer.get_monospace_fonts();
         log::info!("Discovered {} monospace fonts", fonts.len());
         self.settings_panel.set_available_fonts(fonts);
+        self.settings_panel
+            .set_installed_families(renderer.get_font_families());
 
         let geometry = renderer.terminal_area().geometry;
         let (cols, rows) = (geometry.cols, geometry.rows);
@@ -1621,24 +1626,6 @@ impl App {
             tabs.resize_active(area);
         }
         self.finish_copy_mode_reflow();
-    }
-
-    fn pending_font_range_management(
-        &self,
-    ) -> Option<&font_range_editor::PendingFontRangeManagement> {
-        match &self.dialog_flow {
-            Some(DialogFlow::FontRanges(pending)) => Some(pending),
-            _ => None,
-        }
-    }
-
-    fn pending_font_feature_management(
-        &self,
-    ) -> Option<&font_feature_editor::PendingFontFeatureManagement> {
-        match &self.dialog_flow {
-            Some(DialogFlow::FontFeatures(pending)) => Some(pending),
-            _ => None,
-        }
     }
 
     fn pending_file_upload(&self) -> Option<&PendingFileUpload> {

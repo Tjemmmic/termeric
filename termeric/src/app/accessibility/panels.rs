@@ -27,12 +27,22 @@ impl App {
             }
             return;
         }
-        if matches!(request.target_node, SETTINGS_CLOSE | SETTINGS_SAVE) {
+        if matches!(
+            request.target_node,
+            SETTINGS_CLOSE | SETTINGS_SAVE | SETTINGS_BACK
+        ) {
             match request.action {
                 Action::Focus => self.accessibility.focus_override = Some(request.target_node),
                 Action::Click if request.target_node == SETTINGS_CLOSE => {
                     self.settings_panel.close();
                     self.accessibility.focus_override = None;
+                }
+                Action::Click if request.target_node == SETTINGS_BACK => {
+                    // Only the way back that is shown answers.
+                    if self.settings_panel.shows_back(&self.config) {
+                        self.settings_panel.leave_sub_page();
+                        self.accessibility.focus_override = None;
+                    }
                 }
                 Action::Click => {
                     self.apply_settings_action(crate::ui::settings::SettingsAction::SaveConfig);
@@ -68,7 +78,7 @@ impl App {
                 Action::Focus => {
                     if self.settings_panel.accessibility_focus_setting(
                         section,
-                        label,
+                        &label,
                         &self.config,
                         &self.shortcut_registry,
                     ) {
@@ -83,7 +93,7 @@ impl App {
                     };
                     let action = self.settings_panel.accessibility_adjust_setting(
                         section,
-                        label,
+                        &label,
                         direction,
                         &self.config,
                         &self.shortcut_registry,
@@ -94,14 +104,14 @@ impl App {
                 Action::Click => {
                     let action = self.settings_panel.accessibility_activate_setting(
                         section,
-                        label,
+                        &label,
                         &self.config,
                         &self.shortcut_registry,
                     );
                     if matches!(action, SettingsAction::None) {
                         if self.settings_panel.accessibility_set_dropdown_expanded(
                             section,
-                            label,
+                            &label,
                             true,
                             &self.config,
                             &self.shortcut_registry,
@@ -115,7 +125,7 @@ impl App {
                 Action::Expand => {
                     if self.settings_panel.accessibility_set_dropdown_expanded(
                         section,
-                        label,
+                        &label,
                         true,
                         &self.config,
                         &self.shortcut_registry,
@@ -126,7 +136,7 @@ impl App {
                 Action::Collapse => {
                     self.settings_panel.accessibility_set_dropdown_expanded(
                         section,
-                        label,
+                        &label,
                         false,
                         &self.config,
                         &self.shortcut_registry,
@@ -145,7 +155,7 @@ impl App {
                 }
                 let action = self.settings_panel.accessibility_choose_dropdown_option(
                     section,
-                    label,
+                    &label,
                     &value,
                     &self.config,
                     &self.shortcut_registry,
@@ -212,7 +222,7 @@ impl App {
             } else {
                 SettingsSemanticTarget::Setting {
                     section: entry.section,
-                    label: entry.label,
+                    label: entry.label.to_string(),
                 }
             };
             let node_id = self.accessibility.settings.node(&target);
@@ -222,7 +232,7 @@ impl App {
 
             if entry.is_header {
                 let mut node = Node::new(Role::Heading);
-                node.set_label(entry.label);
+                node.set_label(entry.label.as_ref());
                 node.set_bounds(bounds);
                 nodes.push((node_id, node));
                 continue;
@@ -241,7 +251,7 @@ impl App {
                     ..
                 } => {
                     let mut node = Node::new(Role::SpinButton);
-                    node.set_label(entry.label);
+                    node.set_label(entry.label.as_ref());
                     node.set_description(format!("{} setting", entry.section.label()));
                     node.set_value(entry.value.clone());
                     node.set_numeric_value(f64::from(*value));
@@ -255,7 +265,7 @@ impl App {
                 }
                 SettingKind::Dropdown { options, .. } => {
                     let mut node = Node::new(Role::ComboBox);
-                    node.set_label(entry.label);
+                    node.set_label(entry.label.as_ref());
                     node.set_description(format!("{} setting", entry.section.label()));
                     node.set_value(entry.value.clone());
                     node.set_expanded(is_selected && info.dropdown_open);
@@ -271,7 +281,7 @@ impl App {
                 }
                 SettingKind::SteppedList { values, .. } => {
                     let mut node = Node::new(Role::ComboBox);
-                    node.set_label(entry.label);
+                    node.set_label(entry.label.as_ref());
                     node.set_description(format!("{} setting", entry.section.label()));
                     node.set_value(entry.value.clone());
                     node.set_expanded(is_selected && info.dropdown_open);
@@ -288,16 +298,23 @@ impl App {
                 }
                 SettingKind::Action { .. } => {
                     let mut node = Node::new(Role::Button);
-                    node.set_label(entry.label);
+                    node.set_label(entry.label.as_ref());
                     node.set_description(format!("{} action", entry.section.label()));
                     node.set_value(entry.value.clone());
                     node.add_action(Action::Click);
                     node.add_action(Action::Focus);
                     node
                 }
+                SettingKind::Button { .. } => {
+                    let mut node = Node::new(Role::Button);
+                    node.set_label(entry.label.as_ref());
+                    node.add_action(Action::Click);
+                    node.add_action(Action::Focus);
+                    node
+                }
                 SettingKind::ReadOnly => {
                     let mut node = Node::new(Role::Label);
-                    node.set_label(entry.label);
+                    node.set_label(entry.label.as_ref());
                     node.set_description(format!("{} setting", entry.section.label()));
                     node.set_value(entry.value.clone());
                     node.set_read_only();
@@ -305,7 +322,11 @@ impl App {
                     node
                 }
             };
-            node.set_bounds(bounds);
+            // A button row is its button, as it is drawn and hit.
+            node.set_bounds(match entry.kind {
+                SettingKind::Button { .. } => bounds_rect(layout.row_button(row)),
+                _ => bounds,
+            });
             nodes.push((node_id, node));
             selectable_index += 1;
         }
@@ -316,10 +337,12 @@ impl App {
         nodes.push((SETTINGS_INPUT, input));
 
         let mut list = Node::new(Role::List);
-        list.set_label(if info.filter.is_empty() {
-            info.page.label()
+        list.set_label(if !info.filter.is_empty() {
+            "Search results".to_owned()
+        } else if let Some(title) = &info.sub_page_title {
+            title.clone()
         } else {
-            "Search results"
+            info.page.label().to_owned()
         });
         list.set_orientation(accesskit::Orientation::Vertical);
         let first_row = layout.row_rect(0);
@@ -381,13 +404,18 @@ impl App {
             nodes.push((id, button));
         }
 
-        let mut dialog_children = vec![
-            SETTINGS_INPUT,
-            SETTINGS_CLOSE,
-            SETTINGS_PAGES,
-            SETTINGS_LIST,
-            SETTINGS_SAVE,
-        ];
+        let mut dialog_children = vec![SETTINGS_INPUT, SETTINGS_CLOSE, SETTINGS_PAGES];
+        if info.sub_page_title.is_some() {
+            let mut back = Node::new(Role::Button);
+            back.set_label(format!("Back to {}", info.page.label()));
+            back.set_keyboard_shortcut("Escape");
+            back.set_bounds(bounds_rect(layout.back_button));
+            back.add_action(Action::Click);
+            back.add_action(Action::Focus);
+            nodes.push((SETTINGS_BACK, back));
+            dialog_children.push(SETTINGS_BACK);
+        }
+        dialog_children.extend([SETTINGS_LIST, SETTINGS_SAVE]);
         if info.entries.is_empty() {
             let mut empty = Node::new(Role::Status);
             empty.set_label("No matching settings");
@@ -415,7 +443,7 @@ impl App {
                             .settings
                             .node(&SettingsSemanticTarget::Option {
                                 section: entry.section,
-                                label: entry.label,
+                                label: entry.label.to_string(),
                                 value: value.clone(),
                             });
                     let mut option = Node::new(Role::ListBoxOption);

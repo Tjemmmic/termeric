@@ -1359,7 +1359,7 @@ fn settings_is_one_modal_tree_with_typed_controls_and_shared_geometry() {
         .nodes
         .get(&SettingsSemanticTarget::Setting {
             section: SettingsSection::Font,
-            label: "Size",
+            label: "Size".into(),
         })
         .copied()
         .unwrap();
@@ -1372,7 +1372,7 @@ fn settings_is_one_modal_tree_with_typed_controls_and_shared_geometry() {
         .nodes
         .get(&SettingsSemanticTarget::Setting {
             section: SettingsSection::Font,
-            label: "Normal Weight",
+            label: "Normal Weight".into(),
         })
         .copied()
         .unwrap();
@@ -1381,8 +1381,9 @@ fn settings_is_one_modal_tree_with_typed_controls_and_shared_geometry() {
     assert!(node(normal_weight).supports_action(Action::Increment));
     let actual = node(size).bounds().unwrap();
     let dialog = node(SETTINGS_DIALOG).bounds().unwrap();
-    // Size is the Font page's first row, in the content column.
-    let row = layout.row_rect(0);
+    // Size is the Font page's first row under its heading, in the content
+    // column.
+    let row = layout.row_rect(1);
     let expected = rect(
         dialog.x0 as f32 + (row.x - layout.panel.x),
         dialog.y0 as f32 + (row.y - layout.panel.y),
@@ -1418,7 +1419,7 @@ fn settings_accessibility_actions_use_the_existing_validated_action_path() {
         .nodes
         .get(&SettingsSemanticTarget::Setting {
             section: SettingsSection::Window,
-            label: "Opacity",
+            label: "Opacity".into(),
         })
         .unwrap();
     let before = app.config.window.opacity;
@@ -1444,7 +1445,7 @@ fn settings_accessibility_actions_use_the_existing_validated_action_path() {
         .nodes
         .get(&SettingsSemanticTarget::Setting {
             section: SettingsSection::Font,
-            label: "Normal Weight",
+            label: "Normal Weight".into(),
         })
         .unwrap();
     app.handle_accessibility_action(ActionRequest {
@@ -1464,7 +1465,7 @@ fn settings_accessibility_actions_use_the_existing_validated_action_path() {
         .nodes
         .get(&SettingsSemanticTarget::Setting {
             section: SettingsSection::Sessions,
-            label: "Auto Save Workspace",
+            label: "Auto Save Workspace".into(),
         })
         .unwrap();
     app.handle_accessibility_action(ActionRequest {
@@ -1482,7 +1483,7 @@ fn settings_accessibility_actions_use_the_existing_validated_action_path() {
         .nodes
         .get(&SettingsSemanticTarget::Option {
             section: SettingsSection::Sessions,
-            label: "Auto Save Workspace",
+            label: "Auto Save Workspace".into(),
             value: value.into(),
         })
         .unwrap();
@@ -1517,7 +1518,7 @@ fn runtime_plugin_manager_setting_is_an_accessible_button() {
         .nodes
         .get(&SettingsSemanticTarget::Setting {
             section: SettingsSection::Plugins,
-            label: "Manage Third-party Plugins",
+            label: "Manage Third-party Plugins".into(),
         })
         .unwrap();
     let node = &snapshot
@@ -1541,155 +1542,105 @@ fn runtime_plugin_manager_setting_is_an_accessible_button() {
 }
 
 #[test]
-fn font_range_manager_setting_is_an_accessible_button() {
+fn a_font_range_sub_page_its_way_back_and_its_delete_button_are_accessible() {
+    use crate::config::FontRangeOverride;
     use crate::ui::settings::SettingsSection;
 
-    let mut app = App::new_headless(Config::default()).unwrap();
+    let rule = FontRangeOverride {
+        start: 0x0600,
+        end: 0x06FF,
+        family: "Noto Sans Arabic".into(),
+    };
+    let mut config = Config::default();
+    config.font.range_overrides = vec![rule.clone()];
+    let mut app = App::new_headless(config).unwrap();
+    app.settings_panel.set_reduced_motion(true);
+    app.dialog.set_reduced_motion(true);
     app.settings_panel.toggle();
     app.settings_panel.select_page(SettingsSection::Font.page());
+    let node_of = |app: &App, section, label: &str| {
+        *app.accessibility
+            .settings
+            .nodes
+            .get(&SettingsSemanticTarget::Setting {
+                section,
+                label: label.into(),
+            })
+            .unwrap()
+    };
+    let click = |app: &mut App, target_node| {
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Click,
+            target_tree: TreeId::ROOT,
+            target_node,
+            data: None,
+        });
+    };
+
+    // The range's row, named by its block, opens its page.
     assert!(app.settings_panel.accessibility_focus_setting(
-        SettingsSection::Font,
-        "Range Overrides",
+        SettingsSection::FontRanges,
+        "Arabic",
         &app.config,
         &app.shortcut_registry,
     ));
     let snapshot = app.accessibility_snapshot();
-    let manager = *app
-        .accessibility
-        .settings
-        .nodes
-        .get(&SettingsSemanticTarget::Setting {
-            section: SettingsSection::Font,
-            label: "Range Overrides",
-        })
-        .unwrap();
-    let node = &snapshot
-        .nodes
-        .iter()
-        .find(|(node_id, _)| *node_id == manager)
-        .unwrap()
-        .1;
-    assert_eq!(node.role(), Role::Button);
-    assert!(node.supports_action(Action::Click));
+    let arabic = node_of(&app, SettingsSection::FontRanges, "Arabic");
+    let node = |snapshot: &SemanticSnapshot, id| {
+        snapshot
+            .nodes
+            .iter()
+            .find(|(node_id, _)| *node_id == id)
+            .map(|(_, node)| node.clone())
+    };
+    assert_eq!(node(&snapshot, arabic).unwrap().role(), Role::Button);
+    assert!(node(&snapshot, SETTINGS_BACK).is_none());
+    click(&mut app, arabic);
 
-    app.handle_accessibility_action(ActionRequest {
-        action: Action::Click,
-        target_tree: TreeId::ROOT,
-        target_node: manager,
-        data: None,
-    });
-    assert!(!app.settings_panel.is_active());
+    let snapshot = app.accessibility_snapshot();
+    let list = node(&snapshot, SETTINGS_LIST).unwrap();
+    assert_eq!(list.label(), Some("Arabic"));
+    let back = node(&snapshot, SETTINGS_BACK).unwrap();
+    assert_eq!(back.role(), Role::Button);
+    assert_eq!(back.label(), Some("Back to Font"));
+    let layout = app.settings_layout();
+    let dialog = node(&snapshot, SETTINGS_DIALOG).unwrap().bounds().unwrap();
+    let in_window = |bounds: accesskit::Rect| {
+        (
+            bounds.x0 - dialog.x0 + f64::from(layout.panel.x),
+            bounds.y0 - dialog.y0 + f64::from(layout.panel.y),
+        )
+    };
+    assert_eq!(
+        in_window(back.bounds().unwrap()),
+        (
+            f64::from(layout.back_button.x),
+            f64::from(layout.back_button.y)
+        )
+    );
+    // Delete is a button bounded by the button drawn, not its row.
+    let delete = node_of(&app, SettingsSection::FontRange, "Delete…");
+    let delete_node = node(&snapshot, delete).unwrap();
+    assert_eq!(delete_node.role(), Role::Button);
+    let button = layout.row_button(3);
+    assert_eq!(
+        in_window(delete_node.bounds().unwrap()),
+        (f64::from(button.x), f64::from(button.y))
+    );
+    click(&mut app, delete);
     assert!(app.dialog.is_awaiting_current());
-    assert_eq!(app.dialog.title(), "Font ranges");
+    assert!(app.dialog.answers(app.dialog.request_id(), "delete"));
+    app.answer_dialog(crate::ui::dialog::CANCEL);
 
-    app.accessibility_snapshot();
-    let inspect = dialog_button(&app, 1);
-    app.handle_accessibility_action(ActionRequest {
-        action: Action::Click,
-        target_tree: TreeId::ROOT,
-        target_node: inspect,
-        data: None,
-    });
-    assert_eq!(app.dialog.title(), "Check which font draws text");
-
+    // The way back returns to the page with the range's row selected.
+    click(&mut app, SETTINGS_BACK);
+    assert!(app.settings_panel.sub_page().is_none());
     let snapshot = app.accessibility_snapshot();
-    let input = dialog_field(&app);
-    let submit = dialog_button(&app, 1);
-    let input_node = &snapshot
-        .nodes
-        .iter()
-        .find(|(node_id, _)| *node_id == input)
-        .unwrap()
-        .1;
-    assert_eq!(input_node.role(), Role::TextInput);
-    assert_eq!(input_node.label(), Some("Text"));
-    app.handle_accessibility_action(ActionRequest {
-        action: Action::SetValue,
-        target_tree: TreeId::ROOT,
-        target_node: input,
-        data: Some(ActionData::Value("U+0634".into())),
-    });
-    app.handle_accessibility_action(ActionRequest {
-        action: Action::Click,
-        target_tree: TreeId::ROOT,
-        target_node: submit,
-        data: None,
-    });
-    assert_eq!(app.dialog.title(), "Which font draws it");
-}
-
-#[test]
-fn font_feature_manager_is_accessible_and_uses_the_shared_mutation_path() {
-    use crate::ui::settings::SettingsSection;
-
-    let mut app = App::new_headless(Config::default()).unwrap();
-    app.settings_panel.toggle();
-    app.settings_panel.select_page(SettingsSection::Font.page());
-    assert!(app.settings_panel.accessibility_focus_setting(
-        SettingsSection::Font,
-        "OpenType Features",
-        &app.config,
-        &app.shortcut_registry,
-    ));
-    let snapshot = app.accessibility_snapshot();
-    let manager = *app
-        .accessibility
-        .settings
-        .nodes
-        .get(&SettingsSemanticTarget::Setting {
-            section: SettingsSection::Font,
-            label: "OpenType Features",
-        })
-        .unwrap();
-    let node = &snapshot
-        .nodes
-        .iter()
-        .find(|(node_id, _)| *node_id == manager)
-        .unwrap()
-        .1;
-    assert_eq!(node.role(), Role::Button);
-    app.handle_accessibility_action(ActionRequest {
-        action: Action::Click,
-        target_tree: TreeId::ROOT,
-        target_node: manager,
-        data: None,
-    });
-    assert_eq!(app.dialog.title(), "OpenType features");
-
-    app.accessibility_snapshot();
-    let add = dialog_button(&app, 1);
-    app.handle_accessibility_action(ActionRequest {
-        action: Action::Click,
-        target_tree: TreeId::ROOT,
-        target_node: add,
-        data: None,
-    });
-
-    let snapshot = app.accessibility_snapshot();
-    let input = dialog_field(&app);
-    let submit = dialog_button(&app, 1);
-    let input_node = &snapshot
-        .nodes
-        .iter()
-        .find(|(node_id, _)| *node_id == input)
-        .unwrap()
-        .1;
-    assert_eq!(input_node.role(), Role::TextInput);
-    assert_eq!(input_node.label(), Some("Feature"));
-    app.handle_accessibility_action(ActionRequest {
-        action: Action::SetValue,
-        target_tree: TreeId::ROOT,
-        target_node: input,
-        data: Some(ActionData::Value("ss01 = 1".into())),
-    });
-    app.handle_accessibility_action(ActionRequest {
-        action: Action::Click,
-        target_tree: TreeId::ROOT,
-        target_node: submit,
-        data: None,
-    });
-    assert_eq!(app.config.font.features.get("ss01"), Some(&1));
-    assert_eq!(app.dialog.title(), "OpenType features");
+    assert_eq!(
+        node(&snapshot, SETTINGS_INPUT).unwrap().active_descendant(),
+        Some(node_of(&app, SettingsSection::FontRanges, "Arabic"))
+    );
+    assert_eq!(app.config.font.range_overrides, vec![rule]);
 }
 
 #[test]

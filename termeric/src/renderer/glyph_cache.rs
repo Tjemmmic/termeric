@@ -1670,6 +1670,20 @@ impl GlyphCache {
         result
     }
 
+    /// Every installed family by its first name, symbol and emoji fonts
+    /// included, sorted without regard to case: what a font range may use.
+    pub fn get_font_families(&self) -> Vec<String> {
+        let mut families: Vec<String> = self
+            .font_system
+            .db()
+            .faces()
+            .filter_map(|face| face.families.first().map(|(name, _)| name.clone()))
+            .collect();
+        families.sort_by_key(|family| family.to_lowercase());
+        families.dedup_by(|next, kept| next.eq_ignore_ascii_case(kept));
+        families
+    }
+
     /// Explain the exact configured-family routing for a bounded text query.
     /// This diagnostic is explicit user work and never runs on the cell or
     /// frame hot path.
