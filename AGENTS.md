@@ -99,7 +99,7 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `local_socket.rs` | What the domain daemon and the control socket share: the private runtime directory, socket and token paths, same-user peer checks, version-and-token authentication, the bounded accept loop, and stale-socket removal |
 | `safe_text.rs` | Bounding untrusted text shown in chrome or sent over protocols (character classes come from termeric-core) |
 | `process_group.rs` | Starting, reaping, and signalling a child that leads its own process group with piped stdio (agent view agents, plugin handlers): its group is signalled only while it is unreaped |
-| `stderr_capture.rs` | Keeping the start or the end of a child's stderr on a thread of its own, waiting a bounded time for it to close (agent view agents, plugin handlers) |
+| `stderr_capture.rs` | Keeping the end of a child's stderr on a thread of its own, waiting a bounded time for it to close (agent view agents, plugin handlers) |
 
 ### Key Modules (termeric-core/)
 

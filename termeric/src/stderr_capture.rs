@@ -1,10 +1,12 @@
-//! Keeping a bounded part of a child's standard error for its error reports.
+//! Keeping the end of a child's standard error for its error reports.
 //!
 //! A thread reads the stream to its end, so the child never blocks on a full
-//! pipe, and keeps either the start or the end of it. A report waits only so
-//! long for that end: a child's stderr usually closes as soon as it exits,
-//! but a command it started outside its process group, or one that outlived
-//! the signal sent to the group, can hold the pipe open indefinitely.
+//! pipe, and keeps the last bytes of it: what a child says just before it
+//! fails is why, while what it logged first usually is not. A report waits
+//! only so long for that end: a child's stderr usually closes as soon as it
+//! exits, but a command it started outside its process group, or one that
+//! outlived the signal sent to the group, can hold the pipe open
+//! indefinitely.
 
 use std::collections::VecDeque;
 use std::io::Read;
@@ -12,15 +14,6 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
-
-/// Which part of the stream is kept.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Keep {
-    /// The first this many bytes.
-    First(usize),
-    /// The last this many bytes.
-    Last(usize),
-}
 
 /// What was kept of the stream.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -47,10 +40,11 @@ struct Buffer {
 }
 
 impl StderrCapture {
-    /// Starts reading `stream` on a thread called `thread_name`.
+    /// Starts reading `stream` on a thread called `thread_name`, keeping its
+    /// last `limit` bytes.
     pub fn start(
         stream: impl Read + Send + 'static,
-        keep: Keep,
+        limit: usize,
         thread_name: &str,
     ) -> std::io::Result<Self> {
         let kept = Arc::new(Mutex::new(Buffer::default()));
@@ -61,7 +55,7 @@ impl StderrCapture {
             .spawn(move || {
                 // Dropped however reading ends, which disconnects `finished`.
                 let _reading = reading;
-                read_to_end(stream, keep, &target);
+                read_to_end(stream, limit, &target);
             })?;
         Ok(Self {
             kept,
@@ -72,7 +66,7 @@ impl StderrCapture {
 
     /// What has been kept once the stream has ended, or once `deadline` has
     /// passed while something still holds it open. A reader that misses the
-    /// deadline goes on until the stream ends, holding no more than `keep`,
+    /// deadline goes on until the stream ends, holding no more than `limit`,
     /// and a later call can still wait for it.
     pub fn kept_by(&mut self, deadline: Instant) -> Kept {
         if let Some(reader) = self.reader.take() {
@@ -93,7 +87,7 @@ impl StderrCapture {
     }
 }
 
-fn read_to_end(mut stream: impl Read, keep: Keep, target: &Mutex<Buffer>) {
+fn read_to_end(mut stream: impl Read, limit: usize, target: &Mutex<Buffer>) {
     let mut chunk = [0_u8; 4096];
     loop {
         let read = match stream.read(&mut chunk) {
@@ -101,25 +95,17 @@ fn read_to_end(mut stream: impl Read, keep: Keep, target: &Mutex<Buffer>) {
             Ok(read) => read,
         };
         let mut buffer = target.lock().unwrap_or_else(PoisonError::into_inner);
-        buffer.keep(&chunk[..read], keep);
+        buffer.keep(&chunk[..read], limit);
     }
 }
 
 impl Buffer {
-    fn keep(&mut self, chunk: &[u8], keep: Keep) {
-        match keep {
-            Keep::First(limit) => {
-                let retained = chunk.len().min(limit.saturating_sub(self.bytes.len()));
-                self.bytes.extend(&chunk[..retained]);
-                self.truncated |= retained < chunk.len();
-            }
-            Keep::Last(limit) => {
-                self.bytes.extend(chunk);
-                let excess = self.bytes.len().saturating_sub(limit);
-                self.bytes.drain(..excess);
-                self.truncated |= excess > 0;
-            }
-        }
+    /// Adds `chunk`, then drops from the front whatever is past `limit`.
+    fn keep(&mut self, chunk: &[u8], limit: usize) {
+        self.bytes.extend(chunk);
+        let excess = self.bytes.len().saturating_sub(limit);
+        self.bytes.drain(..excess);
+        self.truncated |= excess > 0;
     }
 }
 
@@ -129,45 +115,36 @@ mod tests {
     use std::io::Cursor;
     use std::time::Duration;
 
-    fn kept(written: &[u8], keep: Keep) -> Kept {
+    fn kept(written: &[u8], limit: usize) -> Kept {
         let mut capture =
-            StderrCapture::start(Cursor::new(written.to_vec()), keep, "test").unwrap();
+            StderrCapture::start(Cursor::new(written.to_vec()), limit, "test").unwrap();
         capture.kept_by(Instant::now() + Duration::from_secs(10))
     }
 
     #[test]
-    fn the_start_or_the_end_is_kept_within_its_bound() {
+    fn the_end_is_kept_within_its_bound() {
         // Longer than one read, so the bound holds across reads.
         let written: Vec<u8> = (0..10_000_u32).map(|byte| byte as u8).collect();
         assert_eq!(
-            kept(&written, Keep::First(5_000)),
-            Kept {
-                bytes: written[..5_000].to_vec(),
-                truncated: true
-            }
-        );
-        assert_eq!(
-            kept(&written, Keep::Last(5_000)),
+            kept(&written, 5_000),
             Kept {
                 bytes: written[5_000..].to_vec(),
                 truncated: true
             }
         );
-        for keep in [Keep::First(10_000), Keep::Last(10_000)] {
-            assert_eq!(
-                kept(&written, keep),
-                Kept {
-                    bytes: written.clone(),
-                    truncated: false
-                }
-            );
-        }
+        assert_eq!(
+            kept(&written, 10_000),
+            Kept {
+                bytes: written.clone(),
+                truncated: false
+            }
+        );
     }
 
     #[test]
     fn a_stream_held_open_is_waited_for_only_until_the_deadline() {
         let (reader, mut writer) = std::io::pipe().unwrap();
-        let mut capture = StderrCapture::start(reader, Keep::Last(64), "test").unwrap();
+        let mut capture = StderrCapture::start(reader, 64, "test").unwrap();
         std::io::Write::write_all(&mut writer, b"so far").unwrap();
         let wait = Duration::from_millis(200);
         let started = Instant::now();

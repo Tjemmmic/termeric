@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use crate::line_reader::read_bounded_line;
 use crate::process_group::{PipedChild, Signal};
-use crate::stderr_capture::{Keep, StderrCapture};
+use crate::stderr_capture::StderrCapture;
 
 use super::event::ExitReport;
 
@@ -249,7 +249,7 @@ fn serve_pipes(
         .name("agent-view-input".into())
         .spawn(move || write_input(stdin, input_queue))?;
 
-    let stderr = StderrCapture::start(stderr, Keep::Last(STDERR_TAIL_BYTES), "agent-view-stderr")?;
+    let stderr = StderrCapture::start(stderr, STDERR_TAIL_BYTES, "agent-view-stderr")?;
 
     let (output_sender, output) = mpsc::sync_channel(OUTPUT_CAPACITY);
     let reader_child = Arc::clone(child);

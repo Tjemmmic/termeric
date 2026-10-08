@@ -13,7 +13,8 @@ use crate::agents::AgentConfig;
 use crate::line_reader::read_bounded_line;
 use crate::panes::PaneLayoutPreset;
 use crate::process_group::PipedChild;
-use crate::stderr_capture::{Keep, StderrCapture};
+use crate::safe_text::{single_line_within, suffix_within};
+use crate::stderr_capture::StderrCapture;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader, Write};
@@ -42,7 +43,11 @@ const MAX_TERMINAL_INPUT_BYTES: usize = 8 * 1024;
 const PERSISTENT_PROTOCOL_RESERVE_BYTES: usize = 64;
 const HANDLER_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_OUTPUT_BYTES: u64 = 64 * 1024;
+/// How much of a handler's stderr is kept for its crash report: the end,
+/// where it says why it stopped, rather than whatever it logged first.
 const MAX_ERROR_BYTES: usize = 4 * 1024;
+/// The longest error a handler's failure reports.
+const MAX_REPORT_BYTES: usize = 1_024;
 const MAX_ACTIONS: usize = 8;
 const MAX_MESSAGE_BYTES: usize = 512;
 const MAX_TITLE_BYTES: usize = 128;
@@ -908,17 +913,14 @@ impl PersistentHandler {
             stderr: stderr_stream,
         } = crate::process_group::spawn_piped(&mut handler_command(invocation))
             .map_err(|error| bounded_error(&format!("handler launch failed: {error}")))?;
-        let stderr = match StderrCapture::start(
-            stderr_stream,
-            Keep::First(MAX_ERROR_BYTES),
-            "plugin-handler-stderr",
-        ) {
-            Ok(stderr) => stderr,
-            Err(error) => {
-                terminate_handler(&mut child);
-                return Err(bounded_error(&format!("handler launch failed: {error}")));
-            }
-        };
+        let stderr =
+            match StderrCapture::start(stderr_stream, MAX_ERROR_BYTES, "plugin-handler-stderr") {
+                Ok(stderr) => stderr,
+                Err(error) => {
+                    terminate_handler(&mut child);
+                    return Err(bounded_error(&format!("handler launch failed: {error}")));
+                }
+            };
         let (request_sender, request_receiver) = sync_channel::<PersistentRequest>(1);
         let io_thread = thread::spawn(move || {
             let mut stdout = BufReader::new(stdout);
@@ -1057,18 +1059,26 @@ impl PersistentHandler {
         }
     }
 
-    /// The handler's exit status and the start of its standard error. The
-    /// stderr reader gets until `deadline` to reach end of file, so what the
-    /// handler wrote just before exiting is included. Reaping the handler
-    /// already killed its process group, so only a command that left the
-    /// group can still hold the pipe, and the deadline bounds that wait.
+    /// The handler's exit status and the end of its standard error, as much
+    /// as the report holds. The stderr reader gets until `deadline` to reach
+    /// end of file, so what the handler wrote just before exiting is
+    /// included. Reaping the handler already killed its process group, so
+    /// only a command that left the group can still hold the pipe, and the
+    /// deadline bounds that wait.
     fn exit_error(&mut self, status: std::process::ExitStatus, deadline: Instant) -> String {
         let stderr = self.stderr.kept_by(deadline);
-        let mut detail = String::from_utf8_lossy(&stderr.bytes).into_owned();
-        if stderr.truncated {
-            detail.push('…');
-        }
-        bounded_error(&format!("handler exited with {status}: {detail}"))
+        let lead = format!("handler exited with {status}: ");
+        let detail = single_line_within(&String::from_utf8_lossy(&stderr.bytes), usize::MAX);
+        let room = MAX_REPORT_BYTES
+            .saturating_sub(lead.len())
+            .saturating_sub('…'.len_utf8());
+        let tail = suffix_within(&detail, room);
+        let cut = if stderr.truncated || tail.len() < detail.len() {
+            "…"
+        } else {
+            ""
+        };
+        bounded_error(&format!("{lead}{cut}{tail}"))
     }
 }
 
@@ -1253,7 +1263,7 @@ fn validate_text(label: &str, value: &str, max: usize) -> Result<(), String> {
 }
 
 fn bounded_error(value: &str) -> String {
-    let output = crate::safe_text::single_line_within(value, 1_024);
+    let output = single_line_within(value, MAX_REPORT_BYTES);
     if output.is_empty() {
         "structured plugin handler failed".into()
     } else {
@@ -2049,6 +2059,21 @@ done"#,
                 .unwrap_err();
         assert!(error.contains("exit status: 7"), "{error}");
         assert!(error.contains("died reading"), "{error}");
+        assert!(handler.is_none());
+
+        // A handler that logged plenty before it died reports what it said
+        // last, marked as cut, rather than its earliest lines.
+        let chatty = persistent_fixture(
+            "chatty-crash-fixture",
+            "IFS= read -r event\ni=0\nwhile [ $i -lt 400 ]; do echo \"early log line $i\" >&2; i=$((i+1)); done\necho 'final words' >&2\nexit 7",
+        );
+        let error = run_persistent_handler(&mut handler, &chatty, 4, &shutdown, &generation, 1)
+            .unwrap_err();
+        assert!(error.contains("exit status: 7"), "{error}");
+        assert!(error.ends_with("final words"), "{error}");
+        assert!(error.contains(": …"), "{error}");
+        assert!(error.contains("early log line 399"), "{error}");
+        assert!(error.len() <= MAX_REPORT_BYTES, "{error}");
         assert!(handler.is_none());
     }
 
