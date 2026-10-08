@@ -180,6 +180,12 @@ impl DiffReviewLayout {
         }
     }
 
+    /// The `visible_index`th diff row in view, where it is drawn: on whole
+    /// pixels, each row's bottom the next row's top.
+    pub fn row(&self, visible_index: usize) -> Bounds {
+        self.content.row(self.line_height, visible_index)
+    }
+
     pub fn hit_test(&self, x: f32, y: f32, request_id: u64) -> DiffReviewAction {
         if self
             .stage_button
@@ -544,6 +550,31 @@ mod tests {
             }],
             raw: "--- a/src/fixture.rs\n+++ b/src/fixture.rs".into(),
             reviewed: false,
+        }
+    }
+
+    #[test]
+    fn rows_land_on_whole_pixels_and_tile_the_content() {
+        // A 20-pixel cell gives 30-pixel lines; an odd window height puts
+        // the centred card, and so its content, between pixels.
+        let layout = DiffReviewLayout::calculate(
+            901.0,
+            501.0,
+            10.0,
+            20.0,
+            0.37,
+            "fixture.rs",
+            40,
+            80,
+            false,
+        );
+        assert_ne!(layout.content.y.fract(), 0.0);
+        for index in 0..layout.rows_that_fit {
+            let row = layout.row(index);
+            assert_eq!([row.y.fract(), row.height.fract()], [0.0, 0.0]);
+            assert_eq!((row.x, row.width), (layout.content.x, layout.content.width));
+            assert_eq!(layout.row(index + 1).y, row.bottom());
+            assert!((row.y - (layout.content.y + index as f32 * layout.line_height)).abs() <= 0.5);
         }
     }
 

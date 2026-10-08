@@ -57,7 +57,6 @@ impl Renderer {
             with_alpha(self.ui.palette_text, anim),
         );
 
-        let content_start_y = layout.content.y;
         let dim_color = with_alpha(self.ui.palette_text_dim, 0.7 * anim);
         let added_color = with_alpha(self.ui.success, anim);
         let removed_color = with_alpha(self.ui.error, anim);
@@ -67,7 +66,7 @@ impl Renderer {
         let removed_bg = with_alpha(self.ui.error, 0.15 * anim);
 
         for (visible_row, (_, row)) in info.visible_rows.iter().enumerate() {
-            let line_y = content_start_y + visible_row as f32 * layout.line_height;
+            let line = layout.row(visible_row);
             let (color, bg) = match row {
                 DiffReviewRow::Header(_) => (header_color, None),
                 DiffReviewRow::Context(_) => (dim_color, None),
@@ -77,13 +76,8 @@ impl Renderer {
                 DiffReviewRow::Blank => continue,
             };
             if let Some(bg_color) = bg {
-                self.rect_pipeline.push_rect(
-                    layout.content.x,
-                    line_y,
-                    layout.content.width,
-                    layout.line_height,
-                    bg_color,
-                );
+                self.rect_pipeline
+                    .push_rect(line.x, line.y, line.width, line.height, bg_color);
             }
             let display = row.display_text();
             for (column, character) in display
@@ -95,8 +89,8 @@ impl Renderer {
                 if !character.is_whitespace() {
                     self.text_pipeline.push_char(
                         character,
-                        layout.content.x + column as f32 * char_scale,
-                        line_y,
+                        line.x + column as f32 * char_scale,
+                        line.y,
                         color,
                     );
                 }
