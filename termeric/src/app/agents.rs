@@ -288,12 +288,7 @@ impl App {
         if let Some(token) = supervisor {
             return self.supervised_submit(token, peer_process, tab_id, pane_id, agent_id, text);
         }
-        if !self.config.security.allow_gui_control_input {
-            return Err(
-                "External terminal input is disabled; set security.allow_gui_control_input = true"
-                    .into(),
-            );
-        }
+        self.require_control_input()?;
         let identity = TerminalIdentity {
             tab_id: usize::try_from(tab_id)
                 .map_err(|_| "Target tab ID does not fit this platform".to_string())?,

@@ -61,6 +61,24 @@ pub(super) fn validate_ordinary_tab_creation_capacity(
     Ok(())
 }
 
+/// Why another program's input was refused: the person has not allowed it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ControlInputDisabled;
+
+impl std::fmt::Display for ControlInputDisabled {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(
+            "External control input is disabled; set security.allow_gui_control_input = true",
+        )
+    }
+}
+
+impl From<ControlInputDisabled> for String {
+    fn from(refusal: ControlInputDisabled) -> Self {
+        refusal.to_string()
+    }
+}
+
 /// A requester's stable tab ID as this platform's tab ID.
 pub(super) fn control_tab_id(tab_id: u64) -> std::result::Result<usize, String> {
     usize::try_from(tab_id).map_err(|_| "Target tab ID does not fit this platform".to_string())
@@ -90,6 +108,16 @@ fn plugin_pane_layout_state(manager: &PaneManager) -> (Vec<u32>, u32, Option<u32
 }
 
 impl App {
+    /// Refuses text and answers from other programs (control clients and
+    /// plugins) unless `security.allow_gui_control_input` allows them.
+    pub(super) fn require_control_input(&self) -> Result<(), ControlInputDisabled> {
+        if self.config.security.allow_gui_control_input {
+            Ok(())
+        } else {
+            Err(ControlInputDisabled)
+        }
+    }
+
     pub(super) fn control_tabs(&self) -> std::result::Result<&TabManager, String> {
         self.tabs
             .as_ref()
@@ -478,12 +506,7 @@ impl App {
         ),
         String,
     > {
-        if !self.config.security.allow_gui_control_input {
-            return Err(
-                "External terminal input is disabled; set security.allow_gui_control_input = true"
-                    .into(),
-            );
-        }
+        self.require_control_input()?;
         if self.guardrail.is_awaiting_current() {
             return Err("A destructive-command confirmation is already pending".into());
         }

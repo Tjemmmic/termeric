@@ -52,12 +52,49 @@ impl SendTarget {
     /// The key its sends are rate-limited under.
     fn key(&self) -> String {
         match self {
-            SendTarget::Terminal(target) => {
-                format!("{}:{}", target.identity.tab_id, target.identity.pane_id.0)
-            }
+            SendTarget::Terminal(target) => terminal_send_key(target.identity),
             SendTarget::Session { id, .. } => format!("session:{}", id.control_id()),
         }
     }
+}
+
+/// The key sends to the agent in terminal `identity` are rate-limited under.
+fn terminal_send_key(identity: TerminalIdentity) -> String {
+    format!("{}:{}", identity.tab_id, identity.pane_id.0)
+}
+
+/// Why a request that names the supervisor's token was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum NotTheSupervisor {
+    /// The token is not this window's running supervisor's.
+    UnknownToken,
+    /// The request came from outside the supervisor's own agent process.
+    OtherProcess,
+}
+
+impl std::fmt::Display for NotTheSupervisor {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::UnknownToken => {
+                "This supervisor does not oversee that window, or it has been stopped"
+            }
+            Self::OtherProcess => "Only the supervisor Termeric started may act as the supervisor",
+        })
+    }
+}
+
+impl From<NotTheSupervisor> for String {
+    fn from(refusal: NotTheSupervisor) -> Self {
+        refusal.to_string()
+    }
+}
+
+/// How the supervisor may carry out an action its mode and limits allow.
+enum Permitted {
+    /// Put it to the person first.
+    Assist,
+    /// Carry it out on its own.
+    Auto,
 }
 
 /// A message the supervisor asked to send, waiting for the person.
@@ -501,12 +538,7 @@ impl App {
         let busy = self.agent_view.session(id).is_none_or(|session| {
             session.transcript().turn_active() || session.queued().next().is_some()
         });
-        let person_writing = self
-            .agent_view
-            .state
-            .conversation(id)
-            .is_some_and(|view| !view.composer.is_empty());
-        if busy || person_writing {
+        if busy || self.person_writing_to(id) {
             return false;
         }
         let Some(supervisor) = &mut self.supervisor else {
@@ -588,14 +620,7 @@ impl App {
         agent_id: &str,
         text: &str,
     ) -> Result<bool, String> {
-        if !self.owns_supervisor_token(token) {
-            return Err(
-                "This supervisor does not oversee that window, or it has been stopped".into(),
-            );
-        }
-        if !self.is_supervisor_process(peer_process) {
-            return Err("Only the supervisor Termeric started may send as the supervisor".into());
-        }
+        self.check_supervisor_request(token, peer_process)?;
         let identity = TerminalIdentity {
             tab_id: usize::try_from(tab_id)
                 .map_err(|_| "Target tab ID does not fit this platform".to_string())?,
@@ -614,32 +639,56 @@ impl App {
         // it, before anything is decided.
         self.recheck_agent_target(&target)?;
         self.refuse_while_person_types(&target)?;
+        let key = terminal_send_key(identity);
+        match self.permit_supervisor_action(&key, text, &format!("a message to {agent_name}"))? {
+            Permitted::Auto => {
+                self.paste_and_submit_for_supervisor(target, text)?;
+                self.record_supervisor_action(
+                    &key,
+                    text,
+                    format!("Sent to {agent_name}: {}", one_line(text)),
+                );
+                Ok(false)
+            }
+            Permitted::Assist => self.hold_supervisor_message(SendTarget::Terminal(target), text),
+        }
+    }
+
+    /// Whether the supervisor may now do `action` to the agent whose sends
+    /// are limited under `key`: not in Watch mode, and within its limits. A
+    /// refusal is logged as refusing `what`, and returned.
+    fn permit_supervisor_action(
+        &mut self,
+        key: &str,
+        action: &str,
+        what: &str,
+    ) -> Result<Permitted, String> {
         let per_minute = self.config.supervisor.max_sends_per_minute;
-        let key = format!("{}:{}", identity.tab_id, identity.pane_id.0);
         let supervisor = self
             .supervisor
             .as_mut()
-            .expect("the token was checked above");
-        if let Err(refusal) =
-            supervisor
-                .limits
-                .check(supervisor.mode, per_minute, &key, text, Instant::now())
+            .ok_or(NotTheSupervisor::UnknownToken)?;
+        let mode = supervisor.mode;
+        if let Err(refusal) = supervisor
+            .limits
+            .check(mode, per_minute, key, action, Instant::now())
         {
-            supervisor.note(format!("Refused a message to {agent_name}: {refusal}"));
+            supervisor.note(format!("Refused {what}: {refusal}"));
             return Err(refusal.to_string());
         }
-        match supervisor.mode {
-            SupervisorMode::Watch => unreachable!("watch mode was refused above"),
-            SupervisorMode::Auto => {
-                self.paste_and_submit_for_supervisor(target, text)?;
-                let supervisor = self.supervisor.as_mut().expect("still running");
-                supervisor.limits.record(&key, text, Instant::now());
-                supervisor.note(format!("Sent to {agent_name}: {}", one_line(text)));
-                Ok(false)
-            }
-            SupervisorMode::Assist => {
-                self.hold_supervisor_message(SendTarget::Terminal(target), text)
-            }
+        Ok(match mode {
+            SupervisorMode::Watch => unreachable!("the limits refuse watch mode"),
+            SupervisorMode::Assist => Permitted::Assist,
+            SupervisorMode::Auto => Permitted::Auto,
+        })
+    }
+
+    /// Count an action the supervisor carried out toward its limits, and log
+    /// it as `entry`.
+    fn record_supervisor_action(&mut self, key: &str, action: &str, entry: String) {
+        if let Some(supervisor) = &mut self.supervisor {
+            supervisor.limits.record(key, action, Instant::now());
+            supervisor.note(entry);
         }
     }
 
@@ -778,18 +827,16 @@ impl App {
 
 impl App {
     /// Checks that a request comes from this window's supervisor.
-    fn check_supervisor_request(
+    pub(super) fn check_supervisor_request(
         &self,
         token: &str,
         peer_process: Option<u32>,
-    ) -> Result<(), String> {
+    ) -> Result<(), NotTheSupervisor> {
         if !self.owns_supervisor_token(token) {
-            return Err(
-                "This supervisor does not oversee that window, or it has been stopped".into(),
-            );
+            return Err(NotTheSupervisor::UnknownToken);
         }
         if !self.is_supervisor_process(peer_process) {
-            return Err("Only the supervisor Termeric started may act as the supervisor".into());
+            return Err(NotTheSupervisor::OtherProcess);
         }
         Ok(())
     }
@@ -837,31 +884,23 @@ impl App {
         }
         .key();
         let action = format!("{verb} approval {approval_id}");
-        let per_minute = self.config.supervisor.max_sends_per_minute;
-        let supervisor = self.supervisor.as_mut().expect("the token was checked");
-        if let Err(refusal) =
-            supervisor
-                .limits
-                .check(mode, per_minute, &key, &action, Instant::now())
-        {
-            supervisor.note(format!(
-                "Refused to {verb} a request in \"{title}\": {refusal}"
-            ));
-            return Err(refusal.to_string());
-        }
+        let permitted = self.permit_supervisor_action(
+            &key,
+            &action,
+            &format!("to {verb} a request in \"{title}\""),
+        )?;
         let session = self
             .agent_view
             .session_mut(id)
             .ok_or_else(|| "That agent view session has closed".to_string())?;
-        let decided = match mode {
-            SupervisorMode::Watch => unreachable!("watch mode was refused above"),
-            SupervisorMode::Assist => {
+        let decided = match permitted {
+            Permitted::Assist => {
                 if !session.suggest(approval_id, allow, reason) {
                     return Err(format!("Approval {approval_id} is no longer pending"));
                 }
                 false
             }
-            SupervisorMode::Auto => {
+            Permitted::Auto => {
                 let note = (!reason.is_empty()).then(|| reason.to_owned());
                 let answered = if allow {
                     session.answer(
@@ -898,14 +937,15 @@ impl App {
                 true
             }
         };
-        if let Some(supervisor) = &mut self.supervisor {
-            supervisor.limits.record(&key, &action, Instant::now());
-            supervisor.note(if decided {
+        self.record_supervisor_action(
+            &key,
+            &action,
+            if decided {
                 format!("Chose to {verb} a request in \"{title}\"")
             } else {
                 format!("Suggested you {verb} a request in \"{title}\"")
-            });
-        }
+            },
+        );
         self.request_redraw(RedrawReason::Action);
         Ok(decided)
     }
@@ -928,39 +968,23 @@ impl App {
             .session(id)
             .map(|session| format!("\"{}\"", session.title()))
             .ok_or_else(|| "That agent view session has closed".to_string())?;
-        if self
-            .agent_view
-            .state
-            .conversation(id)
-            .is_some_and(|view| !view.composer.is_empty())
-        {
-            return Err("The person is writing a message to that session; try again later".into());
-        }
+        self.refuse_while_person_writes(id)?;
         let target = SendTarget::Session {
             id,
             name: name.clone(),
         };
         let key = target.key();
-        let per_minute = self.config.supervisor.max_sends_per_minute;
-        let supervisor = self.supervisor.as_mut().expect("the token was checked");
-        if let Err(refusal) =
-            supervisor
-                .limits
-                .check(supervisor.mode, per_minute, &key, text, Instant::now())
-        {
-            supervisor.note(format!("Refused a message to {name}: {refusal}"));
-            return Err(refusal.to_string());
-        }
-        match supervisor.mode {
-            SupervisorMode::Watch => unreachable!("watch mode was refused above"),
-            SupervisorMode::Auto => {
+        match self.permit_supervisor_action(&key, text, &format!("a message to {name}"))? {
+            Permitted::Auto => {
                 self.prompt_agent_view_session(id, text)?;
-                let supervisor = self.supervisor.as_mut().expect("still running");
-                supervisor.limits.record(&key, text, Instant::now());
-                supervisor.note(format!("Sent to {name}: {}", one_line(text)));
+                self.record_supervisor_action(
+                    &key,
+                    text,
+                    format!("Sent to {name}: {}", one_line(text)),
+                );
                 Ok(false)
             }
-            SupervisorMode::Assist => self.hold_supervisor_message(target, text),
+            Permitted::Assist => self.hold_supervisor_message(target, text),
         }
     }
 

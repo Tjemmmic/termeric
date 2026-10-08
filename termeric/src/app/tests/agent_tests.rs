@@ -344,10 +344,9 @@ fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
     let submit = |app: &mut App, agent: &str| {
         app.submit_control_text_to_agent(tab_id as u64, pane_id.0, agent, "go\non", None, None)
     };
-    assert!(
-        submit(&mut app, "codex")
-            .unwrap_err()
-            .contains("allow_gui_control_input")
+    assert_eq!(
+        submit(&mut app, "codex").unwrap_err(),
+        String::from(crate::app::control_actions::ControlInputDisabled)
     );
     app.config.security.allow_gui_control_input = true;
     assert_eq!(
@@ -1679,6 +1678,11 @@ done
         )
     };
     // The token alone, from a process outside the supervisor, is not enough.
+    use crate::app::supervisor::NotTheSupervisor;
+    assert_eq!(
+        app.check_supervisor_request(&token, Some(std::process::id())),
+        Err(NotTheSupervisor::OtherProcess)
+    );
     assert_eq!(
         app.supervised_submit(
             &token,
@@ -1689,7 +1693,7 @@ done
             "hello"
         )
         .unwrap_err(),
-        "Only the supervisor Termeric started may send as the supervisor"
+        String::from(NotTheSupervisor::OtherProcess)
     );
     assert!(
         send(&mut app, &token, "!rm -rf target")

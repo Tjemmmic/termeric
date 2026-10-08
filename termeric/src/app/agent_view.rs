@@ -649,6 +649,24 @@ impl App {
             && state.active == Some(id)
     }
 
+    /// Whether the person has started a message in session `id`'s composer,
+    /// which nothing sent on another program's behalf may interleave with.
+    pub(super) fn person_writing_to(&self, id: SessionId) -> bool {
+        self.agent_view
+            .state
+            .conversation(id)
+            .is_some_and(|view| !view.composer.is_empty())
+    }
+
+    /// Refuses a message sent on another program's behalf to session `id`
+    /// while the person is writing to it.
+    pub(super) fn refuse_while_person_writes(&self, id: SessionId) -> Result<(), String> {
+        if self.person_writing_to(id) {
+            return Err("The person is writing a message to that session; try again later".into());
+        }
+        Ok(())
+    }
+
     /// Tells the person, once per request, when a session needs them and
     /// they cannot see it.
     fn announce_agent_view_attention(&mut self) {
@@ -1518,12 +1536,7 @@ impl App {
                 reason,
             );
         }
-        if !self.config.security.allow_gui_control_input {
-            return Err(
-                "External control input is disabled; set security.allow_gui_control_input = true"
-                    .into(),
-            );
-        }
+        self.require_control_input()?;
         let session = self
             .agent_view
             .session_mut(id)
@@ -1553,12 +1566,7 @@ impl App {
         if let Some(token) = supervisor {
             return self.supervised_session_submit(token, peer_process, id, text);
         }
-        if !self.config.security.allow_gui_control_input {
-            return Err(
-                "External control input is disabled; set security.allow_gui_control_input = true"
-                    .into(),
-            );
-        }
+        self.require_control_input()?;
         crate::agents::supervisor::check_message(text).map_err(|refusal| refusal.to_string())?;
         self.prompt_agent_view_session(id, text)?;
         Ok(false)
@@ -1571,14 +1579,7 @@ impl App {
         id: SessionId,
         text: &str,
     ) -> Result<(), String> {
-        if self
-            .agent_view
-            .state
-            .conversation(id)
-            .is_some_and(|view| !view.composer.is_empty())
-        {
-            return Err("The person is writing a message to that session; try again later".into());
-        }
+        self.refuse_while_person_writes(id)?;
         let session = self
             .agent_view
             .session_mut(id)
@@ -1887,10 +1888,15 @@ mod tests {
     fn outside_answers_need_the_external_input_opt_in() {
         let (mut app, id) = app_with_waiting_session();
         let session = id.control_id();
-        let refused = app
-            .answer_agent_view_approval(session, "r1", true, "", None, None)
-            .unwrap_err();
-        assert!(refused.contains("allow_gui_control_input"), "{refused}");
+        let disabled = String::from(super::super::control_actions::ControlInputDisabled);
+        assert_eq!(
+            app.answer_agent_view_approval(session, "r1", true, "", None, None),
+            Err(disabled.clone())
+        );
+        assert_eq!(
+            app.submit_to_agent_view(session, "go", None, None),
+            Err(disabled)
+        );
         app.config.security.allow_gui_control_input = true;
         assert!(
             app.answer_agent_view_approval(session, "r9", true, "", None, None)

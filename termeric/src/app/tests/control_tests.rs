@@ -1589,10 +1589,10 @@ fn control_input_is_opt_in_exact_paste_aware_and_guarded_without_provider_execut
 
     let mut app = App::new_headless(Config::default()).unwrap();
     app.tabs = Some(tabs);
-    assert!(
+    assert_eq!(
         app.send_text_for(Requester::Control, tab_id as u64, 0, "safe", true, true)
-            .unwrap_err()
-            .contains("disabled")
+            .unwrap_err(),
+        String::from(crate::app::control_actions::ControlInputDisabled)
     );
     app.config.security.allow_gui_control_input = true;
     assert!(
