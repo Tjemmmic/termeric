@@ -247,8 +247,13 @@ impl PanelAnimation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::thread;
     use std::time::Duration;
+
+    /// Move an animation's start into the past, as if `elapsed` had passed
+    /// since it began, so timing is tested without sleeping.
+    fn rewind(start: &mut Instant, elapsed: Duration) {
+        *start = start.checked_sub(elapsed).unwrap();
+    }
 
     #[test]
     fn test_overlay_starts_inactive() {
@@ -265,13 +270,14 @@ mod tests {
         assert!(anim.is_visible());
 
         anim.close();
-        // Still visible during close animation
-        assert!(!anim.is_active() || anim.is_visible());
+        // Still active and visible during the close animation
+        assert!(anim.is_active());
+        assert!(anim.is_visible());
 
-        // Wait for animation to complete
-        thread::sleep(Duration::from_millis(200));
-        anim.update();
+        rewind(&mut anim.animation_start, Duration::from_millis(200));
+        assert!(!anim.update());
         assert!(!anim.is_active());
+        assert!(!anim.is_visible());
     }
 
     #[test]
@@ -281,9 +287,9 @@ mod tests {
         let p = anim.progress();
         assert!((0.0..=1.0).contains(&p));
 
-        thread::sleep(Duration::from_millis(200));
-        let p = anim.progress();
-        assert!((p - 1.0).abs() < 0.01);
+        rewind(&mut anim.animation_start, Duration::from_millis(200));
+        assert_eq!(anim.progress(), 1.0);
+        assert_eq!(anim.eased(), 1.0);
     }
 
     #[test]
@@ -307,28 +313,38 @@ mod tests {
     fn test_panel_visible_during_close() {
         let mut panel = PanelAnimation::new();
         panel.open();
-        // Let the open animation complete
-        thread::sleep(Duration::from_millis(250));
+        rewind(&mut panel.animation_start, Duration::from_millis(250));
+        assert_eq!(panel.raw_progress(), 1.0);
+        assert!(!panel.needs_redraw());
         assert!(panel.is_open());
         assert!(panel.is_visible());
         panel.close();
         // No longer "open" but still visible during close animation
         assert!(!panel.is_open());
         assert!(panel.is_visible());
+        assert!(!panel.is_closed());
+
+        rewind(&mut panel.animation_start, Duration::from_millis(250));
+        assert!(!panel.is_visible());
+        assert!(panel.is_closed());
     }
 
     #[test]
     fn test_panel_seamless_reversal() {
         let mut panel = PanelAnimation::new();
         panel.open();
-        thread::sleep(Duration::from_millis(50));
-        // Mid-animation, toggle should capture current position
+        // A quarter of the way through the 200ms open animation
+        rewind(&mut panel.animation_start, Duration::from_millis(50));
         let mid_progress = panel.raw_progress();
-        assert!(mid_progress > 0.0);
+        assert!(mid_progress >= 0.25);
         panel.close();
-        // After reversal, progress should start from mid_progress
-        let post_toggle = panel.raw_progress();
-        assert!(post_toggle <= mid_progress + 0.1); // Allow small timing variance
+        // The close starts from where the open had reached
+        assert!(panel.animation_base >= mid_progress);
+        assert!(panel.raw_progress() <= panel.animation_base);
+
+        rewind(&mut panel.animation_start, Duration::from_millis(200));
+        assert_eq!(panel.raw_progress(), 0.0);
+        assert!(panel.is_closed());
     }
 
     #[test]
