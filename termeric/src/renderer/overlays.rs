@@ -264,7 +264,6 @@ impl Renderer {
         }
 
         // ── Keyboard hint ──
-        let hint_y = layout.copy_button.bottom() + cell_height * 0.5;
         let first_line = info
             .scroll_offset
             .saturating_add(1)
@@ -284,10 +283,10 @@ impl Renderer {
         };
         self.push_ui_label_centered(
             &hint_text,
-            card_x + card_width / 2.0,
-            hint_y,
-            cell_height,
-            card_width - padding * 2.0,
+            layout.hint.center()[0],
+            layout.hint.y,
+            layout.hint.height,
+            layout.hint.width,
             label_size,
             with_alpha(self.ui.palette_text_dim, 0.35 * anim),
         );
@@ -450,10 +449,10 @@ impl Renderer {
         };
         self.push_ui_label_centered(
             &hint,
-            card_x + card_width / 2.0,
-            layout.done_button.bottom() + cell_height * 0.5,
-            cell_height,
-            card_width - padding * 2.0,
+            layout.hint.center()[0],
+            layout.hint.y,
+            layout.hint.height,
+            layout.hint.width,
             label_size,
             with_alpha(self.ui.palette_text_dim, 0.5 * anim),
         );
@@ -671,10 +670,10 @@ impl Renderer {
         });
         self.push_ui_label_centered(
             hint,
-            card_x + card_width / 2.0,
-            layout.cancel_button.bottom() + cell_height * 0.5,
-            cell_height,
-            card_width - padding * 2.0,
+            layout.hint.center()[0],
+            layout.hint.y,
+            layout.hint.height,
+            layout.hint.width,
             label_size,
             with_alpha(self.ui.palette_text_dim, 0.5 * anim),
         );

@@ -127,6 +127,8 @@ pub struct ContextPickerLayout {
     pub file_input: Bounds,
     pub cancel_button: Bounds,
     pub primary_button: Bounds,
+    /// The keyboard hint under the buttons.
+    pub hint: Bounds,
     pub padding: f32,
     pub title_height: f32,
     pub row_height: f32,
@@ -180,6 +182,7 @@ impl ContextPickerLayout {
             },
             cancel_button: text.button(cancel_x, cancel_width),
             primary_button: text.button(primary_x, primary_width),
+            hint: text.hint,
             padding: text.padding,
             title_height: text.title_height,
             row_height: text.line_height,

@@ -25,6 +25,9 @@ pub struct TextCard {
     pub button_y: f32,
     pub button_height: f32,
     pub button_gap: f32,
+    /// The hint line half a cell below the button row, inside the padding;
+    /// its text is centred in it.
+    pub hint: Bounds,
 }
 
 impl TextCard {
@@ -77,6 +80,9 @@ impl TextCard {
         let content_width = (card_width - padding * 2.0 - scrollbar_gutter).max(char_scale);
         let columns_that_fit = ((content_width / char_scale).floor() as usize).max(1);
 
+        let button_y = content_y + content_height + cell_height * 1.3;
+        let button_height = cell_height * 1.8;
+
         Self {
             card: Bounds::new(card_x, card_y, card_width, card_height),
             content: Bounds::new(content_x, content_y, content_width, content_height),
@@ -87,9 +93,15 @@ impl TextCard {
             footer_height,
             rows_that_fit,
             columns_that_fit,
-            button_y: content_y + content_height + cell_height * 1.3,
-            button_height: cell_height * 1.8,
+            button_y,
+            button_height,
             button_gap: cell_width * 1.5,
+            hint: Bounds::new(
+                content_x,
+                button_y + button_height + cell_height * 0.5,
+                card_width - padding * 2.0,
+                cell_height,
+            ),
         }
     }
 
@@ -299,5 +311,30 @@ mod tests {
             TextCard::calculate(300.0, 200.0, 10.0, 20.0, 0.5, 30.0, 400, 20, 380.0, 1_000);
         assert_eq!(closed.card.y, open.card.y - 10.0);
         assert_eq!(closed.button_y, open.button_y - 10.0);
+        assert_eq!(closed.hint.y, open.hint.y - 10.0);
+    }
+
+    #[test]
+    fn the_hint_sits_inside_the_card_half_a_cell_below_its_buttons() {
+        for (window_width, window_height) in [(300.0, 200.0), (1_600.0, 1_000.0)] {
+            let card = TextCard::calculate(
+                window_width,
+                window_height,
+                10.0,
+                20.0,
+                1.0,
+                30.0,
+                80,
+                20,
+                380.0,
+                12,
+            );
+            let buttons = card.button(card.card.x + card.padding, 10.0);
+            assert_eq!(card.hint.y, buttons.bottom() + 10.0);
+            assert_eq!(card.hint.height, 20.0);
+            assert_eq!(card.hint.x, card.card.x + card.padding);
+            assert_eq!(card.hint.right(), card.card.right() - card.padding);
+            assert!(card.hint.bottom() <= card.card.bottom());
+        }
     }
 }
