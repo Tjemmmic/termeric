@@ -646,10 +646,13 @@ mod tests {
     #[test]
     fn a_command_holding_stderr_open_delays_the_exit_report_only_briefly() {
         // The holder keeps the agent's stderr open until the test kills it.
+        // It ignores SIGTERM from the moment it is forked, since the agent
+        // ignores it first: set inside the holder instead, the agent could
+        // exit and its group be signalled before the holder got to it.
         let started = Instant::now();
         let mut process = AgentProcess::spawn(
             &shell(
-                "(trap '' TERM; exec sleep 600) </dev/null >/dev/null & echo $!
+                "trap '' TERM; (exec sleep 600) </dev/null >/dev/null & echo $!
                 echo 'last words' >&2; exit 4",
             ),
             noop_waker(),
