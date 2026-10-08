@@ -4,8 +4,7 @@
 use super::*;
 use crate::agents::AgentActivity;
 use crate::ui::agents_panel::{
-    AgentOrigin, AgentRow, AgentRowState, AgentsNavigationKey, AgentsPanelAction, AgentsPanelInfo,
-    AgentsPanelLayout,
+    AgentOrigin, AgentRow, AgentRowState, AgentsPanelAction, AgentsPanelInfo, AgentsPanelLayout,
 };
 use winit::keyboard::{Key, NamedKey};
 
@@ -120,18 +119,7 @@ impl App {
             return true;
         }
         let plain = self.modifiers.is_empty();
-        let navigation = match key {
-            Key::Named(NamedKey::Tab) if self.modifiers == ModifiersState::SHIFT => {
-                Some(AgentsNavigationKey::Previous)
-            }
-            Key::Named(NamedKey::Tab | NamedKey::ArrowDown) if plain => {
-                Some(AgentsNavigationKey::Next)
-            }
-            Key::Named(NamedKey::ArrowUp) if plain => Some(AgentsNavigationKey::Previous),
-            Key::Named(NamedKey::Home) if plain => Some(AgentsNavigationKey::First),
-            Key::Named(NamedKey::End) if plain => Some(AgentsNavigationKey::Last),
-            _ => None,
-        };
+        let navigation = super::text_field_keys::focus_step_for_key(key, self.modifiers);
         let layout = self.agents_panel_layout();
         if let Some(navigation) = navigation {
             self.agents_panel.navigate(navigation, layout);

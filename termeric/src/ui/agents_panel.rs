@@ -9,6 +9,7 @@
 
 use crate::tabs::TerminalIdentity;
 use crate::ui::animation::PanelAnimation;
+use crate::ui::focus_step::FocusStep;
 use crate::ui::geometry::Bounds;
 use crate::ui::side_panel::SidePanelFrame;
 
@@ -87,15 +88,6 @@ pub enum AgentsPanelAction {
     /// Show the agent at the row with this index.
     Show(usize),
     ToggleSupervisor,
-}
-
-/// Keys that move focus between controls.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AgentsNavigationKey {
-    Next,
-    Previous,
-    First,
-    Last,
 }
 
 /// Everything the renderer and accessibility need for one frame.
@@ -491,19 +483,12 @@ impl AgentsPanel {
     }
 
     /// Move keyboard focus, and scroll to keep a focused row in view.
-    pub fn navigate(&mut self, key: AgentsNavigationKey, layout: AgentsPanelLayout) {
+    pub fn navigate(&mut self, step: FocusStep, layout: AgentsPanelLayout) {
         let controls = self.controls(layout.supervisor.is_some());
         let current = self
             .focus
             .and_then(|focus| controls.iter().position(|control| *control == focus));
-        let last = controls.len() - 1;
-        let next = match (key, current) {
-            (AgentsNavigationKey::First, _) | (AgentsNavigationKey::Next, None) => 0,
-            (AgentsNavigationKey::Last, _) | (AgentsNavigationKey::Previous, None) => last,
-            (AgentsNavigationKey::Next, Some(index)) => (index + 1) % controls.len(),
-            (AgentsNavigationKey::Previous, Some(index)) => (index + last) % controls.len(),
-        };
-        self.focus = Some(controls[next]);
+        self.focus = Some(controls[step.target(current, controls.len())]);
         self.reveal_focus(layout);
     }
 
@@ -662,7 +647,7 @@ mod tests {
             "the most urgent first"
         );
         let layout = layout(2, None);
-        panel.navigate(AgentsNavigationKey::Next, layout);
+        panel.navigate(FocusStep::Next, layout);
         assert_eq!(
             panel.build_info(rows.clone(), None).focus,
             Some(AgentsControl::Agent(1))
@@ -672,13 +657,13 @@ mod tests {
         let info = panel.build_info(reordered.clone(), None);
         assert_eq!(info.focus, Some(AgentsControl::Agent(0)));
         assert_eq!(panel.shown_agent(0), Some(reordered[0].identity));
-        panel.navigate(AgentsNavigationKey::Next, layout);
-        panel.navigate(AgentsNavigationKey::Next, layout);
+        panel.navigate(FocusStep::Next, layout);
+        panel.navigate(FocusStep::Next, layout);
         assert_eq!(
             panel.build_info(reordered.clone(), None).focus,
             Some(AgentsControl::Close)
         );
-        panel.navigate(AgentsNavigationKey::Next, layout);
+        panel.navigate(FocusStep::Next, layout);
         assert_eq!(
             panel.build_info(reordered.clone(), None).focus,
             Some(AgentsControl::Agent(0)),
@@ -697,8 +682,8 @@ mod tests {
         panel.toggle(&rows);
         panel.build_info(rows.clone(), None);
         let layout = layout(30, None);
-        panel.navigate(AgentsNavigationKey::Previous, layout);
-        panel.navigate(AgentsNavigationKey::Previous, layout);
+        panel.navigate(FocusStep::Previous, layout);
+        panel.navigate(FocusStep::Previous, layout);
         let info = panel.build_info(rows.clone(), None);
         assert_eq!(info.focus, Some(AgentsControl::Agent(29)));
         assert!(

@@ -7,9 +7,10 @@
 //! - Delete commands with the Delete button shown on the hovered row
 //! - Close via scrim or toolbar click, × button, or Escape
 
-use super::navigation::{CommandControl, CommandNavigation, CommandNavigationKey};
+use super::navigation::{CommandControl, CommandNavigation};
 use crate::config::CustomCommand;
 use crate::ui::animation::PanelAnimation;
+use crate::ui::focus_step::FocusStep;
 use crate::ui::geometry::Bounds;
 use crate::ui::side_panel::SidePanelFrame;
 use crate::ui::text_input::{TextInput, TextInputEdit, TextLimit};
@@ -550,14 +551,14 @@ impl CommandsPanel {
 
     pub fn navigate_browse(
         &mut self,
-        key: CommandNavigationKey,
+        step: FocusStep,
         commands: &[CustomCommand],
         layout: CommandsPanelLayout,
     ) {
         if !self.is_open() || self.is_editing() {
             return;
         }
-        let control = self.navigation.navigate(key, commands);
+        let control = self.navigation.navigate(step, commands);
         if let Some(index) = control.row() {
             self.reveal_row(index, layout);
         }
@@ -763,7 +764,7 @@ mod tests {
         assert_eq!(panel.build_info(&commands).browse_focus, None);
         for _ in 0..199 {
             let layout = panel.layout(800.0, 600.0, 0.0, 8.0, 16.0, commands.len());
-            panel.navigate_browse(CommandNavigationKey::Next, &commands, layout);
+            panel.navigate_browse(FocusStep::Next, &commands, layout);
         }
         let layout = panel.layout(800.0, 600.0, 0.0, 8.0, 16.0, commands.len());
         assert_eq!(

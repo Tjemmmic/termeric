@@ -41,24 +41,16 @@ impl App {
         if self.commands_panel.is_editing() {
             return self.handle_commands_form_key(key);
         }
-        use crate::ui::commands::navigation::CommandNavigationKey;
+        use crate::ui::focus_step::FocusStep;
         if self.alt_graph_active {
             return true;
         }
         let plain = self.modifiers.is_empty();
         let navigation = match key {
-            Key::Named(NamedKey::Tab) if self.modifiers == ModifiersState::SHIFT => {
-                Some(CommandNavigationKey::Previous)
-            }
-            Key::Named(NamedKey::Tab | NamedKey::ArrowDown | NamedKey::ArrowRight) if plain => {
-                Some(CommandNavigationKey::Next)
-            }
-            Key::Named(NamedKey::ArrowUp | NamedKey::ArrowLeft) if plain => {
-                Some(CommandNavigationKey::Previous)
-            }
-            Key::Named(NamedKey::Home) if plain => Some(CommandNavigationKey::First),
-            Key::Named(NamedKey::End) if plain => Some(CommandNavigationKey::Last),
-            _ => None,
+            // A row's Run and Delete sit side by side.
+            Key::Named(NamedKey::ArrowRight) if plain => Some(FocusStep::Next),
+            Key::Named(NamedKey::ArrowLeft) if plain => Some(FocusStep::Previous),
+            _ => super::text_field_keys::focus_step_for_key(key, self.modifiers),
         };
         let layout = self.commands_panel_layout();
         if let Some(navigation) = navigation {

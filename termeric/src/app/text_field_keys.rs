@@ -1,6 +1,8 @@
-//! The editing keys every single-line text field shares.
+//! The editing keys every single-line text field shares, and the keys that
+//! step focus through a panel's controls.
 
 use super::*;
+use crate::ui::focus_step::FocusStep;
 use crate::ui::text_input::TextInputEdit;
 use winit::keyboard::{Key, NamedKey};
 
@@ -29,6 +31,22 @@ pub(super) fn types_text(modifiers: ModifiersState, alt_graph_active: bool) -> b
     alt_graph_active
         || !modifiers
             .intersects(ModifiersState::CONTROL | ModifiersState::ALT | ModifiersState::SUPER)
+}
+
+/// Tab and Shift+Tab, the vertical arrows, Home, and End step keyboard focus
+/// through a panel's controls.
+pub(super) fn focus_step_for_key(key: &Key, modifiers: ModifiersState) -> Option<FocusStep> {
+    let plain = modifiers.is_empty();
+    match key {
+        Key::Named(NamedKey::Tab) if modifiers == ModifiersState::SHIFT => {
+            Some(FocusStep::Previous)
+        }
+        Key::Named(NamedKey::Tab | NamedKey::ArrowDown) if plain => Some(FocusStep::Next),
+        Key::Named(NamedKey::ArrowUp) if plain => Some(FocusStep::Previous),
+        Key::Named(NamedKey::Home) if plain => Some(FocusStep::First),
+        Key::Named(NamedKey::End) if plain => Some(FocusStep::Last),
+        _ => None,
+    }
 }
 
 /// Plain arrows, Home, End, Backspace, and Delete edit by grapheme; Ctrl turns

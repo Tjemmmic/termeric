@@ -1,6 +1,7 @@
 //! Stable command identities and keyboard/assistive browse focus.
 
 use crate::config::CustomCommand;
+use crate::ui::focus_step::FocusStep;
 use std::collections::{HashMap, HashSet};
 
 type CommandTuple<'a> = (&'a str, &'a str, Option<&'a str>);
@@ -112,14 +113,6 @@ impl CommandControl {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum CommandNavigationKey {
-    Next,
-    Previous,
-    First,
-    Last,
-}
-
 #[derive(Default)]
 enum StoredControl {
     #[default]
@@ -173,11 +166,7 @@ impl CommandNavigation {
         true
     }
 
-    pub fn navigate(
-        &mut self,
-        key: CommandNavigationKey,
-        commands: &[CustomCommand],
-    ) -> CommandControl {
+    pub fn navigate(&mut self, step: FocusStep, commands: &[CustomCommand]) -> CommandControl {
         // Two fixed controls plus Run/Delete per row, without allocating a second list.
         let last = commands.len().saturating_mul(2).saturating_add(1);
         let current = match self.resolve(commands).unwrap_or(CommandControl::New) {
@@ -186,24 +175,7 @@ impl CommandNavigation {
             CommandControl::Delete(index) => 2 + index * 2,
             CommandControl::Close => last,
         };
-        let next = match key {
-            CommandNavigationKey::First => 0,
-            CommandNavigationKey::Last => last,
-            CommandNavigationKey::Next => {
-                if current >= last {
-                    0
-                } else {
-                    current + 1
-                }
-            }
-            CommandNavigationKey::Previous => {
-                if current == 0 {
-                    last
-                } else {
-                    current - 1
-                }
-            }
-        };
+        let next = step.target(Some(current), last + 1);
         let control = if next == 0 {
             CommandControl::New
         } else if next == last {
@@ -278,10 +250,7 @@ mod tests {
             CommandControl::Close,
             CommandControl::New,
         ] {
-            assert_eq!(
-                navigation.navigate(CommandNavigationKey::Next, &commands),
-                expected
-            );
+            assert_eq!(navigation.navigate(FocusStep::Next, &commands), expected);
         }
         for expected in [
             CommandControl::Close,
@@ -292,24 +261,24 @@ mod tests {
             CommandControl::New,
         ] {
             assert_eq!(
-                navigation.navigate(CommandNavigationKey::Previous, &commands),
+                navigation.navigate(FocusStep::Previous, &commands),
                 expected
             );
         }
         assert_eq!(
-            navigation.navigate(CommandNavigationKey::Last, &commands),
+            navigation.navigate(FocusStep::Last, &commands),
             CommandControl::Close
         );
         assert_eq!(
-            navigation.navigate(CommandNavigationKey::First, &commands),
+            navigation.navigate(FocusStep::First, &commands),
             CommandControl::New
         );
         assert_eq!(
-            navigation.navigate(CommandNavigationKey::Next, &[]),
+            navigation.navigate(FocusStep::Next, &[]),
             CommandControl::Close
         );
         assert_eq!(
-            navigation.navigate(CommandNavigationKey::Next, &[]),
+            navigation.navigate(FocusStep::Next, &[]),
             CommandControl::New
         );
     }

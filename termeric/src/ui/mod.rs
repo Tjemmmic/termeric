@@ -16,6 +16,7 @@ pub mod cursor_motion;
 pub mod diff_review;
 pub mod domain_picker;
 pub mod filter_field;
+pub mod focus_step;
 pub mod geometry;
 pub mod guardrail;
 pub mod icon;
