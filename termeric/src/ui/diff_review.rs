@@ -301,9 +301,10 @@ impl DiffReviewLayout {
         let char_scale = (cell_width * CONTENT_CHAR_SCALE).max(1.0);
         let padding = (cell_width * 2.0).max(12.0).round();
         let title_height = (cell_height * 2.5).round();
-        // The button row and the space below it.
-        let footer_height = (cell_height * 4.5).round();
-        let bottom_margin = (padding * 0.5).round();
+        // The space above the button row, which sits on the card's bottom
+        // padding.
+        let button_gap_above = (cell_height * 1.3).round();
+        let button_height = (cell_height * 1.8).round();
         let outer_margin = (cell_width * 2.0).max(12.0).round();
         let scrollbar_gutter = cell_width.max(6.0).round();
 
@@ -315,7 +316,7 @@ impl DiffReviewLayout {
         let available_width = (window_width - outer_margin * 2.0).floor().max(1.0);
         let card_width = preferred_width.max(500.0).min(available_width);
 
-        let fixed_height = padding + title_height + footer_height + bottom_margin;
+        let fixed_height = padding + title_height + button_gap_above + button_height + padding;
         let available_height = (window_height - outer_margin * 2.0).max(line_height);
         let content_budget = (available_height - fixed_height).max(line_height);
         let rows_that_fit = ((content_budget / line_height).floor() as usize).max(1);
@@ -337,8 +338,7 @@ impl DiffReviewLayout {
             content_height,
         );
 
-        let button_y = content.bottom() + (cell_height * 1.3).round();
-        let button_height = (cell_height * 1.8).round();
+        let button_y = content.bottom() + button_gap_above;
         let button_gap = (cell_width * 1.5).round();
         let button = |x: f32, width: f32| Bounds::new(x, button_y, width.max(1.0), button_height);
         // The row inside the padding, less the gaps between `buttons` buttons.
@@ -912,6 +912,29 @@ mod tests {
                         [layout.padding, layout.title_height].map(f32::fract),
                         [0.0; 2]
                     );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_button_row_sits_on_the_cards_bottom_padding() {
+        for (cell_width, cell_height) in [(10.0, 20.0), (7.3, 15.6), (19.2, 38.0)] {
+            for change_actions in [false, true] {
+                let layout = DiffReviewLayout::calculate(
+                    1_600.0,
+                    1_000.0,
+                    cell_width,
+                    cell_height,
+                    1.0,
+                    "fixture.rs",
+                    10,
+                    80,
+                    change_actions,
+                );
+                for button in DiffReviewButton::row(change_actions) {
+                    let bounds = layout.button(*button).unwrap();
+                    assert_eq!(bounds.bottom() + layout.padding, layout.card.bottom());
                 }
             }
         }
