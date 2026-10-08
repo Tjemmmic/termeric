@@ -29,11 +29,16 @@ pub fn generate_session_id() -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
     let sequence = SESSION_ID_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    session_id_at(duration, std::process::id(), sequence)
+}
+
+/// Every part has a fixed width, so IDs sort lexically in time order.
+fn session_id_at(since_epoch: std::time::Duration, process_id: u32, sequence: u64) -> String {
     format!(
-        "{}_{}_{:010}_{:06}",
-        format_unix_timestamp(duration.as_secs(), None).replace([':', 'T', 'Z'], ""),
-        duration.subsec_nanos(),
-        std::process::id(),
+        "{}_{:09}_{:010}_{:06}",
+        format_unix_timestamp(since_epoch.as_secs(), None).replace([':', 'T', 'Z'], ""),
+        since_epoch.subsec_nanos(),
+        process_id,
         sequence % 1_000_000,
     )
 }
@@ -150,6 +155,25 @@ mod tests {
             format_unix_timestamp(1_582_934_400, Some(7)),
             "2020-02-29T00:00:00.007Z"
         );
+    }
+
+    #[test]
+    fn ids_sort_lexically_in_time_order() {
+        use std::time::Duration;
+        let times = [
+            Duration::new(1_790_200_000, 5),
+            Duration::new(1_790_200_000, 40),
+            Duration::new(1_790_200_000, 999_999_999),
+            Duration::new(1_790_200_001, 0),
+        ];
+        let ids: Vec<_> = times
+            .iter()
+            .map(|time| session_id_at(*time, 4_242, 7))
+            .collect();
+        let mut sorted = ids.clone();
+        sorted.sort();
+        assert_eq!(sorted, ids);
+        assert!(ids.iter().all(|id| id.len() == ids[0].len()));
     }
 
     #[test]
