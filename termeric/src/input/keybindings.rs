@@ -704,20 +704,13 @@ impl Default for ShortcutRegistry {
 
 // ── Plugin / custom bindings ────────────────────────────────────────────────
 
-/// A key binding definition for plugin/custom actions (SendText, RunCommand, etc.)
+/// One `[[keybindings]]` entry in config.toml: a key for a plugin or custom
+/// action (SendText, RunCommand, PluginCommand). Its modifiers are written
+/// as a `[[shortcuts]]` entry writes them, flat beside the key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct KeyBinding {
     pub key: String,
-    #[serde(default)]
-    pub modifiers: KeyModifiers,
-    pub action: KeyAction,
-}
-
-/// Modifier keys for a binding
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct KeyModifiers {
     #[serde(default)]
     pub ctrl: bool,
     #[serde(default)]
@@ -726,6 +719,14 @@ pub struct KeyModifiers {
     pub shift: bool,
     #[serde(default, rename = "super")]
     pub super_key: bool,
+    pub action: KeyAction,
+}
+
+impl KeyBinding {
+    /// The chord this entry binds, normalized as every chord is.
+    fn chord(&self) -> KeyChord {
+        KeyChord::new(&self.key, self.ctrl, self.alt, self.shift, self.super_key)
+    }
 }
 
 /// Action to perform when a plugin/custom key binding is triggered.
@@ -754,15 +755,9 @@ impl KeyBindingManager {
     pub fn load(&mut self, bindings: Vec<KeyBinding>) {
         self.key_map.clear();
         for binding in bindings {
-            let modifiers = &binding.modifiers;
-            let chord = KeyChord::new(
-                &binding.key,
-                modifiers.ctrl,
-                modifiers.alt,
-                modifiers.shift,
-                modifiers.super_key,
-            );
-            self.key_map.entry(chord).or_insert(binding.action);
+            self.key_map
+                .entry(binding.chord())
+                .or_insert(binding.action);
         }
     }
 
@@ -916,12 +911,10 @@ mod tests {
     fn custom_keybindings_share_the_shortcut_normalization() {
         let binding = |key: &str, ctrl: bool, alt: bool, shift: bool, text: &str| KeyBinding {
             key: key.into(),
-            modifiers: KeyModifiers {
-                ctrl,
-                alt,
-                shift,
-                super_key: false,
-            },
+            ctrl,
+            alt,
+            shift,
+            super_key: false,
             action: KeyAction::SendText { text: text.into() },
         };
         let mut manager = KeyBindingManager::new();
@@ -1493,11 +1486,10 @@ mod tests {
         let mut manager = KeyBindingManager::new();
         manager.load(vec![KeyBinding {
             key: "t".to_string(),
-            modifiers: KeyModifiers {
-                ctrl: true,
-                shift: true,
-                ..Default::default()
-            },
+            ctrl: true,
+            alt: false,
+            shift: true,
+            super_key: false,
             action: KeyAction::PluginCommand {
                 command_id: "test_plugin".into(),
             },

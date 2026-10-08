@@ -583,33 +583,24 @@ fn unicode_picker_tracks_only_the_same_focused_owner_through_topology_changes() 
 
 #[test]
 fn shortcuts_outrank_plugin_keybindings_and_both_outrank_the_terminal() {
-    use crate::input::keybindings::{KeyAction, KeyBinding, KeyModifiers};
+    use crate::input::keybindings::{KeyAction, KeyBinding};
     use winit::keyboard::{Key, ModifiersState};
     let mut app = App::new_headless_running(
         "stty raw -echo; printf READY; dd bs=1 count=6 2>/dev/null | od -An -c; sleep 0.2",
         "bound-key-reader",
     );
     app.wait_for_screen_text("READY");
-    let control_shift = KeyModifiers {
+    let control_shift = |key: &str, text: &str| KeyBinding {
+        key: key.into(),
         ctrl: true,
+        alt: false,
         shift: true,
-        ..KeyModifiers::default()
+        super_key: false,
+        action: KeyAction::SendText { text: text.into() },
     };
     app.keybinding_manager.load(vec![
-        KeyBinding {
-            key: "p".into(),
-            modifiers: control_shift.clone(),
-            action: KeyAction::SendText {
-                text: "SHADOW".into(),
-            },
-        },
-        KeyBinding {
-            key: "y".into(),
-            modifiers: control_shift,
-            action: KeyAction::SendText {
-                text: "PLUGIN".into(),
-            },
-        },
+        control_shift("p", "SHADOW"),
+        control_shift("y", "PLUGIN"),
     ]);
     app.modifiers = ModifiersState::CONTROL | ModifiersState::SHIFT;
 

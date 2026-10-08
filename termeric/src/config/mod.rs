@@ -2140,6 +2140,11 @@ mod tests {
                 "[[keybindings]]\nkey = \"a\"\naction = { type = \"send_text\", txt = \"x\" }\n",
                 3,
             ),
+            // Modifiers are written flat, as in [[shortcuts]].
+            (
+                "[[keybindings]]\nkey = \"a\"\nmodifiers = { ctrl = true }\naction = { type = \"send_text\", text = \"x\" }\n",
+                3,
+            ),
             (
                 "[[shortcuts]]\naction = \"copy\"\nkey = \"c\"\ncrtl = true\n",
                 4,
@@ -2150,6 +2155,23 @@ mod tests {
             assert!(error.contains("unknown field"), "{source}: {error}");
             assert!(error.contains(&format!("line {line}")), "{source}: {error}");
         }
+    }
+
+    #[test]
+    fn a_keybinding_writes_its_modifiers_flat_like_a_shortcut() {
+        let source = "\
+[[keybindings]]
+key = \"l\"
+ctrl = true
+alt = true
+action = { type = \"plugin_command\", command_id = \"pane-layouts.dev-layout\" }
+";
+        let config = Config::from_toml(source, std::path::Path::new("config.toml")).unwrap();
+        let binding = &config.keybindings[0];
+        assert!(binding.ctrl && binding.alt && !binding.shift && !binding.super_key);
+        let saved = toml::to_string(binding).unwrap();
+        assert!(saved.contains("ctrl = true\nalt = true\n"), "{saved}");
+        assert!(!saved.contains("modifiers"), "{saved}");
     }
 
     #[test]

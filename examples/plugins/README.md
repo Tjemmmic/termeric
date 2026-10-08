@@ -112,7 +112,8 @@ A command's ID is `PLUGIN-ID.COMMAND-ID`, and a profile's palette command is `PL
 ```toml
 [[keybindings]]
 key = "l"
-modifiers = { ctrl = true, alt = true }
+ctrl = true
+alt = true
 action = { type = "plugin_command", command_id = "pane-layouts.dev-layout" }
 ```
 

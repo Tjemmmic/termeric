@@ -253,8 +253,9 @@ save_scrollback = true
 #   Terminal: clear_scrollback, reset_terminal
 # F6 and Shift+F6, which move keyboard focus to the tab bar, can't be changed.
 
-# Extra keys that type text, run a command, or run a plugin command. The
-# modifiers must match exactly, and a built-in shortcut on the same keys wins.
+# Extra keys that type text, run a command, or run a plugin command. ctrl, alt,
+# shift, and super are written as for [[shortcuts]] and must match exactly, and
+# a built-in shortcut on the same keys wins.
 # A key is a character, or Enter, Tab, Space, Backspace, Escape, Delete,
 # Insert, Home, End, PageUp, PageDown, Up, Down, Left, Right, F1 to F12.
 # send_text types the text exactly as written (add \r for Enter); run_command
@@ -262,7 +263,7 @@ save_scrollback = true
 # runs a plugin's command by its ID, PLUGIN-ID.COMMAND-ID.
 # [[keybindings]]
 # key = "F5"
-# modifiers = { ctrl = true }
+# ctrl = true
 # action = { type = "send_text", text = "make\r" }
 
 # A name for a remote host used by experimental live domains, at most 64, for
