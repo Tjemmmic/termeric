@@ -951,6 +951,8 @@ fn modal_atomic_commits_never_fall_through_to_a_live_pty() {
         .unwrap()
         .set_user_title(Some("Roots".into()));
     app.begin_tab_rename();
+    // End keeps the selected name to add to it.
+    assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::End)));
     // The draft takes every edit; the tab keeps its title until Enter.
     let draft = |app: &App| app.tab_rename.as_ref().unwrap().input.text().to_owned();
     let saved = |app: &App| {
@@ -972,6 +974,7 @@ fn modal_atomic_commits_never_fall_through_to_a_live_pty() {
     assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::Escape)));
     assert_eq!(saved(&app).as_deref(), Some("Roots"));
     app.begin_tab_rename();
+    assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::End)));
     app.handle_ime_event(Ime::Commit(" 🫚".into()));
     assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::Enter)));
     assert!(app.tab_rename.is_none());

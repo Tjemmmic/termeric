@@ -109,33 +109,7 @@ pub trait TextMeasure {
 pub fn fit_with_ellipsis(
     text: &str,
     max_width: f32,
-    measure: impl FnMut(&str) -> f32,
-) -> Cow<'_, str> {
-    fit(text, max_width, measure, Keep::Start)
-}
-
-/// Like [`fit_with_ellipsis`], but keeps the longest grapheme suffix behind a
-/// leading ellipsis, for text whose end matters most, such as a draft being
-/// typed.
-pub fn fit_end_with_ellipsis(
-    text: &str,
-    max_width: f32,
-    measure: impl FnMut(&str) -> f32,
-) -> Cow<'_, str> {
-    fit(text, max_width, measure, Keep::End)
-}
-
-#[derive(Clone, Copy)]
-enum Keep {
-    Start,
-    End,
-}
-
-fn fit(
-    text: &str,
-    max_width: f32,
     mut measure: impl FnMut(&str) -> f32,
-    keep: Keep,
 ) -> Cow<'_, str> {
     if text.is_empty() || max_width <= 0.0 {
         return Cow::Borrowed("");
@@ -146,24 +120,14 @@ fn fit(
     if measure(ELLIPSIS) > max_width {
         return Cow::Borrowed("");
     }
-    // `starts[k]` is where grapheme `k` begins: the byte length of the
-    // first `k` graphemes.
-    let starts: Vec<usize> = text
+    // `ends[k]` is the byte length of the first `k` graphemes.
+    let ends: Vec<usize> = text
         .grapheme_indices(true)
         .map(|(start, _)| start)
         .collect();
-    let candidate = |kept: usize| match keep {
-        Keep::Start => format!("{}{ELLIPSIS}", text[..starts[kept]].trim_end()),
-        Keep::End => {
-            let from = starts
-                .get(starts.len() - kept)
-                .copied()
-                .unwrap_or(text.len());
-            format!("{ELLIPSIS}{}", text[from..].trim_start())
-        }
-    };
+    let candidate = |kept: usize| format!("{}{ELLIPSIS}", text[..ends[kept]].trim_end());
     // Invariant: `low` graphemes fit; `high` graphemes do not.
-    let (mut low, mut high) = (0, starts.len());
+    let (mut low, mut high) = (0, ends.len());
     while high - low > 1 {
         let middle = (low + high) / 2;
         if measure(&candidate(middle)) <= max_width {
@@ -387,19 +351,5 @@ mod tests {
         assert_eq!(fit_with_ellipsis(family, 30.0, width), "👩‍👩‍👧…");
         assert_eq!(fit_with_ellipsis("ab cdef", 40.0, width), "ab…");
         assert_eq!(fit_with_ellipsis("e\u{301}tude", 30.0, width), "e\u{301}t…");
-    }
-
-    #[test]
-    fn keeping_the_end_cuts_the_start_behind_an_ellipsis() {
-        assert_eq!(fit_end_with_ellipsis("claude", 60.0, width), "claude");
-        assert_eq!(
-            fit_end_with_ellipsis("tjemmmic@emrakul", 60.0, width),
-            "…rakul"
-        );
-        assert_eq!(fit_end_with_ellipsis("tjemmmic@emrakul", 20.0, width), "…l");
-        assert_eq!(fit_end_with_ellipsis("tjemmmic@emrakul", 10.0, width), "…");
-        assert_eq!(fit_end_with_ellipsis("tjemmmic@emrakul", 9.0, width), "");
-        assert_eq!(fit_end_with_ellipsis("family 👩‍👩‍👧", 30.0, width), "…👩‍👩‍👧");
-        assert_eq!(fit_end_with_ellipsis("abcd ef", 40.0, width), "…ef");
     }
 }

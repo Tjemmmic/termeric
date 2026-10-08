@@ -57,6 +57,10 @@ pub struct TextInput {
     /// Byte offset into buffer
     cursor: usize,
     limit: TextLimit,
+    /// The whole text is selected, as when a field opens to replace its
+    /// value: typing replaces it, a deletion clears it, and moving the caret
+    /// collapses the selection to the edge moved toward.
+    all_selected: bool,
 }
 
 impl TextInput {
@@ -65,6 +69,7 @@ impl TextInput {
             buffer: String::new(),
             cursor: 0,
             limit,
+            all_selected: false,
         }
     }
 
@@ -75,6 +80,18 @@ impl TextInput {
     /// The caret, as a byte offset.
     pub fn cursor(&self) -> usize {
         self.cursor
+    }
+
+    /// Select the whole text, caret at its end; an empty field has nothing
+    /// to select.
+    pub fn select_all(&mut self) {
+        self.cursor = self.buffer.len();
+        self.all_selected = !self.buffer.is_empty();
+    }
+
+    /// Whether the whole text is selected.
+    pub fn is_all_selected(&self) -> bool {
+        self.all_selected
     }
 
     pub fn limit(&self) -> TextLimit {
@@ -97,12 +114,14 @@ impl TextInput {
             return false;
         }
         self.cursor = cursor;
+        self.all_selected = false;
         true
     }
 
     pub fn clear(&mut self) {
         self.buffer.clear();
         self.cursor = 0;
+        self.all_selected = false;
     }
 
     /// Replace the whole value, caret at its end. Returns whether it was
@@ -114,14 +133,17 @@ impl TextInput {
         self.buffer.clear();
         self.buffer.push_str(text);
         self.cursor = self.buffer.len();
+        self.all_selected = false;
         true
     }
 
-    /// Whether [`insert`](Self::insert) would accept `text`.
+    /// Whether [`insert`](Self::insert) would accept `text`, which replaces
+    /// the whole text while it is selected.
     pub fn can_insert(&self, text: &str) -> bool {
+        let held = if self.all_selected { "" } else { &self.buffer };
         !text.is_empty()
             && !text.chars().any(crate::safe_text::breaks_single_line)
-            && self.limit.admits(&self.buffer, text)
+            && self.limit.admits(held, text)
     }
 
     /// Insert typed, committed, or pasted text at the caret with one splice.
@@ -130,19 +152,45 @@ impl TextInput {
         if !self.can_insert(text) {
             return false;
         }
+        if std::mem::take(&mut self.all_selected) {
+            self.buffer.clear();
+            self.cursor = 0;
+        }
         self.buffer.insert_str(self.cursor, text);
         self.cursor += text.len();
         true
     }
 
     /// Apply a whole-grapheme edit. Returns true only if text changed; moving
-    /// the caret must not invalidate search results.
+    /// the caret must not invalidate search results. While the whole text is
+    /// selected, a deletion clears it and a move collapses the selection to
+    /// the edge it moves toward.
     pub fn edit_grapheme(&mut self, edit: TextInputEdit) -> bool {
+        if std::mem::take(&mut self.all_selected) {
+            return match edit {
+                TextInputEdit::Backspace
+                | TextInputEdit::Delete
+                | TextInputEdit::BackspaceWord
+                | TextInputEdit::DeleteWord => {
+                    self.clear();
+                    true
+                }
+                TextInputEdit::Left | TextInputEdit::Home | TextInputEdit::WordLeft => {
+                    self.cursor = 0;
+                    false
+                }
+                TextInputEdit::Right | TextInputEdit::End | TextInputEdit::WordRight => {
+                    self.cursor = self.buffer.len();
+                    false
+                }
+            };
+        }
         edit_grapheme(&mut self.buffer, &mut self.cursor, edit)
     }
 
     pub fn cursor_end(&mut self) {
         self.cursor = self.buffer.len();
+        self.all_selected = false;
     }
 }
 
@@ -425,5 +473,43 @@ mod tests {
             assert_eq!(input.text(), "x");
             assert_eq!(input.cursor(), 0);
         }
+    }
+
+    /// A field opened with its text selected replaces it on typing, clears
+    /// it on a deletion, and collapses to an edge on a move; a refused
+    /// insertion keeps the selection.
+    #[test]
+    fn a_selected_text_is_replaced_cleared_or_collapsed() {
+        let selected = |text: &str| {
+            let mut input = TextInput::new(TextLimit::Chars(5));
+            input.replace(text);
+            input.select_all();
+            assert!(input.is_all_selected());
+            input
+        };
+
+        let mut input = selected("roots");
+        assert!(!input.insert("too long"));
+        assert!(input.is_all_selected());
+        assert!(input.insert("tubes"));
+        assert_eq!((input.text(), input.cursor()), ("tubes", 5));
+        assert!(!input.is_all_selected());
+
+        for edit in [TextInputEdit::Backspace, TextInputEdit::DeleteWord] {
+            let mut input = selected("roots");
+            assert!(input.edit_grapheme(edit));
+            assert_eq!((input.text(), input.cursor()), ("", 0));
+        }
+
+        for (edit, cursor) in [(TextInputEdit::Left, 0), (TextInputEdit::End, 5)] {
+            let mut input = selected("roots");
+            assert!(!input.edit_grapheme(edit));
+            assert_eq!((input.text(), input.cursor()), ("roots", cursor));
+            assert!(!input.is_all_selected());
+        }
+
+        let mut empty = TextInput::new(TextLimit::Chars(5));
+        empty.select_all();
+        assert!(!empty.is_all_selected());
     }
 }

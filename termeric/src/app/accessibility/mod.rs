@@ -869,7 +869,7 @@ impl App {
             node.set_selected(tab.is_active);
             node.add_action(Action::Click);
             node.add_action(Action::Focus);
-            if tab.renaming {
+            if let Some(rename) = tab.rename {
                 node.set_children([close_id, TAB_RENAME_INPUT]);
                 let mut input = Node::new(Role::TextInput);
                 input.set_label("Tab name");
@@ -879,8 +879,18 @@ impl App {
                     &mut input,
                     TAB_RENAME_INPUT,
                     &tab.title,
-                    Some(tab.title.len()),
+                    Some(rename.cursor),
                 );
+                if rename.all_selected {
+                    let at = |character_index| TextPosition {
+                        node: TAB_RENAME_INPUT,
+                        character_index,
+                    };
+                    input.set_text_selection(TextSelection {
+                        anchor: at(0),
+                        focus: at(tab.title.chars().count()),
+                    });
+                }
                 if let Some(bounds) = self
                     .renderer
                     .as_mut()

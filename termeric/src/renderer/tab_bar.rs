@@ -3,9 +3,10 @@
 use super::Renderer;
 use super::glyph_cache::UiFontMetrics;
 use super::icons::draw_icon;
+use super::text::TextClip;
 use super::types::*;
 use crate::agents::AgentBadge;
-use crate::tabs::{TabInfo, TabType};
+use crate::tabs::{TabInfo, TabRenameView, TabType};
 use crate::ui::color::{high_contrast_text, mix, scale_alpha, with_alpha};
 use crate::ui::constants::BUTTON_CORNER_RADIUS;
 use crate::ui::geometry::Bounds;
@@ -491,13 +492,12 @@ impl TabChrome {
         Bounds::new(left, top, (right - left).max(0.0), (bottom - top).max(0.0))
     }
 
-    /// The caret after a title `title_width` pixels wide laid out in
-    /// `label`: as tall as the UI face's `metrics`, centred in `surface`
-    /// as the title is.
+    /// The caret `offset` pixels into the title span of `label`: as tall as
+    /// the UI face's `metrics`, centred in `surface` as the title is.
     fn rename_caret(
         self,
         label: &TabLabelLayout,
-        title_width: f32,
+        offset: f32,
         surface: Bounds,
         metrics: UiFontMetrics,
     ) -> Bounds {
@@ -506,13 +506,18 @@ impl TabChrome {
             .round()
             .min(surface.bottom() - top)
             .max(1.0);
-        Bounds::new(
-            (label.text_x + title_width).round(),
-            top,
-            self.px(2.0),
-            height,
-        )
+        Bounds::new((label.text_x + offset).round(), top, self.px(2.0), height)
     }
+}
+
+/// Where a rename draft sits in its field: `scroll` pixels of it hidden
+/// left of the field, the caret `caret` pixels into the field, the whole
+/// draft `width` wide, and `room` the field's width for text.
+struct RenameText {
+    scroll: f32,
+    caret: f32,
+    width: f32,
+    room: f32,
 }
 
 /// What a tab being renamed shows while its draft is empty, which Enter
@@ -863,12 +868,11 @@ impl Renderer {
 
         let size_px = self.ui_label_px();
         let text_x = label.text_x;
-        let drawn = if tab.renaming {
-            self.build_tab_rename_field(tab, &label, surface, text_alpha)
+        let drawn = if let Some(rename) = tab.rename {
+            self.build_tab_rename_field(tab, rename, &label, surface, text_alpha)
         } else {
-            let (title, _) = self.fitted_tab_title(tab, &label);
             self.push_ui_label(
-                &title,
+                &tab.title,
                 text_x,
                 y,
                 height,
@@ -880,7 +884,7 @@ impl Renderer {
 
         let badge_width = label.badge_width;
         // The rename field takes the title's place, badge included.
-        let badge_text = (tab.unreviewed_diff_count > 0 && !tab.renaming)
+        let badge_text = (tab.unreviewed_diff_count > 0 && tab.rename.is_none())
             .then(|| tab.unreviewed_diff_count.to_string());
         if let Some(count) = badge_text {
             let badge_height = chrome.px(16.0).min(height);
@@ -1299,29 +1303,40 @@ impl Renderer {
         chrome.label(tab, surface, badge_width)
     }
 
-    /// `tab`'s title as it fits in `label`, and its width. A draft being
-    /// typed keeps its end, where the caret is; any other title its start.
-    fn fitted_tab_title<'a>(
+    /// Where a rename draft sits in its field in `label`: scrolled left
+    /// just enough to keep the caret in view, as a field scrolls.
+    fn rename_text(
         &mut self,
-        tab: &'a TabInfo,
+        tab: &TabInfo,
+        rename: TabRenameView,
         label: &TabLabelLayout,
-    ) -> (std::borrow::Cow<'a, str>, f32) {
+    ) -> RenameText {
         let size_px = self.ui_label_px();
-        let max_width = label.text_right - label.text_x;
-        if tab.renaming {
-            self.fit_ui_label_end(&tab.title, max_width, size_px)
-        } else {
-            self.fit_ui_label(&tab.title, max_width, size_px)
+        let width = self.ui_text_width(&tab.title, size_px);
+        let before_caret = tab
+            .title
+            .get(..rename.cursor)
+            .map_or(width, |prefix| self.ui_text_width(prefix, size_px));
+        let room = (label.text_right - label.text_x).max(0.0);
+        let caret_room = self.tab_chrome().px(2.0);
+        let scroll = (before_caret + caret_room - room).max(0.0).round();
+        RenameText {
+            scroll,
+            caret: before_caret - scroll,
+            width,
+            room,
         }
     }
 
     /// Draws the inline field of `tab`, which is being renamed, over its
     /// title span in `label`: the draft (or a placeholder while it is empty)
-    /// in field colors, its outline in the focus color, and the caret after
-    /// the draft. Returns the drawn draft's width.
+    /// in field colors and clipped to the field, its selection while the
+    /// whole draft is selected, its outline in the focus color, and the
+    /// caret. Returns the drawn draft's width.
     fn build_tab_rename_field(
         &mut self,
         tab: &TabInfo,
+        rename: TabRenameView,
         label: &TabLabelLayout,
         surface: Bounds,
         alpha: f32,
@@ -1348,31 +1363,50 @@ impl Renderer {
             radius,
             chrome.px(1.0),
         );
-        let max_width = label.text_right - label.text_x;
+        let text = self.rename_text(tab, rename, label);
+        let caret = chrome.rename_caret(label, text.caret, surface, metrics);
         let drawn = if tab.title.is_empty() {
             self.push_ui_label(
                 TAB_RENAME_PLACEHOLDER,
                 label.text_x,
                 surface.y,
                 surface.height,
-                max_width,
+                text.room,
                 size_px,
                 scale_alpha(self.ui.palette_text_dim, 0.7 * alpha),
             );
             0.0
         } else {
-            let (title, _) = self.fitted_tab_title(tab, label);
-            self.push_ui_label(
-                &title,
-                label.text_x,
-                surface.y,
-                surface.height,
-                max_width,
+            let start = label.text_x - text.scroll;
+            let (left, right) = (label.text_x, label.text_x + text.room);
+            if rename.all_selected {
+                let from = start.max(left);
+                let to = (start + text.width).min(right);
+                if to > from {
+                    self.rect_pipeline.push_rect(
+                        from,
+                        caret.y,
+                        to - from,
+                        caret.height,
+                        scale_alpha(self.ui.selection, alpha),
+                    );
+                }
+            }
+            self.text_pipeline.push_ui_text(
+                &tab.title,
+                start.round(),
+                metrics.centered_baseline(surface.y, surface.height),
                 size_px,
                 scale_alpha(self.ui.palette_text, alpha),
-            )
+                Some(TextClip::from(Bounds::new(
+                    left,
+                    field.y,
+                    text.room,
+                    field.height,
+                ))),
+            );
+            (text.width - text.scroll).min(text.room)
         };
-        let caret = self.tab_rename_caret_in(tab, label, surface);
         self.rect_pipeline.push_rect(
             caret.x,
             caret.y,
@@ -1383,21 +1417,21 @@ impl Renderer {
         drawn
     }
 
-    /// The caret at the end of `tab`'s title as it is drawn in `label`.
+    /// The caret of `tab`'s rename draft as it is drawn in `label`.
     fn tab_rename_caret_in(
         &mut self,
         tab: &TabInfo,
+        rename: TabRenameView,
         label: &TabLabelLayout,
         surface: Bounds,
     ) -> Bounds {
-        let size_px = self.ui_label_px();
-        let (_, title_width) = self.fitted_tab_title(tab, label);
-        let metrics = self.glyph_cache.ui_font_metrics(size_px);
+        let text = self.rename_text(tab, rename, label);
+        let metrics = self.glyph_cache.ui_font_metrics(self.ui_label_px());
         self.tab_chrome()
-            .rename_caret(label, title_width, surface, metrics)
+            .rename_caret(label, text.caret, surface, metrics)
     }
 
-    /// The caret of the tab being renamed (the one marked `renaming`) where
+    /// The caret of the tab being renamed (the one with a `rename`) where
     /// the tab bar draws it, in a window `window_width` by `window_height`
     /// pixels; `None` while that tab is out of view or shows no title.
     pub fn tab_rename_caret(
@@ -1407,7 +1441,8 @@ impl Renderer {
         window_height: f32,
     ) -> Option<Bounds> {
         let (tab, label, surface) = self.renamed_tab_label(tabs, window_width, window_height)?;
-        Some(self.tab_rename_caret_in(tab, &label, surface))
+        let rename = tab.rename?;
+        Some(self.tab_rename_caret_in(tab, rename, &label, surface))
     }
 
     /// The inline field of the tab being renamed where the tab bar draws
@@ -1423,7 +1458,7 @@ impl Renderer {
         Some(self.tab_chrome().rename_field(&label, surface, metrics))
     }
 
-    /// The tab marked `renaming`, its label layout, and its drawn surface,
+    /// The tab being renamed, its label layout, and its drawn surface,
     /// while it shows its title.
     fn renamed_tab_label<'a>(
         &mut self,
@@ -1431,7 +1466,7 @@ impl Renderer {
         window_width: f32,
         window_height: f32,
     ) -> Option<(&'a TabInfo, TabLabelLayout, Bounds)> {
-        let index = tabs.iter().position(|tab| tab.renaming)?;
+        let index = tabs.iter().position(|tab| tab.rename.is_some())?;
         let tab = &tabs[index];
         let (_, surface) = self
             .placed_tab_surfaces(tabs, window_width, window_height)
@@ -1591,7 +1626,7 @@ mod tests {
                 tab_type: TabType::Shell,
                 unreviewed_diff_count: 0,
                 agent_badge: None,
-                renaming: false,
+                rename: None,
             })
             .collect()
     }
@@ -1953,7 +1988,10 @@ mod tests {
                 plugin_id: "fake".into(),
             };
             tab.pinned = true;
-            tab.renaming = true;
+            tab.rename = Some(TabRenameView {
+                cursor: 0,
+                all_selected: false,
+            });
             let layout = tab_bar_layout(&[tab.clone()], 1000.0 * scale, height, 0, scale);
             let surface = chrome.horizontal_surface(&layout.tabs[0], height);
             let plain = chrome.label(&tabs(1, 0)[0], surface, 0.0);

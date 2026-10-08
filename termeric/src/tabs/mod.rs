@@ -1806,7 +1806,7 @@ impl TabManager {
                     0
                 },
                 agent_badge: tab.agent_badge(),
-                renaming: false,
+                rename: None,
             })
             .collect()
     }
@@ -1905,8 +1905,17 @@ pub struct TabInfo {
     pub unreviewed_diff_count: usize,
     /// The most urgent state reported by an agent in this tab.
     pub agent_badge: Option<crate::agents::AgentBadge>,
-    /// Whether this tab's title is being renamed, so it shows a caret.
-    pub renaming: bool,
+    /// While this tab is being renamed, where the draft's caret sits and
+    /// whether the whole draft is selected; `title` is then the draft.
+    pub rename: Option<TabRenameView>,
+}
+
+/// The caret and selection of a tab's rename draft, as the tab bar draws it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TabRenameView {
+    /// The caret, as a byte offset into the draft.
+    pub cursor: usize,
+    pub all_selected: bool,
 }
 
 #[cfg(test)]

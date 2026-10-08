@@ -4450,6 +4450,17 @@ fn a_tab_being_renamed_exposes_its_draft_as_a_focused_text_field() {
     let mut app = App::new_headless(Config::default()).unwrap();
     app.tabs = Some(tabs);
     app.begin_tab_rename();
+    // The name starts selected, as the field draws it.
+    let name = app.tab_rename.as_ref().unwrap().input.text().to_owned();
+    let snapshot = app.accessibility_snapshot();
+    let selection = snapshot
+        .nodes
+        .iter()
+        .find(|(id, _)| *id == TAB_RENAME_INPUT)
+        .and_then(|(_, node)| node.text_selection())
+        .unwrap();
+    assert_eq!(selection.anchor.character_index, 0);
+    assert_eq!(selection.focus.character_index, name.chars().count());
     app.tab_rename.as_mut().unwrap().input.replace("");
 
     let snapshot = app.accessibility_snapshot();

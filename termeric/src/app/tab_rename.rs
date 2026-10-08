@@ -14,7 +14,10 @@ impl TabRenameState {
             .position(|(_, tab)| tab.id == self.tab_id)
             .and_then(|index| tab_info.get_mut(index))
         {
-            info.renaming = true;
+            info.rename = Some(crate::tabs::TabRenameView {
+                cursor: self.input.cursor(),
+                all_selected: self.input.is_all_selected(),
+            });
             self.input.text().clone_into(&mut info.title);
         }
     }
@@ -53,11 +56,12 @@ impl App {
         } else {
             crate::workspace::MAX_WORKSPACE_TITLE_CHARS
         };
-        self.tab_rename = Some(TabRenameState::new(
-            tab.id,
-            tab.user_title().unwrap_or(&tab.title),
-            max_chars,
-        ));
+        let mut rename =
+            TabRenameState::new(tab.id, tab.user_title().unwrap_or(&tab.title), max_chars);
+        // A rename most often replaces the whole name; an arrow key keeps it
+        // for a small change instead.
+        rename.input.select_all();
+        self.tab_rename = Some(rename);
         self.ime.clear_preedit();
         self.toasts
             .info("Rename tab: Enter saves, Escape cancels; save it empty for the automatic title");
@@ -93,12 +97,6 @@ impl App {
         match key {
             Key::Named(NamedKey::Enter) if plain => commit = true,
             Key::Named(NamedKey::Escape) if plain => cancel = true,
-            Key::Named(NamedKey::Backspace) if plain => {
-                let rename = self.tab_rename.as_mut().expect("rename checked above");
-                rename
-                    .input
-                    .edit_grapheme(crate::ui::text_input::TextInputEdit::Backspace);
-            }
             Key::Named(NamedKey::Space) if text_allowed => {
                 if !self.insert_tab_rename_text(" ") {
                     return true;
@@ -109,7 +107,18 @@ impl App {
                     return true;
                 }
             }
-            _ => return true,
+            _ => {
+                // The arrows, Home, End, and deletions edit as in every field.
+                if let Some(super::text_field_keys::FieldKey::Edit(edit)) =
+                    self.text_edit_for_key(key)
+                {
+                    let rename = self.tab_rename.as_mut().expect("rename checked above");
+                    rename.input.edit_grapheme(edit);
+                    self.ime.clear_preedit();
+                    self.request_redraw(RedrawReason::KeyboardInput);
+                }
+                return true;
+            }
         }
         if commit {
             if let Some(rename) = self.tab_rename.take() {
@@ -189,7 +198,7 @@ mod tests {
             TabRenameState::new(tab_id, "Roots", 64).mark(&tabs, &mut tab_info);
             tab_info
                 .iter()
-                .map(|info| info.renaming)
+                .map(|info| info.rename.is_some())
                 .collect::<Vec<_>>()
         };
         assert_eq!(renamed(first), [true, false]);
@@ -268,7 +277,7 @@ mod tests {
     }
 
     #[test]
-    fn tab_rename_modified_keys_cannot_delete_commit_or_cancel() {
+    fn tab_rename_modified_keys_edit_as_fields_do_but_never_commit_or_cancel() {
         use winit::{
             event::Ime,
             keyboard::{Key, NamedKey},
@@ -285,14 +294,15 @@ mod tests {
             ModifiersState::CONTROL | ModifiersState::ALT,
         ] {
             app.modifiers = modifiers;
-            for key in [
-                NamedKey::Backspace,
-                NamedKey::Enter,
-                NamedKey::Escape,
-                NamedKey::ArrowLeft,
-                NamedKey::Delete,
-            ] {
-                assert!(app.handle_tab_rename_key(&Key::Named(key)));
+            // Ctrl turns deletions into word edits, as in every field; the
+            // other chords leave the draft alone.
+            let edit_keys: &[NamedKey] = if modifiers == ModifiersState::CONTROL {
+                &[]
+            } else {
+                &[NamedKey::Backspace, NamedKey::ArrowLeft, NamedKey::Delete]
+            };
+            for key in [NamedKey::Enter, NamedKey::Escape].iter().chain(edit_keys) {
+                assert!(app.handle_tab_rename_key(&Key::Named(*key)));
                 assert_eq!(app.tab_rename.as_ref().unwrap().input.text(), "Roots");
                 assert!(app.ime.preedit().is_some());
             }
@@ -303,6 +313,11 @@ mod tests {
                 assert!(app.ime.preedit().is_some());
             }
         }
+        app.modifiers = ModifiersState::CONTROL;
+        assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::Backspace)));
+        assert_eq!(app.tab_rename.as_ref().unwrap().input.text(), "");
+        assert!(app.tab_rename.as_mut().unwrap().input.insert("Roots"));
+        app.modifiers = ModifiersState::empty();
         app.alt_graph_active = true;
         assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::Backspace)));
         assert_eq!(app.tab_rename.as_ref().unwrap().input.text(), "Roots");
@@ -334,7 +349,7 @@ mod tests {
         };
         let drawn = |app: &App| {
             let info = app.tab_bar_info().remove(0);
-            (info.title, info.renaming)
+            (info.title, info.rename.is_some())
         };
         let before = title(&app);
         let backspace = Key::Named(NamedKey::Backspace);
@@ -355,11 +370,20 @@ mod tests {
         assert_eq!(drawn(&app), (before.0.clone(), false));
         assert!(app.terminal_has_keyboard());
 
+        // A rename starts with the whole name selected, so typing replaces
+        // it; an arrow key keeps it to change a part.
         app.begin_tab_rename();
-        app.handle_tab_rename_key(&Key::Character(" Roots".into()));
+        assert!(app.tab_rename.as_ref().unwrap().input.is_all_selected());
+        app.handle_tab_rename_key(&Key::Character("Roots".into()));
         app.handle_tab_rename_key(&Key::Named(NamedKey::Enter));
-        let renamed = format!("{} Roots", before.0);
-        assert_eq!(title(&app), (renamed.clone(), Some(renamed)));
+        assert_eq!(title(&app), ("Roots".into(), Some("Roots".into())));
+        app.begin_tab_rename();
+        app.handle_tab_rename_key(&Key::Named(NamedKey::End));
+        app.handle_tab_rename_key(&Key::Named(NamedKey::Backspace));
+        app.handle_tab_rename_key(&Key::Named(NamedKey::Home));
+        app.handle_tab_rename_key(&Key::Character("Tuber ".into()));
+        app.handle_tab_rename_key(&Key::Named(NamedKey::Enter));
+        assert_eq!(title(&app).0, "Tuber Root");
 
         // Saved empty, the tab goes back to its automatic title.
         app.begin_tab_rename();
