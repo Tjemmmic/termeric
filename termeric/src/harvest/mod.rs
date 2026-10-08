@@ -1,23 +1,26 @@
-//! Harvest Mode - Termeric's unique command visualization
+//! Harvest mode: what Termeric shows of the commands that shell integration
+//! (OSC 133) reports.
 //!
-//! Provides organic, root-themed UI elements:
-//! - Root Cellar: Visual command history timeline
-//! - Sprout Actions: Quick context menu on command output
-//! - Organic Indicators: Plant-growth animations for long processes
+//! - Root Cellar: the list of recent commands and how each one ended
+//! - Sprout actions: the menu of actions on one command
+//! - Growth indicators: a marker beside a prompt while its command runs,
+//!   and briefly after it ends
 
 mod cellar;
 mod indicators;
 pub mod sprouts;
 
-pub use cellar::{MAX_HARVEST_COMMAND_BYTES, MAX_HARVEST_OUTPUT_BYTES};
 pub use cellar::{CellarAction, CellarLayout, CommandEntry, CommandHealth, RootCellar};
+pub use cellar::{MAX_HARVEST_COMMAND_BYTES, MAX_HARVEST_OUTPUT_BYTES};
 pub use indicators::{GrowthIndicator, GrowthPhase};
 pub use sprouts::{SproutAvailability, SproutMenu, SproutMenuLayout};
 
 use termeric_core::CommandRegion;
 use termeric_core::shell::PromptTracker;
 
-/// A terminal's stable identity: its tab and its tab-local pane.
+/// The terminal a command ran in: its tab and its pane there. Pane IDs are
+/// never reused within a tab, so this stays exact as the tab splits and its
+/// panes close.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HarvestSource {
     pub tab_id: usize,
@@ -120,12 +123,6 @@ pub struct HarvestMode {
     pub sprout_menu: Option<SproutMenu>,
     next_sprout_request_id: u64,
     reduced_motion: bool,
-}
-
-impl Default for HarvestMode {
-    fn default() -> Self {
-        Self::with_capacity(100)
-    }
 }
 
 impl HarvestMode {

@@ -1,7 +1,7 @@
-//! Root Cellar - Visual command history
+//! Root Cellar: the list of recent commands
 //!
-//! Displays commands as "roots" growing from a timeline,
-//! with branching for piped commands and color-coding by exit status.
+//! Keeps a bounded snapshot of each finished command (its text, output, and
+//! exit status) and the panel's selection, scrolling, and layout.
 
 use super::HarvestSource;
 use crate::ui::geometry::Bounds;

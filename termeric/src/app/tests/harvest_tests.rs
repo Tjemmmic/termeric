@@ -187,7 +187,9 @@ fn harvest_source_survives_single_split_and_collapse() {
     use crate::harvest::sprouts::SproutAction;
     let (mut app, directory, entry, _) = harvest_rerun_capture_fixture_in(false);
     let source = entry.source;
-    app.harvest = Some(crate::harvest::HarvestMode::default());
+    app.harvest = Some(crate::harvest::HarvestMode::with_capacity(
+        app.config.harvest.max_history,
+    ));
     app.active_terminal_mut().unwrap().process(
         b"\r\n\x1b]133;A\x07\x1b]133;B\x07echo original\r\n\x1b]133;C\x07original output\r\n\x1b]133;D;0\x07");
     app.process_pty_events();
@@ -267,7 +269,9 @@ fn harvest_nonzero_survivor_keeps_live_regions_and_rerun_after_collapse() {
     let (mut app, directory, _, _) = harvest_rerun_capture_fixture();
     let source = app.active_harvest_source().unwrap();
     assert_eq!(source.pane_id, 2);
-    app.harvest = Some(crate::harvest::HarvestMode::default());
+    app.harvest = Some(crate::harvest::HarvestMode::with_capacity(
+        app.config.harvest.max_history,
+    ));
     app.active_terminal_mut().unwrap().process(
         b"\r\n\x1b]133;A\x07\x1b]133;B\x07echo nonzero\r\n\x1b]133;C\x07nonzero output\r\n\x1b]133;D;0\x07");
     app.process_pty_events();
@@ -398,7 +402,9 @@ fn harvest_incomplete_command_refuses_live_retained_and_stale_menu_reruns() {
     for split in [false, true] {
         let (mut app, _directory, mut entry, captures) = harvest_rerun_capture_fixture_in(split);
         let origin = captures[0].0;
-        app.harvest = Some(crate::harvest::HarvestMode::default());
+        app.harvest = Some(crate::harvest::HarvestMode::with_capacity(
+            app.config.harvest.max_history,
+        ));
         let command = format!(
             "echo {}",
             "x".repeat(crate::harvest::MAX_HARVEST_COMMAND_BYTES + 100)
