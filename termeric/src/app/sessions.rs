@@ -295,7 +295,8 @@ impl App {
                 crate::tabs::PersistenceNotice::Saved { id, truncated } => {
                     if truncated {
                         self.toasts.warning(format!(
-                            "Closed tab {id} saved, but a pane's scrollback exceeded 5 MB and was truncated"
+                            "Closed tab {id} saved, but its scrollback was shortened to fit {}",
+                            super::workspaces::saved_scrollback_limits()
                         ));
                     }
                 }

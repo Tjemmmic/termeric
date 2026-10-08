@@ -43,8 +43,9 @@ impl App {
                     String::new()
                 } else {
                     format!(
-                        "; {} pane(s) had bounded scrollback",
-                        report.truncated_panes.len()
+                        "; scrollback was shortened in {} to fit {}",
+                        plural(report.truncated_panes.len(), "pane", "panes"),
+                        saved_scrollback_limits()
                     )
                 };
                 self.toasts
@@ -654,5 +655,17 @@ fn confirmation_name(id: &str) -> String {
     format!(
         "\u{201c}{}\u{201d}",
         crate::safe_text::truncate_with_ellipsis(&name, CONFIRMATION_NAME_CHARS)
+    )
+}
+
+/// The limits that shorten saved scrollback, for the notices that report it:
+/// each pane keeps its newest lines up to a per-pane size, and the panes of
+/// one workspace or closed tab share a total.
+pub(super) fn saved_scrollback_limits() -> String {
+    const MIB: usize = 1024 * 1024;
+    format!(
+        "{} MiB per pane and {} MiB in all",
+        crate::workspace::MAX_WORKSPACE_SCROLLBACK_BYTES_PER_PANE / MIB,
+        crate::workspace::MAX_WORKSPACE_SCROLLBACK_BYTES_TOTAL / MIB
     )
 }

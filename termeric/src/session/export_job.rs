@@ -108,7 +108,10 @@ fn export(
         }
         ExportSource::Scrollback(text) => {
             if text.len() > MAX_SCROLLBACK_BYTES {
-                return Err(io::Error::other("Scrollback export exceeds 32 MiB"));
+                return Err(io::Error::other(format!(
+                    "Scrollback export exceeds {} MiB",
+                    MAX_SCROLLBACK_BYTES / (1024 * 1024)
+                )));
             }
             writer.write_all(b"# Scrollback Session Export\n\n```\n")?;
             writer.write_all(text.as_bytes())?;

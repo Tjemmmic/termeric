@@ -10,6 +10,8 @@ pub const MAX_ATTACHMENTS_PER_PANE: usize = 8;
 pub const MAX_TOPOLOGY_SUBSCRIBERS_PER_DOMAIN: usize = 8;
 pub const MAX_PANE_SCROLLBACK_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_TEXT_RESPONSE_BYTES: usize = 1024 * 1024;
+/// The most characters in a domain, tab, or pane name.
+pub const MAX_DOMAIN_NAME_CHARS: usize = 128;
 /// The most columns, and the most rows, a domain terminal may have.
 pub const MAX_TERMINAL_CELLS_PER_SIDE: u16 = 1_000;
 
@@ -170,8 +172,11 @@ pub fn validate_id(label: &str, value: &str) -> anyhow::Result<()> {
 }
 
 pub fn validate_name(label: &str, value: &str) -> anyhow::Result<()> {
-    if value.is_empty() || value.chars().count() > 128 || value.chars().any(char::is_control) {
-        anyhow::bail!("{label} must contain 1 to 128 single-line characters");
+    if value.is_empty()
+        || value.chars().count() > MAX_DOMAIN_NAME_CHARS
+        || value.chars().any(char::is_control)
+    {
+        anyhow::bail!("{label} must contain 1 to {MAX_DOMAIN_NAME_CHARS} single-line characters");
     }
     Ok(())
 }

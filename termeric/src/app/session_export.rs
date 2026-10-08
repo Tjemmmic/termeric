@@ -103,7 +103,10 @@ fn capture_scrollback(grid: &termeric_core::grid::Grid) -> Result<String, String
         let line = row.to_ansi_string();
         let needed = text.len().saturating_add(line.len()).saturating_add(1);
         if needed > MAX_SCROLLBACK_BYTES {
-            return Err("Scrollback export exceeds 32 MiB; no partial export was written".into());
+            return Err(format!(
+                "Scrollback export exceeds {} MiB; no partial export was written",
+                MAX_SCROLLBACK_BYTES / (1024 * 1024)
+            ));
         }
         if needed > text.capacity() {
             let capacity = needed

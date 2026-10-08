@@ -18,7 +18,11 @@ impl App {
                 .info("Wait for the pending live-domain change before renaming");
             return;
         }
-        let max_chars = if tab.live_domain.is_some() { 128 } else { 256 };
+        let max_chars = if tab.live_domain.is_some() {
+            crate::domain::model::MAX_DOMAIN_NAME_CHARS
+        } else {
+            crate::workspace::MAX_WORKSPACE_TITLE_CHARS
+        };
         self.tab_rename = Some(TabRenameState::new(
             tab.id,
             tab.user_title().map(str::to_owned),
