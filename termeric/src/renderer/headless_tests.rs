@@ -445,6 +445,162 @@ fn headless_ui_text_smoke(device: &Device, queue: &Queue) -> Result<()> {
     Ok(())
 }
 
+/// A destructive confirmation laid out with the real UI fonts draws through
+/// the rectangle and text pipelines where its layout says: the card, the
+/// heading's ink inside the heading box, and the Delete button's fill with
+/// its label inside it, and nothing outside the card.
+fn headless_dialog_smoke(device: &Device, queue: &Queue) -> Result<()> {
+    use crate::ui::dialog::{
+        ButtonRole, Dialog, DialogBlock, DialogLayout, DialogMetrics, DialogSpec,
+    };
+    use crate::ui::text_layout::UiFace;
+
+    const FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
+    const WIDTH: u32 = 640;
+    const HEIGHT: u32 = 400;
+    const CLEAR: [u8; 3] = [0, 0, 0];
+    let card_fill = [0.12, 0.12, 0.14, 1.0];
+    let cancel_fill = [0.30, 0.30, 0.32, 1.0];
+    let delete_fill = [0.75, 0.20, 0.20, 1.0];
+    let text_color = [0.95, 0.95, 0.95, 1.0];
+
+    let mut glyph_cache = GlyphCache::for_test(device, queue, 16.0, false)?;
+    let mut dialog = Dialog::new();
+    dialog.set_reduced_motion(true);
+    dialog.show(DialogSpec::confirm(
+        "Delete workspace?",
+        vec![
+            DialogBlock::text("Its layout and saved scrollback are deleted. This can't be undone."),
+            DialogBlock::value("~/.local/share/termeric/workspaces/roots.json"),
+        ],
+        "delete",
+        "Delete",
+        ButtonRole::Destructive,
+    ));
+    let layout = DialogLayout::calculate(
+        &dialog,
+        DialogMetrics {
+            window_width: WIDTH as f32,
+            window_height: HEIGHT as f32,
+            scale: 1.0,
+            cell_width: 8.0,
+            cell_height: 16.0,
+            animation: 1.0,
+        },
+        &mut glyph_cache,
+    );
+    let window = crate::ui::geometry::Bounds::new(0.0, 0.0, WIDTH as f32, HEIGHT as f32);
+    anyhow::ensure!(
+        layout.card.intersect(window) == Some(layout.card),
+        "card {:?} leaves the window",
+        layout.card
+    );
+    let [cancel, delete] = layout.buttons[..] else {
+        anyhow::bail!("{} buttons", layout.buttons.len());
+    };
+
+    let mut rects = RectPipeline::new(device, FORMAT)?;
+    rects.resize(queue, WIDTH, HEIGHT);
+    let mut text = TextPipeline::new(device, FORMAT, &glyph_cache)?;
+    text.resize(queue, WIDTH, HEIGHT);
+    let card = layout.card;
+    rects.push_rounded_rect(card.x, card.y, card.width, card.height, card_fill, 10.0);
+    for (button, fill) in [(cancel, cancel_fill), (delete, delete_fill)] {
+        rects.push_rounded_rect(button.x, button.y, button.width, button.height, fill, 6.0);
+    }
+    for run_line in &layout.heading.lines {
+        for run in &run_line.runs {
+            text.push_ui_text_in(
+                &run.text,
+                UiFace::SANS_BOLD,
+                (layout.heading_bounds.x + run.x).round(),
+                (layout.heading_bounds.y + run_line.baseline).round(),
+                layout.heading_size.font_px,
+                text_color,
+                None,
+            );
+        }
+    }
+    let label_px = layout.body_size.font_px;
+    for (button, label) in [(cancel, "Cancel"), (delete, "Delete")] {
+        let width = glyph_cache.ui_text_width(label, label_px);
+        let baseline = glyph_cache
+            .ui_font_metrics(label_px)
+            .centered_baseline(button.y, button.height);
+        text.push_ui_text(
+            label,
+            (button.center()[0] - width / 2.0).round(),
+            baseline,
+            label_px,
+            text_color,
+            None,
+        );
+    }
+    rects.upload(device, queue);
+    text.upload(device, queue, &mut glyph_cache);
+    let pixels = render_offscreen(
+        device,
+        queue,
+        FORMAT,
+        (WIDTH, HEIGHT),
+        wgpu::Color::BLACK,
+        |pass| {
+            rects.draw_layer(pass, 0);
+            text.draw_layer(pass, 0);
+        },
+    )?;
+
+    let pixel = |x: f32, y: f32| {
+        let offset = ((y as u32 * WIDTH + x as u32) * 4) as usize;
+        [pixels[offset], pixels[offset + 1], pixels[offset + 2]]
+    };
+    let near = |actual: [u8; 3], expected: [f32; 4]| {
+        actual
+            .iter()
+            .zip(expected)
+            .all(|(actual, expected)| actual.abs_diff((expected * 255.0).round() as u8) <= 2)
+    };
+    let inked = |bounds: crate::ui::geometry::Bounds, surface: [f32; 4]| {
+        let mut count = 0;
+        for y in bounds.y as u32..bounds.bottom() as u32 {
+            for x in bounds.x as u32..bounds.right() as u32 {
+                if !near(pixel(x as f32, y as f32), surface) {
+                    count += 1;
+                }
+            }
+        }
+        count
+    };
+    let [_, middle] = delete.center();
+    anyhow::ensure!(
+        near(pixel(delete.x + 3.0, middle), delete_fill),
+        "the Delete button's edge shows {:?}",
+        pixel(delete.x + 3.0, middle)
+    );
+    anyhow::ensure!(
+        near(pixel(cancel.x + 3.0, middle), cancel_fill),
+        "the Cancel button's edge shows {:?}",
+        pixel(cancel.x + 3.0, middle)
+    );
+    let label = delete.inset(8.0, 4.0);
+    anyhow::ensure!(
+        inked(label, delete_fill) > 20,
+        "the Delete label drew no ink"
+    );
+    anyhow::ensure!(
+        inked(layout.heading_bounds, card_fill) > 50,
+        "the heading drew no ink"
+    );
+    for (x, y) in [
+        (card.x - 2.0, card.y + 2.0),
+        (card.right() + 1.0, card.bottom() - 2.0),
+        (2.0, 2.0),
+    ] {
+        anyhow::ensure!(pixel(x, y) == CLEAR, "ink outside the card at ({x}, {y})");
+    }
+    Ok(())
+}
+
 /// The whole of a `width` by `height` render target, for text the terminal
 /// grid would queue with its pane's clip.
 fn target_clip(width: u32, height: u32) -> TextClip {
@@ -1413,6 +1569,7 @@ fn gpu_render_smoke() {
     .expect("headless GPU device request failed");
     headless_unicode_render_smoke(&device, &queue).expect("Unicode grapheme render smoke failed");
     headless_ui_text_smoke(&device, &queue).expect("UI text smoke failed");
+    headless_dialog_smoke(&device, &queue).expect("dialog render smoke failed");
     headless_color_emoji_render_smoke(&device, &queue).expect("color emoji render smoke failed");
     headless_glyph_atlas_stress_smoke(&device, &queue)
         .expect("paged glyph atlas stress smoke failed");
