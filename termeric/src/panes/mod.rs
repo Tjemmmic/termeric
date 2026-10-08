@@ -170,7 +170,7 @@ impl Pane {
         let mut terminal = Terminal::new(geometry.cols, geometry.rows);
         terminal.set_pixel_geometry(geometry.pixel_width.into(), geometry.pixel_height.into());
         policy.apply(&mut terminal, true);
-        let mut launch = if plugin {
+        let launch = if plugin {
             ShellLaunch {
                 program: shell.program.clone(),
                 args: shell.args.clone(),
@@ -186,15 +186,12 @@ impl Pane {
         } else {
             prepare_shell_launch(shell)
         };
-        if let Some(working_dir) = working_dir {
-            launch.env.retain(|(key, _)| key != "PWD");
-            launch.env.push(("PWD".into(), working_dir.into()));
-        }
         let pty = Pty::spawn(
             geometry.pty_size(),
             PtyCommand {
                 program: launch.program.as_deref(),
                 args: &launch.args,
+                cwd: working_dir.map(std::path::Path::new),
                 env: &launch.env,
                 ..PtyCommand::default()
             },
@@ -234,24 +231,17 @@ impl Pane {
         let mut terminal = Terminal::new(geometry.cols, geometry.rows);
         terminal.set_pixel_geometry(geometry.pixel_width.into(), geometry.pixel_height.into());
         policy.apply(&mut terminal, true);
-        // PWD names the working directory when one was given; the launch's
-        // own variables follow, so they may override it.
         let env: Vec<(String, String)> = launch
-            .working_dir
+            .env
             .iter()
-            .map(|pwd| ("PWD".to_string(), pwd.clone()))
-            .chain(
-                launch
-                    .env
-                    .iter()
-                    .map(|(key, value)| (key.clone(), value.clone())),
-            )
+            .map(|(key, value)| (key.clone(), value.clone()))
             .collect();
         let pty = Pty::spawn(
             geometry.pty_size(),
             PtyCommand {
                 program: Some(&launch.program),
                 args: &launch.args,
+                cwd: launch.working_dir.as_deref().map(std::path::Path::new),
                 env: &env,
                 policy: Some(&launch.environment_policy),
             },

@@ -17,6 +17,7 @@ pub use portable_pty::PtySize;
 use child::PtyChild;
 use portable_pty::{CommandBuilder, MasterPty, native_pty_system};
 use std::io::{Read, Write};
+use std::path::Path;
 use std::sync::{Arc, mpsc};
 use std::thread;
 
@@ -64,8 +65,11 @@ pub struct PtyCommand<'a> {
     /// Program to run; `None` runs the user's shell.
     pub program: Option<&'a str>,
     pub args: &'a [String],
-    /// Variables set on top of the inherited environment. `PWD` also sets
-    /// the working directory when it names one.
+    /// The directory the program starts in, also exported as `PWD`; it must
+    /// be a directory. `None` starts it in the home directory.
+    pub cwd: Option<&'a Path>,
+    /// Variables set on top of the inherited environment. `PWD` comes only
+    /// from `cwd`, so it may not be set here.
     pub env: &'a [(String, String)],
     /// Inherited variables to clear or remove first; `None` keeps them all.
     /// Unix portable-pty still supplies SHELL, so this is not a sandbox.
@@ -78,6 +82,7 @@ impl Pty {
         let PtyCommand {
             program,
             args,
+            cwd,
             env,
             policy,
         } = command;
@@ -90,6 +95,16 @@ impl Pty {
             return Err(PtyError::Creation(
                 "Environment variable cannot be both set and removed".into(),
             ));
+        }
+        if env.iter().any(|(key, _)| key == "PWD") {
+            return Err(PtyError::Creation(
+                "PWD is set from the working directory, not the environment".into(),
+            ));
+        }
+        if let Some(cwd) = cwd
+            && !cwd.is_dir()
+        {
+            return Err(PtyError::NotADirectory(cwd.to_path_buf()));
         }
         let pty_system = native_pty_system();
 
@@ -131,19 +146,17 @@ impl Pty {
             cmd.env(TERMINAL_ID_VARIABLE, id);
         }
 
-        // Set additional environment variables (e.g., PWD for session restore)
         for (key, value) in env {
             if !terminal_identity_variable(key) {
                 cmd.env(key, value);
             }
         }
 
-        // If PWD is set, also set the working directory
-        if let Some((_, pwd)) = env.iter().find(|(k, _)| k == "PWD") {
-            let path = std::path::Path::new(pwd);
-            if path.is_dir() {
-                cmd.cwd(path);
-            }
+        // A shell keeps a PWD that names its directory, and with it the path
+        // it was given rather than one with symbolic links resolved.
+        if let Some(cwd) = cwd {
+            cmd.cwd(cwd);
+            cmd.env("PWD", cwd);
         }
 
         // Spawn the shell on the slave side
@@ -383,6 +396,9 @@ pub enum PtyError {
     #[error("Failed to create PTY: {0}")]
     Creation(String),
 
+    #[error("Working directory {} is not a directory", .0.display())]
+    NotADirectory(std::path::PathBuf),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -484,7 +500,6 @@ mod tests {
                     "EXPECTED_PATH_PRESENT".into(),
                     original_path.is_some().to_string(),
                 ),
-                ("PWD".into(), directory.path().to_str().unwrap().into()),
                 ("EMPTY_VALUE".into(), String::new()),
                 ("EXACT_VALUE".into(), "= two words $HOME;λ".into()),
                 ("TERM".into(), "must-not-override-identity".into()),
@@ -498,6 +513,7 @@ mod tests {
                 PtyCommand {
                     program: executable.to_str(),
                     args: &args,
+                    cwd: Some(directory.path()),
                     env: &env,
                     policy: Some(&policy),
                 },
@@ -541,6 +557,90 @@ mod tests {
             assert_eq!(std::env::var_os("PATH"), original_path);
             assert_eq!(std::env::var_os("HOME"), original_home);
         }
+    }
+
+    /// Everything `pty`'s program prints until it exits.
+    fn spawned_output(pty: Pty) -> String {
+        let (_handle, reader) = pty.take_reader();
+        let rx = spawn_reader_thread(reader);
+        let mut output = Vec::new();
+        loop {
+            match rx.recv_timeout(Duration::from_secs(5)) {
+                Ok(PtyEvent::Output(bytes)) => output.extend(bytes),
+                Ok(PtyEvent::Closed | PtyEvent::Error(_)) => break,
+                Err(error) => panic!("child did not finish: {error}"),
+            }
+        }
+        String::from_utf8(output).unwrap()
+    }
+
+    #[test]
+    fn a_program_starts_in_its_working_directory_and_pwd_names_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target");
+        std::fs::create_dir(&target).unwrap();
+        // PWD keeps the path as given, here through a symbolic link.
+        let link = directory.path().join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let args = ["-c".into(), "printf '%s|%s' \"$(pwd -P)\" \"$PWD\"".into()];
+        let pty = Pty::spawn(
+            default_pty_size(80, 24),
+            PtyCommand {
+                program: Some("/bin/sh"),
+                args: &args,
+                cwd: Some(&link),
+                ..PtyCommand::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            spawned_output(pty),
+            format!(
+                "{}|{}",
+                target.canonicalize().unwrap().display(),
+                link.display()
+            )
+        );
+    }
+
+    #[test]
+    fn a_working_directory_that_is_not_one_refuses_the_launch() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("file");
+        std::fs::write(&file, "").unwrap();
+        for cwd in [file, directory.path().join("missing")] {
+            let error = Pty::spawn(
+                default_pty_size(80, 24),
+                PtyCommand {
+                    program: Some("/bin/true"),
+                    cwd: Some(&cwd),
+                    ..PtyCommand::default()
+                },
+            )
+            .err()
+            .unwrap();
+            assert!(
+                matches!(&error, PtyError::NotADirectory(path) if *path == cwd),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn pwd_cannot_be_set_through_the_environment() {
+        let directory = tempfile::tempdir().unwrap();
+        let env = [("PWD".into(), directory.path().display().to_string())];
+        let error = Pty::spawn(
+            default_pty_size(80, 24),
+            PtyCommand {
+                program: Some("/bin/true"),
+                env: &env,
+                ..PtyCommand::default()
+            },
+        )
+        .err()
+        .unwrap();
+        assert!(matches!(error, PtyError::Creation(_)), "{error}");
     }
 
     struct CountingByteReader {

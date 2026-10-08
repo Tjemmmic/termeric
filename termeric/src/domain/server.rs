@@ -2335,17 +2335,13 @@ impl PaneRuntime {
         allow_screen_checksum_reports: bool,
         xterm_keyboard_type: XtermKeyboardType,
     ) -> anyhow::Result<(Self, Box<dyn Read + Send>)> {
-        let mut environment = Vec::new();
-        if let Some(cwd) = &spec.working_directory {
-            environment.push(("PWD".to_string(), cwd.clone()));
-        }
         let initial_size = default_pty_size(spec.cols, spec.rows);
         let pty = Pty::spawn(
             initial_size,
             PtyCommand {
                 program: spec.program.as_deref(),
                 args: &spec.args,
-                env: &environment,
+                cwd: spec.working_directory.as_deref().map(std::path::Path::new),
                 ..PtyCommand::default()
             },
         )?;

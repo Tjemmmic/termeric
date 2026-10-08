@@ -1110,7 +1110,6 @@ mod tests {
 
         let mut config = shell(program, options.args);
         config.env.insert("HOME".into(), home.display().to_string());
-        config.env.insert("PWD".into(), home.display().to_string());
         config.env.insert(
             "XDG_CONFIG_HOME".into(),
             home.join(".config").display().to_string(),
@@ -1129,6 +1128,7 @@ mod tests {
             PtyCommand {
                 program: launch.program.as_deref(),
                 args: &launch.args,
+                cwd: Some(&home),
                 env: &launch.env,
                 policy: Some(&termeric_core::pty::EnvironmentPolicy {
                     clear: isolated_login,

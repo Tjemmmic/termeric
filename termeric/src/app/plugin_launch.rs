@@ -66,9 +66,6 @@ impl App {
                     anyhow::bail!("plugin returned a mismatched terminal launch");
                 }
                 self.validate_plugin_launch_profile(plugin_id, actual_profile.as_deref())?;
-                // Requested cwd is authoritative, including restoration's
-                // missing-cwd fallback. PWD must not override it indirectly.
-                let env = env.into_iter().filter(|(key, _)| key != "PWD").collect();
                 Ok((
                     WorkspaceLaunch::Plugin {
                         plugin_id: plugin_id.into(),
@@ -77,7 +74,7 @@ impl App {
                     crate::config::ShellConfig {
                         program: Some(program),
                         args,
-                        env,
+                        env: env.into_iter().collect(),
                     },
                 ))
             }
