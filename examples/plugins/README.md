@@ -39,18 +39,16 @@ You can manage plugins in Settings or with `termeric plugin`. Both edit the same
 
 ### In Settings
 
-Open Settings, go to the **Plugins** page, and choose **Manage Third-party Plugins** (the palette command **Configure Plugins** opens the same page). The manager lists installed plugins with their version and whether each is enabled, disabled, or has an error.
+Open Settings and go to the **Plugins** page (the palette command **Configure Plugins** opens it). Each installed plugin is a row with its version, whether it is on, off, or has an error, and a switch that turns it on or off. Turning on a plugin that lacks a permission it asks for first shows what turning it on grants.
 
-To install one, choose **Install local plugin** and enter the absolute path of the plugin's directory. Termeric reads the manifest and shows a review: name, version, the number of profiles and commands, the directory's full path, the manifest's fingerprint, and every requested permission with its scope ("this window" or "all windows"). Select permissions to grant them one at a time, or use **Grant all requested permissions**. Then choose **Install disabled** or **Install and enable**; enabling is offered only when every requested permission is granted. If the manifest changes between the review and your choice, the install is refused and you review it again.
+To install one, choose **Install a plugin…** and enter the absolute path of the plugin's directory. Termeric reads the manifest and shows a review: name, version, the number of profiles and commands, the directory's full path, the manifest's fingerprint, and every requested permission with its scope ("this window" or "all windows"). Choose **Install and turn on**, which grants every requested permission, or **Install turned off**, which grants none; you can grant them one at a time on the plugin's page afterwards. If the manifest changes between the review and your choice, the install is refused and you review it again.
 
-Select an installed plugin to see its source, requested and granted permissions, settings, and any error, and to:
+Select an installed plugin to open its page, which shows its version, source, and any error, and has:
 
-- **Choose default profile**, the profile used when a launch or restore doesn't name one;
-- **Configure settings**, one setting at a time, or **Reset settings to defaults**;
-- **Enable** or **Disable** it; enabling a plugin that lacks a permission opens **Review permissions** instead;
-- **Review permissions**, to grant or withdraw each permission it requests, then save it enabled or disabled;
-- **Update from source** (see [Updating](#updating));
-- **Remove installed copy**.
+- **Default Profile**, the profile used when a launch or restore doesn't name one; "Default" is the manifest's first;
+- **Permissions**, an On/Off toggle per requested permission: granting one asks first, and withholding one from a plugin that is on turns it off, after asking;
+- its settings, each as an ordinary row: on/off and choices as dropdowns whose first option is the default, numbers and text as a prompt with **Use default** once changed;
+- **Update…** (see [Updating](#updating)), **Reset settings…**, and **Remove…**, which removes the installed copy and leaves the plugin's directory alone.
 
 ### From the command line
 
@@ -84,7 +82,7 @@ You grant permissions when you install, and can change them at any time afterwar
 
 ### Updating
 
-Installing copies the manifest, so editing the plugin's source directory has no effect until you update. **Update from source** in the manager shows the installed and updated version, profile and command counts, both fingerprints, and the permissions added and removed. Permissions that stay the same keep their grants; newly requested ones start ungranted. Choose **Update and keep enabled** (or **Update and enable**), which needs every permission granted, or **Update and disable**.
+Installing copies the manifest, so editing the plugin's source directory has no effect until you update. **Update…** on the plugin's page shows the installed and updated version, profile and command counts, both fingerprints, and the permissions added and removed. Permissions that stay the same keep their grants. Choose **Update and keep on** (or **Update and turn on**), which also grants what the update newly asks for, or **Update and turn off** (or **Update turned off**), which leaves newly requested permissions ungranted.
 
 `termeric plugin update ID` does the same without a review, so it refuses an update that requests a permission or a wider scope the installed version didn't; install that version with `--replace` and explicit `--allow` options instead. Grants for permissions the update drops are removed, and a grant whose permission the update narrows to window scope narrows with it.
 

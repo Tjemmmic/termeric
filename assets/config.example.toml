@@ -73,14 +73,16 @@ bold_is_bright = false    # bold also brightens ANSI colors 0 to 7
 
 # Up to 32 OpenType features by their four-letter tags: 1 turns one on and 0
 # off. A feature set here overrides `ligatures` for its tag. "kern" isn't
-# allowed, because it would move characters off the grid.
+# allowed, because it would move characters off the grid. The Font page of
+# Settings lists them under OpenType Features.
 # [font.features]
 # ss01 = 1
 # calt = 0
 
 # Prefer a font for a range of code points, such as Nerd Font icons: up to 64
-# ranges, which may not overlap. Range Overrides on the Font page of Settings
-# shows which font draws each character.
+# ranges, which may not overlap. The Font page of Settings lists them under
+# Font Ranges, and "Check which font draws text…" there shows which font draws
+# each character.
 # [[font.range_overrides]]
 # start = 0xE000
 # end = 0xF8FF
