@@ -2842,21 +2842,18 @@ mod tests {
     #[test]
     fn test_toggle_open_close() {
         let mut panel = SettingsPanel::new();
+        // Without motion each toggle lands at once; the next test covers what
+        // the panel does while its close animation plays.
+        panel.set_reduced_motion(true);
         assert!(!panel.is_visible());
         assert!(!panel.is_active());
 
         panel.toggle();
         assert!(panel.is_visible());
-
-        // Wait for animation to complete
-        thread::sleep(Duration::from_millis(250));
         assert!(panel.is_active());
 
         panel.toggle();
         assert!(!panel.is_active());
-        assert!(panel.is_visible());
-        // Wait for close animation to complete
-        thread::sleep(Duration::from_millis(250));
         assert!(!panel.is_visible());
     }
 
@@ -2865,6 +2862,7 @@ mod tests {
         let mut panel = SettingsPanel::new();
         panel.toggle();
         assert!(panel.is_active());
+        // Let the open animation advance, so closing has motion left to play.
         thread::sleep(Duration::from_millis(20));
 
         panel.close();
@@ -2880,7 +2878,6 @@ mod tests {
     fn test_navigation() {
         let mut panel = SettingsPanel::new();
         panel.open();
-        thread::sleep(Duration::from_millis(250));
 
         let config = Config::default();
         let registry = default_registry();
@@ -2909,7 +2906,6 @@ mod tests {
     fn test_value_adjustment() {
         let mut panel = SettingsPanel::new();
         panel.open();
-        thread::sleep(Duration::from_millis(250));
 
         let config = Config::default();
         let registry = default_registry();
@@ -3590,7 +3586,6 @@ mod tests {
     fn test_theme_dropdown() {
         let mut panel = SettingsPanel::new();
         panel.open();
-        thread::sleep(Duration::from_millis(250));
 
         let config = Config::default();
         let registry = default_registry();
@@ -3628,7 +3623,6 @@ mod tests {
     fn test_search_filter() {
         let mut panel = SettingsPanel::new();
         panel.open();
-        thread::sleep(Duration::from_millis(250));
 
         let config = Config::default();
         let registry = default_registry();
@@ -3647,7 +3641,6 @@ mod tests {
     fn test_escape_clears_filter_first() {
         let mut panel = SettingsPanel::new();
         panel.open();
-        thread::sleep(Duration::from_millis(250));
 
         let config = Config::default();
         let registry = default_registry();
@@ -3789,7 +3782,6 @@ mod tests {
     fn test_category_headers_not_selectable() {
         let mut panel = SettingsPanel::new();
         panel.open();
-        thread::sleep(Duration::from_millis(250));
 
         let config = Config::default();
         let registry = default_registry();
@@ -3816,7 +3808,6 @@ mod tests {
     fn test_scroll_follows_selection_down() {
         let mut panel = SettingsPanel::new();
         panel.open();
-        thread::sleep(Duration::from_millis(250));
 
         // Tight viewport so scrolling actually kicks in.
         panel.set_max_visible(5);
@@ -3918,7 +3909,6 @@ mod tests {
     fn test_open_to_section_jumps_without_filter() {
         let mut panel = SettingsPanel::new();
         panel.open_to_section(SettingsSection::Sessions);
-        thread::sleep(Duration::from_millis(250));
 
         // Filter must be empty — the rest of the page stays browsable.
         assert!(panel.filter.text().is_empty());

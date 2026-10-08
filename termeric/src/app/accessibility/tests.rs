@@ -404,9 +404,10 @@ fn pointer_release_and_other_buttons_do_not_change_chrome_focus() {
 #[test]
 fn command_palette_is_one_modal_search_and_result_tree_with_shared_geometry() {
     let mut app = App::new_headless(Config::default()).unwrap();
+    // The layout slides with the palette's fade; reduced motion holds it
+    // where it comes to rest.
+    app.command_palette.set_reduced_motion(true);
     app.command_palette.open();
-    std::thread::sleep(std::time::Duration::from_millis(250));
-    app.command_palette.update_animation();
     let info = app.command_palette.build_info();
     let layout = app.command_palette_accessibility_layout(&info);
     let snapshot = app.accessibility_snapshot();
