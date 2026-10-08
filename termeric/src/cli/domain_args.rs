@@ -3,7 +3,7 @@
 use super::{Direction, LaunchPlan, ParseOutcome, WindowLaunch};
 use crate::domain::model::{self, SpawnSpec};
 use crate::domain::protocol::{self, Request};
-use crate::domain::{DomainAuthority, DomainCommand, DomainTarget};
+use crate::domain::{DaemonCommand, DomainAuthority, DomainCommand, DomainTarget};
 use crate::panes::PaneLayoutPreset;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
@@ -313,7 +313,7 @@ impl DomainCli {
             (None, Some(name)) => Some(load_domains()?.ssh_host(&name)?.destination.clone()),
             (None, None) => None,
         };
-        let request = DomainCommand::request;
+        let request = DaemonCommand::request;
         let command = match self.command {
             DomainArgs::Attach {
                 domain,
@@ -338,45 +338,53 @@ impl DomainCli {
                 }));
             }
             DomainArgs::ProtocolVersion { output } => {
-                local_only(&destination, "protocol-version")?;
-                DomainCommand::ProtocolVersion { json: output.json }
+                return local_only(
+                    &destination,
+                    "protocol-version",
+                    DomainCommand::ProtocolVersion { json: output.json },
+                );
             }
             DomainArgs::Hosts { output } => {
-                local_only(&destination, "hosts")?;
-                DomainCommand::Hosts { json: output.json }
+                return local_only(
+                    &destination,
+                    "hosts",
+                    DomainCommand::Hosts { json: output.json },
+                );
             }
             DomainArgs::Server { .. } => {
-                local_only(&destination, "server")?;
-                DomainCommand::ServerForeground
+                return local_only(&destination, "server", DomainCommand::ServerForeground);
             }
             DomainArgs::ProxyStdio { no_start } => {
-                local_only(&destination, "proxy-stdio")?;
-                DomainCommand::ProxyStdio {
-                    start_server: !no_start,
-                }
+                return local_only(
+                    &destination,
+                    "proxy-stdio",
+                    DomainCommand::ProxyStdio {
+                        start_server: !no_start,
+                    },
+                );
             }
-            DomainArgs::List { output } => DomainCommand::Request {
+            DomainArgs::List { output } => DaemonCommand::Request {
                 request: Request::ListDomains,
                 json: output.json,
             },
-            DomainArgs::Show { domain, output } => DomainCommand::Request {
+            DomainArgs::Show { domain, output } => DaemonCommand::Request {
                 request: Request::Describe { domain },
                 json: output.json,
             },
-            DomainArgs::Panes { domain, output } => DomainCommand::Request {
+            DomainArgs::Panes { domain, output } => DaemonCommand::Request {
                 request: Request::ListPanes { domain },
                 json: output.json,
             },
             DomainArgs::Create { name, spawn } => {
                 let (spawn, json) = spawn.into_spec()?;
-                DomainCommand::Request {
+                DaemonCommand::Request {
                     request: Request::CreateDomain { name, spawn },
                     json,
                 }
             }
             DomainArgs::Spawn { domain, spawn } => {
                 let (spawn, json) = spawn.into_spec()?;
-                DomainCommand::Request {
+                DaemonCommand::Request {
                     request: Request::SpawnTab { domain, spawn },
                     json,
                 }
@@ -387,7 +395,7 @@ impl DomainCli {
                 spawn,
             } => {
                 let (spawn, json) = spawn.into_spec()?;
-                DomainCommand::Request {
+                DaemonCommand::Request {
                     request: Request::SplitPane {
                         domain: pane.domain,
                         pane: pane.pane,
@@ -489,7 +497,7 @@ impl DomainCli {
                 pane,
                 max_bytes,
                 output,
-            } => DomainCommand::Request {
+            } => DaemonCommand::Request {
                 request: Request::GetText {
                     domain: pane.domain,
                     pane: pane.pane,
@@ -502,14 +510,14 @@ impl DomainCli {
                 source,
                 name,
                 output,
-            } => DomainCommand::Upload {
+            } => DaemonCommand::Upload {
                 domain: pane.domain,
                 pane: pane.pane,
                 source,
                 name,
                 json: output.json,
             },
-            DomainArgs::Relay { pane } => DomainCommand::Relay {
+            DomainArgs::Relay { pane } => DaemonCommand::Relay {
                 domain: pane.domain,
                 pane: pane.pane,
             },
@@ -519,9 +527,9 @@ impl DomainCli {
         Ok(ParseOutcome::Domain(match destination {
             Some(destination) => DomainCommand::Remote {
                 destination,
-                command: Box::new(command),
+                command,
             },
-            None => command,
+            None => DomainCommand::Local(command),
         }))
     }
 }
@@ -545,12 +553,17 @@ impl SpawnArgs {
     }
 }
 
-/// Commands about this computer's own daemon, never a remote one.
-fn local_only(destination: &Option<String>, command: &str) -> anyhow::Result<()> {
+/// `command`, `domain NAME`, which is about this computer alone and never
+/// runs on another one.
+fn local_only(
+    destination: &Option<String>,
+    name: &str,
+    command: DomainCommand,
+) -> anyhow::Result<ParseOutcome> {
     if destination.is_some() {
-        anyhow::bail!("`domain {command}` can't run on another computer through --host");
+        anyhow::bail!("`domain {name}` can't run on another computer through --host");
     }
-    Ok(())
+    Ok(ParseOutcome::Domain(command))
 }
 
 fn domain_id(value: &str) -> anyhow::Result<String> {

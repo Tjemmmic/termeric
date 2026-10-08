@@ -102,6 +102,9 @@ impl DomainRelayCommand {
     }
 }
 
+/// What `termeric domain` runs. Commands about this computer alone are
+/// variants of their own, so that only a [`DaemonCommand`] can go to another
+/// computer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DomainCommand {
     ServerForeground,
@@ -115,10 +118,18 @@ pub enum DomainCommand {
     Hosts {
         json: bool,
     },
+    /// A command for this computer's domain daemon.
+    Local(DaemonCommand),
+    /// A command for the domain daemon on `destination`, through SSH.
     Remote {
         destination: String,
-        command: Box<DomainCommand>,
+        command: DaemonCommand,
     },
+}
+
+/// A command a domain daemon answers, on this computer or another.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DaemonCommand {
     Upload {
         domain: String,
         pane: u32,
@@ -137,7 +148,7 @@ pub enum DomainCommand {
     },
 }
 
-impl DomainCommand {
+impl DaemonCommand {
     /// A request whose reply prints as text.
     pub fn request(request: Request) -> Self {
         Self::Request {
@@ -190,21 +201,21 @@ pub fn execute(command: DomainCommand) -> anyhow::Result<Option<String>> {
             command,
         } => {
             let start_server = !command.stops_the_server();
-            (DomainClient::for_ssh(destination, start_server)?, *command)
+            (DomainClient::for_ssh(destination, start_server)?, command)
         }
-        command if command.stops_the_server() => (
+        DomainCommand::Local(command) if command.stops_the_server() => (
             DomainClient::connect_running()?
                 .ok_or_else(|| anyhow::anyhow!(client::NO_SERVER_RUNNING))?,
             command,
         ),
-        command => (DomainClient::connect_or_start()?, command),
+        DomainCommand::Local(command) => (DomainClient::connect_or_start()?, command),
     };
     let (response, json) = match command {
-        DomainCommand::Relay { domain, pane } => {
+        DaemonCommand::Relay { domain, pane } => {
             client.relay(domain, pane)?;
             return Ok(None);
         }
-        DomainCommand::Upload {
+        DaemonCommand::Upload {
             domain,
             pane,
             source,
@@ -214,15 +225,7 @@ pub fn execute(command: DomainCommand) -> anyhow::Result<Option<String>> {
             client.upload(domain, pane, &source, UploadOptions::named(name))?,
             json,
         ),
-        DomainCommand::Request { request, json } => (client.request(request)?, json),
-        // The parser refuses --host for these (`local_only`).
-        local @ (DomainCommand::ServerForeground
-        | DomainCommand::ProxyStdio { .. }
-        | DomainCommand::ProtocolVersion { .. }
-        | DomainCommand::Hosts { .. }
-        | DomainCommand::Remote { .. }) => {
-            unreachable!("{local:?} runs on this computer, not through a domain server")
-        }
+        DaemonCommand::Request { request, json } => (client.request(request)?, json),
     };
     Ok(Some(if json {
         serde_json::to_string_pretty(&response)?

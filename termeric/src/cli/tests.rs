@@ -1340,7 +1340,10 @@ fn domain(arguments: &[&str]) -> crate::domain::DomainCommand {
 /// The daemon request `termeric domain ARGUMENTS` sends.
 fn domain_request(arguments: &[&str]) -> crate::domain::protocol::Request {
     match domain(arguments) {
-        crate::domain::DomainCommand::Request { request, .. } => request,
+        crate::domain::DomainCommand::Local(crate::domain::DaemonCommand::Request {
+            request,
+            ..
+        }) => request,
         command => panic!("expected a daemon request, got {command:?}"),
     }
 }
@@ -1357,10 +1360,10 @@ fn domain_window(arguments: &[&str]) -> WindowLaunch {
 
 #[test]
 fn domain_create_keeps_unicode_argv_size_and_json() {
-    let crate::domain::DomainCommand::Request {
+    let crate::domain::DomainCommand::Local(crate::domain::DaemonCommand::Request {
         request: crate::domain::protocol::Request::CreateDomain { name, spawn },
         json,
-    } = domain(&[
+    }) = domain(&[
         "create",
         "daily",
         "--cwd",
@@ -1514,12 +1517,12 @@ fn domain_bridge_and_version_commands_run_without_a_daemon() {
 
 #[test]
 fn domain_host_sends_daemon_commands_over_ssh() {
-    use crate::domain::DomainCommand;
+    use crate::domain::{DaemonCommand, DomainCommand};
     assert!(matches!(
         domain(&["--host", "dev@example.test", "list", "--json"]),
         DomainCommand::Remote { destination, command }
             if destination == "dev@example.test"
-                && *command == DomainCommand::Request {
+                && command == DaemonCommand::Request {
                     request: crate::domain::protocol::Request::ListDomains,
                     json: true,
                 }
@@ -1539,8 +1542,8 @@ fn domain_host_sends_daemon_commands_over_ssh() {
         DomainCommand::Remote { destination, command }
             if destination == "dev@example.test"
                 && matches!(
-                    command.as_ref(),
-                    DomainCommand::Upload {
+                    &command,
+                    DaemonCommand::Upload {
                         domain,
                         pane: 42,
                         source,
@@ -1593,8 +1596,8 @@ fn saved_ssh_profiles_resolve_for_controls_and_gui_without_re_resolving_relays()
         };
         assert_eq!(destination, "developer@build.example");
         assert_eq!(
-            *command,
-            crate::domain::DomainCommand::Request {
+            command,
+            crate::domain::DaemonCommand::Request {
                 request: crate::domain::protocol::Request::ListDomains,
                 json: true,
             }
@@ -1675,8 +1678,8 @@ fn only_a_host_profile_reads_the_configuration() {
 
 #[test]
 fn free_text_values_may_start_with_a_hyphen() {
-    use crate::domain::DomainCommand;
     use crate::domain::protocol::Request;
+    use crate::domain::{DaemonCommand, DomainCommand};
     use crate::plugin::runtime::{PluginAdminCommand, PluginConfigurationChange};
     let parse_args = |arguments: &[&str]| parse(arguments.iter().map(OsString::from)).unwrap();
 
@@ -1702,10 +1705,10 @@ fn free_text_values_may_start_with_a_hyphen() {
         PluginConfigurationChange::DefaultProfile("-dev".into())
     );
 
-    let ParseOutcome::Domain(DomainCommand::Request {
+    let ParseOutcome::Domain(DomainCommand::Local(DaemonCommand::Request {
         request: Request::CreateDomain { name, spawn },
         json: true,
-    }) = parse_args(&[
+    })) = parse_args(&[
         "domain", "create", "-named", "--title", "-foo", "--cwd", "-dir", "--json",
     ])
     else {
@@ -1714,9 +1717,9 @@ fn free_text_values_may_start_with_a_hyphen() {
     assert_eq!(name, "-named");
     assert_eq!(spawn.title.as_deref(), Some("-foo"));
     assert_eq!(spawn.working_directory.as_deref(), Some("-dir"));
-    let ParseOutcome::Domain(DomainCommand::Upload {
+    let ParseOutcome::Domain(DomainCommand::Local(DaemonCommand::Upload {
         name, json: false, ..
-    }) = parse_args(&[
+    })) = parse_args(&[
         "domain", "upload", "domain-1", "0", "source", "--name", "-file",
     ])
     else {
@@ -1762,10 +1765,10 @@ fn a_remote_working_directory_is_left_for_the_remote_daemon_to_check() {
     let ParseOutcome::Domain(crate::domain::DomainCommand::Remote { command, .. }) = outcome else {
         panic!("expected a remote domain command");
     };
-    let crate::domain::DomainCommand::Request {
+    let crate::domain::DaemonCommand::Request {
         request: crate::domain::protocol::Request::SpawnTab { spawn, .. },
         ..
-    } = *command
+    } = command
     else {
         panic!("expected domain spawn");
     };
