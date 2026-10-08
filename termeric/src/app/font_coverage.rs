@@ -82,20 +82,12 @@ impl App {
             .as_mut()
             .ok_or_else(|| "the renderer is not initialized in this window".to_string())
             .and_then(|renderer| renderer.inspect_font_coverage(&configured_primary, &query));
-        let mut body = vec![DialogBlock::value(format_grapheme(&query))];
-        match report {
-            Ok(report) => {
-                body.push(DialogBlock::text(
-                    "From the installed fonts' character maps and a trial shaping in the regular style.",
-                ));
-                body.push(DialogBlock::value(
-                    format_font_coverage_report(&report).join("\n"),
-                ));
-            }
-            Err(error) => body.push(DialogBlock::error(format!(
+        let body = match report {
+            Ok(report) => coverage_report(&report),
+            Err(error) => vec![DialogBlock::error(format!(
                 "Couldn't check: {error}. Nothing was changed."
-            ))),
-        }
+            ))],
+        };
         let spec = DialogSpec::report("Which font draws it", body)
             .button(DialogButton::answer(
                 RETRY,
@@ -140,94 +132,80 @@ fn parse_font_coverage_query(value: &str) -> std::result::Result<String, String>
     Ok(value.to_string())
 }
 
-fn format_font_coverage_report(report: &FontCoverageReport) -> Vec<String> {
-    let mut lines = vec![
-        format!(
-            "Extended graphemes examined: {}{}",
-            report.entries.len(),
-            if report.graphemes_truncated {
-                format!(" (truncated at {MAX_FONT_COVERAGE_GRAPHEMES})")
-            } else {
-                String::new()
-            }
-        ),
-        "Based on the installed fonts' character maps and a trial shaping in the regular style."
-            .into(),
-    ];
-    for (index, entry) in report.entries.iter().enumerate() {
-        lines.push(String::new());
+/// The report as the dialog reads it: for each character, its code points
+/// as a value, then in plain words which font draws it and which fonts were
+/// tried.
+fn coverage_report(report: &FontCoverageReport) -> Vec<DialogBlock> {
+    let mut body = vec![DialogBlock::text(
+        "From the installed fonts' character maps and a trial shaping in the regular style.",
+    )];
+    for entry in &report.entries {
         let codepoints = entry
             .codepoints
             .iter()
             .map(|codepoint| format_codepoint(*codepoint))
             .collect::<Vec<_>>()
             .join(" ");
-        lines.push(format!(
-            "{}. {} · {}",
-            index + 1,
-            format_grapheme(&entry.grapheme),
-            codepoints
-        ));
-        for attempt in &entry.attempts {
-            let status = if !attempt.installed {
-                "missing"
-            } else if attempt.complete {
-                "installed, complete"
-            } else {
-                "installed, incomplete"
-            };
-            lines.push(format!(
-                "   {} · {} · {status}",
-                format_coverage_source(&attempt.source),
-                attempt.family
-            ));
-        }
-        let route = match &entry.route {
+        body.push(DialogBlock::value(format!(
+            "{}  {codepoints}",
+            format_grapheme(&entry.grapheme)
+        )));
+        let mut lines = vec![match &entry.route {
             FontCoverageRoute::Explicit { source, family } => {
-                format!("   route: {} → {family}", format_coverage_source(source))
+                format!("Drawn with {family}, {}.", source_name(source))
             }
             FontCoverageRoute::Platform {
                 families,
                 names_truncated,
             } => format!(
-                "   route: platform fallback → {}{}",
-                families.join(" + "),
-                if *names_truncated {
-                    " + additional faces"
-                } else {
-                    ""
-                }
+                "Drawn with {}{}, from the system's fallback fonts.",
+                families.join(" and "),
+                if *names_truncated { " and others" } else { "" }
             ),
-            FontCoverageRoute::Missing => {
-                "   route: missing glyph (no explicit or platform shaping face)".into()
+            FontCoverageRoute::Missing => "No installed font draws it.".into(),
+            FontCoverageRoute::DefaultIgnorable { family } => {
+                format!("Nothing to draw: it's invisible formatting, kept with {family}.")
             }
-            FontCoverageRoute::DefaultIgnorable { family } => format!(
-                "   route: default-ignorable-only content retained with {family}; no visible glyph required"
-            ),
-        };
-        lines.push(route);
+        }];
+        lines.extend(entry.attempts.iter().map(|attempt| {
+            let state = if !attempt.installed {
+                "isn't installed"
+            } else if attempt.complete {
+                "has it"
+            } else {
+                "lacks part of it"
+            };
+            format!(
+                "Tried {family}, {source}: {state}.",
+                family = attempt.family,
+                source = source_name(&attempt.source)
+            )
+        }));
+        body.push(DialogBlock::text(lines.join("\n")));
     }
     if report.graphemes_truncated {
-        lines.push(String::new());
-        lines.push(format!(
-            "Additional graphemes were omitted after the {MAX_FONT_COVERAGE_GRAPHEMES}-grapheme report limit."
-        ));
+        body.push(DialogBlock::text(format!(
+            "Only the first {MAX_FONT_COVERAGE_GRAPHEMES} characters were checked."
+        )));
     }
-    lines
+    body
 }
 
-fn format_coverage_source(source: &FontCoverageSource) -> String {
+/// Where a font sits in the configuration, as the report names it.
+fn source_name(source: &FontCoverageSource) -> String {
     match source {
         FontCoverageSource::Range { start, end } => format!(
-            "range {}–{}",
+            "the font for {}–{}",
             format_codepoint(*start),
             format_codepoint(*end)
         ),
-        FontCoverageSource::Primary => "primary".into(),
+        FontCoverageSource::Primary => "the main font".into(),
         FontCoverageSource::Fallback { index } => format!("fallback {index}"),
     }
 }
 
+/// A character as the report shows it: quoted, with anything invisible
+/// escaped.
 fn format_grapheme(grapheme: &str) -> String {
     format!("{grapheme:?}")
 }
@@ -252,37 +230,78 @@ mod tests {
     }
 
     #[test]
-    fn coverage_report_formatter_names_attempt_state_route_and_truncation() {
+    fn the_report_gives_each_character_its_code_points_and_every_font_tried() {
+        let attempt =
+            |source, family: &str, installed, complete| crate::renderer::FontCoverageAttempt {
+                source,
+                family: family.into(),
+                installed,
+                complete,
+            };
         let report = FontCoverageReport {
-            entries: vec![crate::renderer::FontCoverageEntry {
-                grapheme: "شّ".into(),
-                codepoints: vec![0x0634, 0x0651],
-                attempts: vec![crate::renderer::FontCoverageAttempt {
-                    source: FontCoverageSource::Primary,
-                    family: "Missing Primary".into(),
-                    installed: false,
-                    complete: false,
-                }],
-                route: FontCoverageRoute::Platform {
-                    families: vec!["Noto Sans Arabic".into()],
-                    names_truncated: false,
+            entries: vec![
+                crate::renderer::FontCoverageEntry {
+                    grapheme: "شّ".into(),
+                    codepoints: vec![0x0634, 0x0651],
+                    attempts: vec![attempt(
+                        FontCoverageSource::Primary,
+                        "Missing Primary",
+                        false,
+                        false,
+                    )],
+                    route: FontCoverageRoute::Platform {
+                        families: vec!["Noto Sans Arabic".into()],
+                        names_truncated: false,
+                    },
                 },
-            }],
+                crate::renderer::FontCoverageEntry {
+                    grapheme: "\u{E0A0}".into(),
+                    codepoints: vec![0xE0A0],
+                    attempts: vec![attempt(
+                        FontCoverageSource::Range {
+                            start: 0xE000,
+                            end: 0xF8FF,
+                        },
+                        "Symbols",
+                        true,
+                        true,
+                    )],
+                    route: FontCoverageRoute::Explicit {
+                        source: FontCoverageSource::Range {
+                            start: 0xE000,
+                            end: 0xF8FF,
+                        },
+                        family: "Symbols".into(),
+                    },
+                },
+            ],
             graphemes_truncated: true,
         };
-        let lines = format_font_coverage_report(&report);
-        assert!(lines.iter().any(|line| line.contains("U+0634 U+0651")));
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("primary · Missing Primary · missing"))
+        let body = coverage_report(&report);
+        let values: Vec<_> = body
+            .iter()
+            .filter_map(|block| match block {
+                DialogBlock::Value(value) => Some(value.as_str()),
+                _ => None,
+            })
+            .collect();
+        // One value per character, holding its code points; the words
+        // around them are in the UI face.
+        assert_eq!(values.len(), 2);
+        assert!(values[0].ends_with("U+0634 U+0651"));
+        assert!(values[1].ends_with("U+E0A0"));
+        let text = |index: usize| match &body[index] {
+            DialogBlock::Text(text) => text.clone(),
+            other => panic!("block {index} is {other:?}"),
+        };
+        assert!(text(2).contains("Noto Sans Arabic") && text(2).contains("Missing Primary"));
+        assert!(text(4).contains("Symbols") && text(4).contains("U+E000–U+F8FF"));
+        assert!(matches!(body.last(), Some(DialogBlock::Text(_))));
+        assert_eq!(
+            body.len(),
+            6,
+            "an opening note, two per character, and the cut"
         );
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("platform fallback → Noto Sans Arabic"))
-        );
-        assert!(lines.iter().any(|line| line.contains("truncated at 16")));
     }
 
     #[test]
