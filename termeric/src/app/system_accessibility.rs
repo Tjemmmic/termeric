@@ -16,19 +16,19 @@ pub(crate) struct SystemAccessibilityPreferences {
 pub(super) fn start_monitor(proxy: EventLoopProxy<AppEvent>) {
     if let Err(error) = std::thread::Builder::new()
         .name("termeric-accessibility".into())
-        .spawn(move || monitor_linux(proxy))
+        .spawn(move || {
+            if let Err(error) = run_monitor(&proxy) {
+                let _ = proxy.send_event(AppEvent::SystemAccessibilityUnavailable(error));
+            }
+        })
     {
         log::warn!("Could not start the desktop accessibility monitor: {error}");
     }
 }
 
-fn monitor_linux(proxy: EventLoopProxy<AppEvent>) {
-    if let Err(error) = monitor_linux_inner(&proxy) {
-        let _ = proxy.send_event(AppEvent::SystemAccessibilityUnavailable(error));
-    }
-}
-
-fn monitor_linux_inner(proxy: &EventLoopProxy<AppEvent>) -> Result<(), String> {
+/// Report the desktop's preferences, then each change, until the event loop
+/// ends or the portal fails.
+fn run_monitor(proxy: &EventLoopProxy<AppEvent>) -> Result<(), String> {
     use zbus::blocking::{Connection, Proxy};
 
     const DESTINATION: &str = "org.freedesktop.portal.Desktop";
