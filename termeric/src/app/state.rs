@@ -87,24 +87,25 @@ impl AppState {
         self.save()
     }
 
+    /// Make `id` the workspace restored last.
     pub fn remember_workspace(&mut self, id: &str) -> Result<()> {
-        let mut latest = Self::load();
-        latest.first_boot_complete |= self.first_boot_complete;
-        latest
-            .last_workspace_ids
-            .retain(|candidate| candidate != id);
-        latest.last_workspace_ids.push(id.to_string());
-        latest.save()?;
-        *self = latest;
-        Ok(())
+        self.update_workspace_ids(|ids| {
+            ids.retain(|candidate| candidate != id);
+            ids.push(id.to_string());
+        })
     }
 
     pub fn forget_workspace(&mut self, id: &str) -> Result<()> {
+        self.update_workspace_ids(|ids| ids.retain(|candidate| candidate != id))
+    }
+
+    /// Apply `update` to the workspace list on disk and save it. Other
+    /// windows of this and other processes write the same file, so the
+    /// change goes onto what the file holds now, not this window's copy.
+    fn update_workspace_ids(&mut self, update: impl FnOnce(&mut Vec<String>)) -> Result<()> {
         let mut latest = Self::load();
         latest.first_boot_complete |= self.first_boot_complete;
-        latest
-            .last_workspace_ids
-            .retain(|candidate| candidate != id);
+        update(&mut latest.last_workspace_ids);
         latest.save()?;
         *self = latest;
         Ok(())
