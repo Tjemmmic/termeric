@@ -189,10 +189,8 @@ mod tests {
 
     #[test]
     fn shortcut_ime_limit_and_recording_refusal_never_leak_text_to_the_pty() {
-        let mut app = App::new_headless_running(
-            "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.1",
-            "shortcut-filter",
-        );
+        let mut app =
+            App::new_headless_running(crate::test_support::FIRST_BYTE_PROBE, "shortcut-filter");
         app.wait_for_screen_text("READY");
         app.shortcuts_panel.open();
         assert!(app.handle_shortcuts_filter_key(&Key::Character("e\u{301}".into())));
@@ -267,8 +265,7 @@ mod tests {
             format!("{before}界")
         );
         app.shortcuts_panel.close();
-        app.write_to_pty(b"Z");
-        app.wait_for_screen_text("5a");
+        app.assert_pty_untouched();
     }
 
     #[test]

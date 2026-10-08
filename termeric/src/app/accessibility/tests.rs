@@ -518,10 +518,8 @@ fn search_semantic_focus_resumes_confirmed_input_and_preserves_results() {
 
 #[test]
 fn search_semantic_replacement_retires_preedit_and_never_writes_to_pty() {
-    let mut app = App::new_headless_running(
-        "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.1",
-        "search-semantic",
-    );
+    let mut app =
+        App::new_headless_running(crate::test_support::FIRST_BYTE_PROBE, "search-semantic");
     let replace = |app: &mut App, data| {
         app.handle_accessibility_action(ActionRequest {
             action: Action::SetValue,
@@ -586,8 +584,7 @@ fn search_semantic_replacement_retires_preedit_and_never_writes_to_pty() {
     assert_eq!(app.search.query(), "READY界", "higher modal owns input");
     app.command_palette.close();
     app.search.cancel();
-    app.write_to_pty(b"Z");
-    app.wait_for_screen_text("5a");
+    app.assert_pty_untouched();
 }
 
 #[test]

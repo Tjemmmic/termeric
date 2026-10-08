@@ -853,10 +853,8 @@ mod tests {
 
     #[test]
     fn search_clipboard_paste_is_bounded_and_query_pastes_never_reach_raw_pty() {
-        let mut app = App::new_headless_running(
-            "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.1",
-            "query-paste",
-        );
+        let mut app =
+            App::new_headless_running(crate::test_support::FIRST_BYTE_PROBE, "query-paste");
         app.wait_for_screen_text("READY");
         app.search.start();
         assert!(app.paste_clipboard_payload("az"));

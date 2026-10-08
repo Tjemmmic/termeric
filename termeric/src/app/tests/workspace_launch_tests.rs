@@ -290,24 +290,8 @@ fn cli_launch_plan_creates_ordered_shell_and_arbitrary_command_tabs() {
     assert_eq!(tabs_at(&app, 0).unwrap().title, "CLI shell");
     assert_eq!(tabs_at(&app, 1).unwrap().title, "CLI command");
 
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while Instant::now() < deadline {
-        app.process_pty_events();
-        let found = tabs_at(&app, 1)
-            .and_then(|tab| tab.focused_terminal())
-            .is_some_and(|terminal| {
-                terminal
-                    .grid()
-                    .plain_lines()
-                    .join("\n")
-                    .contains("CLI_ARGV_28")
-            });
-        if found {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    panic!("CLI arbitrary-command output did not reach its tab");
+    let command = tabs_at(&app, 1).unwrap().focused_terminal_identity();
+    app.wait_for_terminal_text(command, "CLI_ARGV_28");
 }
 
 #[test]
@@ -420,22 +404,10 @@ fn background_command_launch_preserves_focused_pane_and_interaction_surfaces() {
         );
         assert_eq!(app.search.query(), query);
         assert_eq!(app.search.match_count(), matches);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        loop {
-            app.process_pty_events();
-            let text = tabs_at(&app, created as usize)
-                .unwrap()
-                .focused_terminal()
-                .unwrap()
-                .grid()
-                .plain_lines()
-                .join("\n");
-            if text.contains("background-ready") {
-                break;
-            }
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+        let background = tabs_at(&app, created as usize)
+            .unwrap()
+            .focused_terminal_identity();
+        app.wait_for_terminal_text(background, "background-ready");
         assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(original));
         assert_eq!(app.ime, ime);
         assert_eq!(app.copy_mode_target, copy_target);
@@ -524,52 +496,15 @@ fn running_gui_launch_tab_preserves_argv_cwd_title_and_failure_atomicity() {
     assert_eq!(app.tabs.as_ref().unwrap().active_index(), 0);
     assert_eq!(tabs_at(&app, 0).unwrap().title, "Exact launch 🙂");
 
-    let deadline = Instant::now() + Duration::from_secs(2);
-    let mut exact_output = false;
-    let mut environment_output = false;
-    let mut cwd_output = false;
-    while Instant::now() < deadline {
-        app.process_pty_events();
-        exact_output = tabs_at(&app, 0)
-            .and_then(|tab| tab.focused_terminal())
-            .is_some_and(|terminal| {
-                terminal
-                    .grid()
-                    .plain_lines()
-                    .join("\n")
-                    .contains("[]|[two words]|[$HOME;🙂]|[--json]")
-            });
-        cwd_output = tabs_at(&app, 0)
-            .and_then(|tab| tab.focused_terminal())
-            .is_some_and(|terminal| terminal.grid().plain_lines().join("\n").contains(cwd));
-        environment_output = tabs_at(&app, 0)
-            .and_then(|tab| tab.focused_terminal())
-            .is_some_and(|terminal| {
-                terminal
-                    .grid()
-                    .plain_lines()
-                    .join("\n")
-                    .contains("ENV=[]|[= two words $HOME;value]|[line one")
-                    && terminal
-                        .grid()
-                        .plain_lines()
-                        .join("\n")
-                        .contains("ENV_UNICODE_λ")
-            });
-        if exact_output && environment_output && cwd_output {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(5));
+    let launched = tabs_at(&app, 0).unwrap().focused_terminal_identity();
+    for expected in [
+        "[]|[two words]|[$HOME;🙂]|[--json]",
+        cwd,
+        "ENV=[]|[= two words $HOME;value]|[line one",
+        "ENV_UNICODE_λ",
+    ] {
+        app.wait_for_terminal_text(launched, expected);
     }
-    assert!(
-        exact_output,
-        "exact argv output did not reach the command tab"
-    );
-    assert!(
-        environment_output,
-        "exact environment output did not reach the command tab"
-    );
-    assert!(cwd_output, "the command did not run in the requested cwd");
 
     let count = app.tabs.as_ref().unwrap().count();
     let error = app
@@ -640,23 +575,9 @@ fn terminal_profile_cli_launch_applies_env_cwd_title_and_workspace_identity() {
         &config.profiles["dev"].shell_config()
     );
 
-    let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        app.process_pty_events();
-        let text = app
-            .active_terminal()
-            .unwrap()
-            .grid()
-            .plain_lines()
-            .join("\n");
-        if text.contains("PROFILE_MARK=exact")
-            && text.contains(&format!("PWD={}", temp.path().display()))
-        {
-            break;
-        }
-        assert!(Instant::now() < deadline, "profile output was {text:?}");
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    let profile = tab.focused_terminal_identity();
+    app.wait_for_terminal_text(profile, "PROFILE_MARK=exact");
+    app.wait_for_terminal_text(profile, &format!("PWD={}", temp.path().display()));
 
     let workspace = app
         .tabs

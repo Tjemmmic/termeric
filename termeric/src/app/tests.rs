@@ -1,6 +1,42 @@
 use super::*;
 use crate::plugin::hooks::{Plugin, PluginCommand};
 
+/// Test helpers that go through the app's own input and event paths.
+impl App {
+    /// For an app whose active terminal runs
+    /// [`crate::test_support::FIRST_BYTE_PROBE`]: proves nothing reached that
+    /// terminal yet, by writing `Z` and waiting for the probe to report it
+    /// (`5a`) as the first byte it read.
+    pub(crate) fn assert_pty_untouched(&mut self) {
+        self.write_to_pty(b"Z");
+        self.wait_for_screen_text("5a");
+    }
+
+    /// Process PTY output until the terminal `identity` names, active or
+    /// not, shows `expected` anywhere in its grid; fails the test after
+    /// three seconds with what it shows.
+    pub(crate) fn wait_for_terminal_text(
+        &mut self,
+        identity: crate::tabs::TerminalIdentity,
+        expected: &str,
+    ) {
+        let mut output = String::new();
+        let shown = crate::test_support::poll_until(Duration::from_secs(3), || {
+            self.process_pty_events();
+            output = self
+                .tabs
+                .as_ref()
+                .and_then(|tabs| tabs.tab_by_id(identity.tab_id))
+                .and_then(|tab| tab.pane_terminal(identity.pane_id))
+                .map_or_else(String::new, |terminal| {
+                    terminal.grid().plain_lines().join("\n")
+                });
+            output.contains(expected)
+        });
+        assert!(shown, "{identity:?} is missing {expected}: {output}");
+    }
+}
+
 fn overflow_drag_fixture() -> App {
     let mut app = scrollbar_owner_fixture();
     let tabs = app.tabs.as_mut().unwrap();

@@ -154,10 +154,8 @@ mod tests {
 
     #[test]
     fn search_query_keys_edit_graphemes_and_keep_all_input_out_of_the_pty() {
-        let mut app = App::new_headless_running(
-            "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.1",
-            "search-edit",
-        );
+        let mut app =
+            App::new_headless_running(crate::test_support::FIRST_BYTE_PROBE, "search-edit");
         app.wait_for_screen_text("READY");
         app.search.start();
         let query = "a界e\u{301}👩\u{200d}💻🇺🇸z";
@@ -260,8 +258,7 @@ mod tests {
         assert!(app.handle_search_key(&Key::Named(NamedKey::Escape)));
         assert!(!app.focus_search_query_at(0, redraw_scheduler::RedrawReason::PointerInput));
         assert!(!app.handle_search_key(&Key::Named(NamedKey::Delete)));
-        app.write_to_pty(b"Z");
-        app.wait_for_screen_text("5a");
+        app.assert_pty_untouched();
     }
 
     #[test]
@@ -290,10 +287,8 @@ mod tests {
 
     #[test]
     fn the_find_box_runs_app_shortcuts_for_keys_it_does_not_use_and_swallows_the_rest() {
-        let mut app = App::new_headless_running(
-            "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.1",
-            "search-shortcuts",
-        );
+        let mut app =
+            App::new_headless_running(crate::test_support::FIRST_BYTE_PROBE, "search-shortcuts");
         app.wait_for_screen_text("READY");
         let tabs = app.tabs.as_mut().unwrap();
         tabs.new_tab_with_command(
@@ -351,10 +346,7 @@ mod tests {
         assert!(!app.search.is_active());
         assert!(!app.search.query().contains('F'));
 
-        // The reader's first byte is the one written now: nothing above
-        // reached the terminal.
         app.modifiers = ModifiersState::empty();
-        app.write_to_pty(b"Z");
-        app.wait_for_screen_text("5a");
+        app.assert_pty_untouched();
     }
 }

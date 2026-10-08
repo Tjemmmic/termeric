@@ -319,29 +319,11 @@ fn mouse_focus_and_bracketed_paste_reach_the_focused_pane_in_order() {
     tabs.active_tab_mut().unwrap().panes = panes;
     app.tabs = Some(tabs);
 
-    let ready_deadline = Instant::now() + Duration::from_secs(3);
-    let mut receiver_ready = false;
-    while Instant::now() < ready_deadline {
-        app.tabs.as_mut().unwrap().poll_events();
-        let ready = app
-            .active_panes()
-            .get_pane(receiving_pane)
-            .unwrap()
-            .terminal
-            .grid()
-            .plain_lines()
-            .join("\n")
-            .contains("READY");
-        if ready {
-            receiver_ready = true;
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(2));
-    }
-    assert!(
-        receiver_ready,
-        "focused pane PTY byte receiver did not become ready"
-    );
+    let receiver = crate::tabs::TerminalIdentity {
+        tab_id: app.tabs.as_ref().unwrap().active_tab_id().unwrap(),
+        pane_id: receiving_pane,
+    };
+    app.wait_for_terminal_text(receiver, "READY");
 
     // Duplicate native notifications must not produce duplicate CSI I/O reports.
     app.handle_window_focus_change(false);
@@ -659,26 +641,13 @@ fn collapsed_tab_rejects_retired_pane_and_divider_requests_after_resplit() {
             directory.path().join(replacement_pid.to_string()),
         ),
     ];
-    let deadline = Instant::now() + std::time::Duration::from_secs(3);
-    loop {
-        app.process_pty_events();
-        if app
-            .tabs
-            .as_ref()
-            .unwrap()
-            .terminal_for_origin(captures[1].0)
-            .unwrap()
-            .rows_text(0, 23)
-            .contains("READY")
-        {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "replacement capture did not become ready"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    app.wait_for_terminal_text(
+        crate::tabs::TerminalIdentity {
+            tab_id,
+            pane_id: replacement,
+        },
+        "READY",
+    );
     for retired in [1, 2] {
         assert!(
             app.send_text_for(

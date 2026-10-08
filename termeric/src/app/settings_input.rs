@@ -184,10 +184,8 @@ mod tests {
 
     #[test]
     fn settings_ime_and_keyboard_limits_never_leak_into_the_pty() {
-        let mut app = App::new_headless_running(
-            "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.1",
-            "settings-filter",
-        );
+        let mut app =
+            App::new_headless_running(crate::test_support::FIRST_BYTE_PROBE, "settings-filter");
         app.wait_for_screen_text("READY");
         // The click below targets a layout computed before it; an opening
         // animation would move the field between the two.
@@ -266,8 +264,7 @@ mod tests {
             assert!(app.handle_settings_filter_key(&Key::Named(key)));
         }
         app.settings_panel.close();
-        app.write_to_pty(b"Z");
-        app.wait_for_screen_text("5a");
+        app.assert_pty_untouched();
     }
 
     #[test]

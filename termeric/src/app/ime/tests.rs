@@ -308,24 +308,8 @@ fn retained_search_does_not_steal_ime_geometry_from_modal_or_text_owners() {
 
 #[test]
 fn search_ime_commit_inserts_at_query_caret_without_leaking_into_pty() {
-    let mut app = App::new_headless_running(
-        "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.1",
-        "search-ime",
-    );
-    let deadline = Instant::now() + Duration::from_secs(3);
-    loop {
-        app.process_pty_events();
-        if app
-            .active_terminal()
-            .unwrap()
-            .rows_text(0, 23)
-            .contains("READY")
-        {
-            break;
-        }
-        assert!(Instant::now() < deadline);
-        std::thread::yield_now();
-    }
+    let mut app = App::new_headless_running(crate::test_support::FIRST_BYTE_PROBE, "search-ime");
+    app.wait_for_screen_text("READY");
     app.search.start();
     assert!(
         app.with_search_and_active_grid(|search, grid| search.set_query("a界b", grid))
@@ -338,20 +322,7 @@ fn search_ime_commit_inserts_at_query_caret_without_leaking_into_pty() {
     assert_eq!(app.search.query(), "a日本界b");
     assert_eq!(app.search_cursor_pos, "a日本".len());
     app.search.cancel();
-    app.write_to_pty(b"Z");
-    let deadline = Instant::now() + Duration::from_secs(3);
-    loop {
-        app.process_pty_events();
-        let text = app.active_terminal().unwrap().rows_text(0, 23);
-        if text.contains("5a") {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "query input leaked before the Z fence: {text}"
-        );
-        std::thread::yield_now();
-    }
+    app.assert_pty_untouched();
 }
 
 #[test]
@@ -772,10 +743,7 @@ fn frontmost_panels_own_keyboard_ime_geometry_and_paste_ahead_of_retained_tab_re
 
 #[test]
 fn modal_atomic_commits_never_fall_through_to_a_live_pty() {
-    let mut app = App::new_headless_running(
-        "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.1",
-        "palette-ime",
-    );
+    let mut app = App::new_headless_running(crate::test_support::FIRST_BYTE_PROBE, "palette-ime");
     app.wait_for_screen_text("READY");
     for kind in ["command", "unicode", "domain"] {
         match kind {
@@ -948,8 +916,7 @@ fn modal_atomic_commits_never_fall_through_to_a_live_pty() {
         Some("Roots 🫚")
     );
     assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::Escape)));
-    app.write_to_pty(b"Z");
-    app.wait_for_screen_text("5a");
+    app.assert_pty_untouched();
 }
 
 #[test]

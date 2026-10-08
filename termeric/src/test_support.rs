@@ -13,6 +13,12 @@ use termeric_core::{CellFlags, Terminal};
 mod benchmarks;
 mod soak;
 
+/// An `sh -c` script that shows whether input reached its terminal: with no
+/// echo or line editing it prints `READY`, then the first byte it reads, in
+/// hex. `App::assert_pty_untouched` writes the byte it expects first.
+pub(crate) const FIRST_BYTE_PROBE: &str =
+    "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.1";
+
 /// `sh -c` arguments for a child that stays alive through a test without
 /// printing anything: a real PTY whose process is still running when the
 /// test looks.

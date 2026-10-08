@@ -1003,10 +1003,8 @@ fn copy_mode_runs_app_shortcuts_for_keys_it_does_not_use() {
 #[test]
 fn copy_mode_keys_never_reach_the_terminal() {
     use winit::keyboard::{Key, NamedKey};
-    let mut app = App::new_headless_running(
-        "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.1",
-        "copy-mode-reader",
-    );
+    let mut app =
+        App::new_headless_running(crate::test_support::FIRST_BYTE_PROBE, "copy-mode-reader");
     app.wait_for_screen_text("READY");
     app.enter_copy_mode();
     for (key, modifiers) in [
@@ -1027,9 +1025,7 @@ fn copy_mode_keys_never_reach_the_terminal() {
         ModifiersState::empty()
     ));
     assert!(!app.copy_mode.is_active());
-    // The reader's first byte is the one written now.
-    app.write_to_pty(b"Z");
-    app.wait_for_screen_text("5a");
+    app.assert_pty_untouched();
 }
 
 #[test]

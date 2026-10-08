@@ -585,10 +585,8 @@ mod tests {
 
     #[test]
     fn editing_and_ime_commit_stay_in_the_form_and_leave_the_raw_pty_untouched() {
-        let mut app = App::new_headless_running(
-            "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.1",
-            "command-editor",
-        );
+        let mut app =
+            App::new_headless_running(crate::test_support::FIRST_BYTE_PROBE, "command-editor");
         app.wait_for_screen_text("READY");
         app.commands_panel.toggle();
         exercise_atomic_form_input(&mut app);
@@ -648,7 +646,6 @@ mod tests {
         exercise_command_scrolling(&mut app);
         exercise_browse_navigation(&mut app);
         app.commands_panel.close();
-        app.write_to_pty(b"Z");
-        app.wait_for_screen_text("5a"); // first raw byte: no editing/IME bytes leaked
+        app.assert_pty_untouched();
     }
 }
