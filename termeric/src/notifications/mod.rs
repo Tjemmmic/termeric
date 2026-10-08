@@ -283,8 +283,6 @@ fn wait_for_audio_player(
 
 /// Notification manager for system notifications
 pub struct Notifications {
-    /// Whether notifications are enabled
-    enabled: bool,
     /// Last notification time (for rate limiting)
     last_notification: Option<Instant>,
     /// Minimum time between notifications
@@ -304,7 +302,6 @@ impl Notifications {
     /// Create a new notification manager
     pub fn new() -> Self {
         Self {
-            enabled: true,
             last_notification: None,
             rate_limit: Duration::from_secs(1),
             delivery_failure: FailureReport::new("Desktop notification unavailable"),
@@ -324,10 +321,9 @@ impl Notifications {
     /// Show a notification nothing will replace, close, or report on. These
     /// are rate limited because any program can trigger one.
     fn notify_untracked(&mut self, request: NotificationRequest) -> Option<String> {
-        if !self.enabled
-            || self
-                .last_notification
-                .is_some_and(|last| last.elapsed() < self.rate_limit)
+        if self
+            .last_notification
+            .is_some_and(|last| last.elapsed() < self.rate_limit)
         {
             return None;
         }
@@ -347,9 +343,6 @@ impl Notifications {
         origin: crate::tabs::TerminalIdentity,
         request: NotificationRequest,
     ) -> Option<String> {
-        if !self.enabled {
-            return None;
-        }
         if !requires_tracked_notification(&request) {
             return self.notify_untracked(request);
         }

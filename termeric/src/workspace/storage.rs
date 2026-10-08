@@ -21,7 +21,6 @@ thread_local! {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceSaveReport {
     pub id: String,
-    pub scrollback_bytes: usize,
     pub truncated_panes: Vec<(u32, u32)>,
 }
 
@@ -160,7 +159,6 @@ fn save_workspace_to_dir_with_backup(
 
     Ok(WorkspaceSaveReport {
         id: workspace.id.clone(),
-        scrollback_bytes: total_bytes,
         truncated_panes,
     })
 }

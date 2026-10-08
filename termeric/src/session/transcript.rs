@@ -223,7 +223,6 @@ pub struct TranscriptRecorder {
     completion_rx: Receiver<std::io::Result<()>>,
     shutdown_result: Option<std::io::Result<()>>,
     shutdown_text_error: Option<std::io::Error>,
-    pub entry_count: usize,
     limits: RecorderLimits,
     cap_reached: bool,
     failed: bool,
@@ -239,7 +238,6 @@ impl std::fmt::Debug for TranscriptRecorder {
         formatter
             .debug_struct("TranscriptRecorder")
             .field("path", &self.path)
-            .field("entry_count", &self.entry_count)
             .field("queued_bytes", &self.queued_bytes.load(Ordering::Relaxed))
             .finish()
     }
@@ -309,7 +307,6 @@ impl TranscriptRecorder {
             completion_rx,
             shutdown_result: None,
             shutdown_text_error: None,
-            entry_count: 1,
             limits,
             cap_reached: false,
             failed: false,
@@ -518,10 +515,7 @@ impl TranscriptRecorder {
             ));
         };
         match command_tx.try_send(command) {
-            Ok(()) => {
-                self.entry_count += 1;
-                Ok(TranscriptWrite::Written)
-            }
+            Ok(()) => Ok(TranscriptWrite::Written),
             Err(TrySendError::Full(command)) => {
                 drop(command);
                 Ok(self.backpressure())
