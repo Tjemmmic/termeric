@@ -10,13 +10,12 @@ use super::*;
 use crate::agents::changes::{self, Baseline, ChangeKind, ChangedFile};
 use crate::tabs::TerminalIdentity;
 use crate::ui::command_palette::palette::{CommandSource, PickKind, RegisteredCommand};
+use crate::ui::dialog::{ButtonRole, DialogBlock, DialogSpec};
 use crate::ui::diff_review::{ChangeOwner, ChangeReviewTarget};
-use crate::ui::info_overlay::push_keyless_choice;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
 const REVERT_CHOICE: &str = "agent-change-revert";
-const KEEP_CHOICE: &str = "agent-change-keep";
 
 enum ChangeTask {
     List,
@@ -367,29 +366,30 @@ impl App {
         );
     }
 
-    /// Ask before putting the file under review back as it was. The
-    /// confirmation has no letter shortcut, so a repeated key cannot revert.
+    /// Ask before putting the file under review back as it was. Focus
+    /// starts on Cancel, so a stray Enter cannot revert.
     pub(super) fn confirm_revert_reviewed_change(&mut self, request_id: u64) {
         let Some(review) = self.reviewed_change(request_id) else {
             return;
         };
         self.diff_review.dismiss(request_id);
-        let mut lines = vec![
-            format!(
-                "Put {} back as it was when the agent started?",
-                review.path.display()
-            ),
-            "The agent's edits to this file are lost. Other files, staged".into(),
-            "changes, and commits stay as they are.".into(),
-            String::new(),
-        ];
-        let mut choices = Vec::new();
-        push_keyless_choice(&mut lines, &mut choices, REVERT_CHOICE, "Revert");
-        push_keyless_choice(&mut lines, &mut choices, KEEP_CHOICE, "Keep the changes");
-        let revert_request = self
-            .info_overlay
-            .show_choices("Revert file", lines, choices);
-        self.overlay_flow = Some(OverlayFlow::AgentRevert(PendingRevert {
+        let name = review.path.file_name().map_or_else(
+            || review.path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        let revert_request = self.dialog.show(DialogSpec::confirm(
+            format!("Revert {name}?"),
+            vec![
+                DialogBlock::value(review.path.display().to_string()),
+                DialogBlock::text(
+                    "It goes back to how it was when the agent started, and the agent's edits to it are lost. Other files, staged changes, and commits aren't touched.",
+                ),
+            ],
+            REVERT_CHOICE,
+            "Revert",
+            ButtonRole::Destructive,
+        ));
+        self.dialog_flow = Some(DialogFlow::AgentRevert(PendingRevert {
             request_id: revert_request,
             owner: review.owner,
             baseline: review.baseline,
@@ -397,31 +397,28 @@ impl App {
         }));
     }
 
-    /// Answer the revert confirmation. Returns whether the choice was its.
+    /// Answer the revert confirmation. Returns whether the answer was its.
     pub(super) fn handle_revert_choice(&mut self, request_id: u64, choice_id: &str) -> bool {
-        let pending = match self.overlay_flow.take() {
-            Some(OverlayFlow::AgentRevert(pending))
-                if pending.request_id == request_id
-                    && matches!(choice_id, REVERT_CHOICE | KEEP_CHOICE) =>
+        let pending = match self.dialog_flow.take() {
+            Some(DialogFlow::AgentRevert(pending))
+                if pending.request_id == request_id && choice_id == REVERT_CHOICE =>
             {
                 pending
             }
             other => {
-                self.overlay_flow = other;
+                self.dialog_flow = other;
                 return false;
             }
         };
-        self.info_overlay.dismiss(request_id);
-        if choice_id == REVERT_CHOICE {
-            if self.baseline_is_current(pending.owner, &pending.baseline) {
-                self.start_change_job(
-                    pending.owner,
-                    pending.baseline,
-                    ChangeTask::Revert(pending.path),
-                );
-            } else {
-                self.toasts.warning("That agent has restarted or closed");
-            }
+        self.dialog.dismiss(request_id);
+        if self.baseline_is_current(pending.owner, &pending.baseline) {
+            self.start_change_job(
+                pending.owner,
+                pending.baseline,
+                ChangeTask::Revert(pending.path),
+            );
+        } else {
+            self.toasts.warning("That agent has restarted or closed");
         }
         true
     }
@@ -429,9 +426,9 @@ impl App {
     /// Leave change review: the list, the diff's actions, a revert awaiting
     /// confirmation, and a job whose result would open them again.
     pub(super) fn close_agent_change_review(&mut self) {
-        if let Some(OverlayFlow::AgentRevert(pending)) = &self.overlay_flow {
-            self.info_overlay.dismiss(pending.request_id);
-            self.overlay_flow = None;
+        if let Some(DialogFlow::AgentRevert(pending)) = &self.dialog_flow {
+            self.dialog.dismiss(pending.request_id);
+            self.dialog_flow = None;
         }
         self.agent_change_review = None;
         self.agent_change_list = None;

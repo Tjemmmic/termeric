@@ -331,7 +331,7 @@ fn a_window_of_idle_shells_opens_a_workspace_at_once() {
 
     app.request_open_workspace(&a);
     end_persistence_test();
-    assert!(!app.info_overlay.is_active(), "nothing to ask");
+    assert!(!app.dialog.is_active(), "nothing to ask");
     assert_eq!(tab_count(&app), 2);
     assert_eq!(app.current_workspace_id.as_deref(), Some(a.as_str()));
 }
@@ -352,39 +352,34 @@ fn opening_over_running_programs_asks_first() {
         .launch = crate::workspace::WorkspaceLaunch::Profile { name: "ssh".into() };
 
     app.request_open_workspace(&a);
-    let asked = app.info_overlay.is_active();
-    let request_id = app.info_overlay.request_id();
-    let choose = |app: &mut App, choice_id: &str| {
-        app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
-            request_id,
-            choice_id: choice_id.into(),
-        });
-    };
-    let close_label = app
-        .info_overlay
-        .choice(request_id, "workspace-open")
-        .map(|choice| choice.label.clone());
+    let asked = app.dialog.is_active();
+    let request_id = app.dialog.request_id();
+    let title = app.dialog.title().to_owned();
+    let open_role = app
+        .dialog
+        .buttons()
+        .iter()
+        .find(|button| {
+            button.action == crate::ui::dialog::ButtonAction::Answer("workspace-open".into())
+        })
+        .map(|button| button.role);
     let kept_while_asking = tab_count(&app);
-    choose(&mut app, "workspace-cancel");
+    app.answer_dialog(crate::ui::dialog::CANCEL);
     let kept_after_cancel = tab_count(&app);
 
     app.request_open_workspace(&a);
-    let request_id = app.info_overlay.request_id();
-    app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
-        request_id,
-        choice_id: "workspace-open".into(),
-    });
+    assert_eq!(app.dialog.request_id(), request_id + 1);
+    app.answer_dialog("workspace-open");
     end_persistence_test();
 
     assert!(asked);
-    let close_label = close_label.unwrap();
-    assert!(
-        close_label.starts_with("Close 1 tab and open \u{201c}"),
-        "{close_label}"
-    );
+    // The question names the workspace, and opening it is the button that
+    // ends the running program.
+    assert!(title.starts_with("Open \u{201c}"), "{title}");
+    assert_eq!(open_role, Some(crate::ui::dialog::ButtonRole::Destructive));
     assert_eq!(kept_while_asking, 1);
     assert_eq!(kept_after_cancel, 1);
-    assert!(app.overlay_flow.is_none());
+    assert!(app.dialog_flow.is_none());
     assert_eq!(tab_count(&app), 2, "agreeing opened the workspace");
     assert_eq!(app.current_workspace_id.as_deref(), Some(a.as_str()));
 }
@@ -409,7 +404,7 @@ fn opening_from_a_named_auto_saved_workspace_saves_it_back_first() {
     let saved_back = crate::workspace::load_workspace(&b).unwrap().workspace;
     end_persistence_test();
 
-    assert!(!app.info_overlay.is_active());
+    assert!(!app.dialog.is_active());
     assert_eq!(saved_back.tabs.len(), 2, "B holds the window as it was");
     assert_eq!(tab_count(&app), 2);
     assert_eq!(app.current_workspace_id.as_deref(), Some(a.as_str()));
@@ -435,12 +430,12 @@ fn opening_from_an_automatic_workspace_asks_like_an_unsaved_window() {
         .launch = crate::workspace::WorkspaceLaunch::Profile { name: "ssh".into() };
 
     app.request_open_workspace(&a);
-    let asked = app.info_overlay.is_active();
+    let asked = app.dialog.is_active();
     let untouched = crate::workspace::load_workspace(&b).unwrap().workspace;
-    let request_id = app.info_overlay.request_id();
-    app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
+    let request_id = app.dialog.request_id();
+    app.apply_dialog_action(crate::ui::dialog::DialogAction::Answer {
         request_id,
-        choice_id: "workspace-cancel".into(),
+        id: crate::ui::dialog::CANCEL.into(),
     });
     let kept_after_cancel = tab_count(&app);
     end_persistence_test();
@@ -460,19 +455,19 @@ fn deleting_a_workspace_asks_first() {
     app.current_workspace_id = Some(a.clone());
 
     app.confirm_workspace_delete(&a, false);
-    let asked = app.info_overlay.is_active();
-    let request_id = app.info_overlay.request_id();
-    app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
+    let asked = app.dialog.is_active();
+    let request_id = app.dialog.request_id();
+    app.apply_dialog_action(crate::ui::dialog::DialogAction::Answer {
         request_id,
-        choice_id: "workspace-cancel".into(),
+        id: crate::ui::dialog::CANCEL.into(),
     });
     let after_cancel = workspace_ids();
 
     app.confirm_workspace_delete(&a, false);
-    let request_id = app.info_overlay.request_id();
-    app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
+    let request_id = app.dialog.request_id();
+    app.apply_dialog_action(crate::ui::dialog::DialogAction::Answer {
         request_id,
-        choice_id: "workspace-delete".into(),
+        id: "workspace-delete".into(),
     });
     let after_delete = workspace_ids();
     end_persistence_test();

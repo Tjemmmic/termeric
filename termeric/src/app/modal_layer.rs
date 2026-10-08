@@ -11,7 +11,7 @@ impl App {
     pub(super) fn modal_layer_open(&self, layer: ModalLayer) -> bool {
         match layer {
             ModalLayer::Guardrail => self.guardrail.is_active(),
-            ModalLayer::InfoOverlay => self.info_overlay.is_active(),
+            ModalLayer::Dialog => self.dialog.is_active(),
             ModalLayer::DiffReview => self.diff_review.is_active(),
             ModalLayer::ContextPicker => self.context_picker.is_active(),
             ModalLayer::SproutMenu => self

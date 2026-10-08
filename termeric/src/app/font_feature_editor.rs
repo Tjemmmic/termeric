@@ -2,13 +2,13 @@
 
 use super::*;
 use crate::config::MAX_FONT_FEATURES;
-use crate::ui::info_overlay::{
-    InfoOverlayChoice, MAX_INFO_INPUT_BYTES, OverlayPage, push_key_choice,
+use crate::ui::dialog::{
+    ButtonRole, CANCEL, DialogBlock, DialogButton, DialogRow, DialogSpec, FieldSpec,
 };
 
-const FEATURE_PAGE_SIZE: usize = 8;
 const FEATURE_INPUT_BYTES: usize = 32;
-const FEATURE_SHORTCUTS: [char; FEATURE_PAGE_SIZE] = ['1', '2', '3', '4', '5', '6', '7', '8'];
+/// The answer that saves the edited feature.
+const SAVE: &str = "save";
 
 #[derive(Debug, Clone)]
 pub(super) struct PendingFontFeatureManagement {
@@ -18,21 +18,18 @@ pub(super) struct PendingFontFeatureManagement {
 
 #[derive(Debug, Clone)]
 enum FontFeatureManagerView {
+    /// The features as listed, so a row answers for the one it showed.
     List {
-        page: usize,
-        visible: Vec<(String, u32)>,
+        entries: Vec<(String, u32)>,
     },
     Detail {
-        page: usize,
         tag: String,
         value: u32,
     },
     Edit {
-        page: usize,
         original: Option<(String, u32)>,
     },
     ConfirmDelete {
-        page: usize,
         tag: String,
         value: u32,
     },
@@ -41,11 +38,19 @@ enum FontFeatureManagerView {
 impl App {
     pub(super) fn open_font_feature_manager(&mut self) {
         self.settings_panel.close();
-        self.overlay_flow = None;
-        self.show_font_feature_list(0);
+        self.dialog_flow = None;
+        self.show_font_feature_list();
     }
 
-    fn show_font_feature_list(&mut self, requested_page: usize) {
+    fn show_font_feature_flow(&mut self, spec: DialogSpec, view: FontFeatureManagerView) {
+        let request_id = self.dialog.show(spec);
+        self.dialog_flow = Some(DialogFlow::FontFeatures(PendingFontFeatureManagement {
+            request_id,
+            view,
+        }));
+    }
+
+    fn show_font_feature_list(&mut self) {
         let entries = self
             .config
             .font
@@ -53,99 +58,56 @@ impl App {
             .iter()
             .map(|(tag, value)| (tag.clone(), *value))
             .collect::<Vec<_>>();
-        let OverlayPage {
-            index: page,
-            count: page_count,
-            start,
-            end,
-        } = OverlayPage::of(entries.len(), FEATURE_PAGE_SIZE, requested_page);
-        let visible = entries[start..end].to_vec();
-        let mut lines = vec![
-            format!(
-                "Explicit features: {}/{} · page {}/{}",
-                entries.len(),
-                MAX_FONT_FEATURES,
-                page + 1,
-                page_count
-            ),
-            "Explicit values override the Ligatures preset; kern remains disabled for the cell grid."
-                .into(),
-            "Changes apply live; use Save in Settings to persist them.".into(),
-            String::new(),
-        ];
-        let mut choices = Vec::new();
-        if entries.len() < MAX_FONT_FEATURES {
-            push_key_choice(&mut lines, &mut choices, "add", 'a', "Add feature override");
-        } else {
-            lines.push(format!(
-                "Add unavailable: the maximum of {MAX_FONT_FEATURES} overrides is configured."
-            ));
-        }
-        lines.push(String::new());
-        for (index, (tag, value)) in visible.iter().enumerate() {
-            let label = format_feature(tag, *value);
-            let shortcut = FEATURE_SHORTCUTS[index];
-            push_key_choice(
-                &mut lines,
-                &mut choices,
-                format!("feature:{index}"),
-                shortcut,
-                label,
-            );
-        }
+        let mut body = vec![DialogBlock::text(
+            "A value set here overrides the Ligatures preset. kern stays off so the cell grid holds. Changes apply at once; Save in Settings keeps them.",
+        )];
+        let full = entries.len() >= MAX_FONT_FEATURES;
         if entries.is_empty() {
-            lines.push("No explicit OpenType feature overrides are configured.".into());
+            body.push(DialogBlock::text("No feature values are set."));
+        } else if full {
+            body.push(DialogBlock::text(format!(
+                "That's the most there can be ({MAX_FONT_FEATURES}). Delete one to add another."
+            )));
         }
-        if page > 0 {
-            push_key_choice(
-                &mut lines,
-                &mut choices,
-                "previous-page",
-                'p',
-                "Previous page",
-            );
+        let rows = entries
+            .iter()
+            .enumerate()
+            .map(|(index, (tag, value))| {
+                DialogRow::new(format!("feature:{index}"), tag.as_str())
+                    .with_detail(value.to_string())
+            })
+            .collect();
+        let mut spec =
+            DialogSpec::list("OpenType features", body, rows).button(DialogButton::back());
+        if !full {
+            spec = spec.button(DialogButton::answer("add", "Add…", ButtonRole::Suggested));
         }
-        if page + 1 < page_count {
-            push_key_choice(&mut lines, &mut choices, "next-page", 'n', "Next page");
-        }
-        push_key_choice(&mut lines, &mut choices, "back", 'b', "Back to Settings");
-        let request_id =
-            self.info_overlay
-                .show_choices("OpenType Feature Overrides", lines, choices);
-        self.overlay_flow = Some(OverlayFlow::FontFeatures(PendingFontFeatureManagement {
-            request_id,
-            view: FontFeatureManagerView::List { page, visible },
-        }));
+        self.show_font_feature_flow(spec, FontFeatureManagerView::List { entries });
     }
 
-    fn show_font_feature_detail(&mut self, page: usize, tag: String, value: u32) {
+    fn show_font_feature_detail(&mut self, tag: String, value: u32) {
         if !self.font_feature_is_current(&tag, value) {
-            self.warn_stale_font_feature(page);
+            self.warn_stale_font_feature();
             return;
         }
-        let mut lines = vec![
-            format_feature(&tag, value),
-            String::new(),
-            "The value is forwarded to advanced shaping after the Ligatures preset.".into(),
-            "A font may ignore a feature it does not implement.".into(),
-            String::new(),
-        ];
-        let mut choices = Vec::new();
-        push_key_choice(&mut lines, &mut choices, "edit", 'e', "Edit override");
-        push_key_choice(&mut lines, &mut choices, "delete", 'd', "Delete override");
-        push_key_choice(&mut lines, &mut choices, "back", 'b', "Back to list");
-        let request_id =
-            self.info_overlay
-                .show_choices("OpenType Feature Override", lines, choices);
-        self.overlay_flow = Some(OverlayFlow::FontFeatures(PendingFontFeatureManagement {
-            request_id,
-            view: FontFeatureManagerView::Detail { page, tag, value },
-        }));
+        let spec = DialogSpec::list(
+            format!("Feature {tag}"),
+            vec![
+                DialogBlock::value(format_feature(&tag, value)),
+                DialogBlock::text(
+                    "The value is passed to shaping after the Ligatures preset. A font that doesn't have the feature ignores it.",
+                ),
+            ],
+            Vec::new(),
+        )
+        .button(DialogButton::back())
+        .button(DialogButton::answer("delete", "Delete…", ButtonRole::Neutral))
+        .button(DialogButton::answer("edit", "Edit…", ButtonRole::Suggested));
+        self.show_font_feature_flow(spec, FontFeatureManagerView::Detail { tag, value });
     }
 
     fn show_font_feature_edit(
         &mut self,
-        page: usize,
         original: Option<(String, u32)>,
         input: String,
         error: Option<&str>,
@@ -153,75 +115,46 @@ impl App {
         if let Some((tag, value)) = original.as_ref()
             && !self.font_feature_is_current(tag, *value)
         {
-            self.warn_stale_font_feature(page);
+            self.warn_stale_font_feature();
             return;
         }
-        let mut lines = vec![
-            "Enter one feature using: tag = value".into(),
-            "Tags are four lowercase ASCII letters/digits; values are u32 decimal or 0x hex."
-                .into(),
-            "kern is unavailable because terminal cell origins remain fixed.".into(),
-        ];
-        if let Some(error) = error {
-            lines.push(String::new());
-            lines.push(format!("Validation error: {error}"));
-        }
-        lines.push(String::new());
-        let input_line = lines.len();
-        lines.push(String::new());
-        lines.push("Enter applies · Escape cancels".into());
-        let cancel_line = lines.len();
-        lines.push("[Esc] Cancel".into());
-        let title = if original.is_some() {
-            "Edit OpenType Feature"
+        let (title, action) = if original.is_some() {
+            ("Edit feature", "Save")
         } else {
-            "Add OpenType Feature"
+            ("Add a feature", "Add")
         };
-        let request_id = self.info_overlay.show_input(
+        let spec = DialogSpec::prompt(
             title,
-            lines,
-            input_line,
-            "Feature: ",
-            input,
-            FEATURE_INPUT_BYTES.min(MAX_INFO_INPUT_BYTES),
-            vec![InfoOverlayChoice::new(
-                "cancel",
-                "Cancel edit (Escape)",
-                cancel_line,
-                None,
+            vec![DialogBlock::text(
+                "Write it as tag = value: a four-character tag and a number, in decimal or 0x hex. kern isn't available, so the cell grid holds.",
             )],
+            FieldSpec::new("Feature", input, FEATURE_INPUT_BYTES)
+                .with_error(error.map(crate::safe_text::capitalized)),
+            SAVE,
+            action,
         );
-        self.overlay_flow = Some(OverlayFlow::FontFeatures(PendingFontFeatureManagement {
-            request_id,
-            view: FontFeatureManagerView::Edit { page, original },
-        }));
+        self.show_font_feature_flow(spec, FontFeatureManagerView::Edit { original });
     }
 
-    fn show_font_feature_delete_confirmation(&mut self, page: usize, tag: String, value: u32) {
+    fn show_font_feature_delete_confirmation(&mut self, tag: String, value: u32) {
         if !self.font_feature_is_current(&tag, value) {
-            self.warn_stale_font_feature(page);
+            self.warn_stale_font_feature();
             return;
         }
-        let mut lines = vec![
-            "Delete this explicit feature value?".into(),
-            format_feature(&tag, value),
-            String::new(),
-            "The Ligatures preset will supply its normal value if this tag belongs to that preset."
-                .into(),
-            String::new(),
-        ];
-        let mut choices = Vec::new();
-        push_key_choice(&mut lines, &mut choices, "confirm", 'd', "Delete override");
-        push_key_choice(&mut lines, &mut choices, "cancel", 'b', "Keep override");
-        let request_id = self
-            .info_overlay
-            .show_choices("Delete OpenType Feature", lines, choices);
-        self.overlay_flow = Some(OverlayFlow::FontFeatures(PendingFontFeatureManagement {
-            request_id,
-            view: FontFeatureManagerView::ConfirmDelete { page, tag, value },
-        }));
+        let spec = DialogSpec::confirm(
+            format!("Delete {tag}?"),
+            vec![
+                DialogBlock::value(format_feature(&tag, value)),
+                DialogBlock::text("If the Ligatures preset sets this tag, it sets it again."),
+            ],
+            "delete",
+            "Delete",
+            ButtonRole::Destructive,
+        );
+        self.show_font_feature_flow(spec, FontFeatureManagerView::ConfirmDelete { tag, value });
     }
 
+    /// Answer the manager's dialog. Returns whether the answer was its.
     pub(super) fn handle_font_feature_manager_choice(
         &mut self,
         request_id: u64,
@@ -234,181 +167,142 @@ impl App {
         else {
             return false;
         };
-        self.info_overlay.dismiss(request_id);
-        self.overlay_flow = None;
+        if let FontFeatureManagerView::Edit { original } = &pending.view
+            && choice_id == SAVE
+        {
+            self.submit_font_feature_edit(request_id, original.clone());
+            return true;
+        }
+        self.dialog.dismiss(request_id);
+        self.dialog_flow = None;
         match pending.view {
-            FontFeatureManagerView::List { page, visible } => match choice_id {
+            FontFeatureManagerView::List { entries } => match choice_id {
+                CANCEL => self.open_settings_section(crate::ui::settings::SettingsSection::Font),
                 "add" if self.config.font.features.len() < MAX_FONT_FEATURES => {
-                    self.show_font_feature_edit(page, None, String::new(), None);
+                    self.show_font_feature_edit(None, String::new(), None);
                 }
-                "previous-page" => self.show_font_feature_list(page.saturating_sub(1)),
-                "next-page" => self.show_font_feature_list(page.saturating_add(1)),
-                "back" => self.open_settings_section(crate::ui::settings::SettingsSection::Font),
                 choice if choice.starts_with("feature:") => {
-                    let entry = choice[8..]
+                    let entry = choice["feature:".len()..]
                         .parse::<usize>()
                         .ok()
-                        .and_then(|index| visible.get(index))
+                        .and_then(|index| entries.get(index))
                         .cloned();
                     if let Some((tag, value)) =
                         entry.filter(|(tag, value)| self.font_feature_is_current(tag, *value))
                     {
-                        self.show_font_feature_detail(page, tag, value);
+                        self.show_font_feature_detail(tag, value);
                     } else {
-                        self.warn_stale_font_feature(page);
+                        self.warn_stale_font_feature();
                     }
                 }
-                _ => self.show_font_feature_list(page),
+                _ => self.show_font_feature_list(),
             },
-            FontFeatureManagerView::Detail { page, tag, value } => match choice_id {
+            FontFeatureManagerView::Detail { tag, value } => match choice_id {
                 "edit" if self.font_feature_is_current(&tag, value) => {
                     let input = format_feature(&tag, value);
-                    self.show_font_feature_edit(page, Some((tag, value)), input, None);
+                    self.show_font_feature_edit(Some((tag, value)), input, None);
                 }
                 "delete" if self.font_feature_is_current(&tag, value) => {
-                    self.show_font_feature_delete_confirmation(page, tag, value);
+                    self.show_font_feature_delete_confirmation(tag, value);
                 }
-                "back" => self.show_font_feature_list(page),
-                _ => self.warn_stale_font_feature(page),
+                CANCEL => self.show_font_feature_list(),
+                _ => self.warn_stale_font_feature(),
             },
-            FontFeatureManagerView::Edit { page, original } => {
-                if choice_id == "cancel" {
-                    self.return_from_font_feature_edit(page, original);
-                } else {
-                    self.show_font_feature_edit(page, original, String::new(), None);
-                }
+            FontFeatureManagerView::Edit { original } => {
+                self.return_from_font_feature_edit(original);
             }
-            FontFeatureManagerView::ConfirmDelete { page, tag, value } => match choice_id {
-                "confirm" => self.delete_font_feature(page, tag, value),
-                "cancel" | "back" => self.show_font_feature_detail(page, tag, value),
-                _ => self.show_font_feature_delete_confirmation(page, tag, value),
+            FontFeatureManagerView::ConfirmDelete { tag, value } => match choice_id {
+                "delete" => self.delete_font_feature(tag, value),
+                CANCEL => self.show_font_feature_detail(tag, value),
+                _ => self.show_font_feature_delete_confirmation(tag, value),
             },
         }
         true
     }
 
-    pub(super) fn submit_font_feature_manager_input(&mut self, request_id: u64) -> bool {
-        let Some(pending) = self
-            .pending_font_feature_management()
-            .filter(|pending| pending.request_id == request_id)
-            .cloned()
-        else {
-            return false;
+    fn submit_font_feature_edit(&mut self, request_id: u64, original: Option<(String, u32)>) {
+        let Some(input) = self.dialog.field_value(request_id).map(ToOwned::to_owned) else {
+            return;
         };
-        let FontFeatureManagerView::Edit { page, original } = pending.view else {
-            return false;
-        };
-        let Some(input) = self
-            .info_overlay
-            .input_value(request_id)
-            .map(ToOwned::to_owned)
-        else {
-            return false;
-        };
-        self.info_overlay.dismiss(request_id);
-        self.overlay_flow = None;
+        self.dialog.dismiss(request_id);
+        self.dialog_flow = None;
         if let Some((tag, value)) = original.as_ref()
             && !self.font_feature_is_current(tag, *value)
         {
-            self.warn_stale_font_feature(page);
-            return true;
+            self.warn_stale_font_feature();
+            return;
         }
         let (tag, value) = match parse_font_feature(&input) {
             Ok(feature) => feature,
             Err(error) => {
-                self.show_font_feature_edit(page, original, input, Some(&error));
-                return true;
+                self.show_font_feature_edit(original, input, Some(&error));
+                return;
             }
         };
         let mut candidate = self.config.clone();
         if let Some((old_tag, old_value)) = original.as_ref() {
             if candidate.font.features.get(old_tag) != Some(old_value) {
-                self.warn_stale_font_feature(page);
-                return true;
+                self.warn_stale_font_feature();
+                return;
             }
             candidate.font.features.remove(old_tag);
         } else if candidate.font.features.len() >= MAX_FONT_FEATURES {
             self.show_font_feature_edit(
-                page,
                 None,
                 input,
                 Some(&format!(
-                    "the maximum of {MAX_FONT_FEATURES} overrides is already configured"
+                    "the most there can be ({MAX_FONT_FEATURES}) are already set"
                 )),
             );
-            return true;
+            return;
         }
         if candidate.font.features.contains_key(&tag) {
-            self.show_font_feature_edit(
-                page,
-                original,
-                input,
-                Some("that feature tag already has an explicit value"),
-            );
-            return true;
+            self.show_font_feature_edit(original, input, Some("that tag already has a value"));
+            return;
         }
         candidate.font.features.insert(tag, value);
         if let Err(error) = candidate.validate() {
-            self.show_font_feature_edit(page, original, input, Some(&format!("{error:#}")));
-            return true;
+            self.show_font_feature_edit(original, input, Some(&format!("{error:#}")));
+            return;
         }
         if let Err(error) = self.apply_config(candidate) {
-            self.show_font_feature_edit(page, original, input, Some(&error));
-            return true;
+            self.show_font_feature_edit(original, input, Some(&error));
+            return;
         }
         self.toasts.success(if original.is_some() {
-            "OpenType feature override updated"
+            "OpenType feature updated"
         } else {
-            "OpenType feature override added"
+            "OpenType feature added"
         });
-        self.show_font_feature_list(page);
-        true
+        self.show_font_feature_list();
     }
 
-    pub(super) fn cancel_font_feature_manager_input(&mut self, request_id: u64) -> bool {
-        let Some(pending) = self
-            .pending_font_feature_management()
-            .filter(|pending| pending.request_id == request_id)
-            .cloned()
-        else {
-            return false;
-        };
-        let FontFeatureManagerView::Edit { page, original } = pending.view else {
-            return false;
-        };
-        self.info_overlay.dismiss(request_id);
-        self.overlay_flow = None;
-        self.return_from_font_feature_edit(page, original);
-        true
-    }
-
-    fn return_from_font_feature_edit(&mut self, page: usize, original: Option<(String, u32)>) {
+    fn return_from_font_feature_edit(&mut self, original: Option<(String, u32)>) {
         if let Some((tag, value)) =
             original.filter(|(tag, value)| self.font_feature_is_current(tag, *value))
         {
-            self.show_font_feature_detail(page, tag, value);
+            self.show_font_feature_detail(tag, value);
         } else {
-            self.show_font_feature_list(page);
+            self.show_font_feature_list();
         }
     }
 
-    fn delete_font_feature(&mut self, page: usize, tag: String, value: u32) {
+    fn delete_font_feature(&mut self, tag: String, value: u32) {
         let mut candidate = self.config.clone();
         if candidate.font.features.get(&tag) != Some(&value) {
-            self.warn_stale_font_feature(page);
+            self.warn_stale_font_feature();
             return;
         }
         candidate.font.features.remove(&tag);
         match self.apply_config(candidate) {
             Ok(()) => {
-                self.toasts.success("OpenType feature override deleted");
-                self.show_font_feature_list(page);
+                self.toasts.success("OpenType feature deleted");
+                self.show_font_feature_list();
             }
             Err(error) => {
-                self.toasts.error(format!(
-                    "OpenType feature override could not be deleted: {error}"
-                ));
-                self.show_font_feature_detail(page, tag, value);
+                self.toasts
+                    .error(format!("OpenType feature could not be deleted: {error}"));
+                self.show_font_feature_detail(tag, value);
             }
         }
     }
@@ -417,10 +311,10 @@ impl App {
         self.config.font.features.get(tag) == Some(&value)
     }
 
-    fn warn_stale_font_feature(&mut self, page: usize) {
+    fn warn_stale_font_feature(&mut self) {
         self.toasts
-            .warning("OpenType features changed; refreshed the current list");
-        self.show_font_feature_list(page);
+            .warning("OpenType features changed; refreshed the list");
+        self.show_font_feature_list();
     }
 }
 
@@ -459,21 +353,7 @@ fn format_feature(tag: &str, value: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::info_overlay::InfoOverlayAction;
-
-    fn choose(app: &mut App, choice_id: &str) {
-        let request_id = app.info_overlay.request_id();
-        app.apply_info_overlay_action(InfoOverlayAction::Choose {
-            request_id,
-            choice_id: choice_id.into(),
-        });
-    }
-
-    fn submit(app: &mut App, value: &str) {
-        let request_id = app.info_overlay.request_id();
-        assert!(app.info_overlay.replace_input_text(request_id, value));
-        app.apply_info_overlay_action(InfoOverlayAction::SubmitInput { request_id });
-    }
+    use crate::ui::dialog::DialogAction;
 
     #[test]
     fn feature_parser_accepts_bounded_decimal_and_hex_values() {
@@ -501,22 +381,27 @@ mod tests {
     fn feature_manager_adds_edits_and_confirm_deletes_atomically() {
         let mut app = App::new_headless(Config::default()).unwrap();
         app.open_font_feature_manager();
-        assert_eq!(app.info_overlay.title(), "OpenType Feature Overrides");
-        choose(&mut app, "add");
-        submit(&mut app, "ss01 = 1");
+        assert_eq!(app.dialog.title(), "OpenType features");
+        app.answer_dialog("add");
+        app.submit_dialog_field("ss01 = 1");
         assert_eq!(app.config.font.features.get("ss01"), Some(&1));
-        choose(&mut app, "feature:0");
-        choose(&mut app, "edit");
-        submit(&mut app, "cv01 = 2");
+        app.answer_dialog("feature:0");
+        app.answer_dialog("edit");
+        app.submit_dialog_field("cv01 = 2");
         assert_eq!(app.config.font.features.get("ss01"), None);
         assert_eq!(app.config.font.features.get("cv01"), Some(&2));
-        choose(&mut app, "feature:0");
-        choose(&mut app, "delete");
-        choose(&mut app, "cancel");
+        app.answer_dialog("feature:0");
+        app.answer_dialog("delete");
+        app.answer_dialog(CANCEL);
         assert_eq!(app.config.font.features.get("cv01"), Some(&2));
-        choose(&mut app, "delete");
-        choose(&mut app, "confirm");
+        assert_eq!(app.dialog.title(), "Feature cv01");
+        app.answer_dialog("delete");
+        app.answer_dialog("delete");
         assert!(app.config.font.features.is_empty());
+        // Back leaves the manager for Settings.
+        app.answer_dialog(CANCEL);
+        assert!(!app.dialog.is_awaiting_current());
+        assert!(app.settings_panel.is_active());
     }
 
     #[test]
@@ -525,63 +410,60 @@ mod tests {
         config.font.features.insert("ss01".into(), 1);
         let mut app = App::new_headless(config).unwrap();
         app.open_font_feature_manager();
-        choose(&mut app, "feature:0");
-        choose(&mut app, "edit");
-        submit(&mut app, "kern = 1");
-        assert_eq!(app.info_overlay.title(), "Edit OpenType Feature");
-        assert_eq!(
-            app.info_overlay.input_value(app.info_overlay.request_id()),
-            Some("kern = 1")
-        );
+        app.answer_dialog("feature:0");
+        app.answer_dialog("edit");
+        app.submit_dialog_field("kern = 1");
+        assert_eq!(app.dialog.title(), "Edit feature");
+        let field = app.dialog.field(app.dialog.request_id()).unwrap();
+        assert_eq!(field.value, "kern = 1");
+        assert!(field.error.is_some());
         assert_eq!(app.config.font.features.get("ss01"), Some(&1));
 
         app.config.font.features.insert("ss01".into(), 2);
-        submit(&mut app, "cv01 = 3");
+        app.submit_dialog_field("cv01 = 3");
         assert_eq!(app.config.font.features.get("ss01"), Some(&2));
         assert_eq!(app.config.font.features.get("cv01"), None);
-        assert_eq!(app.info_overlay.title(), "OpenType Feature Overrides");
+        assert_eq!(app.dialog.title(), "OpenType features");
     }
 
     #[test]
-    fn feature_manager_pages_caps_cancels_and_refuses_replaced_requests() {
+    fn feature_manager_lists_every_feature_caps_cancels_and_refuses_replaced_requests() {
         let mut config = Config::default();
         config.font.features = (0..MAX_FONT_FEATURES)
             .map(|index| (format!("f{index:03}"), index as u32))
             .collect();
         let mut app = App::new_headless(config).unwrap();
         app.open_font_feature_manager();
-        assert!(
-            app.info_overlay
-                .lines()
-                .iter()
-                .any(|line| line.contains(&format!("maximum of {MAX_FONT_FEATURES}")))
+        // One scrolling list instead of pages, and no Add at the limit.
+        assert_eq!(app.dialog.rows().len(), MAX_FONT_FEATURES);
+        assert!(!app.dialog.answers(app.dialog.request_id(), "add"));
+        app.answer_dialog(&format!("feature:{}", MAX_FONT_FEATURES - 1));
+        assert_eq!(
+            app.dialog.title(),
+            format!("Feature f{:03}", MAX_FONT_FEATURES - 1)
         );
-        assert!(
-            app.info_overlay
-                .choice(app.info_overlay.request_id(), "add")
-                .is_none()
-        );
-        choose(&mut app, "next-page");
-        assert!(app.info_overlay.lines()[0].contains("page 2/4"));
 
         let mut app = App::new_headless(Config::default()).unwrap();
         app.open_font_feature_manager();
-        choose(&mut app, "add");
-        let cancelled = app.info_overlay.request_id();
-        app.apply_info_overlay_action(InfoOverlayAction::CancelInput {
-            request_id: cancelled,
-        });
-        assert_eq!(app.info_overlay.title(), "OpenType Feature Overrides");
+        app.answer_dialog("add");
+        app.answer_dialog(CANCEL);
+        assert_eq!(app.dialog.title(), "OpenType features");
         assert!(app.config.font.features.is_empty());
 
-        choose(&mut app, "add");
-        let replaced = app.info_overlay.request_id();
-        app.info_overlay
-            .show("Replacement", vec!["new request".into()]);
-        assert!(!app.submit_font_feature_manager_input(replaced));
+        app.answer_dialog("add");
+        let replaced = app.dialog.request_id();
+        app.dialog.replace_field_text(replaced, "ss01 = 1");
+        app.dialog.show(crate::ui::dialog::DialogSpec::message(
+            "Replacement",
+            vec![],
+        ));
+        app.apply_dialog_action(DialogAction::Answer {
+            request_id: replaced,
+            id: "save".into(),
+        });
         assert!(app.config.font.features.is_empty());
-        let current = app.info_overlay.request_id();
-        app.apply_info_overlay_action(InfoOverlayAction::Dismiss {
+        let current = app.dialog.request_id();
+        app.apply_dialog_action(DialogAction::Close {
             request_id: current,
         });
         assert!(app.pending_font_feature_management().is_none());

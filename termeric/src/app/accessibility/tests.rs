@@ -1538,8 +1538,8 @@ fn runtime_plugin_manager_setting_is_an_accessible_button() {
         data: None,
     });
     assert!(!app.settings_panel.is_active());
-    assert!(app.info_overlay.is_awaiting_current());
-    assert_eq!(app.info_overlay.title(), "Third-party Plugin Manager");
+    assert!(app.dialog.is_awaiting_current());
+    assert_eq!(app.dialog.title(), "Third-party plugins");
 }
 
 #[test]
@@ -1581,42 +1581,22 @@ fn font_range_manager_setting_is_an_accessible_button() {
         data: None,
     });
     assert!(!app.settings_panel.is_active());
-    assert!(app.info_overlay.is_awaiting_current());
-    assert_eq!(app.info_overlay.title(), "Font Range Overrides");
+    assert!(app.dialog.is_awaiting_current());
+    assert_eq!(app.dialog.title(), "Font ranges");
 
-    let manager_request = app.info_overlay.request_id();
     app.accessibility_snapshot();
-    let inspect = *app
-        .accessibility
-        .info
-        .nodes
-        .get(&InfoSemanticTarget::Choice {
-            request_id: manager_request,
-            id: "inspect".into(),
-        })
-        .unwrap();
+    let inspect = dialog_button(&app, 1);
     app.handle_accessibility_action(ActionRequest {
         action: Action::Click,
         target_tree: TreeId::ROOT,
         target_node: inspect,
         data: None,
     });
-    assert_eq!(app.info_overlay.title(), "Inspect Glyph Coverage");
+    assert_eq!(app.dialog.title(), "Check which font draws text");
 
-    let input_request = app.info_overlay.request_id();
     let snapshot = app.accessibility_snapshot();
-    let input = *app
-        .accessibility
-        .info
-        .nodes
-        .get(&InfoSemanticTarget::Input(input_request))
-        .unwrap();
-    let submit = *app
-        .accessibility
-        .info
-        .nodes
-        .get(&InfoSemanticTarget::Dismiss(input_request))
-        .unwrap();
+    let input = dialog_field(&app);
+    let submit = dialog_button(&app, 1);
     let input_node = &snapshot
         .nodes
         .iter()
@@ -1637,7 +1617,7 @@ fn font_range_manager_setting_is_an_accessible_button() {
         target_node: submit,
         data: None,
     });
-    assert_eq!(app.info_overlay.title(), "Glyph Coverage Report");
+    assert_eq!(app.dialog.title(), "Which font draws it");
 }
 
 #[test]
@@ -1676,19 +1656,10 @@ fn font_feature_manager_is_accessible_and_uses_the_shared_mutation_path() {
         target_node: manager,
         data: None,
     });
-    assert_eq!(app.info_overlay.title(), "OpenType Feature Overrides");
+    assert_eq!(app.dialog.title(), "OpenType features");
 
-    let manager_request = app.info_overlay.request_id();
     app.accessibility_snapshot();
-    let add = *app
-        .accessibility
-        .info
-        .nodes
-        .get(&InfoSemanticTarget::Choice {
-            request_id: manager_request,
-            id: "add".into(),
-        })
-        .unwrap();
+    let add = dialog_button(&app, 1);
     app.handle_accessibility_action(ActionRequest {
         action: Action::Click,
         target_tree: TreeId::ROOT,
@@ -1696,20 +1667,9 @@ fn font_feature_manager_is_accessible_and_uses_the_shared_mutation_path() {
         data: None,
     });
 
-    let input_request = app.info_overlay.request_id();
     let snapshot = app.accessibility_snapshot();
-    let input = *app
-        .accessibility
-        .info
-        .nodes
-        .get(&InfoSemanticTarget::Input(input_request))
-        .unwrap();
-    let submit = *app
-        .accessibility
-        .info
-        .nodes
-        .get(&InfoSemanticTarget::Dismiss(input_request))
-        .unwrap();
+    let input = dialog_field(&app);
+    let submit = dialog_button(&app, 1);
     let input_node = &snapshot
         .nodes
         .iter()
@@ -1731,7 +1691,7 @@ fn font_feature_manager_is_accessible_and_uses_the_shared_mutation_path() {
         data: None,
     });
     assert_eq!(app.config.font.features.get("ss01"), Some(&1));
-    assert_eq!(app.info_overlay.title(), "OpenType Feature Overrides");
+    assert_eq!(app.dialog.title(), "OpenType features");
 }
 
 #[test]
@@ -3613,100 +3573,126 @@ fn pending_domain_picker_exposes_read_only_live_status() {
     assert_eq!(app.domain_picker.build_info().input, before);
 }
 
-fn show_info_fixture(app: &mut App) -> u64 {
-    let mut lines: Vec<_> = (0..40)
-        .map(|index| format!("fixture line {index} {}", "x".repeat(300)))
-        .collect();
-    lines[1] = "  1  Safe fixture choice".into();
-    app.info_overlay.show_choices(
-        "Hermetic notice",
-        lines,
-        vec![crate::ui::info_overlay::InfoOverlayChoice::new(
-            "safe-choice",
-            "Safe fixture choice",
-            1,
-            Some('1'),
-        )],
+/// A confirmation whose body is far taller than any window, above a list
+/// of rows, so the body scrolls.
+fn show_dialog_fixture(app: &mut App) -> u64 {
+    use crate::ui::dialog::{ButtonRole, DialogBlock, DialogButton, DialogRow, DialogSpec};
+    let mut spec = DialogSpec::list(
+        "Hermetic question?",
+        (0..40)
+            .map(|index| DialogBlock::text(format!("fixture line {index}")))
+            .collect(),
+        vec![DialogRow::new("safe-choice", "Safe fixture choice").with_detail("detail")],
     )
+    .button(DialogButton::cancel())
+    .button(DialogButton::answer(
+        "delete",
+        "Delete",
+        ButtonRole::Destructive,
+    ));
+    spec.kind = crate::ui::dialog::DialogKind::Confirmation;
+    app.dialog.show(spec)
+}
+
+/// The node of the open dialog's `index`th button.
+fn dialog_button(app: &App, index: usize) -> NodeId {
+    app.accessibility.dialog.nodes[&DialogSemanticTarget::Button {
+        request_id: app.dialog.request_id(),
+        index,
+    }]
+}
+
+fn dialog_row(app: &App, id: &str) -> NodeId {
+    app.accessibility.dialog.nodes[&DialogSemanticTarget::Row {
+        request_id: app.dialog.request_id(),
+        id: id.into(),
+    }]
+}
+
+fn dialog_field(app: &App) -> NodeId {
+    app.accessibility.dialog.nodes[&DialogSemanticTarget::Field(app.dialog.request_id())]
 }
 
 #[test]
-fn info_overlay_keyboard_and_assistive_focus_share_the_same_owner_and_bounds() {
-    use crate::ui::info_overlay::{InfoOverlayAction, InfoOverlayFocus};
+fn dialog_keyboard_and_assistive_focus_share_the_same_owner_and_bounds() {
+    use crate::ui::dialog::{CANCEL, DialogAction, DialogFocus};
     let mut app = App::new_headless(Config::default()).unwrap();
     // Compare one settled phase, not two advancing Instant samples.
-    app.info_overlay.set_reduced_motion(true);
-    let request = show_info_fixture(&mut app);
-    app.accessibility_snapshot();
-    app.info_overlay.cycle_focus(request, false);
+    app.dialog.set_reduced_motion(true);
+    let request = show_dialog_fixture(&mut app);
+    // Beside a destructive action, focus starts on Cancel.
     let snapshot = app.accessibility_snapshot();
-    let choice = app.accessibility.info.nodes[&InfoSemanticTarget::Choice {
-        request_id: request,
-        id: "safe-choice".into(),
-    }];
-    assert_eq!(snapshot.focus, choice);
-    let layout = app.info_overlay_layout();
-    let bounds = snapshot
-        .nodes
-        .iter()
-        .find(|(id, _)| *id == choice)
-        .unwrap()
-        .1
-        .bounds()
-        .unwrap();
-    let expected = bounds_rect(
-        layout
-            .source_line_rect(1, app.info_overlay.viewport().row(), 40)
-            .unwrap(),
-    );
-    assert_eq!(bounds, expected);
+    let cancel = dialog_button(&app, 0);
+    assert_eq!(snapshot.focus, cancel);
+
+    // Tab reaches the list; the row's node takes focus at its drawn bounds.
+    app.dialog.set_focus(request, Some(DialogFocus::Button(1)));
+    app.dialog.cycle_focus(request, false);
+    let snapshot = app.accessibility_snapshot();
+    let row = dialog_row(&app, "safe-choice");
+    assert_eq!(snapshot.focus, row);
+    let layout = app.dialog_layout().unwrap();
+    let node = &snapshot.nodes.iter().find(|(id, _)| *id == row).unwrap().1;
+    assert_eq!(node.role(), Role::ListItem);
+    assert!(node.is_selected().unwrap_or(false));
     assert_eq!(
-        app.info_overlay.activate_focused(request),
-        InfoOverlayAction::Choose {
+        node.bounds(),
+        Some(bounds_rect(
+            layout.row(0, app.dialog.scroll_offset()).unwrap()
+        ))
+    );
+    assert_eq!(
+        app.dialog.activate_focused(request),
+        DialogAction::Answer {
             request_id: request,
-            choice_id: "safe-choice".into()
+            id: "safe-choice".into()
         }
     );
-    let copy = app.accessibility.info.nodes[&InfoSemanticTarget::Copy(request)];
+
+    // Assistive focus moves the dialog's own focus.
     app.handle_accessibility_action(ActionRequest {
         action: Action::Focus,
         target_tree: TreeId::ROOT,
-        target_node: copy,
+        target_node: cancel,
         data: None,
     });
-    assert_eq!(app.info_overlay.focus(), Some(&InfoOverlayFocus::Copy));
+    assert_eq!(app.dialog.focus(), Some(DialogFocus::Button(0)));
     assert_eq!(
-        app.info_overlay.activate_focused(request),
-        InfoOverlayAction::Copy {
-            request_id: request
+        app.dialog.activate_focused(request),
+        DialogAction::Answer {
+            request_id: request,
+            id: CANCEL.into()
         }
     );
-    assert_eq!(app.accessibility_snapshot().focus, copy);
-    let replacement = app
-        .info_overlay
-        .show("Replacement", vec!["No choice".into()]);
+    assert_eq!(app.accessibility_snapshot().focus, cancel);
+
+    // A node of a replaced dialog moves nothing.
+    let replacement = app.dialog.show(crate::ui::dialog::DialogSpec::message(
+        "Replacement",
+        vec![],
+    ));
     app.handle_accessibility_action(ActionRequest {
         action: Action::Focus,
         target_tree: TreeId::ROOT,
-        target_node: choice,
+        target_node: row,
         data: None,
     });
-    assert_eq!(app.info_overlay.focus(), Some(&InfoOverlayFocus::Continue));
+    assert_eq!(app.dialog.focus(), Some(DialogFocus::Button(0)));
     assert_eq!(
-        app.info_overlay.activate_focused(replacement),
-        InfoOverlayAction::Dismiss {
+        app.dialog.activate_focused(replacement),
+        DialogAction::Close {
             request_id: replacement
         }
     );
 }
 
 #[test]
-fn info_overlay_is_one_scrollable_modal_tree_with_shared_geometry() {
+fn a_dialog_is_one_scrollable_modal_tree_with_shared_geometry() {
     let mut app = App::new_headless(Config::default()).unwrap();
-    app.info_overlay.set_reduced_motion(true);
-    let request = show_info_fixture(&mut app);
-    let layout = app.info_overlay_layout();
+    app.dialog.set_reduced_motion(true);
+    show_dialog_fixture(&mut app);
     let snapshot = app.accessibility_snapshot();
+    let layout = app.dialog_layout().unwrap();
     let node = |id| {
         &snapshot
             .nodes
@@ -3715,156 +3701,112 @@ fn info_overlay_is_one_scrollable_modal_tree_with_shared_geometry() {
             .unwrap()
             .1
     };
-    let content = *app
-        .accessibility
-        .info
-        .nodes
-        .get(&InfoSemanticTarget::Content(request))
-        .unwrap();
-    let copy = *app
-        .accessibility
-        .info
-        .nodes
-        .get(&InfoSemanticTarget::Copy(request))
-        .unwrap();
-    let dismiss = *app
-        .accessibility
-        .info
-        .nodes
-        .get(&InfoSemanticTarget::Dismiss(request))
-        .unwrap();
-    let choice = *app
-        .accessibility
-        .info
-        .nodes
-        .get(&InfoSemanticTarget::Choice {
-            request_id: request,
-            id: "safe-choice".into(),
-        })
-        .unwrap();
+    let (cancel, delete) = (dialog_button(&app, 0), dialog_button(&app, 1));
 
-    assert_eq!(node(ROOT).children(), &[INFO_DIALOG]);
-    assert_eq!(node(INFO_DIALOG).role(), Role::Dialog);
-    assert!(node(INFO_DIALOG).is_modal());
-    assert_eq!(node(content).role(), Role::Document);
-    assert!(node(content).supports_action(Action::ScrollDown));
-    assert!(node(content).supports_action(Action::ScrollRight));
-    assert_eq!(node(choice).role(), Role::Button);
-    assert!(node(choice).supports_action(Action::Click));
-    assert_eq!(snapshot.focus, dismiss);
-    assert_eq!(node(copy).bounds(), Some(bounds_rect(layout.copy_button)));
-    assert_eq!(
-        node(dismiss).bounds(),
-        Some(bounds_rect(layout.continue_button))
+    assert_eq!(node(ROOT).children(), &[DIALOG]);
+    // A question with consequences is announced as an alert, labelled by
+    // its heading and described by its body.
+    assert_eq!(node(DIALOG).role(), Role::AlertDialog);
+    assert!(node(DIALOG).is_modal());
+    assert_eq!(node(DIALOG).label(), Some("Hermetic question?"));
+    assert!(
+        node(DIALOG)
+            .description()
+            .is_some_and(|description| description.contains("fixture line 39"))
     );
-    assert_eq!(node(content).bounds(), Some(bounds_rect(layout.content)));
+    assert_eq!(node(DIALOG).bounds(), Some(bounds_rect(layout.card)));
+    assert_eq!(node(DIALOG_HEADING).role(), Role::Heading);
+    assert_eq!(
+        node(DIALOG_HEADING).bounds(),
+        Some(bounds_rect(layout.heading_bounds))
+    );
+    assert_eq!(node(DIALOG_BODY).bounds(), Some(bounds_rect(layout.body)));
+    assert!(node(DIALOG_BODY).supports_action(Action::ScrollDown));
+    assert!(!node(DIALOG_BODY).supports_action(Action::ScrollUp));
+    assert_eq!(node(DIALOG_LIST).role(), Role::ListBox);
+    assert_eq!(node(cancel).role(), Role::Button);
+    assert_eq!(node(cancel).label(), Some("Cancel"));
+    assert_eq!(node(cancel).bounds(), Some(bounds_rect(layout.buttons[0])));
+    assert_eq!(node(delete).bounds(), Some(bounds_rect(layout.buttons[1])));
+    assert!(node(delete).supports_action(Action::Click));
 
     app.handle_accessibility_action(ActionRequest {
         action: Action::ScrollDown,
         target_tree: TreeId::ROOT,
-        target_node: content,
+        target_node: DIALOG_BODY,
         data: None,
     });
-    assert!(app.info_overlay.viewport().row() > 0);
+    assert!(app.dialog.scroll_offset() > 0.0);
     let scrolled = app.accessibility_snapshot();
-    let scrolled_content = &scrolled
+    let body = &scrolled
         .nodes
         .iter()
-        .find(|(id, _)| *id == content)
+        .find(|(id, _)| *id == DIALOG_BODY)
         .unwrap()
         .1;
-    assert!(
-        scrolled_content
-            .value()
-            .is_some_and(|value| !value.contains("fixture line 0"))
-    );
+    assert!(body.supports_action(Action::ScrollUp));
 }
 
 #[test]
-fn info_overlay_rejects_retired_choices_and_background_actions() {
+fn a_dialog_rejects_retired_nodes_and_background_actions() {
     let mut app = App::new_headless(Config::default()).unwrap();
-    let stale_request = show_info_fixture(&mut app);
+    show_dialog_fixture(&mut app);
     app.accessibility_snapshot();
-    let stale_choice = *app
-        .accessibility
-        .info
-        .nodes
-        .get(&InfoSemanticTarget::Choice {
-            request_id: stale_request,
-            id: "safe-choice".into(),
-        })
-        .unwrap();
+    let stale_delete = dialog_button(&app, 1);
+    let stale_row = dialog_row(&app, "safe-choice");
 
-    let current = app
-        .info_overlay
-        .show("Replacement notice", vec!["No choices are active".into()]);
+    let current = app.dialog.show(crate::ui::dialog::DialogSpec::message(
+        "Replacement notice",
+        vec![],
+    ));
     app.accessibility_snapshot();
-    app.handle_accessibility_action(ActionRequest {
-        action: Action::Click,
-        target_tree: TreeId::ROOT,
-        target_node: stale_choice,
-        data: None,
-    });
-    app.handle_accessibility_action(ActionRequest {
-        action: Action::Click,
-        target_tree: TreeId::ROOT,
-        target_node: SETTINGS,
-        data: None,
-    });
+    for target_node in [stale_delete, stale_row, SETTINGS] {
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Click,
+            target_tree: TreeId::ROOT,
+            target_node,
+            data: None,
+        });
+    }
 
-    assert!(app.info_overlay.is_awaiting(current));
+    assert!(app.dialog.is_awaiting(current));
     assert!(!app.settings_panel.is_active());
 }
 
 #[test]
-fn info_overlay_dismiss_action_revokes_the_request_immediately() {
+fn a_dialog_button_action_revokes_the_request_immediately() {
     let mut app = App::new_headless(Config::default()).unwrap();
-    let request = show_info_fixture(&mut app);
+    let request = app
+        .dialog
+        .show(crate::ui::dialog::DialogSpec::message("Saved", vec![]));
     app.accessibility_snapshot();
-    let dismiss = *app
-        .accessibility
-        .info
-        .nodes
-        .get(&InfoSemanticTarget::Dismiss(request))
-        .unwrap();
-    app.handle_accessibility_action(ActionRequest {
-        action: Action::Click,
-        target_tree: TreeId::ROOT,
-        target_node: dismiss,
-        data: None,
-    });
-    assert!(app.info_overlay.is_active());
-    assert!(!app.info_overlay.is_awaiting(request));
-    app.handle_accessibility_action(ActionRequest {
-        action: Action::Click,
-        target_tree: TreeId::ROOT,
-        target_node: dismiss,
-        data: None,
-    });
-    assert!(!app.info_overlay.is_awaiting(request));
+    let close = dialog_button(&app, 0);
+    for _ in 0..2 {
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Click,
+            target_tree: TreeId::ROOT,
+            target_node: close,
+            data: None,
+        });
+        assert!(app.dialog.is_active(), "the closing animation still blocks");
+        assert!(!app.dialog.is_awaiting(request));
+    }
 }
 
 #[test]
-fn info_overlay_input_is_editable_focused_and_uses_shared_row_geometry() {
+fn a_dialog_field_is_editable_focused_and_uses_shared_geometry() {
     let mut app = App::new_headless(Config::default()).unwrap();
-    app.info_overlay.set_reduced_motion(true);
-    let request = app.info_overlay.show_input(
-        "Edit setting",
-        vec!["Typed value".into(), String::new(), "Enter saves".into()],
-        1,
-        "Value: ",
-        "root",
-        32,
-        Vec::new(),
-    );
-    let layout = app.info_overlay_layout();
+    app.dialog.set_reduced_motion(true);
+    let request = app.dialog.show(crate::ui::dialog::DialogSpec::prompt(
+        "Change setting",
+        vec![crate::ui::dialog::DialogBlock::text("Typed value")],
+        crate::ui::dialog::FieldSpec::new("Value", "root", 32),
+        "save",
+        "Save",
+    ));
     let snapshot = app.accessibility_snapshot();
-    let input_id = *app
-        .accessibility
-        .info
-        .nodes
-        .get(&InfoSemanticTarget::Input(request))
-        .unwrap();
+    let layout = app.dialog_layout().unwrap();
+    let input_id = dialog_field(&app);
     let input = &snapshot
         .nodes
         .iter()
@@ -3872,15 +3814,26 @@ fn info_overlay_input_is_editable_focused_and_uses_shared_row_geometry() {
         .unwrap()
         .1;
     assert_eq!(input.role(), Role::TextInput);
+    assert_eq!(input.label(), Some("Value"));
     assert_eq!(input.value(), Some("root"));
     assert!(input.supports_action(Action::SetValue));
     assert_eq!(snapshot.focus, input_id);
-    let actual = input.bounds().unwrap();
-    let expected = layout
-        .source_line_rect(1, app.info_overlay.viewport().row(), 3)
-        .map(bounds_rect)
-        .unwrap();
-    assert_eq!(actual, expected);
+    assert_eq!(
+        input.bounds(),
+        Some(bounds_rect(
+            layout.field_box(app.dialog.scroll_offset()).unwrap()
+        ))
+    );
+    assert_eq!(
+        snapshot
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == DIALOG)
+            .unwrap()
+            .1
+            .role(),
+        Role::Dialog
+    );
 
     app.handle_accessibility_action(ActionRequest {
         action: Action::SetValue,
@@ -3888,14 +3841,14 @@ fn info_overlay_input_is_editable_focused_and_uses_shared_row_geometry() {
         target_node: input_id,
         data: Some(ActionData::Value("warm 🫚".into())),
     });
-    assert_eq!(app.info_overlay.input_value(request), Some("warm 🫚"));
+    assert_eq!(app.dialog.field_value(request), Some("warm 🫚"));
     app.handle_accessibility_action(ActionRequest {
         action: Action::SetValue,
         target_tree: TreeId::ROOT,
         target_node: input_id,
         data: Some(ActionData::Value("bad\nvalue".into())),
     });
-    assert_eq!(app.info_overlay.input_value(request), Some("warm 🫚"));
+    assert_eq!(app.dialog.field_value(request), Some("warm 🫚"));
 }
 
 fn show_diff_fixture(app: &mut App, id: u64) -> u64 {
@@ -4403,7 +4356,7 @@ fn current_guardrail_confirm_with_missing_origin_never_falls_back() {
 #[test]
 fn a_headless_tree_spans_the_window_its_dialogs_are_laid_out_in() {
     let mut app = App::new_headless(Config::default()).unwrap();
-    app.info_overlay.set_reduced_motion(true);
+    app.dialog.set_reduced_motion(true);
     let metrics = app.ui_metrics();
     let window = Rect::new(0.0, 0.0, metrics.width as f64, metrics.height as f64);
     let bounds = |snapshot: &SemanticSnapshot, id: NodeId| {
@@ -4416,11 +4369,11 @@ fn a_headless_tree_spans_the_window_its_dialogs_are_laid_out_in() {
     };
     assert_eq!(bounds(&app.accessibility_snapshot(), ROOT), window);
 
-    show_info_fixture(&mut app);
+    show_dialog_fixture(&mut app);
     let snapshot = app.accessibility_snapshot();
     assert_eq!(bounds(&snapshot, ROOT), window);
-    let dialog = bounds(&snapshot, INFO_DIALOG);
-    assert_eq!(dialog, bounds_rect(app.info_overlay_layout().card));
+    let dialog = bounds(&snapshot, DIALOG);
+    assert_eq!(dialog, bounds_rect(app.dialog_layout().unwrap().card));
     assert!(dialog.x0 >= window.x0 && dialog.x1 <= window.x1);
     assert!(dialog.y0 >= window.y0 && dialog.y1 <= window.y1);
 }

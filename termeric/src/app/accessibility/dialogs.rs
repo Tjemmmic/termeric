@@ -1,4 +1,4 @@
-//! The guardrail confirmation, info overlay, diff review, and context
+//! The guardrail confirmation, dialog, diff review, and context
 //! picker: each dialog's nodes and the actions assistive technology takes on
 //! them.
 
@@ -195,259 +195,242 @@ impl App {
         }
     }
 
-    pub(super) fn handle_info_accessibility_action(&mut self, request: ActionRequest) {
-        use crate::ui::info_overlay::InfoOverlayAction;
+    pub(super) fn handle_dialog_accessibility_action(&mut self, request: ActionRequest) {
+        use crate::ui::dialog::{DialogAction, DialogFocus, DialogScroll};
 
-        let Some(target) = self
-            .accessibility
-            .info
-            .targets
-            .get(&request.target_node)
-            .cloned()
-        else {
-            // The notice is modal. Background and retired request nodes are
-            // consumed instead of falling through to terminal chrome.
-            return;
+        let request_id = self.dialog.request_id();
+        let target = if request.target_node == DIALOG_BODY {
+            None
+        } else {
+            match self
+                .accessibility
+                .dialog
+                .targets
+                .get(&request.target_node)
+                .cloned()
+            {
+                Some(target) => Some(target),
+                // The dialog is modal. Background and retired request nodes
+                // are consumed instead of falling through to the chrome.
+                None => return,
+            }
         };
-        let request_id = match &target {
-            InfoSemanticTarget::Content(request_id)
-            | InfoSemanticTarget::Input(request_id)
-            | InfoSemanticTarget::Copy(request_id)
-            | InfoSemanticTarget::Dismiss(request_id) => *request_id,
-            InfoSemanticTarget::Choice { request_id, .. } => *request_id,
+        let target_request = match &target {
+            None => request_id,
+            Some(
+                DialogSemanticTarget::Field(request_id)
+                | DialogSemanticTarget::Row { request_id, .. }
+                | DialogSemanticTarget::Button { request_id, .. },
+            ) => *request_id,
         };
-        if !self.info_overlay.is_awaiting(request_id) {
+        if !self.dialog.is_awaiting(target_request) {
             return;
         }
+        let row_index =
+            |app: &Self, id: &str| app.dialog.rows().iter().position(|row| row.id == id);
         let action = match (request.action, target) {
             (Action::Focus, target) => {
-                use crate::ui::info_overlay::InfoOverlayFocus;
                 let focus = match target {
-                    InfoSemanticTarget::Content(_) => None,
-                    InfoSemanticTarget::Input(_) => Some(InfoOverlayFocus::Input),
-                    InfoSemanticTarget::Choice { id, .. } => Some(InfoOverlayFocus::Choice(id)),
-                    InfoSemanticTarget::Copy(_) => Some(InfoOverlayFocus::Copy),
-                    InfoSemanticTarget::Dismiss(_) => Some(InfoOverlayFocus::Continue),
+                    None => None,
+                    Some(DialogSemanticTarget::Field(_)) => Some(DialogFocus::Field),
+                    Some(DialogSemanticTarget::Row { id, .. }) => {
+                        row_index(self, &id).map(DialogFocus::Row)
+                    }
+                    Some(DialogSemanticTarget::Button { index, .. }) => {
+                        Some(DialogFocus::Button(index))
+                    }
                 };
-                self.info_overlay.set_focus(request_id, focus);
+                self.dialog.set_focus(request_id, focus);
                 self.ime.clear_preedit();
                 self.accessibility.focus_override = Some(request.target_node);
-                InfoOverlayAction::None
+                DialogAction::None
             }
-            (Action::Click, InfoSemanticTarget::Copy(request_id)) => {
-                InfoOverlayAction::Copy { request_id }
+            (Action::Click, Some(DialogSemanticTarget::Button { index, .. })) => {
+                self.dialog.activate_button(request_id, index)
             }
-            (Action::Click, InfoSemanticTarget::Dismiss(request_id)) => {
-                if self.info_overlay.has_input() {
-                    InfoOverlayAction::SubmitInput { request_id }
-                } else {
-                    InfoOverlayAction::Dismiss { request_id }
-                }
-            }
-            (Action::SetValue, InfoSemanticTarget::Input(request_id)) => {
+            (Action::Click, Some(DialogSemanticTarget::Row { id, .. })) => row_index(self, &id)
+                .map_or(DialogAction::None, |row| {
+                    self.dialog.activate_row(request_id, row)
+                }),
+            (Action::SetValue, Some(DialogSemanticTarget::Field(_))) => {
                 let Some(ActionData::Value(value)) = request.data.as_ref() else {
                     return;
                 };
-                if self.info_overlay.replace_input_text(request_id, value) {
-                    self.info_overlay.set_focus(
-                        request_id,
-                        Some(crate::ui::info_overlay::InfoOverlayFocus::Input),
-                    );
+                if self.dialog.replace_field_text(request_id, value) {
+                    self.dialog.set_focus(request_id, Some(DialogFocus::Field));
                     self.accessibility.focus_override = Some(request.target_node);
                 }
-                InfoOverlayAction::None
+                DialogAction::None
             }
-            (
-                Action::Click,
-                InfoSemanticTarget::Choice {
-                    request_id,
-                    id: choice_id,
-                },
-            ) => InfoOverlayAction::Choose {
+            (Action::ScrollUp, None) => DialogAction::Scroll {
                 request_id,
-                choice_id,
+                by: DialogScroll::Pages(-1),
             },
-            (Action::ScrollUp, InfoSemanticTarget::Content(request_id)) => {
-                InfoOverlayAction::Scroll {
-                    request_id,
-                    by: OverlayScroll::Rows(-(self.info_overlay.viewport().rows() as isize)),
-                }
-            }
-            (Action::ScrollDown, InfoSemanticTarget::Content(request_id)) => {
-                InfoOverlayAction::Scroll {
-                    request_id,
-                    by: OverlayScroll::Rows(self.info_overlay.viewport().rows() as isize),
-                }
-            }
-            (Action::ScrollLeft, InfoSemanticTarget::Content(request_id)) => {
-                InfoOverlayAction::Scroll {
-                    request_id,
-                    by: OverlayScroll::Columns(-(self.info_overlay.viewport().columns() as isize)),
-                }
-            }
-            (Action::ScrollRight, InfoSemanticTarget::Content(request_id)) => {
-                InfoOverlayAction::Scroll {
-                    request_id,
-                    by: OverlayScroll::Columns(self.info_overlay.viewport().columns() as isize),
-                }
-            }
-            _ => InfoOverlayAction::None,
+            (Action::ScrollDown, None) => DialogAction::Scroll {
+                request_id,
+                by: DialogScroll::Pages(1),
+            },
+            _ => DialogAction::None,
         };
-        self.apply_info_overlay_action(action);
+        self.apply_dialog_action(action);
     }
 
-    pub(super) fn info_accessibility_snapshot(&mut self) -> ModalSnapshot {
-        let layout = self.info_overlay_layout();
-        self.info_overlay
-            .set_viewport(layout.rows_that_fit, layout.columns_that_fit);
-        let request_id = self.info_overlay.request_id();
-        let awaiting = self.info_overlay.is_awaiting_current();
-        let scroll_offset = self.info_overlay.viewport().row();
-        let horizontal_offset = self.info_overlay.viewport().column();
-        let total_lines = self.info_overlay.lines().len();
-        let input_info = self.info_overlay.input_info(request_id);
-        let input_visible = input_info.as_ref().is_some_and(|input| {
-            layout
-                .source_line_rect(input.source_line, scroll_offset, total_lines)
-                .is_some()
-        });
+    /// The dialog's nodes: an alert dialog for confirmations and errors and
+    /// a dialog otherwise, labelled by its heading and described by its
+    /// body, with its field, list rows, and buttons, all bounded by the
+    /// layout it is drawn with.
+    pub(super) fn dialog_accessibility_snapshot(&mut self) -> ModalSnapshot {
+        use crate::ui::dialog::{ButtonRole, DialogFocus};
 
-        let content_target = InfoSemanticTarget::Content(request_id);
-        let copy_target = InfoSemanticTarget::Copy(request_id);
-        let dismiss_target = InfoSemanticTarget::Dismiss(request_id);
-        let visible_choices: Vec<_> = self
-            .info_overlay
-            .choices()
-            .iter()
-            .filter(|choice| {
-                choice.source_line >= scroll_offset
-                    && choice.source_line < scroll_offset.saturating_add(layout.rows_that_fit)
-            })
-            .cloned()
-            .collect();
-        let mut targets = HashSet::from([
-            content_target.clone(),
-            copy_target.clone(),
-            dismiss_target.clone(),
-        ]);
-        if input_visible {
-            targets.insert(InfoSemanticTarget::Input(request_id));
+        let layout = self.dialog_layout();
+        let request_id = self.dialog.request_id();
+        let awaiting = self.dialog.is_awaiting_current();
+        let offset = self.dialog.scroll_offset();
+        let field = self.dialog.field(request_id);
+        let rows = self.dialog.rows().to_vec();
+        let buttons = self.dialog.buttons().to_vec();
+
+        let field_target = DialogSemanticTarget::Field(request_id);
+        let row_target = |id: &str| DialogSemanticTarget::Row {
+            request_id,
+            id: id.to_owned(),
+        };
+        let button_target = |index| DialogSemanticTarget::Button { request_id, index };
+        let mut targets: HashSet<DialogSemanticTarget> =
+            (0..buttons.len()).map(button_target).collect();
+        if field.is_some() {
+            targets.insert(field_target.clone());
         }
-        targets.extend(
-            visible_choices
-                .iter()
-                .map(|choice| InfoSemanticTarget::Choice {
-                    request_id,
-                    id: choice.id.clone(),
-                }),
-        );
+        targets.extend(rows.iter().map(|row| row_target(&row.id)));
         self.accessibility
-            .info
+            .dialog
             .retain(|target| targets.contains(target));
-        let content_id = self.accessibility.info.node(&content_target);
-        let copy_id = self.accessibility.info.node(&copy_target);
-        let dismiss_id = self.accessibility.info.node(&dismiss_target);
-        let input_id = input_visible.then(|| {
-            self.accessibility
-                .info
-                .node(&InfoSemanticTarget::Input(request_id))
-        });
-        let choice_nodes: Vec<_> = visible_choices
+        let field_id = field
+            .is_some()
+            .then(|| self.accessibility.dialog.node(&field_target));
+        let row_ids: Vec<NodeId> = rows
             .iter()
-            .map(|choice| {
-                let target = InfoSemanticTarget::Choice {
-                    request_id,
-                    id: choice.id.clone(),
-                };
-                (choice.clone(), self.accessibility.info.node(&target))
-            })
+            .map(|row| self.accessibility.dialog.node(&row_target(&row.id)))
+            .collect();
+        let button_ids: Vec<NodeId> = (0..buttons.len())
+            .map(|index| self.accessibility.dialog.node(&button_target(index)))
             .collect();
 
-        let visible_lines: Vec<_> = self
-            .info_overlay
-            .visible_lines()
-            .map(|(_, line)| {
-                line.chars()
-                    .skip(horizontal_offset)
-                    .take(layout.columns_that_fit)
-                    .collect::<String>()
-            })
-            .collect();
-        let first_line = scroll_offset.saturating_add(1).min(total_lines.max(1));
-        let last_line = scroll_offset
-            .saturating_add(layout.rows_that_fit)
-            .min(total_lines);
-        let status_text = format!(
-            "Showing lines {first_line} through {last_line} of {total_lines}, starting at column {}",
-            horizontal_offset + 1
-        );
+        let bounds = |bounds: Option<crate::ui::geometry::Bounds>| bounds.map(bounds_rect);
+        let mut nodes = Vec::with_capacity(4 + rows.len() + buttons.len());
+        let title = self.dialog.title().to_owned();
+        let description = self
+            .dialog
+            .body()
+            .iter()
+            .map(crate::ui::dialog::DialogBlock::content)
+            .collect::<Vec<_>>()
+            .join("\n\n");
 
-        let mut nodes = Vec::with_capacity(7 + choice_nodes.len());
-
-        let mut title = Node::new(Role::Heading);
-        title.set_label(self.info_overlay.title());
-        title.set_bounds(rect(
-            layout.card.x + layout.padding,
-            layout.card.y + layout.padding,
-            layout.card.width - layout.padding * 2.0,
-            layout.title_height,
-        ));
-        nodes.push((INFO_TITLE, title));
-
-        let mut content = Node::new(Role::Document);
-        content.set_label("Notice content");
-        content.set_value(visible_lines.join("\n"));
-        content.set_description(status_text.clone());
-        content.set_bounds(bounds_rect(layout.content));
-        let mut content_children = input_id.into_iter().collect::<Vec<_>>();
-        content_children.extend(choice_nodes.iter().map(|(_, node)| *node));
-        content.set_children(content_children);
-        if awaiting {
-            content.add_action(Action::Focus);
-            if self.info_overlay.viewport().row() > 0 {
-                content.add_action(Action::ScrollUp);
-            }
-            if self.info_overlay.viewport().row() < self.info_overlay.viewport().max_row() {
-                content.add_action(Action::ScrollDown);
-            }
-            if self.info_overlay.viewport().column() > 0 {
-                content.add_action(Action::ScrollLeft);
-            }
-            if self.info_overlay.viewport().column() < self.info_overlay.viewport().max_column() {
-                content.add_action(Action::ScrollRight);
-            }
-        } else {
-            content.set_disabled();
+        let mut heading = Node::new(Role::Heading);
+        heading.set_label(title.clone());
+        if let Some(rect) = bounds(layout.as_ref().map(|layout| layout.heading_bounds)) {
+            heading.set_bounds(rect);
         }
-        nodes.push((content_id, content));
+        nodes.push((DIALOG_HEADING, heading));
 
-        if let (Some(input), Some(input_id)) = (input_info.as_ref(), input_id)
-            && let Some(input_rect) =
-                layout.source_line_rect(input.source_line, scroll_offset, total_lines)
-        {
+        let mut body_children = Vec::new();
+        if let (Some(field), Some(field_id)) = (field.as_ref(), field_id) {
             let mut node = Node::new(Role::TextInput);
-            node.set_label(input.label.trim_end_matches([' ', ':']));
-            node.set_description(format!("Single-line value, at most {}", input.limit));
-            set_text_value(&mut node, input_id, &input.value, Some(input.cursor_byte));
-            node.set_bounds(bounds_rect(input_rect));
+            node.set_label(field.label.as_str());
+            match &field.error {
+                Some(error) => node.set_description(error.as_str()),
+                None => node.set_description(format!("At most {}", field.limit)),
+            }
+            set_text_value(&mut node, field_id, &field.value, Some(field.cursor_byte));
+            if let Some(rect) = bounds(layout.as_ref().and_then(|layout| layout.field_box(offset)))
+            {
+                node.set_bounds(rect);
+            }
             if awaiting {
                 node.add_action(Action::Focus);
                 node.add_action(Action::SetValue);
             } else {
                 node.set_disabled();
             }
-            nodes.push((input_id, node));
+            nodes.push((field_id, node));
+            body_children.push(field_id);
+        }
+        if !rows.is_empty() {
+            let focused_row = match self.dialog.focus() {
+                Some(DialogFocus::Row(row)) => Some(row),
+                _ => None,
+            };
+            for (index, (row, node_id)) in rows.iter().zip(&row_ids).enumerate() {
+                let mut node = Node::new(Role::ListItem);
+                node.set_label(row.label.as_str());
+                if let Some(detail) = &row.detail {
+                    node.set_description(detail.as_str());
+                }
+                node.set_selected(focused_row == Some(index));
+                if let Some(rect) =
+                    bounds(layout.as_ref().and_then(|layout| layout.row(index, offset)))
+                {
+                    node.set_bounds(rect);
+                }
+                if awaiting {
+                    node.add_action(Action::Click);
+                    node.add_action(Action::Focus);
+                } else {
+                    node.set_disabled();
+                }
+                nodes.push((*node_id, node));
+            }
+            let mut list = Node::new(Role::ListBox);
+            list.set_label(title.clone());
+            if let Some(layout) = &layout {
+                let first = layout.rows_top - offset;
+                list.set_bounds(bounds_rect(crate::ui::geometry::Bounds::new(
+                    layout.body.x,
+                    layout.body.y + first,
+                    layout.content_width,
+                    layout.row_height * rows.len() as f32,
+                )));
+            }
+            list.set_children(row_ids.clone());
+            nodes.push((DIALOG_LIST, list));
+            body_children.push(DIALOG_LIST);
         }
 
-        for (choice, node_id) in &choice_nodes {
-            let visible_row = choice.source_line.saturating_sub(scroll_offset);
-            let mut node = Node::new(Role::Button);
-            node.set_label(choice.label.as_str());
-            node.set_description("Select this notice option");
-            if let Some(shortcut) = choice.shortcut {
-                node.set_keyboard_shortcut(shortcut.to_string());
+        let mut body = Node::new(Role::Document);
+        body.set_label(title.clone());
+        body.set_value(description.clone());
+        if let Some(rect) = bounds(layout.as_ref().map(|layout| layout.body)) {
+            body.set_bounds(rect);
+        }
+        body.set_children(body_children);
+        let extent = self.dialog.extent();
+        if awaiting {
+            body.add_action(Action::Focus);
+            if offset > 0.0 {
+                body.add_action(Action::ScrollUp);
             }
-            node.set_bounds(bounds_rect(layout.row(visible_row)));
+            if offset + extent.viewport < extent.content {
+                body.add_action(Action::ScrollDown);
+            }
+        } else {
+            body.set_disabled();
+        }
+        nodes.push((DIALOG_BODY, body));
+
+        for (index, (button, node_id)) in buttons.iter().zip(&button_ids).enumerate() {
+            let mut node = Node::new(Role::Button);
+            node.set_label(button.label.as_str());
+            if button.role == ButtonRole::Cancel {
+                node.set_keyboard_shortcut("Escape");
+            }
+            if let Some(rect) = bounds(
+                layout
+                    .as_ref()
+                    .and_then(|layout| layout.buttons.get(index).copied()),
+            ) {
+                node.set_bounds(rect);
+            }
             if awaiting {
                 node.add_action(Action::Click);
                 node.add_action(Action::Focus);
@@ -457,69 +440,35 @@ impl App {
             nodes.push((*node_id, node));
         }
 
-        let mut status = Node::new(Role::Status);
-        status.set_label(status_text);
-        status.set_live(Live::Polite);
-        nodes.push((INFO_STATUS, status));
-
-        let mut copy = Node::new(Role::Button);
-        copy.set_label("Copy notice content");
-        if self.info_overlay.copy_key_free() {
-            copy.set_keyboard_shortcut("C");
-        }
-        copy.set_bounds(bounds_rect(layout.copy_button));
-        if awaiting {
-            copy.add_action(Action::Click);
-            copy.add_action(Action::Focus);
+        let mut dialog = Node::new(if self.dialog.kind().is_alert() {
+            Role::AlertDialog
         } else {
-            copy.set_disabled();
+            Role::Dialog
+        });
+        dialog.set_label(title);
+        if !description.is_empty() {
+            dialog.set_description(description);
         }
-        nodes.push((copy_id, copy));
-
-        let mut dismiss = Node::new(Role::DefaultButton);
-        if input_info.is_some() {
-            dismiss.set_label("Submit input");
-            dismiss.set_keyboard_shortcut("Enter");
-        } else {
-            dismiss.set_label("Continue and close notice");
-            dismiss.set_keyboard_shortcut("Enter or Escape");
-        }
-        dismiss.set_bounds(bounds_rect(layout.continue_button));
-        if awaiting {
-            dismiss.add_action(Action::Click);
-            dismiss.add_action(Action::Focus);
-        } else {
-            dismiss.set_disabled();
-        }
-        nodes.push((dismiss_id, dismiss));
-
-        let mut dialog = Node::new(Role::Dialog);
-        dialog.set_label(self.info_overlay.title());
-        dialog.set_description("Application notice with bounded scrollable content");
         dialog.set_modal();
         dialog.add_action(Action::Focus);
-        dialog.set_bounds(bounds_rect(layout.card));
-        let mut children = vec![INFO_TITLE, content_id];
-        children.extend([INFO_STATUS, copy_id, dismiss_id]);
+        if let Some(rect) = bounds(layout.as_ref().map(|layout| layout.card)) {
+            dialog.set_bounds(rect);
+        }
+        let mut children = vec![DIALOG_HEADING, DIALOG_BODY];
+        children.extend(&button_ids);
         dialog.set_children(children);
-        nodes.push((INFO_DIALOG, dialog));
+        nodes.push((DIALOG, dialog));
 
-        let model_focus = self.info_overlay.focus().and_then(|focus| {
-            use crate::ui::info_overlay::InfoOverlayFocus;
-            match focus {
-                InfoOverlayFocus::Input => input_id,
-                InfoOverlayFocus::Choice(id) => choice_nodes
-                    .iter()
-                    .find(|(choice, _)| &choice.id == id)
-                    .map(|(_, node)| *node),
-                InfoOverlayFocus::Copy => Some(copy_id),
-                InfoOverlayFocus::Continue => Some(dismiss_id),
-            }
+        // Assistive focus follows the dialog's own focus.
+        let model_focus = self.dialog.focus().and_then(|focus| match focus {
+            DialogFocus::Field => field_id,
+            DialogFocus::Row(row) => row_ids.get(row).copied(),
+            DialogFocus::Button(button) => button_ids.get(button).copied(),
         });
-        let focus = model_focus.unwrap_or(if awaiting { content_id } else { INFO_DIALOG });
+        let focus = model_focus.unwrap_or(if awaiting { DIALOG_BODY } else { DIALOG });
         self.accessibility.focus_override = Some(focus);
         ModalSnapshot {
-            dialog: INFO_DIALOG,
+            dialog: DIALOG,
             nodes,
             focus,
         }

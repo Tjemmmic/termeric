@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::tabs::TabType;
-use crate::ui::info_overlay::push_keyless_choice;
+use crate::ui::dialog::{ButtonRole, DialogBlock, DialogSpec};
 use crate::ui::text::plural;
 use crate::workspace::{
     WorkspaceConfigReference, WorkspaceLaunch, WorkspaceRestoreOutcome, WorkspaceSnapshot,
@@ -30,7 +30,6 @@ struct SaveTarget {
 const AUTOMATIC_WORKSPACE_NAME: &str = "Last workspace";
 const WORKSPACE_OPEN_CHOICE: &str = "workspace-open";
 const WORKSPACE_DELETE_CHOICE: &str = "workspace-delete";
-const WORKSPACE_CANCEL_CHOICE: &str = "workspace-cancel";
 /// Longest workspace name a confirmation quotes.
 const CONFIRMATION_NAME_CHARS: usize = 40;
 
@@ -530,20 +529,16 @@ impl App {
         }
         let name = confirmation_name(id);
         let tabs = plural(tabs, "tab", "tabs");
-        let close = format!("Close {tabs} and open {name}");
-        let mut lines = vec![
-            format!("Open {name} in this window?"),
-            format!("It replaces the {tabs} here, and the programs running"),
-            "in them end. Save the window first to keep them.".into(),
-            String::new(),
-        ];
-        let mut choices = Vec::new();
-        push_keyless_choice(&mut lines, &mut choices, WORKSPACE_OPEN_CHOICE, close);
-        push_keyless_choice(&mut lines, &mut choices, WORKSPACE_CANCEL_CHOICE, "Cancel");
-        let request_id = self
-            .info_overlay
-            .show_choices("Open Workspace", lines, choices);
-        self.overlay_flow = Some(OverlayFlow::WorkspaceOpen {
+        let request_id = self.dialog.show(DialogSpec::confirm(
+            format!("Open {name} here?"),
+            vec![DialogBlock::text(format!(
+                "The {tabs} in this window close, and the programs running in them stop. Save this window first to keep them."
+            ))],
+            WORKSPACE_OPEN_CHOICE,
+            "Close tabs and open",
+            ButtonRole::Destructive,
+        ));
+        self.dialog_flow = Some(DialogFlow::WorkspaceOpen {
             request_id,
             workspace_id: id.to_owned(),
         });
@@ -553,56 +548,47 @@ impl App {
     /// can't be undone.
     pub(super) fn confirm_workspace_delete(&mut self, id: &str, closed_tab: bool) {
         let name = confirmation_name(id);
-        let mut lines = vec![
+        let noun = if closed_tab {
+            "closed tab"
+        } else {
+            "workspace"
+        };
+        let request_id = self.dialog.show(DialogSpec::confirm(
             format!("Delete {name}?"),
-            "Its layout and saved scrollback are removed from disk.".into(),
-            "This can't be undone.".into(),
-            String::new(),
-        ];
-        let mut choices = Vec::new();
-        push_keyless_choice(&mut lines, &mut choices, WORKSPACE_DELETE_CHOICE, "Delete");
-        push_keyless_choice(&mut lines, &mut choices, WORKSPACE_CANCEL_CHOICE, "Cancel");
-        let request_id = self.info_overlay.show_choices(
-            if closed_tab {
-                "Delete Tab Snapshot"
-            } else {
-                "Delete Workspace"
-            },
-            lines,
-            choices,
-        );
-        self.overlay_flow = Some(OverlayFlow::WorkspaceDelete {
+            vec![DialogBlock::text(format!(
+                "The {noun}'s layout and saved scrollback are deleted. This can't be undone."
+            ))],
+            WORKSPACE_DELETE_CHOICE,
+            "Delete",
+            ButtonRole::Destructive,
+        ));
+        self.dialog_flow = Some(DialogFlow::WorkspaceDelete {
             request_id,
             workspace_id: id.to_owned(),
             closed_tab,
         });
     }
 
-    /// Answer an open or delete confirmation. Returns whether the choice was
-    /// its.
+    /// Answer an open or delete confirmation. Returns whether the answer was
+    /// its; Cancel is no flow's, and closes the dialog.
     pub(super) fn handle_workspace_choice(&mut self, request_id: u64, choice_id: &str) -> bool {
         let pending = matches!(
-            self.overlay_flow,
+            self.dialog_flow,
             Some(
-                OverlayFlow::WorkspaceOpen { request_id: pending, .. }
-                    | OverlayFlow::WorkspaceDelete { request_id: pending, .. }
+                DialogFlow::WorkspaceOpen { request_id: pending, .. }
+                    | DialogFlow::WorkspaceDelete { request_id: pending, .. }
             ) if pending == request_id
         );
-        if !pending
-            || !matches!(
-                choice_id,
-                WORKSPACE_OPEN_CHOICE | WORKSPACE_DELETE_CHOICE | WORKSPACE_CANCEL_CHOICE
-            )
-        {
+        if !pending || !matches!(choice_id, WORKSPACE_OPEN_CHOICE | WORKSPACE_DELETE_CHOICE) {
             return false;
         }
-        self.info_overlay.dismiss(request_id);
-        match (self.overlay_flow.take(), choice_id) {
-            (Some(OverlayFlow::WorkspaceOpen { workspace_id, .. }), WORKSPACE_OPEN_CHOICE) => {
+        self.dialog.dismiss(request_id);
+        match (self.dialog_flow.take(), choice_id) {
+            (Some(DialogFlow::WorkspaceOpen { workspace_id, .. }), WORKSPACE_OPEN_CHOICE) => {
                 self.restore_saved_workspace(&workspace_id);
             }
             (
-                Some(OverlayFlow::WorkspaceDelete {
+                Some(DialogFlow::WorkspaceDelete {
                     workspace_id,
                     closed_tab,
                     ..

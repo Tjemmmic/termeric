@@ -88,9 +88,9 @@ impl App {
             TextTarget::CommandsForm => {
                 self.commands_panel.insert_form_text(text);
             }
-            TextTarget::InfoOverlayInput => {
-                let request_id = self.info_overlay.request_id();
-                self.info_overlay.insert_input_text(request_id, text);
+            TextTarget::DialogField => {
+                let request_id = self.dialog.request_id();
+                self.dialog.insert_field_text(request_id, text);
             }
             TextTarget::TabRename => {
                 self.insert_tab_rename_text(text);
@@ -138,7 +138,7 @@ impl App {
                 .workspace_panel
                 .rename_input_viewport(&self.workspace_panel_layout()),
             TextTarget::CommandsForm => self.commands_ime_viewport(&metrics),
-            TextTarget::InfoOverlayInput
+            TextTarget::DialogField
             | TextTarget::TabRename
             | TextTarget::AgentView
             | TextTarget::Search
@@ -179,27 +179,21 @@ impl App {
         if target == TextTarget::TabRename {
             return self.tab_rename_ime_target();
         }
-        let renderer = self.renderer.as_ref()?;
-        if target == TextTarget::InfoOverlayInput {
-            let request_id = self.info_overlay.request_id();
-            let input = self.info_overlay.input_info(request_id)?;
-            let layout = self.info_overlay_layout();
-            let row = layout.source_line_rect(
-                input.source_line,
-                self.info_overlay.viewport().row(),
-                self.info_overlay.lines().len(),
-            )?;
-            let cursor_column =
-                input.label.chars().count() + input.value[..input.cursor_byte].chars().count();
-            let x = row.x
-                + cursor_column.saturating_sub(self.info_overlay.viewport().column()) as f32
-                    * layout.char_scale;
-            let y = row.y;
+        self.renderer.as_ref()?;
+        if target == TextTarget::DialogField {
+            let view = self.dialog_field_viewport()?;
+            let metrics = self.ui_metrics();
             return self.ime_target(
-                [x, y, layout.char_scale, row.height],
-                (row.x + row.width - x).max(layout.char_scale),
+                [
+                    view.cursor_x,
+                    view.text_y,
+                    metrics.cell_width,
+                    metrics.cell_height,
+                ],
+                (view.right - view.cursor_x).max(metrics.cell_width),
             );
         }
+        let renderer = self.renderer.as_ref()?;
         let width = renderer.window_size().0;
         let (cell_width, cell_height) = renderer.cell_size();
         let view = match target {

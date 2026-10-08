@@ -831,7 +831,8 @@ fn modal_interruption_finishes_native_gestures_before_pointer_motion() {
         |app| app.settings_panel.toggle(),
         |app| app.shortcuts_panel.open(),
         |app| {
-            app.info_overlay.show("Notice", vec![]);
+            app.dialog
+                .show(crate::ui::dialog::DialogSpec::message("Notice", vec![]));
         },
         |app| app.unicode_picker.open(),
         |app| app.domain_picker.open(&app.config.domains),

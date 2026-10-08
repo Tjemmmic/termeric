@@ -21,7 +21,6 @@ pub mod focus_step;
 pub mod geometry;
 pub mod guardrail;
 pub mod icon;
-pub mod info_overlay;
 pub mod list_dialog;
 pub mod modal;
 pub mod popup_menu;

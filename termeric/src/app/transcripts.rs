@@ -1,6 +1,7 @@
 //! Transcript controls target one local terminal, never tab presentation.
 use super::*;
 use crate::tabs::TerminalIdentity;
+use crate::ui::dialog::{DialogBlock, DialogSpec};
 
 impl App {
     pub(super) fn toggle_terminal_transcript(&mut self, identity: TerminalIdentity) {
@@ -41,27 +42,30 @@ impl App {
             let path = recorder.path().display().to_string();
             match recorder.finish(Duration::from_millis(500)) {
                 Ok(()) => {
-                    self.info_overlay.show(
-                        "Transcript Stopped",
-                        vec!["Transcript saved to:".into(), path],
-                    );
+                    self.dialog.show(DialogSpec::message(
+                        "Transcript saved",
+                        vec![DialogBlock::value(path)],
+                    ));
                 }
                 Err(error) => {
-                    self.info_overlay.show(
-                        "Transcript Incomplete",
+                    self.dialog.show(DialogSpec::error(
+                        "Transcript may be incomplete",
                         vec![
-                            format!("Could not durably flush: {error}"),
-                            format!("Partial path: {path}"),
+                            DialogBlock::text("The end of it couldn't be written to disk."),
+                            DialogBlock::value(path),
+                            DialogBlock::value(error.to_string()),
                         ],
-                    );
+                    ));
                 }
             }
         } else if let Some(agent) = agent {
             let Some(base) = crate::session::sessions_base_dir() else {
-                self.info_overlay.show(
-                    "Transcript Error",
-                    vec!["Session data directory is unavailable".into()],
-                );
+                self.dialog.show(DialogSpec::error(
+                    "Couldn't start a transcript",
+                    vec![DialogBlock::text(
+                        "There's no data folder to save it in. Check that HOME is set.",
+                    )],
+                ));
                 return;
             };
             let repo = cwd.as_deref().and_then(|cwd| {
@@ -91,22 +95,22 @@ impl App {
                         .pane_integration_mut(identity.pane_id)
                         .unwrap()
                         .start_transcript(recorder);
-                    self.info_overlay.show(
-                        "Transcript Started",
+                    self.dialog.show(DialogSpec::message(
+                        "Recording a transcript",
                         vec![
-                            "Recording this terminal's output to:".into(),
-                            path,
-                            String::new(),
-                            "Common token prefixes are redacted, but".into(),
-                            "this is not a complete secret scanner.".into(),
+                            DialogBlock::text("This terminal's output is saved to:"),
+                            DialogBlock::value(path),
+                            DialogBlock::text(
+                                "Common token formats are hidden, but other secrets may still be saved.",
+                            ),
                         ],
-                    );
+                    ));
                 }
                 Err(error) => {
-                    self.info_overlay.show(
-                        "Transcript Error",
-                        vec![format!("Failed to start recording: {error}")],
-                    );
+                    self.dialog.show(DialogSpec::error(
+                        "Couldn't start a transcript",
+                        vec![DialogBlock::value(error.to_string())],
+                    ));
                 }
             }
         }

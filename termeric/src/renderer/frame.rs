@@ -548,12 +548,12 @@ impl Renderer {
                         self.diff_review = Some(info);
                     }
                 }
-                ModalLayer::InfoOverlay => {
-                    if let Some(info) = self.info_overlay.take() {
+                ModalLayer::Dialog => {
+                    if let Some(info) = self.dialog.take() {
                         if info.animation > 0.001 {
-                            self.build_info_overlay(&info, window_width, window_height);
+                            self.build_dialog(&info, window_width, window_height);
                         }
-                        self.info_overlay = Some(info);
+                        self.dialog = Some(info);
                     }
                 }
                 ModalLayer::Guardrail => {

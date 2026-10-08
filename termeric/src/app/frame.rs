@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::renderer::{
-    ContextPickerInfo, DiffReviewInfo, GuardrailInfo, InfoOverlayInfo, PopupMenuInfo,
+    ContextPickerInfo, DialogInfo, DiffReviewInfo, GuardrailInfo, PopupMenuInfo,
 };
 use crate::ui::agents_panel::AgentsPanelInfo;
 use crate::ui::command_palette::PaletteInfo;
@@ -26,7 +26,7 @@ pub(super) struct ChromeInfo {
     pub(super) agents_panel: Option<AgentsPanelInfo>,
     pub(super) palette: Option<(PaletteInfo, ListDialogLayout)>,
     pub(super) shortcuts: Option<(ShortcutsPanelInfo, ListDialogLayout)>,
-    pub(super) info_overlay: Option<InfoOverlayInfo>,
+    pub(super) dialog: Option<DialogInfo>,
     pub(super) toasts: Vec<crate::ui::toast::ToastInfo>,
     pub(super) diff_review: Option<DiffReviewInfo>,
     pub(super) context_picker: Option<ContextPickerInfo>,
@@ -64,8 +64,8 @@ impl App {
         let palette = self.palette_frame_info();
         animating |= self.shortcuts_panel.update_animation();
         let shortcuts = self.shortcuts_frame_info();
-        let info_overlay = self.info_overlay_frame_info();
-        animating |= self.info_overlay.update_animation();
+        let dialog = self.dialog_frame_info();
+        animating |= self.dialog.update_animation();
         // Toast lifecycle: prune expired, then snapshot.
         animating |= self.toasts.update();
         let toasts = self.toasts.build_info();
@@ -85,7 +85,7 @@ impl App {
                 agents_panel,
                 palette,
                 shortcuts,
-                info_overlay,
+                dialog,
                 toasts,
                 diff_review,
                 context_picker,
@@ -155,50 +155,22 @@ impl App {
         Some((info, layout))
     }
 
-    fn info_overlay_frame_info(&mut self) -> Option<InfoOverlayInfo> {
-        if !self.info_overlay.is_visible() {
+    fn dialog_frame_info(&mut self) -> Option<DialogInfo> {
+        if !self.dialog.is_visible() {
             return None;
         }
-        let layout = self.info_overlay_layout();
-        self.info_overlay
-            .set_viewport(layout.rows_that_fit, layout.columns_that_fit);
-        let scroll_offset = self.info_overlay.viewport().row();
-        let horizontal_offset = self.info_overlay.viewport().column();
-        let visible_lines = self
-            .info_overlay
-            .visible_lines()
-            .map(|(source_line, line)| {
-                (
-                    source_line,
-                    line.chars()
-                        .skip(horizontal_offset)
-                        .take(layout.columns_that_fit)
-                        .collect(),
-                )
-            })
-            .collect();
-        let choices = self
-            .info_overlay
-            .choices()
-            .iter()
-            .filter(|choice| {
-                choice.source_line >= scroll_offset
-                    && choice.source_line < scroll_offset.saturating_add(layout.rows_that_fit)
-            })
-            .cloned()
-            .collect();
-        Some(InfoOverlayInfo {
-            title: self.info_overlay.title().to_string(),
-            visible_lines,
-            choices,
-            input: self.info_overlay.input_info(self.info_overlay.request_id()),
-            focus: self.info_overlay.focus().cloned(),
-            total_lines: self.info_overlay.lines().len(),
-            scroll_offset,
-            horizontal_offset,
-            awaiting: self.info_overlay.is_awaiting_current(),
-            animation: self.info_overlay.animation(),
+        let layout = self.dialog_layout()?;
+        let dialog = &self.dialog;
+        Some(DialogInfo {
             layout,
+            body: dialog.body().to_vec(),
+            field: dialog.field(dialog.request_id()),
+            rows: dialog.rows().to_vec(),
+            buttons: dialog.buttons().to_vec(),
+            focus: dialog.focus(),
+            scroll: dialog.scroll_offset(),
+            awaiting: dialog.is_awaiting_current(),
+            animation: dialog.animation(),
             mouse_pos: self.last_cursor_pos.map(|(x, y)| (x as f32, y as f32)),
             mouse_pressed: self.mouse_pressed,
         })

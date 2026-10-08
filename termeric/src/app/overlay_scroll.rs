@@ -1,4 +1,4 @@
-//! The scrolling keys the info overlay and diff review share.
+//! The scrolling keys of diff review.
 
 use crate::ui::text_card::OverlayScroll;
 use winit::keyboard::{Key, ModifiersState, NamedKey};

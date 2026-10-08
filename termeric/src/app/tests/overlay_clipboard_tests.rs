@@ -436,54 +436,28 @@ fn a_finished_mouse_selection_fills_primary_and_with_copy_on_select_the_clipboar
 }
 
 #[test]
-fn c_copies_a_notice_whose_choices_leave_c_free() {
-    let mut app = App::new_headless(Config::default()).unwrap();
-    let (clipboard, memory) = super::super::clipboard::Clipboard::in_memory();
-    app.clipboard = clipboard;
-    let request_id = app.info_overlay.show_choices(
-        "Question",
-        vec!["Go on?".into(), "  Y  Yes".into()],
-        vec![crate::ui::info_overlay::InfoOverlayChoice::new(
-            "yes",
-            "Yes",
-            1,
-            Some('y'),
-        )],
-    );
-    app.handle_info_overlay_key(&winit::keyboard::Key::Character("c".into()), false);
-
-    assert!(app.info_overlay.is_awaiting(request_id));
-    assert_eq!(
-        memory.lock().unwrap().clipboard.as_deref(),
-        Some("Go on?\n  Y  Yes")
-    );
-}
-
-#[test]
-fn a_notice_field_takes_altgr_text_and_spaces_but_not_chorded_text() {
+fn a_dialog_field_takes_altgr_text_and_spaces_but_not_chorded_text() {
     use winit::keyboard::{Key, NamedKey};
     let mut app = App::new_headless(Config::default()).unwrap();
-    let request_id = app.info_overlay.show_input(
-        "Rule",
-        vec!["Rule: ".into()],
-        0,
-        "Rule: ",
-        "",
-        64,
-        Vec::new(),
-    );
-    assert!(app.info_overlay.input_focused());
-    app.handle_info_overlay_key(&Key::Character("a".into()), false);
-    app.handle_info_overlay_key(&Key::Named(NamedKey::Space), false);
+    let request_id = app.dialog.show(crate::ui::dialog::DialogSpec::prompt(
+        "Add rule",
+        vec![],
+        crate::ui::dialog::FieldSpec::new("Rule", "", 64),
+        "save",
+        "Add",
+    ));
+    assert!(app.dialog.field_focused());
+    app.handle_dialog_key(&Key::Character("a".into()), false);
+    app.handle_dialog_key(&Key::Named(NamedKey::Space), false);
     // AltGr can arrive as Ctrl+Alt; the text it composes still types.
     app.modifiers = ModifiersState::CONTROL | ModifiersState::ALT;
     app.alt_graph_active = true;
-    app.handle_info_overlay_key(&Key::Character("@".into()), false);
+    app.handle_dialog_key(&Key::Character("@".into()), false);
     app.alt_graph_active = false;
     for modifiers in [ModifiersState::SUPER, ModifiersState::ALT] {
         app.modifiers = modifiers;
-        app.handle_info_overlay_key(&Key::Character("x".into()), false);
-        app.handle_info_overlay_key(&Key::Named(NamedKey::Space), false);
+        app.handle_dialog_key(&Key::Character("x".into()), false);
+        app.handle_dialog_key(&Key::Named(NamedKey::Space), false);
     }
-    assert_eq!(app.info_overlay.input_value(request_id), Some("a @"));
+    assert_eq!(app.dialog.field_value(request_id), Some("a @"));
 }

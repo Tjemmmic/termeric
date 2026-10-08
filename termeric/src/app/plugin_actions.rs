@@ -397,10 +397,10 @@ impl App {
                             });
                         }
                         Err(e) => {
-                            self.info_overlay.show(
-                                format!("Failed to launch '{}'", program),
-                                vec![format!("{}", e)],
-                            );
+                            self.dialog.show(crate::ui::dialog::DialogSpec::error(
+                                format!("Couldn't open {program}"),
+                                vec![crate::ui::dialog::DialogBlock::value(e.to_string())],
+                            ));
                             self.request_redraw(RedrawReason::Action);
                             log::error!("Plugin failed to open tab for '{}': {}", program, e);
                         }
@@ -413,7 +413,15 @@ impl App {
             }
             PluginAction::ShowNotice { title, lines } => {
                 log::info!("Plugin notice [{}]: {}", title, lines.join(" / "));
-                self.info_overlay.show(title, lines);
+                // A plugin's own wording, each line a paragraph.
+                self.dialog.show(crate::ui::dialog::DialogSpec::message(
+                    title,
+                    lines
+                        .into_iter()
+                        .filter(|line| !line.trim().is_empty())
+                        .map(crate::ui::dialog::DialogBlock::Text)
+                        .collect(),
+                ));
                 self.request_redraw(RedrawReason::Action);
             }
         }

@@ -2,7 +2,7 @@
 //! confirming and uploading it to a live-domain pane.
 
 use super::*;
-use crate::ui::info_overlay::push_key_choice;
+use crate::ui::dialog::{ButtonRole, DialogBlock, DialogSpec};
 use anyhow::Context as _;
 
 #[derive(Debug, Clone)]
@@ -51,7 +51,6 @@ pub(super) struct ActiveFileUpload {
 const MAX_DROPPED_PATH_BYTES: usize = 4_096;
 const FILE_UPLOAD_PROGRESS_EVENT_BYTES: u64 = 1024 * 1024;
 const UPLOAD_CHOICE: &str = "file-upload-confirm";
-const CANCEL_UPLOAD_CHOICE: &str = "file-upload-cancel";
 
 enum DroppedPathAction {
     InsertLocal(String),
@@ -259,41 +258,31 @@ impl App {
                 source_identity,
             } => {
                 let (noun, size) = match source_kind {
-                    FileUploadSourceKind::File { bytes } => {
-                        ("file", format!("Size: {bytes} bytes"))
-                    }
+                    FileUploadSourceKind::File { bytes } => ("file", format!("{bytes} bytes")),
                     FileUploadSourceKind::Directory => (
-                        "directory",
+                        "folder",
                         format!(
-                            "Size: calculated after confirmation; maximum archive {} MiB",
+                            "Its size is checked once it's packed, up to {} MiB.",
                             crate::domain::protocol::MAX_FILE_UPLOAD_BYTES / (1024 * 1024)
                         ),
                     ),
                 };
-                let mut lines = vec![
-                    format!("Upload this local {noun} to the focused live-domain pane?"),
-                    String::new(),
-                    format!("Source: {}", source.display()),
-                    format!("Destination: domain {domain_id}, pane {pane_id}, cwd/{name}"),
-                    size,
-                    String::new(),
-                    "The destination must not exist. Termeric will not overwrite it.".into(),
-                    "After upload, the quoted remote path is inserted without Enter.".into(),
-                    String::new(),
-                ];
-                let mut choices = Vec::new();
-                push_key_choice(&mut lines, &mut choices, UPLOAD_CHOICE, 'u', "Upload");
-                push_key_choice(
-                    &mut lines,
-                    &mut choices,
-                    CANCEL_UPLOAD_CHOICE,
-                    'c',
-                    "Cancel",
-                );
-                let request_id =
-                    self.info_overlay
-                        .show_choices("Confirm live-domain upload", lines, choices);
-                self.overlay_flow = Some(OverlayFlow::FileUpload(PendingFileUpload {
+                let request_id = self.dialog.show(DialogSpec::confirm(
+                    format!("Upload this {noun}?"),
+                    vec![
+                        DialogBlock::value(source.display().to_string()),
+                        DialogBlock::text(format!(
+                            "It goes to pane {pane_id} of domain {domain_id}, as {name} in the pane's current folder. {size}"
+                        )),
+                        DialogBlock::text(
+                            "Nothing there is overwritten. When it's done, the remote path is typed at the prompt without pressing Enter.",
+                        ),
+                    ],
+                    UPLOAD_CHOICE,
+                    "Upload",
+                    ButtonRole::Suggested,
+                ));
+                self.dialog_flow = Some(DialogFlow::FileUpload(PendingFileUpload {
                     request_id,
                     source,
                     authority,
@@ -308,24 +297,21 @@ impl App {
         }
     }
 
-    /// Answer the upload confirmation. Returns whether the choice was its.
+    /// Answer the upload confirmation. Returns whether the answer was its.
     pub(super) fn handle_file_upload_choice(&mut self, request_id: u64, choice_id: &str) -> bool {
-        let upload = match self.overlay_flow.take() {
-            Some(OverlayFlow::FileUpload(upload))
-                if upload.request_id == request_id
-                    && matches!(choice_id, UPLOAD_CHOICE | CANCEL_UPLOAD_CHOICE) =>
+        let upload = match self.dialog_flow.take() {
+            Some(DialogFlow::FileUpload(upload))
+                if upload.request_id == request_id && choice_id == UPLOAD_CHOICE =>
             {
                 upload
             }
             other => {
-                self.overlay_flow = other;
+                self.dialog_flow = other;
                 return false;
             }
         };
-        self.info_overlay.dismiss(request_id);
-        if choice_id == UPLOAD_CHOICE {
-            self.start_file_upload(upload);
-        }
+        self.dialog.dismiss(request_id);
+        self.start_file_upload(upload);
         true
     }
 

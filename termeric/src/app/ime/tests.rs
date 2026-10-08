@@ -41,11 +41,15 @@ fn an_open_workspaces_menu_swallows_ime_text_like_every_key() {
 }
 
 #[test]
-fn a_guardrail_over_an_info_overlay_field_swallows_ime_text() {
+fn a_guardrail_over_a_dialog_field_swallows_ime_text() {
     let mut app = App::new_headless(Config::default()).unwrap();
-    let request_id =
-        app.info_overlay
-            .show_input("Name", vec!["Name:".into()], 0, "Name", "", 64, Vec::new());
+    let request_id = app.dialog.show(crate::ui::dialog::DialogSpec::prompt(
+        "Rename?",
+        vec![],
+        crate::ui::dialog::FieldSpec::new("Name", "", 64),
+        "save",
+        "Rename",
+    ));
     assert_ne!(app.text_target(), TextTarget::Blocked);
     app.guardrail.show(
         crate::terminal::guardrails::GuardrailMatch {
@@ -62,7 +66,7 @@ fn a_guardrail_over_an_info_overlay_field_swallows_ime_text() {
     );
     assert_eq!(app.text_target(), TextTarget::Blocked);
     app.handle_ime_event(Ime::Commit("hidden".into()));
-    assert_eq!(app.info_overlay.input_value(request_id), Some(""));
+    assert_eq!(app.dialog.field_value(request_id), Some(""));
 }
 
 #[test]
@@ -276,7 +280,8 @@ fn command_form_ime_follows_the_active_scrolled_field_and_respects_modal_priorit
     assert_ne!(app.text_target(), TextTarget::CommandsForm);
     assert!(ime_viewport_of(&mut app, TextTarget::CommandsForm, 800.0, 800.0, 8.0, 16.0).is_none());
     app.command_palette.close();
-    app.info_overlay.show("Notice", vec![]);
+    app.dialog
+        .show(crate::ui::dialog::DialogSpec::message("Notice", vec![]));
     assert_ne!(app.text_target(), TextTarget::CommandsForm);
     app.commands_panel.close();
     assert!(ime_viewport_of(&mut app, TextTarget::CommandsForm, 800.0, 800.0, 8.0, 16.0).is_none());
@@ -338,7 +343,8 @@ fn retained_search_does_not_steal_ime_geometry_from_modal_or_text_owners() {
                 .open(crate::session::listing::WorkspaceListing::workspaces())
         },
         |app| {
-            app.info_overlay.show("Notice", vec![]);
+            app.dialog
+                .show(crate::ui::dialog::DialogSpec::message("Notice", vec![]));
         },
         |app| app.domain_picker.open(&app.config.domains),
         |app| app.tab_rename = Some(TabRenameState::new(0, "", 80)),
@@ -1023,26 +1029,24 @@ fn preedit_is_not_inserted_and_commit_is_inserted_once() {
 }
 
 #[test]
-fn ime_commit_reaches_the_active_information_overlay_input_only() {
+fn ime_commit_reaches_the_dialog_field_only_while_it_is_focused() {
     let mut app = App::new_headless(Config::default()).unwrap();
-    let request = app.info_overlay.show_input(
-        "Edit setting",
-        vec![String::new()],
-        0,
-        "Value: ",
-        "root",
-        32,
-        Vec::new(),
-    );
+    let request = app.dialog.show(crate::ui::dialog::DialogSpec::prompt(
+        "Change setting",
+        vec![],
+        crate::ui::dialog::FieldSpec::new("Value", "root", 32),
+        "save",
+        "Save",
+    ));
     app.handle_ime_event(Ime::Preedit("しょうが".into(), None));
-    assert_eq!(app.info_overlay.input_value(request), Some("root"));
+    assert_eq!(app.dialog.field_value(request), Some("root"));
     app.handle_ime_event(Ime::Commit("生姜".into()));
-    assert_eq!(app.info_overlay.input_value(request), Some("root生姜"));
+    assert_eq!(app.dialog.field_value(request), Some("root生姜"));
     assert!(app.ime.preedit().is_none());
-    app.info_overlay.cycle_focus(request, false); // Copy button, not text.
+    app.dialog.cycle_focus(request, false); // Cancel, not text.
     app.handle_ime_event(Ime::Preedit("blocked".into(), None));
     app.handle_ime_event(Ime::Commit("must not arrive".into()));
-    assert_eq!(app.info_overlay.input_value(request), Some("root生姜"));
+    assert_eq!(app.dialog.field_value(request), Some("root生姜"));
     assert!(app.ime.preedit().is_none());
 }
 

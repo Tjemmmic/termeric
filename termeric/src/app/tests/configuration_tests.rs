@@ -933,11 +933,16 @@ fn reset_configuration_asks_first_and_keeps_the_old_file() {
 
     // Cancelling changes nothing.
     app.handle_action(Action::ResetConfig);
-    let request = app.info_overlay.request_id();
-    assert_eq!(app.info_overlay.title(), "Reset Configuration");
-    app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
+    let request = app.dialog.request_id();
+    assert_eq!(app.dialog.title(), "Reset all settings?");
+    // A stray Enter cancels.
+    assert_eq!(
+        app.dialog.focus(),
+        Some(crate::ui::dialog::DialogFocus::Button(0))
+    );
+    app.apply_dialog_action(crate::ui::dialog::DialogAction::Answer {
         request_id: request,
-        choice_id: "config-keep".into(),
+        id: crate::ui::dialog::CANCEL.into(),
     });
     assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
     assert!(backups(directory.path()).is_empty());
@@ -945,10 +950,10 @@ fn reset_configuration_asks_first_and_keeps_the_old_file() {
 
     // Confirming replaces the file, keeps the old one, and applies defaults.
     app.handle_action(Action::ResetConfig);
-    let request = app.info_overlay.request_id();
-    app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
+    let request = app.dialog.request_id();
+    app.apply_dialog_action(crate::ui::dialog::DialogAction::Answer {
         request_id: request,
-        choice_id: "config-reset".into(),
+        id: "config-reset".into(),
     });
     assert_eq!(
         std::fs::read_to_string(&path).unwrap(),
@@ -977,7 +982,7 @@ fn ctrl_r_in_settings_does_not_reset() {
     app.settings_panel.toggle();
     app.modifiers = ModifiersState::CONTROL;
     app.handle_settings_panel_key(&winit::keyboard::Key::Character("r".into()));
-    assert!(!app.info_overlay.is_active());
+    assert!(!app.dialog.is_active());
     assert!(!app.config.bell.visual);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
 }
@@ -1004,7 +1009,7 @@ fn record_shortcut(
 #[test]
 fn recording_a_chord_another_action_uses_asks_before_changing_anything() {
     use crate::input::keybindings::{BindableAction, KeyChord};
-    use crate::ui::info_overlay::{InfoOverlayAction, InfoOverlayFocus};
+    use crate::ui::dialog::{CANCEL, DialogAction, DialogFocus};
     use crate::ui::modal::ModalLayer;
     let new_tab = KeyChord::new("t", true, false, true, false);
     let ctrl_shift = ModifiersState::CONTROL | ModifiersState::SHIFT;
@@ -1030,24 +1035,19 @@ fn recording_a_chord_another_action_uses_asks_before_changing_anything() {
     // The question names the chord and both actions, and nothing has
     // changed while it is open.
     record_shortcut(&mut app, BindableAction::RenameTab, "T", ctrl_shift);
-    assert_eq!(app.top_modal_layer(), Some(ModalLayer::InfoOverlay));
-    assert_eq!(app.info_overlay.title(), "Reassign Shortcut");
-    assert_eq!(
-        app.info_overlay.lines()[..2],
-        [
-            "Ctrl+Shift+T is the shortcut for New Tab.",
-            "Use it for Rename Tab and leave New Tab without a shortcut?"
-        ]
-    );
+    assert_eq!(app.top_modal_layer(), Some(ModalLayer::Dialog));
+    assert_eq!(app.dialog.title(), "Use Ctrl+Shift+T for Rename Tab?");
+    assert!(app.dialog_text().contains("New Tab"));
     unchanged(&app);
 
-    // Cancel, Escape, and Enter on the default focus all keep both.
-    let request_id = app.info_overlay.request_id();
-    app.apply_info_overlay_action(InfoOverlayAction::Choose {
+    // Cancel, Escape, and Enter on the initial focus (Cancel) all keep
+    // both.
+    let request_id = app.dialog.request_id();
+    app.apply_dialog_action(DialogAction::Answer {
         request_id,
-        choice_id: "shortcut-keep".into(),
+        id: CANCEL.into(),
     });
-    assert!(!app.info_overlay.is_awaiting_current());
+    assert!(!app.dialog.is_awaiting_current());
     assert!(app.shortcuts_panel.is_active());
     unchanged(&app);
     for key in [
@@ -1055,29 +1055,26 @@ fn recording_a_chord_another_action_uses_asks_before_changing_anything() {
         winit::keyboard::NamedKey::Enter,
     ] {
         record_shortcut(&mut app, BindableAction::RenameTab, "T", ctrl_shift);
-        assert!(app.info_overlay.is_awaiting_current());
-        app.handle_info_overlay_key(&winit::keyboard::Key::Named(key), false);
-        assert!(!app.info_overlay.is_awaiting_current(), "{key:?}");
-        assert!(app.overlay_flow.is_none());
+        assert!(app.dialog.is_awaiting_current());
+        app.handle_dialog_key(&winit::keyboard::Key::Named(key), false);
+        assert!(!app.dialog.is_awaiting_current(), "{key:?}");
+        assert!(app.dialog_flow.is_none());
         unchanged(&app);
     }
 
-    // Tab reaches Reassign, and Enter takes the chord, leaving New Tab
+    // Tab reaches Replace, and Enter takes the chord, leaving New Tab
     // unbound in the file too.
     record_shortcut(&mut app, BindableAction::RenameTab, "T", ctrl_shift);
-    app.handle_info_overlay_key(
+    app.handle_dialog_key(
         &winit::keyboard::Key::Named(winit::keyboard::NamedKey::Tab),
         false,
     );
-    assert_eq!(
-        app.info_overlay.focus(),
-        Some(&InfoOverlayFocus::Choice("shortcut-reassign".into()))
-    );
-    app.handle_info_overlay_key(
+    assert_eq!(app.dialog.focus(), Some(DialogFocus::Button(1)));
+    app.handle_dialog_key(
         &winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter),
         false,
     );
-    assert!(!app.info_overlay.is_awaiting_current());
+    assert!(!app.dialog.is_awaiting_current());
     assert_eq!(
         app.shortcut_registry.binding_for(BindableAction::RenameTab),
         Some(&new_tab)
@@ -1094,7 +1091,7 @@ fn recording_a_chord_another_action_uses_asks_before_changing_anything() {
 
     // A chord nothing uses is taken without a question.
     record_shortcut(&mut app, BindableAction::NewTab, "N", ctrl_shift);
-    assert!(!app.info_overlay.is_awaiting_current());
+    assert!(!app.dialog.is_awaiting_current());
     assert_eq!(
         app.shortcut_registry.binding_for(BindableAction::NewTab),
         Some(&KeyChord::new("n", true, false, true, false))
@@ -1104,7 +1101,7 @@ fn recording_a_chord_another_action_uses_asks_before_changing_anything() {
 #[test]
 fn a_reassignment_answered_after_a_reload_moved_the_chord_asks_again() {
     use crate::input::keybindings::{BindableAction, KeyChord};
-    use crate::ui::info_overlay::InfoOverlayAction;
+    use crate::ui::dialog::DialogAction;
     let chord = KeyChord::new("t", true, false, true, false);
     let (_directory, path, mut app) = app_with_config_file("");
     record_shortcut(
@@ -1113,7 +1110,7 @@ fn a_reassignment_answered_after_a_reload_moved_the_chord_asks_again() {
         "T",
         ModifiersState::CONTROL | ModifiersState::SHIFT,
     );
-    let request_id = app.info_overlay.request_id();
+    let request_id = app.dialog.request_id();
 
     // Meanwhile the file gives Ctrl+Shift+T to Copy instead.
     std::fs::write(
@@ -1128,19 +1125,16 @@ fn a_reassignment_answered_after_a_reload_moved_the_chord_asks_again() {
     );
 
     // Agreeing to take it from New Tab is no answer for Copy.
-    app.apply_info_overlay_action(InfoOverlayAction::Choose {
+    app.apply_dialog_action(DialogAction::Answer {
         request_id,
-        choice_id: "shortcut-reassign".into(),
+        id: "shortcut-reassign".into(),
     });
     assert_eq!(
         app.shortcut_registry.conflict_for(&chord),
         Some(BindableAction::Copy)
     );
-    assert!(app.info_overlay.is_awaiting_current());
-    assert_eq!(
-        app.info_overlay.lines()[0],
-        "Ctrl+Shift+T is the shortcut for Copy Selection."
-    );
+    assert!(app.dialog.is_awaiting_current());
+    assert!(app.dialog_text().contains("Copy Selection"));
 }
 
 #[test]
@@ -1202,10 +1196,10 @@ fn agent_shortcuts_are_no_conflict_while_agent_features_are_off() {
         ModifiersState::CONTROL | ModifiersState::SHIFT,
     );
     assert!(
-        !app.info_overlay.is_awaiting_current(),
+        !app.dialog.is_awaiting_current(),
         "no question names Agent View while it is off"
     );
-    assert!(app.overlay_flow.is_none());
+    assert!(app.dialog_flow.is_none());
     assert_eq!(
         app.shortcut_registry.binding_for(BindableAction::RenameTab),
         Some(&agent_view)

@@ -2,16 +2,14 @@
 
 use super::*;
 use crate::input::keybindings::{BindableAction, KeyChord};
-use crate::ui::info_overlay::push_keyless_choice;
+use crate::ui::dialog::{ButtonRole, DialogBlock, DialogSpec};
 
 const CONFIG_RESET_CHOICE: &str = "config-reset";
-const CONFIG_KEEP_CHOICE: &str = "config-keep";
 const SHORTCUT_REASSIGN_CHOICE: &str = "shortcut-reassign";
-const SHORTCUT_KEEP_CHOICE: &str = "shortcut-keep";
 
 impl App {
-    /// Ask before Reset Configuration replaces the file. The confirmation has
-    /// no letter shortcut, so a repeated key cannot reset.
+    /// Ask before Reset Configuration replaces the file. Focus starts on
+    /// Cancel, so a stray Enter cannot reset.
     pub(super) fn confirm_config_reset(&mut self) {
         let path = match self.config_file() {
             Ok(path) => path.display().to_string(),
@@ -20,35 +18,33 @@ impl App {
                 return;
             }
         };
-        let mut lines = vec![
-            format!("Replace {path} with a file that sets nothing?"),
-            "Every setting returns to its default. The current file is kept".into(),
-            "beside it as a .bak copy.".into(),
-            String::new(),
-        ];
-        let mut choices = Vec::new();
-        push_keyless_choice(&mut lines, &mut choices, CONFIG_RESET_CHOICE, "Reset");
-        push_keyless_choice(&mut lines, &mut choices, CONFIG_KEEP_CHOICE, "Cancel");
-        let request_id = self
-            .info_overlay
-            .show_choices("Reset Configuration", lines, choices);
-        self.overlay_flow = Some(OverlayFlow::ConfigReset { request_id });
+        let request_id = self.dialog.show(DialogSpec::confirm(
+            "Reset all settings?",
+            vec![
+                DialogBlock::text(
+                    "Every setting goes back to its default. The current file is kept beside it as a .bak copy.",
+                ),
+                DialogBlock::value(path),
+            ],
+            CONFIG_RESET_CHOICE,
+            "Reset",
+            ButtonRole::Destructive,
+        ));
+        self.dialog_flow = Some(DialogFlow::ConfigReset { request_id });
     }
 
-    /// Answer the reset confirmation. Returns whether the choice was its.
+    /// Answer the reset confirmation. Returns whether the answer was its.
     pub(super) fn handle_config_reset_choice(&mut self, request_id: u64, choice_id: &str) -> bool {
         let pending = matches!(
-            self.overlay_flow,
-            Some(OverlayFlow::ConfigReset { request_id: pending }) if pending == request_id
+            self.dialog_flow,
+            Some(DialogFlow::ConfigReset { request_id: pending }) if pending == request_id
         );
-        if !pending || !matches!(choice_id, CONFIG_RESET_CHOICE | CONFIG_KEEP_CHOICE) {
+        if !pending || choice_id != CONFIG_RESET_CHOICE {
             return false;
         }
-        self.info_overlay.dismiss(request_id);
-        self.overlay_flow = None;
-        if choice_id == CONFIG_RESET_CHOICE {
-            self.reset_config_to_defaults();
-        }
+        self.dialog.dismiss(request_id);
+        self.dialog_flow = None;
+        self.reset_config_to_defaults();
         true
     }
 
@@ -642,7 +638,7 @@ impl App {
             .palette_mut()
             .set_reduced_motion(reduced_motion);
         self.shortcuts_panel.set_reduced_motion(reduced_motion);
-        self.info_overlay.set_reduced_motion(reduced_motion);
+        self.dialog.set_reduced_motion(reduced_motion);
         self.diff_review.set_reduced_motion(reduced_motion);
         self.context_picker.set_reduced_motion(reduced_motion);
         self.guardrail.set_reduced_motion(reduced_motion);
@@ -906,9 +902,8 @@ impl App {
         self.set_shortcut(action, chord);
     }
 
-    /// Ask before `chord` moves from `holder` to `action`. Like the other
-    /// confirmations it has no letter shortcut, so a key still held from
-    /// recording cannot answer it.
+    /// Ask before `chord` moves from `holder` to `action`. No letter key
+    /// answers a dialog, so a key still held from recording cannot.
     fn confirm_shortcut_reassign(
         &mut self,
         action: BindableAction,
@@ -916,23 +911,16 @@ impl App {
         holder: BindableAction,
     ) {
         let (label, holder_label) = (action.meta().label, holder.meta().label);
-        let mut lines = vec![
-            format!("{chord} is the shortcut for {holder_label}."),
-            format!("Use it for {label} and leave {holder_label} without a shortcut?"),
-            String::new(),
-        ];
-        let mut choices = Vec::new();
-        push_keyless_choice(
-            &mut lines,
-            &mut choices,
+        let request_id = self.dialog.show(DialogSpec::confirm(
+            format!("Use {chord} for {label}?"),
+            vec![DialogBlock::text(format!(
+                "It's the shortcut for {holder_label}, which will be left without one."
+            ))],
             SHORTCUT_REASSIGN_CHOICE,
-            "Reassign",
-        );
-        push_keyless_choice(&mut lines, &mut choices, SHORTCUT_KEEP_CHOICE, "Cancel");
-        let request_id = self
-            .info_overlay
-            .show_choices("Reassign Shortcut", lines, choices);
-        self.overlay_flow = Some(OverlayFlow::ShortcutReassign {
+            "Replace",
+            ButtonRole::Destructive,
+        ));
+        self.dialog_flow = Some(DialogFlow::ShortcutReassign {
             request_id,
             action,
             chord,
@@ -940,14 +928,14 @@ impl App {
         });
     }
 
-    /// Answer the reassign confirmation. Returns whether the choice was its.
+    /// Answer the reassign confirmation. Returns whether the answer was its.
     pub(super) fn handle_shortcut_reassign_choice(
         &mut self,
         request_id: u64,
         choice_id: &str,
     ) -> bool {
-        let (action, chord, holder) = match &self.overlay_flow {
-            Some(OverlayFlow::ShortcutReassign {
+        let (action, chord, holder) = match &self.dialog_flow {
+            Some(DialogFlow::ShortcutReassign {
                 request_id: pending,
                 action,
                 chord,
@@ -955,19 +943,17 @@ impl App {
             }) if *pending == request_id => (*action, chord.clone(), *holder),
             _ => return false,
         };
-        if !matches!(choice_id, SHORTCUT_REASSIGN_CHOICE | SHORTCUT_KEEP_CHOICE) {
+        if choice_id != SHORTCUT_REASSIGN_CHOICE {
             return false;
         }
-        self.info_overlay.dismiss(request_id);
-        self.overlay_flow = None;
-        if choice_id == SHORTCUT_REASSIGN_CHOICE {
-            // A reload while the question was open may have moved the chord;
-            // the person agreed to take it from `holder` alone.
-            if self.shortcut_registry.conflict_for(&chord) == Some(holder) {
-                self.set_shortcut(action, Some(chord));
-            } else {
-                self.request_shortcut(action, Some(chord));
-            }
+        self.dialog.dismiss(request_id);
+        self.dialog_flow = None;
+        // A reload while the question was open may have moved the chord;
+        // the person agreed to take it from `holder` alone.
+        if self.shortcut_registry.conflict_for(&chord) == Some(holder) {
+            self.set_shortcut(action, Some(chord));
+        } else {
+            self.request_shortcut(action, Some(chord));
         }
         self.request_redraw(RedrawReason::Action);
         true

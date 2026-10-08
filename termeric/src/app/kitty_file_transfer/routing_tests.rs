@@ -99,8 +99,8 @@ fn consent_and_pruning_follow_only_the_same_terminal_owner() {
                     path.name = Some(directory.path().join("not-opened").display().to_string());
                     app.handle_kitty_file_transfer(origin, path);
                 }
-                let request_id = app.info_overlay.request_id();
-                assert!(app.info_overlay.is_awaiting(request_id));
+                let request_id = app.dialog.request_id();
+                assert!(app.dialog.is_awaiting(request_id));
                 let captures = change_owner_layout(&mut app, directory.path(), owner, transition);
                 if prune_first {
                     assert_eq!(
@@ -112,8 +112,7 @@ fn consent_and_pruning_follow_only_the_same_terminal_owner() {
                 // Without a native window, a surviving owner's Allow is refused
                 // before worker creation. A removed owner's Allow emits no reply.
                 let choice = match (upload, prune_first) {
-                    (true, true) => "kitty-upload-deny",
-                    (false, true) => "kitty-download-deny",
+                    (_, true) => crate::ui::dialog::CANCEL,
                     (true, false) => "kitty-upload-allow",
                     (false, false) => "kitty-download-allow",
                 };
@@ -335,7 +334,7 @@ fn path_collection_and_active_commands_match_across_split_and_collapse() {
             .len(),
         2
     );
-    assert!(app.info_overlay.is_awaiting(app.info_overlay.request_id()));
+    assert!(app.dialog.is_awaiting(app.dialog.request_id()));
     assert_eq!(
         app.tabs.as_ref().unwrap().identity_for_origin(route),
         Some(owner)

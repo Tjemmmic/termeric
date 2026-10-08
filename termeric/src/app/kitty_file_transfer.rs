@@ -5,7 +5,7 @@
 
 use super::{App, AppEvent, EVENT_LOOP_PROXY, WindowResult};
 use crate::tabs::{TerminalEventOrigin, TerminalIdentity};
-use crate::ui::info_overlay::push_key_choice;
+use crate::ui::dialog::{ButtonRole, CANCEL, DialogBlock, DialogSpec};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
@@ -391,7 +391,7 @@ impl App {
     }
 
     fn show_kitty_upload_consent(&mut self) {
-        if self.info_overlay.is_active() {
+        if self.dialog.is_active() {
             self.deny_pending_kitty_upload(
                 Some(KittyFileTransferStatusCode::Busy),
                 "another information dialog appeared before path collection completed",
@@ -401,42 +401,30 @@ impl App {
         let Some(pending) = self.kitty_file_transfers.pending_upload.as_ref() else {
             return;
         };
-        let mut lines = vec![
-            "The exact originating terminal wants to read files from this computer.".into(),
-            String::new(),
-            format!("Session: {}", pending.key.id),
-            format!("Origin: {}", describe_origin(pending.key.origin)),
-            format!(
-                "Limits: at most {MAX_KITTY_UPLOAD_PATHS} regular files and {} MiB",
-                MAX_KITTY_UPLOAD_BYTES / (1024 * 1024)
-            ),
-            String::new(),
-            "Requested paths:".into(),
-        ];
-        lines.extend(
-            pending
-                .paths
-                .iter()
-                .map(|path| format!("  {}", path.path.display())),
-        );
-        lines.extend([
-            String::new(),
-            "Directories, links, and non-regular files will be refused.".into(),
-            "Only continue if you trust the command that requested these exact files.".into(),
-            String::new(),
-        ]);
-        let mut choices = Vec::new();
-        push_key_choice(
-            &mut lines,
-            &mut choices,
+        let request_id = self.dialog.show(consent_dialog(
+            "Let this terminal read your files?",
+            vec![
+                DialogBlock::text("A program in this terminal wants to read these files:"),
+                DialogBlock::value(
+                    pending
+                        .paths
+                        .iter()
+                        .map(|path| path.path.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                ),
+                DialogBlock::text(format!(
+                    "Only allow it if you trust the command that asked. Folders, links, and special files are refused, and at most {MAX_KITTY_UPLOAD_PATHS} files and {} MiB are read.",
+                    MAX_KITTY_UPLOAD_BYTES / (1024 * 1024)
+                )),
+                DialogBlock::text(format!(
+                    "Session {} from {}.",
+                    pending.key.id,
+                    describe_origin(pending.key.origin)
+                )),
+            ],
             "kitty-upload-allow",
-            'a',
-            "Allow these reads once",
-        );
-        push_key_choice(&mut lines, &mut choices, "kitty-upload-deny", 'd', "Deny");
-        let request_id =
-            self.info_overlay
-                .show_choices("Allow terminal to read host files?", lines, choices);
+        ));
         if let Some(pending) = self.kitty_file_transfers.pending_upload.as_mut() {
             pending.request_id = Some(request_id);
         }
@@ -486,34 +474,27 @@ impl App {
         else {
             return;
         };
-        let mut lines = vec![
-            "The exact originating terminal wants to create files on this computer.".into(),
-            String::new(),
-            format!("Session: {}", command.id),
-            format!("Origin: {}", describe_origin(origin)),
-            format!(
-                "Limits: at most {MAX_KITTY_DOWNLOAD_FILES} entries and {} MiB",
-                MAX_KITTY_DOWNLOAD_BYTES / (1024 * 1024)
-            ),
-            "The entry limit includes automatically created parent directories.".into(),
-            String::new(),
-            "The remote side chooses destination paths and symbolic-link targets.".into(),
-            "Existing entries will not be replaced.".into(),
-            "Only continue if you trust the remote computer and the command you ran.".into(),
-            String::new(),
-        ];
-        let mut choices = Vec::new();
-        push_key_choice(
-            &mut lines,
-            &mut choices,
+        let request_id = self.dialog.show(consent_dialog(
+            "Let this terminal save files?",
+            vec![
+                DialogBlock::text(
+                    "A program on the other end of this terminal wants to create files on this computer. It chooses where they go and where links point; nothing that exists is replaced.",
+                ),
+                DialogBlock::text(format!(
+                    "At most {MAX_KITTY_DOWNLOAD_FILES} files and folders and {} MiB, counting the folders it creates.",
+                    MAX_KITTY_DOWNLOAD_BYTES / (1024 * 1024)
+                )),
+                DialogBlock::text(
+                    "Only allow it if you trust the remote computer and the command you ran.",
+                ),
+                DialogBlock::text(format!(
+                    "Session {} from {}.",
+                    command.id,
+                    describe_origin(origin)
+                )),
+            ],
             "kitty-download-allow",
-            'a',
-            "Allow this transfer",
-        );
-        push_key_choice(&mut lines, &mut choices, "kitty-download-deny", 'd', "Deny");
-        let request_id =
-            self.info_overlay
-                .show_choices("Allow remote file transfer?", lines, choices);
+        ));
         self.kitty_file_transfers.pending = Some(PendingConsent {
             request_id,
             token,
@@ -551,7 +532,7 @@ impl App {
         } else if transfers.pending.is_some()
             || transfers.pending_upload.is_some()
             || transfers.active.len() + transfers.active_uploads.len() >= MAX_ACTIVE_KITTY_TRANSFERS
-            || self.info_overlay.is_active()
+            || self.dialog.is_active()
         {
             Some((
                 KittyFileTransferStatusCode::Busy,
@@ -640,13 +621,12 @@ impl App {
         let Some(pending) = self.kitty_file_transfers.pending.as_ref() else {
             return false;
         };
-        if pending.request_id != request_id
-            || !matches!(choice_id, "kitty-download-allow" | "kitty-download-deny")
+        if pending.request_id != request_id || !matches!(choice_id, "kitty-download-allow" | CANCEL)
         {
             return false;
         }
-        self.info_overlay.dismiss(request_id);
-        if choice_id == "kitty-download-deny" {
+        self.dialog.dismiss(request_id);
+        if choice_id == CANCEL {
             self.deny_pending_kitty_download(
                 Some(KittyFileTransferStatusCode::PermissionDenied),
                 "user refused the transfer",
@@ -716,12 +696,12 @@ impl App {
             return false;
         };
         if pending.request_id != Some(request_id)
-            || !matches!(choice_id, "kitty-upload-allow" | "kitty-upload-deny")
+            || !matches!(choice_id, "kitty-upload-allow" | CANCEL)
         {
             return false;
         }
-        self.info_overlay.dismiss(request_id);
-        if choice_id == "kitty-upload-deny" {
+        self.dialog.dismiss(request_id);
+        if choice_id == CANCEL {
             self.deny_pending_kitty_upload(
                 Some(KittyFileTransferStatusCode::PermissionDenied),
                 "user refused the host file read",
@@ -883,7 +863,7 @@ impl App {
             return;
         };
         if let Some(request_id) = pending.request_id {
-            self.info_overlay.dismiss(request_id);
+            self.dialog.dismiss(request_id);
         }
         if let Some(code) = code {
             self.write_kitty_status(
@@ -958,7 +938,7 @@ impl App {
         let Some(pending) = self.kitty_file_transfers.pending.take() else {
             return;
         };
-        self.info_overlay.dismiss(pending.request_id);
+        self.dialog.dismiss(pending.request_id);
         if let Some(code) = code {
             self.write_kitty_status(
                 pending.key.origin,
@@ -1121,7 +1101,7 @@ impl App {
             .pending
             .as_ref()
             .is_some_and(|pending| {
-                !self.info_overlay.is_awaiting(pending.request_id)
+                !self.dialog.is_awaiting(pending.request_id)
                     || self.kitty_transfer_origin(pending.key.origin).is_none()
             });
         if stale_pending {
@@ -1139,7 +1119,7 @@ impl App {
                 pending.created_at.elapsed() >= PENDING_UPLOAD_TIMEOUT
                     || pending
                         .request_id
-                        .is_some_and(|request_id| !self.info_overlay.is_awaiting(request_id))
+                        .is_some_and(|request_id| !self.dialog.is_awaiting(request_id))
                     || self.kitty_transfer_origin(pending.key.origin).is_none()
             });
         if stale_pending_upload {
@@ -1268,6 +1248,13 @@ pub(super) fn test_transfer_command(
         bypass_present: false,
         reply_uses_8bit_controls: false,
     }
+}
+
+/// A consent a program asks of the person: Deny, then Allow answering
+/// `allow`. Neither is suggested, so focus starts on Deny and a stray Enter
+/// cannot hand a program the person's files.
+fn consent_dialog(title: &str, body: Vec<DialogBlock>, allow: &str) -> DialogSpec {
+    DialogSpec::confirm(title, body, allow, "Allow", ButtonRole::Neutral).cancel_label("Deny")
 }
 
 fn describe_origin(origin: TerminalIdentity) -> String {

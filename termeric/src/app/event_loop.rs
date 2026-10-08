@@ -264,7 +264,7 @@ impl App {
             WindowEvent::CursorMoved { position, .. } => {
                 self.last_cursor_pos = Some((position.x, position.y));
                 // The cards that draw hover from the pointer redraw as it moves.
-                if self.info_overlay.is_active()
+                if self.dialog.is_active()
                     || self.diff_review.is_active()
                     || self.context_picker.is_active()
                 {
@@ -427,9 +427,9 @@ impl App {
         let key = &event.logical_key;
         match layer {
             ModalLayer::Guardrail => self.handle_guardrail_key(key),
-            // Actions are request-scoped, so input during the overlay's
-            // close animation cannot target a replacement notice.
-            ModalLayer::InfoOverlay => self.handle_info_overlay_key(key, event.repeat),
+            // Actions are request-scoped, so input during the dialog's
+            // close animation cannot target a replacement dialog.
+            ModalLayer::Dialog => self.handle_dialog_key(key, event.repeat),
             ModalLayer::DiffReview => self.handle_diff_review_key(key),
             ModalLayer::ContextPicker => self.handle_context_picker_key(key),
             ModalLayer::SproutMenu => {
@@ -571,36 +571,11 @@ impl App {
                     self.request_redraw(RedrawReason::PointerInput);
                 }
             }
-            // Information overlay pointer actions use the same request and
-            // geometry as keyboard, rendering, and accessibility.
-            Some(ModalLayer::InfoOverlay) => {
-                if matches!(
-                    button,
-                    winit::event::MouseButton::Left | winit::event::MouseButton::Middle
-                ) && let Some(pos) = pos
-                {
-                    let layout = self.info_overlay_layout();
-                    let (mx, my) = (pos.0 as f32, pos.1 as f32);
-                    let press = if layout.copy_button.contains(mx, my) {
-                        super::info_overlay::InfoOverlayPress::CopyButton
-                    } else if layout.continue_button.contains(mx, my) {
-                        super::info_overlay::InfoOverlayPress::ContinueButton
-                    } else if let Some(line) = layout.content_row_at(
-                        mx,
-                        my,
-                        self.info_overlay.viewport().row(),
-                        self.info_overlay.lines().len(),
-                    ) {
-                        let column = self.info_overlay.viewport().column().saturating_add(
-                            ((mx - layout.content.x) / layout.char_scale)
-                                .floor()
-                                .max(0.0) as usize,
-                        );
-                        super::info_overlay::InfoOverlayPress::Line { line, column }
-                    } else {
-                        super::info_overlay::InfoOverlayPress::Elsewhere
-                    };
-                    self.press_info_overlay(button, press);
+            // Dialog presses use the same request and geometry as the
+            // keyboard, drawing, and accessibility.
+            Some(ModalLayer::Dialog) => {
+                if let Some(pos) = pos {
+                    self.press_dialog(button, pos.0 as f32, pos.1 as f32);
                     self.request_redraw(RedrawReason::PointerInput);
                 }
             }
@@ -737,19 +712,12 @@ impl App {
         };
         let sideways = two_axis_columns.abs() > two_axis_rows.abs();
         match self.top_modal_layer() {
-            Some(ModalLayer::InfoOverlay) => {
-                use crate::ui::info_overlay::InfoOverlayAction;
-                let request_id = self.info_overlay.request_id();
-                self.apply_info_overlay_action(if sideways {
-                    InfoOverlayAction::Scroll {
-                        request_id,
-                        by: OverlayScroll::Columns(two_axis_columns),
-                    }
-                } else {
-                    InfoOverlayAction::Scroll {
-                        request_id,
-                        by: OverlayScroll::Rows(two_axis_rows),
-                    }
+            // Only the dialog's body scrolls, and only up and down.
+            Some(ModalLayer::Dialog) => {
+                let request_id = self.dialog.request_id();
+                self.apply_dialog_action(crate::ui::dialog::DialogAction::Scroll {
+                    request_id,
+                    by: crate::ui::dialog::DialogScroll::Lines(rows),
                 });
             }
             Some(ModalLayer::DiffReview) => {
@@ -955,11 +923,11 @@ mod wheel_tests {
     #[test]
     fn the_guardrail_keeps_the_wheel_from_scrolling_surfaces_beneath_it() {
         let mut app = App::new_headless(Config::default()).unwrap();
-        let lines = (0..100).map(|line| format!("line {line}")).collect();
-        app.info_overlay.show("Long notice", lines);
-        app.info_overlay.set_viewport(5, 80);
+        app.dialog.show(long_message());
+        app.dialog_layout();
         app.handle_mouse_wheel(MouseScrollDelta::LineDelta(0.0, -3.0));
-        assert_eq!(app.info_overlay.viewport().row(), 3);
+        let scrolled = app.dialog.scroll_offset();
+        assert!(scrolled > 0.0);
 
         app.guardrail.show(
             crate::terminal::guardrails::GuardrailMatch {
@@ -975,7 +943,17 @@ mod wheel_tests {
             )],
         );
         app.handle_mouse_wheel(MouseScrollDelta::LineDelta(0.0, -3.0));
-        assert_eq!(app.info_overlay.viewport().row(), 3);
+        assert_eq!(app.dialog.scroll_offset(), scrolled);
+    }
+
+    /// A message whose body is far taller than any window.
+    fn long_message() -> crate::ui::dialog::DialogSpec {
+        crate::ui::dialog::DialogSpec::message(
+            "Long notice",
+            (0..100)
+                .map(|line| crate::ui::dialog::DialogBlock::text(format!("line {line}")))
+                .collect(),
+        )
     }
 
     #[test]
@@ -1011,15 +989,11 @@ mod wheel_tests {
         app.handle_mouse_wheel(MouseScrollDelta::LineDelta(0.0, -3.0));
         assert!(settings_offset(&mut app) > 0);
 
-        // The info overlay, above Settings, scrolls both ways, so Shift
-        // turns the same wheel sideways there.
-        let lines = (0..100)
-            .map(|line| format!("line {line} {}", "wide ".repeat(60)))
-            .collect();
-        app.info_overlay.show("Wide notice", lines);
-        app.info_overlay.set_viewport(5, 80);
+        // A dialog above it wraps its body, so the same wheel still scrolls
+        // it down.
+        app.dialog.show(long_message());
+        app.dialog_layout();
         app.handle_mouse_wheel(MouseScrollDelta::LineDelta(0.0, -3.0));
-        assert_eq!(app.info_overlay.viewport().row(), 0);
-        assert_eq!(app.info_overlay.viewport().column(), 3);
+        assert!(app.dialog.scroll_offset() > 0.0);
     }
 }

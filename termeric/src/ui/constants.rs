@@ -2,11 +2,12 @@
 //! logical pixels, scaled to the display where they are drawn
 //! (`Renderer::px`); the rest are noted.
 
-/// Corner radius for cards: toasts, the info overlay, the guardrail
-/// confirmation, and Harvest panels.
+/// Corner radius for cards: toasts, the guardrail confirmation, diff
+/// review, the context picker, and Harvest panels.
 pub const CARD_CORNER_RADIUS: f32 = 12.0;
 
-/// Corner radius for the shared modal frame (Settings, the command palette).
+/// Corner radius for the shared modal frame (Settings, the command palette,
+/// and dialogs).
 pub const MODAL_CORNER_RADIUS: f32 = 10.0;
 
 /// Corner radius for popup menus, dropdowns, and the find box.

@@ -4,11 +4,10 @@
 
 use super::*;
 use crate::agents::setup::{self, HookState, HookedAgent};
-use crate::ui::info_overlay::push_key_choice;
+use crate::ui::dialog::{ButtonRole, DialogBlock, DialogSpec};
 use std::path::Path;
 
 const APPLY_CHOICE: &str = "agent-hooks-apply";
-const CANCEL_CHOICE: &str = "agent-hooks-cancel";
 
 /// One settings file to rewrite.
 #[derive(Debug)]
@@ -232,75 +231,74 @@ impl App {
             Some(relative) => format!("~/{}", relative.display()),
             None => path.display().to_string(),
         };
-        let mut lines: Vec<String> = reason
-            .into_iter()
-            .flat_map(|reason| [reason.to_owned(), String::new()])
-            .collect();
-        lines.extend(if install {
-            vec![
-                "Termeric adds hooks that report when an agent is working, needs you,".into(),
-                "or is done. They do nothing when the agent runs elsewhere.".into(),
-                String::new(),
-            ]
+        let mut body: Vec<DialogBlock> = reason.into_iter().map(DialogBlock::text).collect();
+        body.push(DialogBlock::text(if install {
+            "Termeric adds hooks that report when an agent is working, needs you, or is done. They do nothing when the agent runs outside Termeric."
         } else {
-            vec![
-                "Termeric removes its hooks. Your other hooks and settings stay.".into(),
-                String::new(),
-            ]
-        });
-        for change in &changes {
-            lines.push(format!("  {}: {}", change.name, shown(&change.path)));
-        }
-        lines.push(String::new());
-        lines.push(
-            "Each file's previous version is kept beside it, ending in .termeric-backup.".into(),
-        );
+            "Termeric removes its hooks. Your other hooks and settings stay."
+        }));
+        body.push(DialogBlock::value(
+            changes
+                .iter()
+                .map(|change| format!("{}: {}", change.name, shown(&change.path)))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ));
+        body.push(DialogBlock::text(
+            "Each file's old version is kept beside it, ending in .termeric-backup.",
+        ));
         if install && changes.iter().any(|change| change.agent_id == "codex") {
-            lines.push("Codex asks you to trust the new hooks the next time it starts.".into());
+            body.push(DialogBlock::text(
+                "Codex asks you to trust the new hooks the next time it starts.",
+            ));
         }
-        lines.push(String::new());
-        let (title, key, action) = if install {
-            ("Set up agent status", 's', "Set Up")
+        let request_id = self.dialog.show(if install {
+            DialogSpec::confirm(
+                "Set up agent status?",
+                body,
+                APPLY_CHOICE,
+                "Set up",
+                ButtonRole::Suggested,
+            )
         } else {
-            ("Remove agent status hooks", 'r', "Remove")
-        };
-        let mut choices = Vec::new();
-        push_key_choice(&mut lines, &mut choices, APPLY_CHOICE, key, action);
-        push_key_choice(&mut lines, &mut choices, CANCEL_CHOICE, 'c', "Cancel");
-        let request_id = self.info_overlay.show_choices(title, lines, choices);
-        self.overlay_flow = Some(OverlayFlow::AgentHooks(PendingHookChange {
+            DialogSpec::confirm(
+                "Remove agent status hooks?",
+                body,
+                APPLY_CHOICE,
+                "Remove",
+                ButtonRole::Destructive,
+            )
+        });
+        self.dialog_flow = Some(DialogFlow::AgentHooks(PendingHookChange {
             request_id,
             install,
             changes,
         }));
     }
 
-    /// Answer the confirmation dialog. Returns whether the choice was its.
+    /// Answer the confirmation dialog. Returns whether the answer was its.
     pub(super) fn handle_agent_hook_choice(&mut self, request_id: u64, choice_id: &str) -> bool {
-        let pending = match self.overlay_flow.take() {
-            Some(OverlayFlow::AgentHooks(pending))
-                if pending.request_id == request_id
-                    && matches!(choice_id, APPLY_CHOICE | CANCEL_CHOICE) =>
+        let pending = match self.dialog_flow.take() {
+            Some(DialogFlow::AgentHooks(pending))
+                if pending.request_id == request_id && choice_id == APPLY_CHOICE =>
             {
                 pending
             }
             other => {
-                self.overlay_flow = other;
+                self.dialog_flow = other;
                 return false;
             }
         };
-        self.info_overlay.dismiss(request_id);
-        if choice_id == APPLY_CHOICE {
-            self.apply_hook_changes(pending);
-        }
+        self.dialog.dismiss(request_id);
+        self.apply_hook_changes(pending);
         true
     }
 
     /// Close the setup dialog without changing any file.
     pub(super) fn close_agent_hook_setup(&mut self) {
-        if let Some(OverlayFlow::AgentHooks(pending)) = &self.overlay_flow {
-            self.info_overlay.dismiss(pending.request_id);
-            self.overlay_flow = None;
+        if let Some(DialogFlow::AgentHooks(pending)) = &self.dialog_flow {
+            self.dialog.dismiss(pending.request_id);
+            self.dialog_flow = None;
         }
     }
 

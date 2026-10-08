@@ -427,7 +427,7 @@ impl App {
                             None
                             | Some(
                                 ModalLayer::Guardrail
-                                | ModalLayer::InfoOverlay
+                                | ModalLayer::Dialog
                                 | ModalLayer::DiffReview
                                 | ModalLayer::ContextPicker
                                 | ModalLayer::SproutMenu
@@ -801,7 +801,7 @@ impl App {
             }
             Some(
                 ModalLayer::Guardrail
-                | ModalLayer::InfoOverlay
+                | ModalLayer::Dialog
                 | ModalLayer::DiffReview
                 | ModalLayer::ContextPicker
                 | ModalLayer::SproutMenu

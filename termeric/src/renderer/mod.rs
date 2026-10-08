@@ -178,8 +178,8 @@ pub struct Renderer {
     agent_view: Option<std::sync::Arc<crate::ui::agent_view::scene::Scene>>,
     /// Width reserved on the right for the agent view.
     dock_width: f32,
-    // Bounded information/error/choice overlay state
-    info_overlay: Option<InfoOverlayInfo>,
+    /// The open dialog: messages, confirmations, and prompts.
+    dialog: Option<DialogInfo>,
     diff_review: Option<DiffReviewInfo>,
     context_picker: Option<ContextPickerInfo>,
     guardrail: Option<GuardrailInfo>,
@@ -339,7 +339,7 @@ impl Renderer {
             git_completions: None,
             agent_view: None,
             dock_width: 0.0,
-            info_overlay: None,
+            dialog: None,
             diff_review: None,
             context_picker: None,
             guardrail: None,
@@ -614,9 +614,8 @@ impl Renderer {
         self.git_completions = info;
     }
 
-    /// Set info overlay data for rendering
-    pub fn set_info_overlay(&mut self, info: Option<InfoOverlayInfo>) {
-        self.info_overlay = info;
+    pub fn set_dialog(&mut self, info: Option<DialogInfo>) {
+        self.dialog = info;
     }
 
     /// Update the toast stack for the current frame. Empty vec clears.

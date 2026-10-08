@@ -88,9 +88,10 @@ const GUARDRAIL_DIALOG: NodeId = NodeId(80);
 const GUARDRAIL_COMMAND: NodeId = NodeId(81);
 const GUARDRAIL_REASON: NodeId = NodeId(82);
 const GUARDRAIL_CONTEXT: NodeId = NodeId(83);
-const INFO_DIALOG: NodeId = NodeId(90);
-const INFO_TITLE: NodeId = NodeId(91);
-const INFO_STATUS: NodeId = NodeId(92);
+const DIALOG: NodeId = NodeId(90);
+const DIALOG_HEADING: NodeId = NodeId(91);
+const DIALOG_BODY: NodeId = NodeId(92);
+const DIALOG_LIST: NodeId = NodeId(93);
 const DIFF_DIALOG: NodeId = NodeId(100);
 const DIFF_TITLE: NodeId = NodeId(101);
 const DIFF_STATUS: NodeId = NodeId(102);
@@ -135,7 +136,7 @@ const WORKSPACE_ENTRY_BASE: u64 = 1 << 57;
 const SHORTCUTS_ENTRY_BASE: u64 = 1 << 56;
 const DOMAIN_ENTRY_BASE: u64 = 1 << 55;
 const GUARDRAIL_ACTION_BASE: u64 = 1 << 54;
-const INFO_ACTION_BASE: u64 = 1 << 53;
+const DIALOG_ACTION_BASE: u64 = 1 << 53;
 const DIFF_ACTION_BASE: u64 = 1 << 52;
 const CONTEXT_ACTION_BASE: u64 = 1 << 51;
 const TOAST_BASE: u64 = 1 << 50;
@@ -199,12 +200,10 @@ enum GuardrailSemanticTarget {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum InfoSemanticTarget {
-    Content(u64),
-    Input(u64),
-    Copy(u64),
-    Dismiss(u64),
-    Choice { request_id: u64, id: String },
+enum DialogSemanticTarget {
+    Field(u64),
+    Row { request_id: u64, id: String },
+    Button { request_id: u64, index: usize },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -308,7 +307,7 @@ pub(super) struct AccessibilityState {
     domain: NodeRegistry<String>,
     unicode: NodeRegistry<String>,
     guardrail: NodeRegistry<GuardrailSemanticTarget>,
-    info: NodeRegistry<InfoSemanticTarget>,
+    dialog: NodeRegistry<DialogSemanticTarget>,
     diff: NodeRegistry<DiffSemanticTarget>,
     context: NodeRegistry<ContextSemanticTarget>,
     harvest: NodeRegistry<HarvestSemanticTarget>,
@@ -332,7 +331,7 @@ impl Default for AccessibilityState {
             domain: NodeRegistry::new(DOMAIN_ENTRY_BASE),
             unicode: NodeRegistry::new(UNICODE_ENTRY_BASE),
             guardrail: NodeRegistry::new(GUARDRAIL_ACTION_BASE),
-            info: NodeRegistry::new(INFO_ACTION_BASE),
+            dialog: NodeRegistry::new(DIALOG_ACTION_BASE),
             diff: NodeRegistry::new(DIFF_ACTION_BASE),
             context: NodeRegistry::new(CONTEXT_ACTION_BASE),
             harvest: NodeRegistry::new(HARVEST_ACTION_BASE),
@@ -477,8 +476,9 @@ impl AccessibilityState {
         ) || self.guardrail.contains(node)
     }
 
-    fn is_info_node(&self, node: NodeId) -> bool {
-        matches!(node, INFO_DIALOG | INFO_TITLE | INFO_STATUS) || self.info.contains(node)
+    fn is_dialog_node(&self, node: NodeId) -> bool {
+        matches!(node, DIALOG | DIALOG_HEADING | DIALOG_BODY | DIALOG_LIST)
+            || self.dialog.contains(node)
     }
 
     fn is_diff_node(&self, node: NodeId) -> bool {
@@ -586,7 +586,7 @@ impl App {
         if let Some(layer) = self.top_modal_layer() {
             match layer {
                 ModalLayer::Guardrail => self.handle_guardrail_accessibility_action(request),
-                ModalLayer::InfoOverlay => self.handle_info_accessibility_action(request),
+                ModalLayer::Dialog => self.handle_dialog_accessibility_action(request),
                 ModalLayer::DiffReview => self.handle_diff_accessibility_action(request),
                 ModalLayer::ContextPicker => self.handle_context_accessibility_action(request),
                 ModalLayer::SproutMenu | ModalLayer::Cellar => {
@@ -1162,7 +1162,7 @@ impl App {
             focus,
         } = match layer {
             ModalLayer::Guardrail => self.guardrail_accessibility_snapshot(),
-            ModalLayer::InfoOverlay => self.info_accessibility_snapshot(),
+            ModalLayer::Dialog => self.dialog_accessibility_snapshot(),
             ModalLayer::DiffReview => self.diff_accessibility_snapshot(),
             ModalLayer::ContextPicker => self.context_accessibility_snapshot(),
             ModalLayer::SproutMenu => self.sprout_accessibility_snapshot(),
@@ -1200,7 +1200,7 @@ impl App {
         };
         let stale = match layer {
             ModalLayer::Guardrail => self.accessibility.is_guardrail_node(node),
-            ModalLayer::InfoOverlay => self.accessibility.is_info_node(node),
+            ModalLayer::Dialog => self.accessibility.is_dialog_node(node),
             ModalLayer::DiffReview => self.accessibility.is_diff_node(node),
             ModalLayer::ContextPicker => self.accessibility.is_context_node(node),
             // The two Harvest layers share their nodes, so only the lower one

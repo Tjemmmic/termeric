@@ -116,7 +116,7 @@ fn live_domain_drop_requires_request_scoped_confirmation_without_reading_content
     let mut app = App::new_headless_with_tabs(config);
     // Each dismissed confirmation must be gone before the next request,
     // without waiting out its fade.
-    app.info_overlay.set_reduced_motion(true);
+    app.dialog.set_reduced_motion(true);
     app.live_domain_authority = Some(crate::domain::DomainAuthority::Local);
     app.tabs
         .as_mut()
@@ -131,8 +131,8 @@ fn live_domain_drop_requires_request_scoped_confirmation_without_reading_content
 
     assert!(app.dropped_path_allowed(&source));
     assert!(app.handle_dropped_path(&source));
-    let first_request = app.info_overlay.request_id();
-    assert!(app.info_overlay.is_awaiting(first_request));
+    let first_request = app.dialog.request_id();
+    assert!(app.dialog.is_awaiting(first_request));
     assert!(app.pending_file_upload().is_some_and(|pending| {
         pending.request_id == first_request
             && pending.domain_id == "domain-upload"
@@ -140,26 +140,26 @@ fn live_domain_drop_requires_request_scoped_confirmation_without_reading_content
             && pending.name == "upload λ.bin"
             && pending.source_kind == FileUploadSourceKind::File { bytes: 32 }
     }));
-    app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
+    app.apply_dialog_action(crate::ui::dialog::DialogAction::Answer {
         request_id: first_request,
-        choice_id: "file-upload-cancel".into(),
+        id: crate::ui::dialog::CANCEL.into(),
     });
     assert!(app.pending_file_upload().is_none());
     assert!(app.active_file_upload.is_none());
 
     assert!(app.handle_dropped_path(&source));
-    let second_request = app.info_overlay.request_id();
-    app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
+    let second_request = app.dialog.request_id();
+    app.apply_dialog_action(crate::ui::dialog::DialogAction::Answer {
         request_id: first_request,
-        choice_id: "file-upload-confirm".into(),
+        id: "file-upload-confirm".into(),
     });
     assert!(
         app.pending_file_upload().is_some(),
         "stale confirmation acted"
     );
-    app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
+    app.apply_dialog_action(crate::ui::dialog::DialogAction::Answer {
         request_id: second_request,
-        choice_id: "file-upload-confirm".into(),
+        id: "file-upload-confirm".into(),
     });
     assert!(app.pending_file_upload().is_none());
     assert!(app.active_file_upload.is_none());
@@ -168,21 +168,21 @@ fn live_domain_drop_requires_request_scoped_confirmation_without_reading_content
     let directory = temp.path().join("project λ");
     std::fs::create_dir(&directory).unwrap();
     assert!(app.handle_dropped_path(&directory));
-    let directory_request = app.info_overlay.request_id();
+    let directory_request = app.dialog.request_id();
     assert!(app.pending_file_upload().is_some_and(|pending| {
         pending.request_id == directory_request
             && pending.name == "project λ"
             && pending.source_kind == FileUploadSourceKind::Directory
     }));
-    app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
+    app.apply_dialog_action(crate::ui::dialog::DialogAction::Answer {
         request_id: directory_request,
-        choice_id: "file-upload-cancel".into(),
+        id: crate::ui::dialog::CANCEL.into(),
     });
     assert!(app.pending_file_upload().is_none());
 }
 
 #[test]
-fn c_cancels_the_live_domain_upload_confirmation_instead_of_copying_it() {
+fn letter_keys_neither_answer_nor_copy_the_upload_confirmation() {
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("upload.bin");
     std::fs::write(&source, b"never sent").unwrap();
@@ -206,13 +206,22 @@ fn c_cancels_the_live_domain_upload_confirmation_instead_of_copying_it() {
     });
 
     assert!(app.handle_dropped_path(&source));
-    let request_id = app.info_overlay.request_id();
-    assert!(app.info_overlay.is_awaiting(request_id));
-    app.handle_info_overlay_key(&winit::keyboard::Key::Character("c".into()), false);
-
-    assert!(!app.info_overlay.is_awaiting(request_id));
-    assert!(app.pending_file_upload().is_none());
+    let request_id = app.dialog.request_id();
+    assert!(app.dialog.is_awaiting(request_id));
+    for letter in ["c", "u", "y"] {
+        app.handle_dialog_key(&winit::keyboard::Key::Character(letter.into()), false);
+    }
+    assert!(app.dialog.is_awaiting(request_id));
+    assert!(app.pending_file_upload().is_some());
     assert_eq!(memory.lock().unwrap().clipboard, None);
+
+    // Escape is the way out.
+    app.handle_dialog_key(
+        &winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape),
+        false,
+    );
+    assert!(!app.dialog.is_awaiting(request_id));
+    assert!(app.pending_file_upload().is_none());
 }
 
 fn kitty_send_request(id: &str) -> termeric_core::KittyFileTransferCommand {
@@ -271,7 +280,7 @@ fn drops_reach_agent_panes_but_program_transfers_follow_each_panes_launch() {
         agent_pane,
         "agent-in-shell-tab"
     ));
-    assert!(!app.info_overlay.is_active());
+    assert!(!app.dialog.is_active());
 
     // The agent of an agent tab takes a drop and is refused a transfer; a
     // shell split into that tab is accepted for both, though its tab is not.
@@ -307,7 +316,7 @@ fn drops_reach_agent_panes_but_program_transfers_follow_each_panes_launch() {
         agent_tab_pane,
         "agent-tab"
     ));
-    assert!(!app.info_overlay.is_active());
+    assert!(!app.dialog.is_active());
     let panes = &mut app.tabs.as_mut().unwrap().active_tab_mut().unwrap().panes;
     panes.adopt_primary_shell(crate::test_support::sleeping_shell());
     let shell_pane = panes
@@ -352,7 +361,7 @@ fn serial_tabs_refuse_drops_and_program_transfers() {
         event: TerminalEvent::KittyFileTransfer(kitty_send_request("serial")),
     });
     assert!(app.kitty_file_transfers.pending.is_none());
-    assert!(!app.info_overlay.is_active());
+    assert!(!app.dialog.is_active());
 }
 
 #[test]
@@ -364,7 +373,7 @@ fn kitty_download_consent_is_request_scoped_and_terminal_type_gated() {
     let mut app = App::new_headless_with_tabs(config);
     // Each dismissed confirmation must be gone before the next request,
     // without waiting out its fade.
-    app.info_overlay.set_reduced_motion(true);
+    app.dialog.set_reduced_motion(true);
     let tab_id = app.tabs.as_ref().unwrap().active_tab_id().unwrap();
     let origin = TerminalEventOrigin {
         tab_id,
@@ -376,19 +385,14 @@ fn kitty_download_consent_is_request_scoped_and_terminal_type_gated() {
         origin,
         event: TerminalEvent::KittyFileTransfer(request.clone()),
     });
-    let confirmation = app.info_overlay.request_id();
-    assert!(app.info_overlay.is_awaiting(confirmation));
-    // Pointer hit-testing, hover, and focus follow each choice's source line,
-    // so every choice must sit on the line that shows its shortcut.
-    for choice in app.info_overlay.choices() {
-        let line = &app.info_overlay.lines()[choice.source_line];
-        let key = choice.shortcut.unwrap().to_ascii_uppercase();
-        assert!(
-            line.starts_with(&format!("[{key}]")),
-            "{} sits on {line:?}",
-            choice.id
-        );
-    }
+    let confirmation = app.dialog.request_id();
+    assert!(app.dialog.is_awaiting(confirmation));
+    // Deny is where focus starts, so a stray Enter refuses.
+    assert_eq!(
+        app.dialog.focus(),
+        Some(crate::ui::dialog::DialogFocus::Button(0))
+    );
+    assert_eq!(app.dialog.buttons()[0].label, "Deny");
     assert!(
         app.kitty_file_transfers
             .pending
@@ -401,14 +405,14 @@ fn kitty_download_consent_is_request_scoped_and_terminal_type_gated() {
                     && pending.reply_uses_8bit_controls
             })
     );
-    app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
+    app.apply_dialog_action(crate::ui::dialog::DialogAction::Answer {
         request_id: confirmation.wrapping_add(1),
-        choice_id: "kitty-download-allow".into(),
+        id: "kitty-download-allow".into(),
     });
     assert!(app.kitty_file_transfers.pending.is_some());
-    app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
+    app.apply_dialog_action(crate::ui::dialog::DialogAction::Answer {
         request_id: confirmation,
-        choice_id: "kitty-download-deny".into(),
+        id: crate::ui::dialog::CANCEL.into(),
     });
     assert!(app.kitty_file_transfers.pending.is_none());
     assert!(app.kitty_file_transfers.active.is_empty());
@@ -420,10 +424,13 @@ fn kitty_download_consent_is_request_scoped_and_terminal_type_gated() {
         event: TerminalEvent::KittyFileTransfer(stale_request),
     });
     assert!(app.kitty_file_transfers.pending.is_some());
-    let replacement = app.info_overlay.show("Replacement", vec!["content".into()]);
+    let replacement = app.dialog.show(crate::ui::dialog::DialogSpec::message(
+        "Replacement",
+        vec![],
+    ));
     assert!(app.prune_stale_kitty_file_transfers());
     assert!(app.kitty_file_transfers.pending.is_none());
-    app.info_overlay.dismiss(replacement);
+    app.dialog.dismiss(replacement);
 
     app.tabs
         .as_mut()
@@ -439,7 +446,7 @@ fn kitty_download_consent_is_request_scoped_and_terminal_type_gated() {
         origin,
         event: TerminalEvent::KittyFileTransfer(serial_request),
     });
-    assert!(!app.info_overlay.is_active());
+    assert!(!app.dialog.is_active());
     assert!(app.kitty_file_transfers.pending.is_none());
     assert!(app.kitty_file_transfers.active.is_empty());
 }
@@ -475,7 +482,7 @@ fn kitty_upload_collects_exact_paths_before_request_scoped_consent() {
         )),
     });
     assert!(app.kitty_file_transfers.pending_upload.is_some());
-    assert!(!app.info_overlay.is_active());
+    assert!(!app.dialog.is_active());
 
     app.handle_terminal_event(RoutedTerminalEvent {
         origin,
@@ -486,7 +493,7 @@ fn kitty_upload_collects_exact_paths_before_request_scoped_consent() {
             None,
         )),
     });
-    assert!(!app.info_overlay.is_active());
+    assert!(!app.dialog.is_active());
     app.handle_terminal_event(RoutedTerminalEvent {
         origin,
         event: TerminalEvent::KittyFileTransfer(command(
@@ -497,18 +504,15 @@ fn kitty_upload_collects_exact_paths_before_request_scoped_consent() {
         )),
     });
 
-    let request_id = app.info_overlay.request_id();
-    assert!(app.info_overlay.is_awaiting(request_id));
-    assert_eq!(
-        app.info_overlay.title(),
-        "Allow terminal to read host files?"
-    );
-    let notice = app.info_overlay.lines().join("\n");
+    let request_id = app.dialog.request_id();
+    assert!(app.dialog.is_awaiting(request_id));
+    assert!(app.dialog.kind().is_alert());
+    let notice = app.dialog_text();
     assert!(notice.contains("/tmp/approved-one.txt"));
     assert!(notice.contains("approved-two.txt"));
-    app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
+    app.apply_dialog_action(crate::ui::dialog::DialogAction::Answer {
         request_id,
-        choice_id: "kitty-upload-deny".into(),
+        id: crate::ui::dialog::CANCEL.into(),
     });
     assert!(app.kitty_file_transfers.pending_upload.is_none());
     assert!(app.kitty_file_transfers.active_uploads.is_empty());
@@ -524,7 +528,7 @@ fn kitty_transfer_confirmation_never_replies_to_a_replacement_owner() {
         },
         kitty_capture_command(termeric_core::KittyFileTransferAction::Send),
     );
-    let request_id = app.info_overlay.request_id();
+    let request_id = app.dialog.request_id();
     assert!(app.kitty_file_transfers.pending.is_some());
     split_harvest_capture_owner(&mut app, directory.path());
     app.close_pane_for(Requester::Control, entry.source.tab_id as u64, 0)

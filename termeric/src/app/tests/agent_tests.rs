@@ -838,10 +838,10 @@ fn agent_changes_are_listed_reviewed_staged_and_reverted_for_their_terminal() {
         "one\nTWO\n",
         "nothing is reverted before the person confirms"
     );
-    let confirmation = app.info_overlay.request_id();
-    app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
+    let confirmation = app.dialog.request_id();
+    app.apply_dialog_action(crate::ui::dialog::DialogAction::Answer {
         request_id: confirmation,
-        choice_id: "agent-change-revert".into(),
+        id: "agent-change-revert".into(),
     });
     finish_job(&mut app);
     assert_eq!(latest_toast(&app), Some("Reverted kept.txt"));
@@ -995,7 +995,7 @@ fn a_transcript_can_be_stopped_after_its_agent_exits() {
         }),
     );
     app.toggle_transcript();
-    assert_eq!(app.info_overlay.title(), "Transcript Started");
+    assert_eq!(app.dialog.title(), "Recording a transcript");
 
     // The agent exits while its transcript records.
     set_agent(&mut app, None);
@@ -1005,7 +1005,7 @@ fn a_transcript_can_be_stopped_after_its_agent_exits() {
         "a recording can still be stopped"
     );
     app.toggle_transcript();
-    assert_eq!(app.info_overlay.title(), "Transcript Stopped");
+    assert_eq!(app.dialog.title(), "Transcript saved");
     assert!(
         app.unavailable_agent_commands()
             .contains(&"core.toggle-transcript".to_string()),
@@ -1198,9 +1198,9 @@ fn plugin_spawn_failure_is_visible_without_a_preflight_process() {
         env: HashMap::new(),
     });
 
-    assert!(app.info_overlay.is_active());
-    assert!(app.info_overlay.title().contains("Failed to launch"));
-    assert!(!app.info_overlay.lines().is_empty());
+    assert!(app.dialog.is_active());
+    assert_eq!(app.dialog.kind(), crate::ui::dialog::DialogKind::Error);
+    assert!(!app.dialog.body().is_empty());
     assert_eq!(app.tabs.as_ref().unwrap().count(), 0);
 }
 
@@ -1467,10 +1467,10 @@ done
     app.start_supervisor();
     // Whether status hooks need setting up depends on this machine's own
     // agent settings; the dialog offering it is not under test here.
-    if app.info_overlay.is_awaiting_current() {
-        assert_eq!(app.info_overlay.title(), "Set up agent status");
-        let request = app.info_overlay.request_id();
-        app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Dismiss {
+    if app.dialog.is_awaiting_current() {
+        assert_eq!(app.dialog.title(), "Set up agent status?");
+        let request = app.dialog.request_id();
+        app.apply_dialog_action(crate::ui::dialog::DialogAction::Close {
             request_id: request,
         });
     }
@@ -1730,9 +1730,9 @@ fn codex_supervises_as_an_agent_view_conversation() {
     app.tabs = Some(tabs);
 
     app.start_supervisor();
-    if app.info_overlay.is_awaiting_current() {
-        let request = app.info_overlay.request_id();
-        app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Dismiss {
+    if app.dialog.is_awaiting_current() {
+        let request = app.dialog.request_id();
+        app.apply_dialog_action(crate::ui::dialog::DialogAction::Close {
             request_id: request,
         });
     }
@@ -1806,7 +1806,7 @@ fn earlier_claude_conversations_come_from_the_configured_directory() {
 }
 
 #[test]
-fn c_cancels_the_agent_status_setup_instead_of_copying_it() {
+fn letter_keys_leave_the_agent_status_setup_and_escape_cancels_it() {
     use std::os::unix::fs::PermissionsExt;
     let temp = tempfile::tempdir().unwrap();
     let program = temp.path().join("claude");
@@ -1838,13 +1838,21 @@ fn c_cancels_the_agent_status_setup_instead_of_copying_it() {
     ]));
 
     app.open_agent_hook_setup(true);
-    let request_id = app.info_overlay.request_id();
-    assert!(app.info_overlay.is_awaiting(request_id));
-    assert!(matches!(app.overlay_flow, Some(OverlayFlow::AgentHooks(_))));
-    app.handle_info_overlay_key(&winit::keyboard::Key::Character("c".into()), false);
+    let request_id = app.dialog.request_id();
+    assert!(app.dialog.is_awaiting(request_id));
+    assert!(matches!(app.dialog_flow, Some(DialogFlow::AgentHooks(_))));
+    for letter in ["c", "s"] {
+        app.handle_dialog_key(&winit::keyboard::Key::Character(letter.into()), false);
+    }
+    assert!(app.dialog.is_awaiting(request_id));
+    assert!(!config_dir.join("settings.json").exists());
+    app.handle_dialog_key(
+        &winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape),
+        false,
+    );
 
-    assert!(!app.info_overlay.is_awaiting(request_id));
-    assert!(app.overlay_flow.is_none());
+    assert!(!app.dialog.is_awaiting(request_id));
+    assert!(app.dialog_flow.is_none());
     assert_eq!(memory.lock().unwrap().clipboard, None);
     assert!(!config_dir.join("settings.json").exists());
 }
@@ -1852,8 +1860,8 @@ fn c_cancels_the_agent_status_setup_instead_of_copying_it() {
 #[test]
 fn a_plugin_that_exits_at_once_is_named_from_the_agent_catalog() {
     for (plugin_id, title) in [
-        ("opencode", "OpenCode failed to start"),
-        ("unlisted-plugin", "unlisted-plugin failed to start"),
+        ("opencode", "OpenCode didn't start"),
+        ("unlisted-plugin", "unlisted-plugin didn't start"),
     ] {
         let mut app = App::new_headless(Config::default()).unwrap();
         let mut tabs = TabManager::for_test(ShellConfig::default());
@@ -1871,7 +1879,7 @@ fn a_plugin_that_exits_at_once_is_named_from_the_agent_catalog() {
         app.tabs = Some(tabs);
 
         let deadline = Instant::now() + Duration::from_secs(3);
-        while !app.info_overlay.is_awaiting_current() {
+        while !app.dialog.is_awaiting_current() {
             assert!(
                 Instant::now() < deadline,
                 "{plugin_id} quick exit not shown"
@@ -1879,6 +1887,6 @@ fn a_plugin_that_exits_at_once_is_named_from_the_agent_catalog() {
             app.process_pty_events();
             std::thread::yield_now();
         }
-        assert_eq!(app.info_overlay.title(), title);
+        assert_eq!(app.dialog.title(), title);
     }
 }

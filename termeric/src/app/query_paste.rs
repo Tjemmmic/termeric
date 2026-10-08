@@ -155,9 +155,9 @@ impl App {
             TextTarget::TabRename => self.insert_tab_rename_text(text),
             TextTarget::ShortcutsFilter => self.shortcuts_panel.insert_filter_text(text),
             TextTarget::SettingsFilter => self.settings_panel.insert_filter_text(text),
-            TextTarget::InfoOverlayInput => {
-                let request_id = self.info_overlay.request_id();
-                self.info_overlay.insert_input_text(request_id, text)
+            TextTarget::DialogField => {
+                let request_id = self.dialog.request_id();
+                self.dialog.insert_field_text(request_id, text)
             }
             TextTarget::Search => self.insert_search_text(text),
             TextTarget::Blocked | TextTarget::Terminal | TextTarget::AgentView => unreachable!(),
@@ -178,6 +178,7 @@ mod tests {
     use super::*;
     use crate::app::palette_input::PaletteModal;
     use crate::input::keybindings::{BindableAction, KeyChord};
+    use crate::ui::dialog::{DialogSpec, FieldSpec};
     use crate::ui::text_input::TextInputEdit;
     use winit::keyboard::{Key, NamedKey};
 
@@ -233,9 +234,9 @@ mod tests {
     /// A modal opened above the field under test.
     #[derive(Clone, Copy, Debug)]
     enum Higher {
-        InfoOverlay,
-        /// An info overlay with a focused text field, as the font editors show.
-        InfoOverlayInput,
+        Dialog,
+        /// A dialog with a focused text field, as the font editors show.
+        DialogField,
         Settings,
         Shortcuts,
         Palette,
@@ -248,19 +249,17 @@ mod tests {
     impl Higher {
         fn open(self, app: &mut App) {
             match self {
-                Self::InfoOverlay => {
-                    app.info_overlay.show("Notice", vec![]);
+                Self::Dialog => {
+                    app.dialog.show(DialogSpec::message("Notice", vec![]));
                 }
-                Self::InfoOverlayInput => {
-                    app.info_overlay.show_input(
-                        "Rule",
-                        vec!["Rule: ".into()],
-                        0,
-                        "Rule: ",
-                        "",
-                        64,
-                        Vec::new(),
-                    );
+                Self::DialogField => {
+                    app.dialog.show(DialogSpec::prompt(
+                        "Add rule",
+                        vec![],
+                        FieldSpec::new("Rule", "", 64),
+                        "save",
+                        "Add",
+                    ));
                 }
                 Self::Settings => app.settings_panel.toggle(),
                 Self::Shortcuts => app.shortcuts_panel.open(),
@@ -277,10 +276,10 @@ mod tests {
         /// pastes.
         fn query(self, app: &mut App) -> Option<String> {
             match self {
-                Self::InfoOverlay | Self::Recording => None,
-                Self::InfoOverlayInput => {
-                    let request_id = app.info_overlay.request_id();
-                    app.info_overlay.input_value(request_id).map(str::to_owned)
+                Self::Dialog | Self::Recording => None,
+                Self::DialogField => {
+                    let request_id = app.dialog.request_id();
+                    app.dialog.field_value(request_id).map(str::to_owned)
                 }
                 Self::Settings => Some(settings_filter(app)),
                 Self::Shortcuts => Some(shortcuts_filter(app)),
@@ -552,8 +551,8 @@ mod tests {
                 assert_eq!(app.workspace_panel.entries()[0].display_name, "Roots");
             },
             &[
-                Higher::InfoOverlay,
-                Higher::InfoOverlayInput,
+                Higher::Dialog,
+                Higher::DialogField,
                 Higher::Settings,
                 Higher::Shortcuts,
                 Higher::Palette,
@@ -650,8 +649,8 @@ mod tests {
             },
             |app| assert_eq!(settings_filter(app), "settings only"),
             &[
-                Higher::InfoOverlay,
-                Higher::InfoOverlayInput,
+                Higher::Dialog,
+                Higher::DialogField,
                 Higher::Shortcuts,
                 Higher::Palette,
                 Higher::Unicode,
@@ -739,8 +738,8 @@ mod tests {
             },
             |app| assert_eq!(shortcuts_filter(app), "filter"),
             &[
-                Higher::InfoOverlay,
-                Higher::InfoOverlayInput,
+                Higher::Dialog,
+                Higher::DialogField,
                 Higher::Palette,
                 Higher::Unicode,
                 Higher::Domains,
@@ -791,7 +790,7 @@ mod tests {
                     .open(crate::session::listing::WorkspaceListing::workspaces())
             },
             |app| {
-                app.info_overlay.show("Notice", vec![]);
+                app.dialog.show(DialogSpec::message("Notice", vec![]));
             },
         ] {
             let mut app = App::new_headless(Config::default()).unwrap();
@@ -824,7 +823,7 @@ mod tests {
         let mut app = App::new_headless(Config::default()).unwrap();
         app.command_palette.open();
         let rebound = assert_paste_binding_follows_registry(&mut app);
-        app.info_overlay.show("Notice", vec![]);
+        app.dialog.show(DialogSpec::message("Notice", vec![]));
         assert!(!app.handle_query_paste_key(&rebound));
         assert!(app.clipboard_paste_blocked());
         assert!(!app.paste_clipboard_payload("hidden"));

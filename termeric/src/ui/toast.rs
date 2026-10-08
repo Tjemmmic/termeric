@@ -3,8 +3,8 @@
 //!
 //! Used for "something happened, you should know, but don't stop what you're
 //! doing" feedback: saves, deletes, font fallbacks, image evictions, etc.
-//! Blocking errors that demand acknowledgement still go through
-//! `info_overlay` (the full modal card).
+//! Blocking errors that demand acknowledgement still go through a
+//! `ui::dialog::Dialog`.
 
 use crate::ui::geometry::Bounds;
 use std::collections::VecDeque;

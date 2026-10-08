@@ -18,6 +18,7 @@ mod context_picker;
 mod control_actions;
 mod copy_mode;
 mod desktop_io;
+mod dialog;
 mod diff_review;
 mod domain_picker;
 mod event_loop;
@@ -29,7 +30,6 @@ mod git_completion;
 mod guardrail_input;
 mod harvest_actions;
 mod ime;
-mod info_overlay;
 mod kitty_file_transfer;
 mod live_domain_control;
 mod modal_layer;
@@ -113,9 +113,9 @@ use crate::terminal::url::{UrlCache, UrlDetector};
 use crate::ui::command_palette::PaletteOwner;
 use crate::ui::command_palette::{CommandPalette, PaletteResult};
 use crate::ui::context_picker::ContextPicker;
+use crate::ui::dialog::Dialog;
 use crate::ui::diff_review::DiffReviewOverlay;
 use crate::ui::domain_picker::DomainPicker;
-use crate::ui::info_overlay::InfoOverlay;
 use crate::ui::settings::{SettingsAction, SettingsPanel};
 use crate::ui::shortcuts_panel::{ShortcutsAction, ShortcutsPanel};
 use crate::ui::text::plural;
@@ -466,9 +466,9 @@ struct PendingUnicodePicker {
     terminal: crate::tabs::TerminalIdentity,
 }
 
-/// A multi-step flow in the info overlay. There is at most one, so starting
-/// a flow ends whichever ran before.
-enum OverlayFlow {
+/// A multi-step flow through dialogs. There is at most one, so starting a
+/// flow ends whichever ran before.
+enum DialogFlow {
     /// Navigation and confirmation for installed third-party plugins.
     RuntimePlugins(PendingRuntimePluginManagement),
     /// Navigation and edits of Unicode-range font overrides.
@@ -816,8 +816,8 @@ pub struct App {
     domain_picker: DomainPicker,
     /// Shortcuts panel (standalone centered modal)
     shortcuts_panel: ShortcutsPanel,
-    /// Bounded information, error, and choice overlay
-    info_overlay: InfoOverlay,
+    /// Messages, confirmations, and prompts: the one modal dialog
+    dialog: Dialog,
     /// Transient toast notifications stacked in the bottom-right
     toasts: crate::ui::toast::ToastManager,
     /// Diff review overlay
@@ -826,8 +826,8 @@ pub struct App {
     context_picker: ContextPicker,
     /// Guardrail confirmation overlay
     guardrail: GuardrailOverlay,
-    /// The multi-step flow the info overlay is running, if any.
-    overlay_flow: Option<OverlayFlow>,
+    /// The multi-step flow running through dialogs, if any.
+    dialog_flow: Option<DialogFlow>,
     /// Where third-party plugins and their registry live, `None` without a
     /// configuration directory; tests point this at a temporary directory.
     runtime_plugin_paths: Option<crate::plugin::runtime::PluginPaths>,
@@ -1125,13 +1125,13 @@ impl App {
             shortcuts_panel: ShortcutsPanel::new(),
             #[cfg(test)]
             headless_metrics: UiMetrics::HEADLESS,
-            info_overlay: InfoOverlay::new(),
+            dialog: Dialog::new(),
             toasts: crate::ui::toast::ToastManager::new(),
             diff_review: DiffReviewOverlay::new(),
             context_picker: ContextPicker::new(),
             guardrail: GuardrailOverlay::new(),
 
-            overlay_flow: None,
+            dialog_flow: None,
             runtime_plugin_paths,
             agent_change_job: None,
             agent_change_list: None,
@@ -1408,28 +1408,34 @@ impl App {
                 .map_or(plugin_id.as_str(), |agent| agent.name.as_str())
                 .to_owned();
 
-            let mut overlay_lines = vec![
-                format!("{} exited immediately.", display_name),
-                String::new(),
-            ];
-
+            use crate::ui::dialog::{DialogBlock, DialogSpec};
+            let mut body = vec![DialogBlock::text("It closed right after it started.")];
             if output_lines.is_empty() {
-                overlay_lines.push("No output was captured.".into());
-                overlay_lines.push("Check that the tool is installed and".into());
-                overlay_lines.push("configured correctly.".into());
+                body.push(DialogBlock::text(
+                    "It printed nothing. Check that it's installed and set up.",
+                ));
             } else {
-                overlay_lines.push("Output:".into());
-                // Show up to 8 lines of output
-                for line in output_lines.iter().take(8) {
-                    overlay_lines.push(format!("  {}", line));
-                }
-                if output_lines.len() > 8 {
-                    overlay_lines.push(format!("  ... ({} more lines)", output_lines.len() - 8));
+                const SHOWN_LINES: usize = 8;
+                body.push(DialogBlock::text("Its last output:"));
+                body.push(DialogBlock::value(
+                    output_lines
+                        .iter()
+                        .take(SHOWN_LINES)
+                        .map(String::as_str)
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                ));
+                if output_lines.len() > SHOWN_LINES {
+                    body.push(DialogBlock::text(format!(
+                        "{} more lines aren't shown.",
+                        output_lines.len() - SHOWN_LINES
+                    )));
                 }
             }
-
-            self.info_overlay
-                .show(format!("{} failed to start", display_name), overlay_lines);
+            self.dialog.show(DialogSpec::error(
+                format!("{display_name} didn't start"),
+                body,
+            ));
             self.request_redraw(RedrawReason::TerminalOutput);
             log::warn!(
                 "Plugin '{plugin_id}' exited within {} seconds of launch",
@@ -1622,8 +1628,8 @@ impl App {
     fn pending_font_range_management(
         &self,
     ) -> Option<&font_range_editor::PendingFontRangeManagement> {
-        match &self.overlay_flow {
-            Some(OverlayFlow::FontRanges(pending)) => Some(pending),
+        match &self.dialog_flow {
+            Some(DialogFlow::FontRanges(pending)) => Some(pending),
             _ => None,
         }
     }
@@ -1631,15 +1637,15 @@ impl App {
     fn pending_font_feature_management(
         &self,
     ) -> Option<&font_feature_editor::PendingFontFeatureManagement> {
-        match &self.overlay_flow {
-            Some(OverlayFlow::FontFeatures(pending)) => Some(pending),
+        match &self.dialog_flow {
+            Some(DialogFlow::FontFeatures(pending)) => Some(pending),
             _ => None,
         }
     }
 
     fn pending_file_upload(&self) -> Option<&PendingFileUpload> {
-        match &self.overlay_flow {
-            Some(OverlayFlow::FileUpload(pending)) => Some(pending),
+        match &self.dialog_flow {
+            Some(DialogFlow::FileUpload(pending)) => Some(pending),
             _ => None,
         }
     }
@@ -1836,7 +1842,7 @@ impl App {
             }
         }
 
-        renderer.set_info_overlay(chrome.info_overlay);
+        renderer.set_dialog(chrome.dialog);
         renderer.set_toasts(chrome.toasts);
         renderer.set_diff_review(chrome.diff_review);
         renderer.set_context_picker(chrome.context_picker);
@@ -2753,7 +2759,7 @@ impl App {
                 self.request_redraw(RedrawReason::Action);
             }
             Action::ShowAbout => {
-                self.info_overlay.show_about();
+                self.show_about();
             }
             Action::ToggleHarvestCellar => {
                 if let Some(harvest) = &mut self.harvest {

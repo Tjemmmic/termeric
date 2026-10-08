@@ -197,26 +197,6 @@ pub struct DialogInfo {
     pub mouse_pressed: bool,
 }
 
-/// Bounded information/error/choice overlay data for rendering.
-#[derive(Debug, Clone)]
-pub struct InfoOverlayInfo {
-    pub title: String,
-    pub visible_lines: Vec<(usize, String)>,
-    pub choices: Vec<crate::ui::info_overlay::InfoOverlayChoice>,
-    pub input: Option<crate::ui::info_overlay::InfoOverlayInputInfo>,
-    pub focus: Option<crate::ui::info_overlay::InfoOverlayFocus>,
-    pub total_lines: usize,
-    pub scroll_offset: usize,
-    pub horizontal_offset: usize,
-    pub awaiting: bool,
-    pub animation: f32,
-    pub layout: crate::ui::info_overlay::InfoOverlayLayout,
-    /// Current mouse position (for hover effects)
-    pub mouse_pos: Option<(f32, f32)>,
-    /// Whether the mouse is currently pressed (for click effects)
-    pub mouse_pressed: bool,
-}
-
 /// Info for rendering the diff review overlay
 #[derive(Debug, Clone)]
 pub struct DiffReviewInfo {

@@ -6,7 +6,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ModalLayer {
     Guardrail,
-    InfoOverlay,
+    Dialog,
     DiffReview,
     ContextPicker,
     SproutMenu,
@@ -26,7 +26,7 @@ impl ModalLayer {
     /// Every layer, the one on top first.
     pub const INPUT_PRIORITY: [ModalLayer; 15] = [
         ModalLayer::Guardrail,
-        ModalLayer::InfoOverlay,
+        ModalLayer::Dialog,
         ModalLayer::DiffReview,
         ModalLayer::ContextPicker,
         ModalLayer::SproutMenu,

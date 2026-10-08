@@ -1,10 +1,9 @@
-//! What the centred content cards (the info overlay, diff review, and the
+//! What the centred content cards (diff review and the
 //! context picker) share: the card geometry around their content and the
 //! two-axis viewport over scrolled text.
 
 use super::constants::CONTENT_CHAR_SCALE;
 use super::geometry::Bounds;
-use super::scroll::reveal_row;
 
 /// Geometry of a centred card showing rows of content under a title and
 /// above a row of buttons with a hint line. Rendering, hit testing, viewport
@@ -28,13 +27,6 @@ pub struct TextCard {
     /// The hint line half a cell below the button row, inside the padding;
     /// its text is centred in it.
     pub hint: Bounds,
-    /// The rule a cell and a half below the title's top, across the card
-    /// inside the padding. Rules have no height of their own: the renderer
-    /// draws them a border width thick from their top edge.
-    pub title_rule: Bounds,
-    /// The rule half a cell below the content, across the card like the
-    /// title's.
-    pub content_rule: Bounds,
 }
 
 impl TextCard {
@@ -89,7 +81,6 @@ impl TextCard {
 
         let button_y = content_y + content_height + cell_height * 1.3;
         let button_height = cell_height * 1.8;
-        let rule_width = (card_width - padding * 2.0).max(1.0);
 
         Self {
             card: Bounds::new(card_x, card_y, card_width, card_height),
@@ -109,18 +100,6 @@ impl TextCard {
                 button_y + button_height + cell_height * 0.5,
                 card_width - padding * 2.0,
                 cell_height,
-            ),
-            title_rule: Bounds::new(
-                content_x,
-                card_y + padding + cell_height * 1.5,
-                rule_width,
-                0.0,
-            ),
-            content_rule: Bounds::new(
-                content_x,
-                content_y + content_height + cell_height * 0.5,
-                rule_width,
-                0.0,
             ),
         }
     }
@@ -225,18 +204,6 @@ impl TextViewport {
         }
     }
 
-    /// Scroll as little as possible to show `row`.
-    pub fn reveal_row(&mut self, row: usize) {
-        self.row = reveal_row(self.row, row, self.rows);
-        self.clamp();
-    }
-
-    /// Scroll as little as possible to show `column`.
-    pub fn reveal_column(&mut self, column: usize) {
-        self.column = reveal_row(self.column, column, self.columns);
-        self.clamp();
-    }
-
     /// The first row in view.
     pub fn row(&self) -> usize {
         self.row
@@ -290,9 +257,8 @@ mod tests {
         assert!(!viewport.scroll_by(1, 1), "already at the far corner");
         assert!(viewport.scroll_to(Some(0), None));
         assert_eq!((viewport.row(), viewport.column()), (0, 10));
-        viewport.reveal_row(25);
-        viewport.reveal_column(2);
-        assert_eq!((viewport.row(), viewport.column()), (16, 2));
+        assert!(viewport.scroll_to(Some(25), Some(2)));
+        assert_eq!((viewport.row(), viewport.column()), (25, 2));
         viewport.set_content(12, 8);
         assert_eq!((viewport.row(), viewport.column()), (2, 0));
         viewport.reset(3, 3);
@@ -332,35 +298,6 @@ mod tests {
         assert_eq!(closed.card.y, open.card.y - 10.0);
         assert_eq!(closed.button_y, open.button_y - 10.0);
         assert_eq!(closed.hint.y, open.hint.y - 10.0);
-        assert_eq!(closed.title_rule.y, open.title_rule.y - 10.0);
-        assert_eq!(closed.content_rule.y, open.content_rule.y - 10.0);
-    }
-
-    #[test]
-    fn the_rules_part_the_title_content_and_buttons_inside_the_padding() {
-        for (window_width, window_height) in [(300.0, 200.0), (1_600.0, 1_000.0)] {
-            let card = TextCard::calculate(
-                window_width,
-                window_height,
-                10.0,
-                20.0,
-                1.0,
-                30.0,
-                80,
-                20,
-                380.0,
-                12,
-            );
-            assert_eq!(card.title_rule.y, card.card.y + card.padding + 30.0);
-            assert!(card.title_rule.y < card.content.y);
-            assert_eq!(card.content_rule.y, card.content.bottom() + 10.0);
-            assert!(card.content_rule.y < card.button_y);
-            for rule in [card.title_rule, card.content_rule] {
-                assert_eq!(rule.x, card.card.x + card.padding);
-                assert_eq!(rule.right(), card.card.right() - card.padding);
-                assert_eq!(rule.height, 0.0);
-            }
-        }
     }
 
     #[test]

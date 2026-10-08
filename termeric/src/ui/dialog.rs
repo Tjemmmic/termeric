@@ -9,7 +9,7 @@
 
 mod layout;
 
-pub use layout::{BlockLayout, DialogHit, DialogLayout, DialogMetrics, FieldLayout};
+pub use layout::{DialogHit, DialogLayout, DialogMetrics};
 
 use super::animation::OverlayAnimation;
 use super::request_scope::RequestScope;
@@ -131,6 +131,11 @@ impl DialogButton {
     /// "Cancel", answering [`CANCEL`].
     pub fn cancel() -> Self {
         Self::answer(CANCEL, "Cancel", ButtonRole::Cancel)
+    }
+
+    /// "Back", answering [`CANCEL`]: the way out of one step of a manager.
+    pub fn back() -> Self {
+        Self::answer(CANCEL, "Back", ButtonRole::Cancel)
     }
 
     /// A message's one button.
@@ -537,10 +542,6 @@ impl Dialog {
 
     pub fn field_focused(&self) -> bool {
         self.focus() == Some(DialogFocus::Field)
-    }
-
-    pub fn has_field(&self) -> bool {
-        self.is_awaiting_current() && self.field.is_some()
     }
 
     /// Focus is request-scoped and never activates anything by itself.

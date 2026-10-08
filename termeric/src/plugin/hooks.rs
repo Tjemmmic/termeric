@@ -119,7 +119,7 @@ pub enum PluginAction {
     },
     /// Show a brief informational toast
     ShowMessage { message: String },
-    /// Show a modal info overlay (title + body lines). Use for anything the
+    /// Show a message dialog (a title, and a paragraph per line). Use for anything the
     /// user needs to actually see — failed profile lookups, config warnings,
     /// etc.
     ShowNotice { title: String, lines: Vec<String> },

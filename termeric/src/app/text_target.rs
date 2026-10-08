@@ -16,8 +16,8 @@ pub(super) enum TextTarget {
     SettingsFilter,
     WorkspaceRename,
     CommandsForm,
-    /// The focused text field of an info overlay, such as a font editor's.
-    InfoOverlayInput,
+    /// The focused field of a dialog, such as a font editor's.
+    DialogField,
     TabRename,
     AgentView,
     Search,
@@ -65,9 +65,7 @@ impl App {
                 ModalLayer::CommandsPanel if self.commands_panel.is_editing() => {
                     TextTarget::CommandsForm
                 }
-                ModalLayer::InfoOverlay if self.info_overlay.input_focused() => {
-                    TextTarget::InfoOverlayInput
-                }
+                ModalLayer::Dialog if self.dialog.field_focused() => TextTarget::DialogField,
                 _ => TextTarget::Blocked,
             });
         }
@@ -127,21 +125,19 @@ mod tests {
         assert_eq!(app.command_palette.build_info().input, "roots");
         app.command_palette.close();
 
-        app.info_overlay.set_reduced_motion(true);
-        let request = app.info_overlay.show_input(
-            "Rule",
-            vec!["Rule: ".into()],
-            0,
-            "Rule: ",
-            "",
-            64,
-            Vec::new(),
-        );
+        app.dialog.set_reduced_motion(true);
+        let request = app.dialog.show(crate::ui::dialog::DialogSpec::prompt(
+            "Add rule",
+            vec![],
+            crate::ui::dialog::FieldSpec::new("Rule", "", 64),
+            "save",
+            "Add",
+        ));
         assert!(app.paste_clipboard_payload("tuber"));
         app.handle_ime_event(Ime::Commit("s".into()));
-        assert_eq!(app.info_overlay.input_value(request), Some("tubers"));
-        assert!(app.info_overlay.dismiss(request));
-        app.info_overlay.update_animation();
+        assert_eq!(app.dialog.field_value(request), Some("tubers"));
+        assert!(app.dialog.dismiss(request));
+        app.dialog.update_animation();
 
         app.broadcast = BroadcastState::Inactive;
         assert_eq!(app.text_target(), TextTarget::Terminal);
