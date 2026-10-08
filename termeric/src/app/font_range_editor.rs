@@ -329,18 +329,12 @@ impl App {
             "The change applies live and is persisted only when Settings is saved.".into(),
             String::new(),
         ];
-        let delete_line = lines.len();
-        lines.push("[D] Delete".into());
-        let cancel_line = lines.len();
-        lines.push("[B] Keep override".into());
-        let request_id = self.info_overlay.show_choices(
-            "Delete Font Range Override",
-            lines,
-            vec![
-                InfoOverlayChoice::new("confirm", "Delete override", delete_line, Some('d')),
-                InfoOverlayChoice::new("cancel", "Keep override", cancel_line, Some('b')),
-            ],
-        );
+        let mut choices = Vec::new();
+        push_key_choice(&mut lines, &mut choices, "confirm", 'd', "Delete override");
+        push_key_choice(&mut lines, &mut choices, "cancel", 'b', "Keep override");
+        let request_id =
+            self.info_overlay
+                .show_choices("Delete Font Range Override", lines, choices);
         self.overlay_flow = Some(OverlayFlow::FontRanges(PendingFontRangeManagement {
             request_id,
             view: FontRangeManagerView::ConfirmDelete { page, rule },

@@ -210,18 +210,12 @@ impl App {
                 .into(),
             String::new(),
         ];
-        let delete_line = lines.len();
-        lines.push("[D] Delete".into());
-        let cancel_line = lines.len();
-        lines.push("[B] Keep override".into());
-        let request_id = self.info_overlay.show_choices(
-            "Delete OpenType Feature",
-            lines,
-            vec![
-                InfoOverlayChoice::new("confirm", "Delete override", delete_line, Some('d')),
-                InfoOverlayChoice::new("cancel", "Keep override", cancel_line, Some('b')),
-            ],
-        );
+        let mut choices = Vec::new();
+        push_key_choice(&mut lines, &mut choices, "confirm", 'd', "Delete override");
+        push_key_choice(&mut lines, &mut choices, "cancel", 'b', "Keep override");
+        let request_id = self
+            .info_overlay
+            .show_choices("Delete OpenType Feature", lines, choices);
         self.overlay_flow = Some(OverlayFlow::FontFeatures(PendingFontFeatureManagement {
             request_id,
             view: FontFeatureManagerView::ConfirmDelete { page, tag, value },
