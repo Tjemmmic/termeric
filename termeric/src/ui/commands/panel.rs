@@ -11,6 +11,7 @@ use super::navigation::{CommandControl, CommandNavigation, CommandNavigationKey}
 use crate::config::CustomCommand;
 use crate::ui::animation::PanelAnimation;
 use crate::ui::geometry::Bounds;
+use crate::ui::side_panel::SidePanelFrame;
 use crate::ui::text_input::{TextInput, TextInputEdit, TextLimit};
 use crate::ui::text_input_viewport::TextInputViewport;
 
@@ -196,19 +197,22 @@ impl CommandsPanelLayout {
         editing: bool,
         command_count: usize,
     ) -> Self {
-        // Shares the Workspace Manager's width so side panels line up.
-        let panel_width = (cell_width * 44.0).max(380.0).min(window_width * 0.45);
-        let panel_x = window_width - panel_width * animation;
-        let padding = cell_width * 1.5;
+        let SidePanelFrame {
+            panel,
+            padding,
+            title_y,
+            control,
+            close_button,
+        } = SidePanelFrame::calculate(
+            window_width,
+            window_height,
+            top,
+            cell_width,
+            cell_height,
+            animation,
+        );
+        let (panel_x, panel_width) = (panel.x, panel.width);
         let small_padding = cell_width * 0.8;
-        let title_y = top + cell_height * 0.9;
-        let control = cell_height * 1.5;
-        let close_button = Bounds {
-            x: panel_x + panel_width - padding * 0.5 - control,
-            y: title_y,
-            width: control,
-            height: control,
-        };
         let new_button = Bounds {
             x: close_button.x - control - cell_width * 0.25,
             ..close_button
@@ -269,12 +273,7 @@ impl CommandsPanelLayout {
         });
         let row_height = cell_height * 3.0;
         Self {
-            panel: Bounds {
-                x: panel_x,
-                y: top,
-                width: panel_width,
-                height: (window_height - top).max(0.0),
-            },
+            panel,
             padding,
             small_padding,
             title_y,

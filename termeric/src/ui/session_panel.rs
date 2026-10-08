@@ -5,6 +5,7 @@
 use crate::session::listing::SessionListing;
 use crate::ui::animation::PanelAnimation;
 use crate::ui::geometry::Bounds;
+use crate::ui::side_panel::SidePanelFrame;
 use crate::ui::text_input::{TextInput, TextInputEdit, TextLimit};
 
 const MAX_RENAME_CHARACTERS: usize = 128;
@@ -191,19 +192,22 @@ impl SessionPanelLayout {
         workspaces: bool,
         entry_count: usize,
     ) -> Self {
-        // Wide enough that a hovered row's actions leave room for its name.
-        let panel_width = (cell_width * 44.0).max(380.0).min(window_width * 0.45);
-        let panel_x = window_width - panel_width * animation;
-        let padding_x = cell_width * 1.5;
+        let SidePanelFrame {
+            panel,
+            padding: padding_x,
+            title_y,
+            control,
+            close_button,
+        } = SidePanelFrame::calculate(
+            window_width,
+            window_height,
+            top,
+            cell_width,
+            cell_height,
+            animation,
+        );
+        let (panel_x, panel_width) = (panel.x, panel.width);
         let padding_y = cell_height * 0.5;
-        let title_y = top + cell_height * 0.9;
-        let control = cell_height * 1.5;
-        let close_button = Bounds {
-            x: panel_x + panel_width - padding_x * 0.5 - control,
-            y: title_y,
-            width: control,
-            height: control,
-        };
         let back_button = (!workspaces).then_some(Bounds {
             x: panel_x + padding_x * 0.5,
             y: title_y,
@@ -257,12 +261,7 @@ impl SessionPanelLayout {
             .max(1.0) as usize;
         Self {
             window_width,
-            panel: Bounds {
-                x: panel_x,
-                y: top,
-                width: panel_width,
-                height: (window_height - top).max(0.0),
-            },
+            panel,
             padding_x,
             padding_y,
             title_y,
