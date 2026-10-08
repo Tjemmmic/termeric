@@ -129,7 +129,12 @@ fn explicit_plugin_panes_spawn_one_owner_with_exact_profile_cwd_and_geometry() {
     }
     let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
     let panes = &mut tab.panes;
-    let ordinary = panes.split(SplitDirection::Vertical).unwrap();
+    let ordinary = panes
+        .split(
+            SplitDirection::Vertical,
+            crate::config::PaneCwdMode::Focused,
+        )
+        .unwrap();
     assert_eq!(
         panes.get_pane(ordinary).unwrap().launch,
         WorkspaceLaunch::Shell

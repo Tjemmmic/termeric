@@ -2012,7 +2012,10 @@ fn plugin_pane_creation_is_exact_atomic_and_non_activating() {
     let tab = tabs.tab_mut_by_id(tab_id).unwrap();
     let panes = tab.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
     panes
-        .split(crate::panes::SplitDirection::Horizontal)
+        .split(
+            crate::panes::SplitDirection::Horizontal,
+            crate::config::PaneCwdMode::Focused,
+        )
         .unwrap();
 
     let mut target = App::new_headless(Config::default()).unwrap();
@@ -3481,7 +3484,12 @@ fn pane_transfer_fixture() -> (App, App, Option<u32>) {
         10.0,
         20.0,
     );
-    let moved = source_panes.split(SplitDirection::Vertical).unwrap();
+    let moved = source_panes
+        .split(
+            SplitDirection::Vertical,
+            crate::config::PaneCwdMode::Focused,
+        )
+        .unwrap();
     source_panes.get_pane_mut(moved).unwrap().title = Some("moved-owner".into());
     let moved_child = source_panes.get_pane(moved).unwrap().pty.child_id();
 

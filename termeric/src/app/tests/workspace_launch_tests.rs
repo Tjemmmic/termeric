@@ -61,9 +61,19 @@ fn complete_workspace_round_trip_restores_nested_panes_plugin_profile_and_focus(
                 10.0,
                 20.0,
             );
-            let right = panes.split(SplitDirection::Vertical).unwrap();
+            let right = panes
+                .split(
+                    SplitDirection::Vertical,
+                    crate::config::PaneCwdMode::Focused,
+                )
+                .unwrap();
             panes.focus(right);
-            let lower_right = panes.split(SplitDirection::Horizontal).unwrap();
+            let lower_right = panes
+                .split(
+                    SplitDirection::Horizontal,
+                    crate::config::PaneCwdMode::Focused,
+                )
+                .unwrap();
             panes.focus(lower_right);
         }
         app.tabs = Some(tabs);
@@ -324,7 +334,12 @@ fn background_command_launch_preserves_focused_pane_and_interaction_surfaces() {
             .active_tab_mut()
             .unwrap()
             .panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
-        let focused = panes.split(SplitDirection::Vertical).unwrap();
+        let focused = panes
+            .split(
+                SplitDirection::Vertical,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
         panes.focus(focused);
         panes
             .focused_pane_mut()

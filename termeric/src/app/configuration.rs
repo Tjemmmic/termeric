@@ -445,9 +445,6 @@ impl App {
             // selected by the foreground application through DECSET 1060/1061.
             tabs.set_terminal_policy(policy, false);
             tabs.set_shell_config(self.config.shell.clone());
-            for tab in tabs.all_tabs_mut() {
-                tab.panes.set_cwd_mode(self.config.panes.cwd);
-            }
         }
         self.shortcut_registry = ShortcutRegistry::new();
         self.shortcut_registry

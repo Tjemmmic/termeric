@@ -82,7 +82,12 @@ fn app_mediated_clipboard_reply_returns_to_requesting_pane_not_focus() {
         20.0,
     )
     .unwrap();
-    let requesting_pane = panes.split(SplitDirection::Vertical).unwrap();
+    let requesting_pane = panes
+        .split(
+            SplitDirection::Vertical,
+            crate::config::PaneCwdMode::Focused,
+        )
+        .unwrap();
     panes.focus(PaneId(0));
     tabs.active_tab_mut().unwrap().panes = panes;
     app.tabs = Some(tabs);
@@ -235,7 +240,12 @@ fn osc_titles_and_dynamic_colors_apply_to_exact_inactive_tab_and_pane_origins() 
         20.0,
     )
     .unwrap();
-    let second_pane = panes.split(SplitDirection::Vertical).unwrap();
+    let second_pane = panes
+        .split(
+            SplitDirection::Vertical,
+            crate::config::PaneCwdMode::Focused,
+        )
+        .unwrap();
     panes.focus(PaneId(0));
     tabs.active_tab_mut().unwrap().panes = panes;
     let active_tab_id = tabs

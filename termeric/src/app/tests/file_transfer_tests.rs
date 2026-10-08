@@ -327,7 +327,12 @@ fn drops_reach_agent_panes_but_program_transfers_follow_each_panes_launch() {
     assert!(!app.info_overlay.is_active());
     let panes = &mut app.tabs.as_mut().unwrap().active_tab_mut().unwrap().panes;
     panes.adopt_primary_shell(crate::test_support::sleeping_shell());
-    let shell_pane = panes.split(SplitDirection::Vertical).unwrap();
+    let shell_pane = panes
+        .split(
+            SplitDirection::Vertical,
+            crate::config::PaneCwdMode::Focused,
+        )
+        .unwrap();
     panes.focus(shell_pane);
     assert_eq!(
         app.dropped_path_payload(path).unwrap(),

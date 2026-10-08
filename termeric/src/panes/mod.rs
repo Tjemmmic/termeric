@@ -17,7 +17,7 @@ pub const MAX_PANES_PER_TAB: usize = 64;
 // A live-domain tab shows every pane of its daemon, so they must all fit.
 const _: () = assert!(crate::domain::model::MAX_DAEMON_PANES <= MAX_PANES_PER_TAB);
 
-use crate::config::ShellConfig;
+use crate::config::{PaneCwdMode, ShellConfig};
 use crate::session::terminal_state::DiffWatch;
 use crate::terminal::events::{MAX_FORWARDED_TERMINAL_EVENTS_PER_POLL, drain_terminal_events};
 use crate::terminal::geometry::{TerminalArea, TerminalGeometry};
@@ -113,6 +113,14 @@ pub(crate) struct LocalPaneLaunch {
     pub identity: crate::workspace::WorkspaceLaunch,
     pub shell: ShellConfig,
     pub cwd: Option<String>,
+}
+
+/// What a split launches.
+enum SplitLaunch<'a> {
+    /// The tab's split shell, in the directory the mode picks.
+    Shell(PaneCwdMode),
+    /// Exactly this launch.
+    Given(&'a LocalPaneLaunch),
 }
 
 impl Pane {
@@ -546,7 +554,6 @@ pub struct PaneManager {
     area: TerminalArea,
     /// Shells spawned by this manager (the tab's first terminal is excluded).
     spawned_shells: usize,
-    cwd_mode: crate::config::PaneCwdMode,
 }
 
 impl PaneManager {
@@ -572,7 +579,6 @@ impl PaneManager {
             next_id: id.0.saturating_add(1),
             area,
             spawned_shells: 0,
-            cwd_mode: crate::config::PaneCwdMode::Focused,
         }
     }
 
@@ -904,10 +910,6 @@ impl PaneManager {
         self.zoomed
     }
 
-    pub fn set_cwd_mode(&mut self, mode: crate::config::PaneCwdMode) {
-        self.cwd_mode = mode;
-    }
-
     pub fn pane_ids(&self) -> Vec<PaneId> {
         self.tree.get_all_ids()
     }
@@ -1034,15 +1036,20 @@ impl PaneManager {
         TerminalGeometry::from_available_pixels(width, height, cell_width, cell_height)
     }
 
-    /// Split the focused pane
-    pub fn split(&mut self, direction: SplitDirection) -> anyhow::Result<PaneId> {
-        self.split_local(direction, None)
+    /// Split the focused pane, starting the new shell in the directory
+    /// `cwd_mode` picks.
+    pub fn split(
+        &mut self,
+        direction: SplitDirection,
+        cwd_mode: PaneCwdMode,
+    ) -> anyhow::Result<PaneId> {
+        self.split_local(direction, SplitLaunch::Shell(cwd_mode))
     }
 
     fn split_local(
         &mut self,
         direction: SplitDirection,
-        launch: Option<&LocalPaneLaunch>,
+        launch: SplitLaunch<'_>,
     ) -> anyhow::Result<PaneId> {
         self.ensure_room_for_pane()?;
         if !self.tree.has_split_capacity() {
@@ -1060,24 +1067,25 @@ impl PaneManager {
         let geometry = self
             .split_geometry(self.focused, direction)
             .expect("validated focused split target");
-        let pane_cwd = |id: PaneId| self.panes.get(&id).and_then(Pane::working_directory);
-        let working_dir = self
-            .cwd_mode
-            .resolve(|| pane_cwd(self.focused), || pane_cwd(self.primary_id()));
-        let shell = launch.map_or(&self.split_shell, |launch| &launch.shell);
-        let cwd = launch.map_or(working_dir.as_deref(), |launch| launch.cwd.as_deref());
+        let (shell, cwd, identity) = match launch {
+            SplitLaunch::Shell(cwd_mode) => {
+                let pane_cwd = |id: PaneId| self.panes.get(&id).and_then(Pane::working_directory);
+                let cwd =
+                    cwd_mode.resolve(|| pane_cwd(self.focused), || pane_cwd(self.primary_id()));
+                (&self.split_shell, cwd, self.split_launch())
+            }
+            SplitLaunch::Given(launch) => {
+                (&launch.shell, launch.cwd.clone(), launch.identity.clone())
+            }
+        };
+        let plugin = matches!(identity, crate::workspace::WorkspaceLaunch::Plugin { .. });
         let mut pane = match Pane::new_local(
             new_id,
             geometry,
             shell,
             &self.policy,
-            cwd,
-            launch.is_some_and(|launch| {
-                matches!(
-                    launch.identity,
-                    crate::workspace::WorkspaceLaunch::Plugin { .. }
-                )
-            }),
+            cwd.as_deref(),
+            plugin,
         ) {
             Ok(pane) => pane,
             Err(error) => {
@@ -1086,7 +1094,7 @@ impl PaneManager {
                 return Err(error);
             }
         };
-        pane.launch = launch.map_or_else(|| self.split_launch(), |launch| launch.identity.clone());
+        pane.launch = identity;
         self.spawned_shells += 1;
         self.panes.insert(new_id, pane);
 
@@ -1126,8 +1134,9 @@ impl PaneManager {
         &mut self,
         target: PaneId,
         direction: SplitDirection,
+        cwd_mode: PaneCwdMode,
     ) -> anyhow::Result<PaneId> {
-        self.split_target_local(target, direction, None)
+        self.split_target_local(target, direction, SplitLaunch::Shell(cwd_mode))
     }
 
     pub(crate) fn split_target_with_launch(
@@ -1136,14 +1145,14 @@ impl PaneManager {
         direction: SplitDirection,
         launch: &LocalPaneLaunch,
     ) -> anyhow::Result<PaneId> {
-        self.split_target_local(target, direction, Some(launch))
+        self.split_target_local(target, direction, SplitLaunch::Given(launch))
     }
 
     fn split_target_local(
         &mut self,
         target: PaneId,
         direction: SplitDirection,
-        launch: Option<&LocalPaneLaunch>,
+        launch: SplitLaunch<'_>,
     ) -> anyhow::Result<PaneId> {
         if !self.panes.contains_key(&target) {
             anyhow::bail!("pane {} does not exist", target.0);
@@ -1865,13 +1874,12 @@ mod tests {
         )
         .unwrap();
         for index in 1..panes {
-            manager
-                .split(if index % 2 == 0 {
-                    SplitDirection::Horizontal
-                } else {
-                    SplitDirection::Vertical
-                })
-                .unwrap();
+            let direction = if index % 2 == 0 {
+                SplitDirection::Horizontal
+            } else {
+                SplitDirection::Vertical
+            };
+            manager.split(direction, PaneCwdMode::Focused).unwrap();
         }
         manager
     }
@@ -2123,7 +2131,7 @@ mod tests {
         assert_eq!(manager.focused_id(), PaneId(1));
         assert!(
             manager
-                .split_target(PaneId(99), SplitDirection::Vertical)
+                .split_target(PaneId(99), SplitDirection::Vertical, PaneCwdMode::Focused)
                 .is_err()
         );
         assert_eq!(manager.focused_id(), PaneId(1));
@@ -2131,7 +2139,7 @@ mod tests {
         manager.split_shell.program = Some("/definitely/missing/termeric-shell".into());
         assert!(
             manager
-                .split_target(PaneId(0), SplitDirection::Horizontal)
+                .split_target(PaneId(0), SplitDirection::Horizontal, PaneCwdMode::Focused)
                 .is_err()
         );
         assert_eq!(manager.focused_id(), PaneId(1));
@@ -2140,7 +2148,7 @@ mod tests {
         manager.next_id = u32::MAX;
         assert!(
             manager
-                .split_target(PaneId(0), SplitDirection::Horizontal)
+                .split_target(PaneId(0), SplitDirection::Horizontal, PaneCwdMode::Focused)
                 .is_err()
         );
         assert_eq!(manager.focused_id(), PaneId(1));
@@ -2148,7 +2156,7 @@ mod tests {
         manager.next_id = 2;
 
         let created = manager
-            .split_target(PaneId(0), SplitDirection::Horizontal)
+            .split_target(PaneId(0), SplitDirection::Horizontal, PaneCwdMode::Focused)
             .unwrap();
         assert_eq!(created, PaneId(2));
         assert_eq!(manager.focused_id(), created);
@@ -2224,7 +2232,9 @@ mod tests {
         assert_eq!(lone.geometry, geometry);
         assert_eq!(lone.pty.size().unwrap(), geometry.pty_size());
 
-        let right = panes.split(SplitDirection::Vertical).unwrap();
+        let right = panes
+            .split(SplitDirection::Vertical, PaneCwdMode::Focused)
+            .unwrap();
         assert_ne!(panes.get_pane(PaneId(0)).unwrap().geometry, geometry);
         assert!(panes.close(right));
         let lone = panes.get_pane(PaneId(0)).unwrap();
@@ -2249,7 +2259,9 @@ mod tests {
 
         // IDs are never reused, and the survivor stays primary wherever a
         // later split moves it in the tree.
-        let added = panes.split(SplitDirection::Vertical).unwrap();
+        let added = panes
+            .split(SplitDirection::Vertical, PaneCwdMode::Focused)
+            .unwrap();
         assert_eq!(added, PaneId(2));
         assert!(panes.swap_focused_next());
         assert_eq!(panes.pane_ids(), vec![PaneId(2), PaneId(1)]);
@@ -2445,7 +2457,9 @@ mod tests {
             ..TerminalPolicy::with_scrollback(1_000, 8 * 1024 * 1024)
         };
         panes.apply_terminal_policy(allowed, false);
-        let split = panes.split(SplitDirection::Vertical).unwrap();
+        let split = panes
+            .split(SplitDirection::Vertical, PaneCwdMode::Focused)
+            .unwrap();
         assert!(
             panes
                 .get_pane(split)
@@ -2505,7 +2519,9 @@ mod tests {
             termeric_core::term::XtermKeyboardType::Vt220
         );
 
-        let split = panes.split(SplitDirection::Vertical).unwrap();
+        let split = panes
+            .split(SplitDirection::Vertical, PaneCwdMode::Focused)
+            .unwrap();
         let new_terminal = &panes.get_pane(split).unwrap().terminal;
         assert_eq!(
             new_terminal.xterm_keyboard_type(),
@@ -2565,8 +2581,12 @@ mod tests {
             20.0,
         )
         .unwrap();
-        panes.split(SplitDirection::Vertical).unwrap();
-        panes.split(SplitDirection::Horizontal).unwrap();
+        panes
+            .split(SplitDirection::Vertical, PaneCwdMode::Focused)
+            .unwrap();
+        panes
+            .split(SplitDirection::Horizontal, PaneCwdMode::Focused)
+            .unwrap();
         let saved_tree = format!("{:?}", panes.workspace_layout());
         let hidden_geometry = panes.get_pane(PaneId(0)).unwrap().geometry;
 
@@ -2606,7 +2626,9 @@ mod tests {
             .unwrap()
         };
         let mut source = make();
-        let moved = source.split(SplitDirection::Vertical).unwrap();
+        let moved = source
+            .split(SplitDirection::Vertical, PaneCwdMode::Focused)
+            .unwrap();
         let child = source.get_pane(moved).unwrap().pty.child_id();
         let pane = source.detach_focused().unwrap();
         assert_eq!(pane.pty.child_id(), child);
@@ -2642,8 +2664,12 @@ mod tests {
         };
 
         let mut source = make();
-        let first_closed = source.split(SplitDirection::Vertical).unwrap();
-        let second_closed = source.split(SplitDirection::Horizontal).unwrap();
+        let first_closed = source
+            .split(SplitDirection::Vertical, PaneCwdMode::Focused)
+            .unwrap();
+        let second_closed = source
+            .split(SplitDirection::Horizontal, PaneCwdMode::Focused)
+            .unwrap();
         source.get_pane_mut(first_closed).unwrap().closed = true;
         source.get_pane_mut(second_closed).unwrap().closed = true;
         assert_eq!(source.pane_count(), 3);
@@ -2652,7 +2678,9 @@ mod tests {
         assert!(source.get_pane(PaneId(0)).is_some());
 
         let mut destination = make();
-        let closed_anchor = destination.split(SplitDirection::Vertical).unwrap();
+        let closed_anchor = destination
+            .split(SplitDirection::Vertical, PaneCwdMode::Focused)
+            .unwrap();
         destination.get_pane_mut(closed_anchor).unwrap().closed = true;
         let error = destination
             .validate_attach_target(closed_anchor)
@@ -2689,7 +2717,9 @@ mod tests {
             20.0,
         )
         .unwrap();
-        let focused = panes.split(SplitDirection::Vertical).unwrap();
+        let focused = panes
+            .split(SplitDirection::Vertical, PaneCwdMode::Focused)
+            .unwrap();
         panes
             .get_pane_mut(PaneId(0))
             .unwrap()
@@ -2736,16 +2766,19 @@ mod tests {
             .process(format!("\x1b]7;file://{}\x07", reported_focused_dir.display()).as_bytes());
 
         panes.focus(focused);
-        panes.set_cwd_mode(crate::config::PaneCwdMode::Focused);
-        let inherited_focus = panes.split(SplitDirection::Horizontal).unwrap();
+        let inherited_focus = panes
+            .split(SplitDirection::Horizontal, PaneCwdMode::Focused)
+            .unwrap();
         wait_for_cwd(&mut panes, inherited_focus, &reported_focused_dir);
 
-        panes.set_cwd_mode(crate::config::PaneCwdMode::Tab);
-        let inherited_tab = panes.split(SplitDirection::Horizontal).unwrap();
+        let inherited_tab = panes
+            .split(SplitDirection::Horizontal, PaneCwdMode::Tab)
+            .unwrap();
         wait_for_cwd(&mut panes, inherited_tab, &reported_primary_dir);
 
-        panes.set_cwd_mode(crate::config::PaneCwdMode::Process);
-        let inherited_process = panes.split(SplitDirection::Horizontal).unwrap();
+        let inherited_process = panes
+            .split(SplitDirection::Horizontal, PaneCwdMode::Process)
+            .unwrap();
         wait_for_cwd(
             &mut panes,
             inherited_process,
@@ -2772,14 +2805,18 @@ mod tests {
             18.5,
         )
         .unwrap();
-        panes.split(SplitDirection::Vertical).unwrap();
+        panes
+            .split(SplitDirection::Vertical, PaneCwdMode::Focused)
+            .unwrap();
         let divider = panes.get_dividers()[0];
         assert!(
             panes
                 .resize_divider_target(divider.target, 337.25, 200.0)
                 .is_some()
         );
-        panes.split(SplitDirection::Horizontal).unwrap();
+        panes
+            .split(SplitDirection::Horizontal, PaneCwdMode::Focused)
+            .unwrap();
 
         let layout = panes.calculate_layout();
         assert_eq!(layout.len(), 3);
@@ -2835,7 +2872,9 @@ mod tests {
             20.0,
         )
         .unwrap();
-        panes.split(SplitDirection::Vertical).unwrap();
+        panes
+            .split(SplitDirection::Vertical, PaneCwdMode::Focused)
+            .unwrap();
 
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
@@ -2894,7 +2933,9 @@ mod tests {
             20.0,
         )
         .unwrap();
-        panes.split(SplitDirection::Vertical).unwrap();
+        panes
+            .split(SplitDirection::Vertical, PaneCwdMode::Focused)
+            .unwrap();
         let closed_id = panes.focused_id();
         assert!(panes.close_focused());
         assert!(panes.get_pane(closed_id).is_none());

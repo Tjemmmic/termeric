@@ -73,7 +73,12 @@ fn notification_occasions_use_exact_tab_pane_zoom_focus_and_visibility_state() {
     let split_tab_id = tabs.new_tab().unwrap();
     let split_tab = tabs.tab_mut_by_id(split_tab_id).unwrap();
     let panes = split_tab.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
-    panes.split(SplitDirection::Vertical).unwrap();
+    panes
+        .split(
+            SplitDirection::Vertical,
+            crate::config::PaneCwdMode::Focused,
+        )
+        .unwrap();
     assert_eq!(panes.focused_id(), PaneId(1));
     let active_tab_id = tabs.new_tab().unwrap();
 
@@ -215,7 +220,12 @@ fn delayed_notification_reply_returns_to_requesting_pane_without_a_focus_fallbac
         20.0,
     )
     .unwrap();
-    let requesting_pane = panes.split(SplitDirection::Vertical).unwrap();
+    let requesting_pane = panes
+        .split(
+            SplitDirection::Vertical,
+            crate::config::PaneCwdMode::Focused,
+        )
+        .unwrap();
     panes.focus(PaneId(0));
     tabs.active_tab_mut().unwrap().panes = panes;
     app.tabs = Some(tabs);
@@ -315,7 +325,12 @@ fn notification_activation_selects_the_exact_origin_and_stale_origins_fail_close
     let origin = {
         let tab = tabs.tab_mut_by_id(origin_tab).unwrap();
         let panes = tab.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
-        let pane_id = panes.split(SplitDirection::Vertical).unwrap();
+        let pane_id = panes
+            .split(
+                SplitDirection::Vertical,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
         panes.focus(PaneId(0));
         crate::tabs::TerminalIdentity {
             tab_id: origin_tab,

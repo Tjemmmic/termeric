@@ -1998,7 +1998,13 @@ mod tests {
         assert_eq!(tab.title, "lone");
         assert_eq!(tab.panes.get_pane(PaneId(0)).unwrap().title, None);
 
-        let right = tab.panes.split(SplitDirection::Vertical).unwrap();
+        let right = tab
+            .panes
+            .split(
+                SplitDirection::Vertical,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
         assert!(manager.set_title_for_origin(origin, "split".into()));
         let tab = manager.active_tab_mut().unwrap();
         assert_eq!(
@@ -2038,7 +2044,10 @@ mod tests {
             .active_tab_mut()
             .unwrap()
             .panes_for_test(shell, 800.0, 160.0, 10.0, 20.0)
-            .split(SplitDirection::Vertical)
+            .split(
+                SplitDirection::Vertical,
+                crate::config::PaneCwdMode::Focused,
+            )
             .unwrap();
         let split = TerminalEventOrigin {
             tab_id,
@@ -2144,7 +2153,12 @@ mod tests {
             .active_tab_mut()
             .unwrap()
             .panes_for_test(shell, 800.0, 160.0, 10.0, 20.0);
-        panes.split(SplitDirection::Vertical).unwrap();
+        panes
+            .split(
+                SplitDirection::Vertical,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
 
         const LINE_LIMIT: usize = 32;
         const BYTE_LIMIT: usize = 4 * 1024;
@@ -2156,7 +2170,10 @@ mod tests {
             .active_tab_mut()
             .unwrap()
             .panes
-            .split(SplitDirection::Horizontal)
+            .split(
+                SplitDirection::Horizontal,
+                crate::config::PaneCwdMode::Focused,
+            )
             .unwrap();
         manager
             .new_tab_with_command(
@@ -2214,7 +2231,12 @@ mod tests {
 
         let tab = manager.active_tab_mut().unwrap();
         let panes = tab.panes_for_test(ShellConfig::default(), 800.0, 160.0, 10.0, 20.0);
-        let right = panes.split(SplitDirection::Vertical).unwrap();
+        let right = panes
+            .split(
+                SplitDirection::Vertical,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
         for (id, marker, command) in [
             (PaneId(0), "left-history", "left-command"),
             (right, "right-history", "right-command"),
@@ -2261,7 +2283,12 @@ mod tests {
         manager.new_tab().unwrap();
         let tab = manager.active_tab_mut().unwrap();
         let panes = tab.panes_for_test(shell, 800.0, 160.0, 10.0, 20.0);
-        let right = panes.split(SplitDirection::Vertical).unwrap();
+        let right = panes
+            .split(
+                SplitDirection::Vertical,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
         // The unfocused pane scrolled output away; the focused one is idle.
         let left = panes.get_pane_mut(PaneId(0)).unwrap();
         for index in 0..40 {
@@ -2330,17 +2357,23 @@ mod tests {
                 .active_tab_mut()
                 .unwrap()
                 .panes_for_test(shell.clone(), 800.0, 160.0, 10.0, 20.0);
-        other_panes.split(SplitDirection::Vertical).unwrap();
+        other_panes
+            .split(
+                SplitDirection::Vertical,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
         let moved = other_panes.detach_focused().unwrap();
         let tab = manager.active_tab_mut().unwrap();
         let panes = tab.panes_for_test(shell.clone(), 6_400.0, 6_400.0, 10.0, 20.0);
         for index in 1..MAX_PANES_PER_TAB {
+            let direction = if index % 2 == 0 {
+                SplitDirection::Horizontal
+            } else {
+                SplitDirection::Vertical
+            };
             panes
-                .split(if index % 2 == 0 {
-                    SplitDirection::Horizontal
-                } else {
-                    SplitDirection::Vertical
-                })
+                .split(direction, crate::config::PaneCwdMode::Focused)
                 .unwrap();
             panes.balance();
         }
@@ -2349,10 +2382,21 @@ mod tests {
         // Neither a split, by key or by control request, nor a pane moved in
         // from another tab goes past it.
         let focused = panes.focused_id();
-        assert!(panes.split(SplitDirection::Vertical).is_err());
         assert!(
             panes
-                .split_target(focused, SplitDirection::Vertical)
+                .split(
+                    SplitDirection::Vertical,
+                    crate::config::PaneCwdMode::Focused
+                )
+                .is_err()
+        );
+        assert!(
+            panes
+                .split_target(
+                    focused,
+                    SplitDirection::Vertical,
+                    crate::config::PaneCwdMode::Focused
+                )
                 .is_err()
         );
         assert!(panes.validate_attach_target(focused).is_err());
@@ -2628,7 +2672,12 @@ mod tests {
             .active_tab_mut()
             .unwrap()
             .panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
-        let remote = panes.split(SplitDirection::Vertical).unwrap();
+        let remote = panes
+            .split(
+                SplitDirection::Vertical,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
         panes
             .get_pane_mut(PaneId(0))
             .unwrap()
@@ -2679,7 +2728,12 @@ mod tests {
             .active_tab_mut()
             .unwrap()
             .panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
-        panes.split(SplitDirection::Vertical).unwrap();
+        panes
+            .split(
+                SplitDirection::Vertical,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
         panes.focus(PaneId(0));
         source
             .new_tab_with_command(
@@ -2757,7 +2811,12 @@ mod tests {
             .active_tab_mut()
             .unwrap()
             .panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
-        let movable = panes.split(SplitDirection::Vertical).unwrap();
+        let movable = panes
+            .split(
+                SplitDirection::Vertical,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
         panes.focus(PaneId(0));
         let child = panes.get_pane(PaneId(0)).unwrap().pty.child_id();
 
@@ -2810,7 +2869,12 @@ mod tests {
         }
         manager.switch_to(0);
         let panes = manager.tabs[0].panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
-        let remaining = panes.split(SplitDirection::Vertical).unwrap();
+        let remaining = panes
+            .split(
+                SplitDirection::Vertical,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
         panes.focus(remaining);
         let child = panes.get_pane(PaneId(0)).unwrap().pty.child_id();
 
@@ -2870,7 +2934,12 @@ mod tests {
             10.0,
             20.0,
         );
-        profile_panes.split(SplitDirection::Vertical).unwrap();
+        profile_panes
+            .split(
+                SplitDirection::Vertical,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
         manager.new_tab_with_cwd(None, Some("shell")).unwrap();
         manager.switch_to(0);
 
@@ -2933,7 +3002,13 @@ mod tests {
         );
         assert!(matches!(tab.tab_type, TabType::Profile { ref name } if name == "dev"));
 
-        let new_pane = tab.panes.split(SplitDirection::Vertical).unwrap();
+        let new_pane = tab
+            .panes
+            .split(
+                SplitDirection::Vertical,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
         let panes = &tab.panes;
         assert_eq!(
             panes.get_pane(new_pane).unwrap().launch,
@@ -2965,7 +3040,12 @@ mod tests {
             .active_tab_mut()
             .unwrap()
             .panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
-        let ordinary = panes.split(SplitDirection::Vertical).unwrap();
+        let ordinary = panes
+            .split(
+                SplitDirection::Vertical,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
         panes.focus(PaneId(0));
         manager.new_tab().unwrap();
         manager.switch_to(0);
@@ -3082,7 +3162,12 @@ mod tests {
             20.0,
         )
         .unwrap();
-        panes.split(SplitDirection::Vertical).unwrap();
+        panes
+            .split(
+                SplitDirection::Vertical,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
         let pane_ids: HashSet<PaneId> = panes.iter_with_layout().map(|(pane, _)| pane.id).collect();
         manager.tabs[0].panes = panes;
 

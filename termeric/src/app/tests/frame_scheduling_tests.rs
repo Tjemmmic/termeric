@@ -371,7 +371,12 @@ fn synchronized_output_timeout_is_terminal_local_even_when_its_pane_is_unfocused
         20.0,
     )
     .unwrap();
-    let right = panes.split(SplitDirection::Vertical).unwrap();
+    let right = panes
+        .split(
+            SplitDirection::Vertical,
+            crate::config::PaneCwdMode::Focused,
+        )
+        .unwrap();
     panes
         .get_pane_mut(right)
         .unwrap()

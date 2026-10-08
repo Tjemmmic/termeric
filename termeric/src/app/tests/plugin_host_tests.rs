@@ -491,7 +491,12 @@ fn plugin_context_cwd_follows_the_focused_pane_and_single_terminal() {
         20.0,
     )
     .unwrap();
-    let right = panes.split(SplitDirection::Vertical).unwrap();
+    let right = panes
+        .split(
+            SplitDirection::Vertical,
+            crate::config::PaneCwdMode::Focused,
+        )
+        .unwrap();
     panes
         .get_pane_mut(PaneId(0))
         .unwrap()

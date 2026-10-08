@@ -389,7 +389,12 @@ fn plugin_pane_creation_is_exact_correlated_and_rejects_unsupported_tabs() {
     let tab_id = tabs.new_tab().unwrap();
     let tab = tabs.tab_mut_by_id(tab_id).unwrap();
     let panes = tab.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
-    panes.split(SplitDirection::Vertical).unwrap();
+    panes
+        .split(
+            SplitDirection::Vertical,
+            crate::config::PaneCwdMode::Focused,
+        )
+        .unwrap();
     let mut app = App::new_headless(Config::default()).unwrap();
     app.tabs = Some(tabs);
 
@@ -519,7 +524,12 @@ fn plugin_pane_movement_preserves_pty_and_returns_exact_destination_state() {
     let source = tabs.tab_mut_by_id(source_tab_id).unwrap();
     let moved_child = source.lone_child_id();
     let source_panes = source.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
-    let surviving_source_pane = source_panes.split(SplitDirection::Vertical).unwrap();
+    let surviving_source_pane = source_panes
+        .split(
+            SplitDirection::Vertical,
+            crate::config::PaneCwdMode::Focused,
+        )
+        .unwrap();
     let destination_tab_id = tabs.new_tab().unwrap();
     let destination_anchor = tabs
         .tab_by_id(destination_tab_id)
@@ -586,8 +596,18 @@ fn plugin_pane_layout_controls_background_tab_without_changing_terminal_owners()
     let target_tab_id = tabs.new_tab().unwrap();
     let target = tabs.tab_mut_by_id(target_tab_id).unwrap();
     let panes = target.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
-    panes.split(SplitDirection::Vertical).unwrap();
-    panes.split(SplitDirection::Horizontal).unwrap();
+    panes
+        .split(
+            SplitDirection::Vertical,
+            crate::config::PaneCwdMode::Focused,
+        )
+        .unwrap();
+    panes
+        .split(
+            SplitDirection::Horizontal,
+            crate::config::PaneCwdMode::Focused,
+        )
+        .unwrap();
     let original = panes.pane_ids();
     let owners: HashMap<_, _> = original
         .iter()
@@ -707,7 +727,12 @@ fn plugin_pane_layout_refuses_unsupported_or_incomplete_tabs_atomically() {
     let tab_id = tabs.new_tab().unwrap();
     let tab = tabs.tab_mut_by_id(tab_id).unwrap();
     let panes = tab.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
-    let sibling = panes.split(SplitDirection::Vertical).unwrap();
+    let sibling = panes
+        .split(
+            SplitDirection::Vertical,
+            crate::config::PaneCwdMode::Focused,
+        )
+        .unwrap();
     let original = panes.pane_ids();
     let mut app = App::new_headless(Config::default()).unwrap();
     app.tabs = Some(tabs);
@@ -793,7 +818,12 @@ fn plugin_pane_movement_refuses_unsupported_targets_before_detaching() {
         let source_tab_id = tabs.new_tab().unwrap();
         let source = tabs.tab_mut_by_id(source_tab_id).unwrap();
         let panes = source.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
-        let sibling = panes.split(SplitDirection::Vertical).unwrap();
+        let sibling = panes
+            .split(
+                SplitDirection::Vertical,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
         let destination_tab_id = tabs.new_tab().unwrap();
         let mut app = App::new_headless(Config::default()).unwrap();
         app.tabs = Some(tabs);
@@ -943,7 +973,12 @@ fn plugin_pane_movement_refuses_unsupported_targets_before_detaching() {
         .tab_mut_by_id(destination)
         .unwrap();
     let destination_panes = destination_tab.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
-    destination_panes.split(SplitDirection::Vertical).unwrap();
+    destination_panes
+        .split(
+            SplitDirection::Vertical,
+            crate::config::PaneCwdMode::Focused,
+        )
+        .unwrap();
     destination_panes.get_pane_mut(PaneId(0)).unwrap().closed = true;
     assert_refused(
         &move_result(&mut closed_anchor, source as u64, 0, destination as u64, 0),
@@ -991,9 +1026,18 @@ fn plugin_pane_closure_is_exact_correlated_and_preserves_last_pane() {
     let target_tab_id = tabs.new_tab().unwrap();
     let tab = tabs.tab_mut_by_id(target_tab_id).unwrap();
     let panes = tab.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
-    let first_sibling = panes.split(SplitDirection::Vertical).unwrap();
+    let first_sibling = panes
+        .split(
+            SplitDirection::Vertical,
+            crate::config::PaneCwdMode::Focused,
+        )
+        .unwrap();
     let second_sibling = panes
-        .split_target(first_sibling, SplitDirection::Horizontal)
+        .split_target(
+            first_sibling,
+            SplitDirection::Horizontal,
+            crate::config::PaneCwdMode::Focused,
+        )
         .unwrap();
     let active_tab_id = tabs.new_tab().unwrap();
     let mut app = App::new_headless(Config::default()).unwrap();

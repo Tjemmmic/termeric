@@ -695,7 +695,12 @@ fn scrollbar_drag_cannot_migrate_between_panes_in_the_same_tab() {
     let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
     let panes = tab.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
     let first = panes.focused_id();
-    let second = panes.split(SplitDirection::Vertical).unwrap();
+    let second = panes
+        .split(
+            SplitDirection::Vertical,
+            crate::config::PaneCwdMode::Focused,
+        )
+        .unwrap();
     panes
         .get_pane_mut(second)
         .unwrap()

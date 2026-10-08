@@ -600,7 +600,12 @@ mod tests {
             ShellIntegrationSupport::Enabled("bash");
         let panes = tab.panes_for_test(shell, 1600.0, 480.0, 8.0, 16.0);
         let original = panes.focused_id();
-        panes.split(SplitDirection::Vertical).unwrap();
+        panes
+            .split(
+                SplitDirection::Vertical,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
         let second = panes
             .pane_ids()
             .into_iter()
@@ -783,7 +788,12 @@ mod tests {
         };
         let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
         let panes = tab.panes_for_test(shell, 800.0, 480.0, 8.0, 16.0);
-        panes.split(SplitDirection::Vertical).unwrap();
+        panes
+            .split(
+                SplitDirection::Vertical,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
         let targets = panes.pane_ids();
         let tab_id = tab.id;
         let wait_all = |app: &mut App, expected: &str| {

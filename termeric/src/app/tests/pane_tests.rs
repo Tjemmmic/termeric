@@ -18,7 +18,12 @@ fn keyboard_mode_snapshot_follows_the_focused_pane() {
         20.0,
     )
     .unwrap();
-    let right = panes.split(SplitDirection::Vertical).unwrap();
+    let right = panes
+        .split(
+            SplitDirection::Vertical,
+            crate::config::PaneCwdMode::Focused,
+        )
+        .unwrap();
     panes.get_pane_mut(PaneId(0)).unwrap().terminal.set_mode(
         termeric_core::term::TerminalMode::CURSOR_KEYS_APPLICATION,
         true,
@@ -217,7 +222,12 @@ fn copy_mode_is_owned_by_one_focused_pane_and_disappears_after_focus_changes() {
         20.0,
     )
     .unwrap();
-    let right = panes.split(SplitDirection::Vertical).unwrap();
+    let right = panes
+        .split(
+            SplitDirection::Vertical,
+            crate::config::PaneCwdMode::Focused,
+        )
+        .unwrap();
     let mut tabs = TabManager::for_test(ShellConfig::default());
     tabs.new_tab_with_command(
         "/bin/sh",
@@ -276,7 +286,12 @@ fn mouse_focus_and_bracketed_paste_reach_the_focused_pane_in_order() {
         20.0,
     )
     .unwrap();
-    let receiving_pane = panes.split(SplitDirection::Vertical).unwrap();
+    let receiving_pane = panes
+        .split(
+            SplitDirection::Vertical,
+            crate::config::PaneCwdMode::Focused,
+        )
+        .unwrap();
     panes.focus(receiving_pane);
     panes
         .get_pane_mut(receiving_pane)
@@ -438,7 +453,12 @@ fn splitting_and_closing_back_to_one_pane_keep_the_first_terminal_without_orphan
             Some(original_pid)
         );
 
-        let added = panes.split(SplitDirection::Vertical).unwrap();
+        let added = panes
+            .split(
+                SplitDirection::Vertical,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
         assert_eq!(
             added,
             PaneId(cycle + 1),
@@ -524,7 +544,15 @@ fn pane_identity_survives_closing_back_to_one_pane_and_the_next_split() {
     )
     .unwrap();
     let panes = tab.panes_for_test(shell.clone(), 800.0, 480.0, 10.0, 20.0);
-    assert_eq!(panes.split(SplitDirection::Vertical).unwrap(), PaneId(1));
+    assert_eq!(
+        panes
+            .split(
+                SplitDirection::Vertical,
+                crate::config::PaneCwdMode::Focused
+            )
+            .unwrap(),
+        PaneId(1)
+    );
     assert!(panes.close(PaneId(0)));
     assert_eq!(tab.panes.focused_id(), PaneId(1));
     let snapshot = tab.capture_workspace_tab(0, false).unwrap();
@@ -539,7 +567,12 @@ fn pane_identity_survives_closing_back_to_one_pane_and_the_next_split() {
 
     assert!(tab.panes.get_pane(PaneId(1)).is_some());
     assert_eq!(
-        tab.panes.split(SplitDirection::Horizontal).unwrap(),
+        tab.panes
+            .split(
+                SplitDirection::Horizontal,
+                crate::config::PaneCwdMode::Focused
+            )
+            .unwrap(),
         PaneId(2)
     );
 }
@@ -584,7 +617,12 @@ fn collapsed_tab_rejects_retired_pane_and_divider_requests_after_resplit() {
     // Only the renderer-dependent first adoption is performed directly; all
     // closure and stale control requests below use the real app handlers.
     let panes = tab.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
-    let replacement = panes.split(SplitDirection::Vertical).unwrap();
+    let replacement = panes
+        .split(
+            SplitDirection::Vertical,
+            crate::config::PaneCwdMode::Focused,
+        )
+        .unwrap();
     assert_eq!(replacement, PaneId(3));
     assert_eq!(
         panes.get_dividers()[0].target,
@@ -708,13 +746,25 @@ fn pane_allocation_history_survives_failed_split_and_exhaustion() {
         };
         let panes = tab.panes_for_test(shell.clone(), 800.0, 480.0, 10.0, 20.0);
         panes.set_next_ids_for_test(next_pane, next_divider);
-        assert!(panes.split(SplitDirection::Vertical).is_err());
+        assert!(
+            panes
+                .split(
+                    SplitDirection::Vertical,
+                    crate::config::PaneCwdMode::Focused
+                )
+                .is_err()
+        );
         assert_eq!(panes.spawned_shell_count(), 0);
         shell.program = Some("/bin/sh".into());
         panes.adopt_primary_shell(shell);
         let spawned = next_pane == u32::MAX - 1;
         if spawned {
-            let last = panes.split(SplitDirection::Vertical).unwrap();
+            let last = panes
+                .split(
+                    SplitDirection::Vertical,
+                    crate::config::PaneCwdMode::Focused,
+                )
+                .unwrap();
             assert_eq!(last, PaneId(u32::MAX - 1));
             assert_eq!(
                 panes.get_dividers()[0].target,
@@ -726,7 +776,10 @@ fn pane_allocation_history_survives_failed_split_and_exhaustion() {
         let panes = &mut tab.panes;
         assert!(
             panes
-                .split(SplitDirection::Vertical)
+                .split(
+                    SplitDirection::Vertical,
+                    crate::config::PaneCwdMode::Focused
+                )
                 .unwrap_err()
                 .to_string()
                 .contains(expected_error)
@@ -772,7 +825,12 @@ fn pane_read_only_blocks_user_routes_but_not_protocol_replies_and_follows_owners
         panes.write_to(primary, b"blocked").unwrap_err().kind(),
         std::io::ErrorKind::PermissionDenied
     );
-    let writable = panes.split(SplitDirection::Vertical).unwrap();
+    let writable = panes
+        .split(
+            SplitDirection::Vertical,
+            crate::config::PaneCwdMode::Focused,
+        )
+        .unwrap();
     assert!(!panes.get_pane(writable).unwrap().read_only);
     assert!(panes.write_to(writable, b"").is_ok());
     assert!(panes.close(writable));
@@ -871,7 +929,12 @@ fn a_closed_split_tab_keeps_every_pane_and_is_named_for_the_focused_one() {
         env: Default::default(),
     };
     let panes = tab.panes_for_test(shell, 800.0, 160.0, 10.0, 20.0);
-    let right_id = panes.split(SplitDirection::Vertical).unwrap();
+    let right_id = panes
+        .split(
+            SplitDirection::Vertical,
+            crate::config::PaneCwdMode::Focused,
+        )
+        .unwrap();
 
     for (pane_id, directory) in [(PaneId(0), &left_dir), (right_id, &right_dir)] {
         panes

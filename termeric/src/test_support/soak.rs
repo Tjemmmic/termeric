@@ -83,8 +83,18 @@ fn scheduled_resource_soak_scenario() {
             20.0,
         )
         .unwrap();
-        panes.split(SplitDirection::Vertical).unwrap();
-        panes.split(SplitDirection::Horizontal).unwrap();
+        panes
+            .split(
+                SplitDirection::Vertical,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
+        panes
+            .split(
+                SplitDirection::Horizontal,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
         panes.resize(
             crate::terminal::geometry::TerminalArea::from_available_pixels(900.0, 600.0, 9.0, 18.0),
         );

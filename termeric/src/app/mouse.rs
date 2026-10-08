@@ -2292,7 +2292,12 @@ mod tests {
                 20.0,
             );
         let left = panes.focused_id();
-        let right = panes.split(SplitDirection::Vertical).unwrap();
+        let right = panes
+            .split(
+                SplitDirection::Vertical,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
         for pane in [left, right] {
             panes
                 .get_pane_mut(pane)
@@ -2766,7 +2771,12 @@ mod tests {
                 20.0,
             );
         let left = panes.focused_id();
-        let right = panes.split(SplitDirection::Vertical).unwrap();
+        let right = panes
+            .split(
+                SplitDirection::Vertical,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
         panes.focus(left);
         // A detected URL in the focused pane and an OSC 8 link in the other,
         // both starting at the second row's first cell.

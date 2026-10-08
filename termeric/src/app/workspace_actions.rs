@@ -261,11 +261,6 @@ impl App {
 
     pub(super) fn cycle_pane_cwd_mode(&mut self) {
         self.config.panes.cwd = self.config.panes.cwd.next();
-        if let Some(tabs) = &mut self.tabs {
-            for tab in tabs.all_tabs_mut() {
-                tab.panes.set_cwd_mode(self.config.panes.cwd);
-            }
-        }
         let label = self.config.panes.cwd.label();
         match self.save_config() {
             Ok(_) => self.toasts.success(format!("New panes use {label}")),
@@ -320,8 +315,7 @@ impl App {
         if !tab.allows_pane_splits() {
             anyhow::bail!("serial terminal tabs cannot be split into panes");
         }
-        tab.panes.set_cwd_mode(self.config.panes.cwd);
-        let new_id = tab.panes.split(direction)?;
+        let new_id = tab.panes.split(direction, self.config.panes.cwd)?;
         log::info!("Split pane {direction:?}, created pane {new_id:?}");
         self.refresh_focused_terminal_surfaces();
         self.request_redraw(RedrawReason::Action);
@@ -359,10 +353,11 @@ impl App {
         let direction_name = direction.name();
         let target = super::control_actions::control_running_pane(tab, pane_id)?.id;
         let manager = &mut tab.panes;
-        manager.set_cwd_mode(cwd_mode);
-        let new_id = manager.split_target(target, direction).map_err(|error| {
-            format!("Could not split pane {pane_id} {direction_name}: {error:#}")
-        })?;
+        let new_id = manager
+            .split_target(target, direction, cwd_mode)
+            .map_err(|error| {
+                format!("Could not split pane {pane_id} {direction_name}: {error:#}")
+            })?;
 
         log::info!(
             "Control split pane {pane_id} {direction_name}, created pane {}",

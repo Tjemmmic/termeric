@@ -544,8 +544,18 @@ mod tests {
             .active_tab_mut()
             .unwrap()
             .panes_for_test(shell, 400.0, 160.0, 10.0, 20.0);
-        panes.split(SplitDirection::Vertical).unwrap();
-        let locked = panes.split(SplitDirection::Horizontal).unwrap();
+        panes
+            .split(
+                SplitDirection::Vertical,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
+        let locked = panes
+            .split(
+                SplitDirection::Horizontal,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
         panes.get_pane_mut(locked).unwrap().read_only = true;
         let mut app = App::new_headless(Config::default()).unwrap();
         app.tabs = Some(tabs);
@@ -600,8 +610,18 @@ mod tests {
             .active_tab_mut()
             .unwrap()
             .panes_for_test(shell, 400.0, 160.0, 10.0, 20.0);
-        panes.split(SplitDirection::Vertical).unwrap();
-        panes.split(SplitDirection::Horizontal).unwrap();
+        panes
+            .split(
+                SplitDirection::Vertical,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
+        panes
+            .split(
+                SplitDirection::Horizontal,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
         let mut app = App::new_headless(Config::default()).unwrap();
         app.tabs = Some(tabs);
 
@@ -688,7 +708,10 @@ mod tests {
                 10.0,
                 20.0,
             )
-            .split(SplitDirection::Vertical)
+            .split(
+                SplitDirection::Vertical,
+                crate::config::PaneCwdMode::Focused,
+            )
             .unwrap();
         app.toggle_broadcast();
         let armed_targets = |app: &App| match &app.broadcast {

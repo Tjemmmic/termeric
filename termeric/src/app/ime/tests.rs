@@ -1032,7 +1032,12 @@ fn ime_commit_reaches_only_the_focused_pane_pty() {
     };
     let mut panes =
         PaneManager::for_test(40, 8, shell, 100, 1024 * 1024, 400.0, 160.0, 10.0, 20.0).unwrap();
-    let right = panes.split(SplitDirection::Vertical).unwrap();
+    let right = panes
+        .split(
+            SplitDirection::Vertical,
+            crate::config::PaneCwdMode::Focused,
+        )
+        .unwrap();
     panes.focus(right);
 
     let mut tabs = TabManager::new(40, 8, ShellConfig::default(), 100, 1024 * 1024);

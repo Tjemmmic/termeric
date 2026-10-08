@@ -69,7 +69,12 @@ fn divider_owner_fixture() -> App {
         env: Default::default(),
     };
     let panes = tab.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
-    panes.split(SplitDirection::Vertical).unwrap();
+    panes
+        .split(
+            SplitDirection::Vertical,
+            crate::config::PaneCwdMode::Focused,
+        )
+        .unwrap();
     let divider = panes.get_dividers()[0];
     app.divider_dragging = Some(DividerDrag {
         tab_id,
@@ -318,7 +323,12 @@ fn background_split_tab_app() -> (App, usize, usize) {
     let second = sleeping_tab("second");
     let first_tab = tabs.tab_mut_by_id(first).unwrap();
     let panes = first_tab.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
-    panes.split(SplitDirection::Vertical).unwrap();
+    panes
+        .split(
+            SplitDirection::Vertical,
+            crate::config::PaneCwdMode::Focused,
+        )
+        .unwrap();
     assert_eq!(panes.focused_id(), PaneId(1));
     assert_eq!(tabs.active_tab_id(), Some(second));
 
@@ -394,8 +404,18 @@ pub(super) fn harvest_rerun_capture_fixture_in(
         .panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
     let source = panes.focused_id();
     if split {
-        panes.split(SplitDirection::Vertical).unwrap();
-        panes.split(SplitDirection::Horizontal).unwrap();
+        panes
+            .split(
+                SplitDirection::Vertical,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
+        panes
+            .split(
+                SplitDirection::Horizontal,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
     }
     let captures = panes
         .pane_ids()
@@ -499,7 +519,10 @@ pub(super) fn split_harvest_capture_owner(app: &mut App, directory: &std::path::
         )]),
     };
     tab.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0)
-        .split(SplitDirection::Vertical)
+        .split(
+            SplitDirection::Vertical,
+            crate::config::PaneCwdMode::Focused,
+        )
         .unwrap()
 }
 
