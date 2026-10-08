@@ -60,11 +60,6 @@ impl App {
         animating |= self.unicode_picker.palette_mut().update_animation();
         let palette = self.palette_frame_info(metrics);
         animating |= self.shortcuts_panel.update_animation();
-        // Auto-cancel shortcut recording after 15s of no input so users
-        // can't get stuck in recording mode.
-        animating |= self
-            .shortcuts_panel
-            .tick_recording_timeout(std::time::Duration::from_secs(15));
         let shortcuts = self.shortcuts_frame_info(metrics);
         let info_overlay = self.info_overlay_frame_info();
         animating |= self.info_overlay.update_animation();

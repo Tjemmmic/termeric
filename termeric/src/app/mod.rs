@@ -2716,8 +2716,8 @@ impl App {
                 || !self.tab_slides.is_empty()
                 || self
                     .copy_flash_start
-                    .is_some_and(|start| start.elapsed().as_secs_f32() < 0.15)
-                || self.focus_change_time.elapsed().as_secs_f32() < 0.1
+                    .is_some_and(|start| start.elapsed() < COPY_FLASH_DURATION)
+                || self.focus_change_time.elapsed() < FOCUS_DIM_DURATION
                 || (self.tab_bar_hover.is_some() && self.tab_bar_hover_progress() < 1.0))
     }
 
@@ -2874,9 +2874,7 @@ impl App {
                     .request(redraw_scheduler::RedrawReason::Animation);
             }
 
-            if self.has_deadline_animation()
-                && now >= self.last_frame_time + std::time::Duration::from_millis(16)
-            {
+            if self.has_deadline_animation() && now >= self.last_frame_time + FRAME_INTERVAL {
                 self.redraw_scheduler
                     .request(redraw_scheduler::RedrawReason::Animation);
             }
@@ -2885,10 +2883,7 @@ impl App {
             self.redraw_scheduler
                 .request(redraw_scheduler::RedrawReason::Animation);
         }
-        if self
-            .shortcuts_panel
-            .tick_recording_timeout(std::time::Duration::from_secs(15))
-        {
+        if self.shortcuts_panel.tick_recording_timeout(now) {
             self.redraw_scheduler
                 .request(redraw_scheduler::RedrawReason::WindowEvent);
         }
@@ -2904,7 +2899,7 @@ impl App {
         deadlines.extend(self.agents_panel.refresh_deadline());
         deadlines.extend(self.next_agent_view_deadline(now));
         if self.unicode_picker.search_pending() {
-            deadlines.push(now + Duration::from_millis(16));
+            deadlines.push(now + FRAME_INTERVAL);
         }
         if !self.presentation_suspended() {
             if let Some(dwell) = &self.tab_drag_scroll {
@@ -2917,7 +2912,7 @@ impl App {
                 deadlines.push(text);
             }
             if self.has_deadline_animation() {
-                deadlines.push(self.last_frame_time + std::time::Duration::from_millis(16));
+                deadlines.push(self.last_frame_time + FRAME_INTERVAL);
             }
             if let Some(toast) = self.toasts.next_redraw_deadline(now) {
                 deadlines.push(toast);
@@ -2926,10 +2921,7 @@ impl App {
                 deadlines.push(graphics_animation);
             }
         }
-        if let Some(recording) = self
-            .shortcuts_panel
-            .recording_deadline(std::time::Duration::from_secs(15))
-        {
+        if let Some(recording) = self.shortcuts_panel.recording_deadline() {
             deadlines.push(recording);
         }
         if let Some(synchronized_output) = self.next_synchronized_output_deadline() {
@@ -3561,50 +3553,27 @@ impl App {
         }
     }
 
-    /// Calculate copy flash intensity (0.0 = no flash, 1.0 = full flash)
-    /// Flash fades out over ~150ms
+    /// Calculate copy flash intensity (0.0 = no flash, 1.0 = full flash),
+    /// fading out over `COPY_FLASH_DURATION`.
     fn copy_flash_intensity(&self) -> f32 {
-        const FLASH_DURATION: f32 = 0.15; // 150ms
-
         if self.reduced_motion_enabled() {
             return 0.0;
         }
-        match self.copy_flash_start {
-            Some(start) => {
-                let elapsed = start.elapsed().as_secs_f32();
-                if elapsed >= FLASH_DURATION {
-                    0.0
-                } else {
-                    // Fade out: 1.0 -> 0.0
-                    1.0 - (elapsed / FLASH_DURATION)
-                }
-            }
-            None => 0.0,
-        }
+        self.copy_flash_start.map_or(0.0, |start| {
+            1.0 - (start.elapsed().as_secs_f32() / COPY_FLASH_DURATION.as_secs_f32()).min(1.0)
+        })
     }
 
-    /// Calculate focus dim amount (0.0 = fully bright/focused, 1.0 = dimmed/unfocused)
-    /// Smoothly transitions over ~100ms when focus changes
+    /// How much the window is dimmed for not having focus, from 0.0 (bright)
+    /// to `FOCUS_DIM_AMOUNT`, easing over `FOCUS_DIM_DURATION` after focus
+    /// changes.
     fn focus_dim(&self) -> f32 {
-        const TRANSITION_DURATION: f32 = 0.1; // 100ms transition
-        const DIM_AMOUNT: f32 = 0.3; // How much to dim when unfocused (30%)
-
-        if self.reduced_motion_enabled() {
-            return if self.window_focused { 0.0 } else { DIM_AMOUNT };
-        }
-        let elapsed = self.focus_change_time.elapsed().as_secs_f32();
-        let t = (elapsed / TRANSITION_DURATION).min(1.0);
-
-        // Ease-out for smooth transition
-        let eased_t = 1.0 - (1.0 - t) * (1.0 - t);
-
-        if self.window_focused {
-            // Transitioning to focused: dim -> bright
-            DIM_AMOUNT * (1.0 - eased_t)
+        let elapsed = if self.reduced_motion_enabled() {
+            FOCUS_DIM_DURATION
         } else {
-            // Transitioning to unfocused: bright -> dim
-            DIM_AMOUNT * eased_t
-        }
+            self.focus_change_time.elapsed()
+        };
+        focus_dim_after(self.window_focused, elapsed)
     }
 
     fn handle_window_occlusion_change(&mut self, occluded: bool) {
@@ -3962,6 +3931,27 @@ fn update_visible_url_cache(
 /// The terminal cursor's opacity while the agent view has the keyboard.
 const AGENT_VIEW_RESTING_CURSOR: f32 = 0.35;
 
+/// How often a running animation is drawn, and how soon pending background
+/// work is polled again.
+const FRAME_INTERVAL: Duration = Duration::from_millis(16);
+/// How long the window flashes after a copy.
+const COPY_FLASH_DURATION: Duration = Duration::from_millis(150);
+/// How long the window takes to dim or brighten after focus changes, and
+/// how far it dims without focus.
+const FOCUS_DIM_DURATION: Duration = Duration::from_millis(100);
+const FOCUS_DIM_AMOUNT: f32 = 0.3;
+
+/// The dimming `elapsed` after the window gained (`focused`) or lost focus.
+fn focus_dim_after(focused: bool, elapsed: Duration) -> f32 {
+    let t = (elapsed.as_secs_f32() / FOCUS_DIM_DURATION.as_secs_f32()).min(1.0);
+    let eased = crate::ui::animation::ease_out_cubic(t);
+    if focused {
+        FOCUS_DIM_AMOUNT * (1.0 - eased)
+    } else {
+        FOCUS_DIM_AMOUNT * eased
+    }
+}
+
 /// How long SGR slow and rapid blinking text stays shown, then hidden.
 const SLOW_TEXT_BLINK_HALF_PERIOD: Duration = Duration::from_millis(500);
 const RAPID_TEXT_BLINK_HALF_PERIOD: Duration = Duration::from_millis(250);
@@ -4075,8 +4065,9 @@ fn sprout_menu_render_info(
 #[cfg(test)]
 mod helper_tests {
     use super::{
-        blink_phase_visible, command_keystrokes, cursor_opacity_at, cursor_state_requires_blink,
-        next_blink_boundary, resolve_cursor_presentation, select_agent_target,
+        FOCUS_DIM_AMOUNT, FOCUS_DIM_DURATION, blink_phase_visible, command_keystrokes,
+        cursor_opacity_at, cursor_state_requires_blink, focus_dim_after, next_blink_boundary,
+        resolve_cursor_presentation, select_agent_target,
     };
     use std::time::{Duration, Instant};
 
@@ -4105,6 +4096,20 @@ mod helper_tests {
             cursor_opacity_at(true, Duration::from_millis(1_000), half),
             1.0
         );
+    }
+
+    #[test]
+    fn focus_dimming_eases_out_cubically_and_settles_at_its_amount() {
+        let half = FOCUS_DIM_DURATION / 2;
+        // Half way, ease-out cubic has covered seven eighths of the change.
+        assert!((focus_dim_after(false, half) - FOCUS_DIM_AMOUNT * 0.875).abs() < 1e-6);
+        assert!((focus_dim_after(true, half) - FOCUS_DIM_AMOUNT * 0.125).abs() < 1e-6);
+        assert_eq!(focus_dim_after(false, Duration::ZERO), 0.0);
+        assert_eq!(
+            focus_dim_after(false, FOCUS_DIM_DURATION * 2),
+            FOCUS_DIM_AMOUNT
+        );
+        assert_eq!(focus_dim_after(true, FOCUS_DIM_DURATION), 0.0);
     }
 
     #[test]

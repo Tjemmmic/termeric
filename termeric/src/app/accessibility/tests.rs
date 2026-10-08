@@ -3091,9 +3091,7 @@ fn shortcut_recording_rejects_filter_focus_and_restores_editability_on_every_exi
         app.shortcuts_panel.open();
         app.accessibility.focus_override = Some(SHORTCUTS_INPUT);
         app.apply_shortcuts_action(ShortcutsAction::StartRecording(BindableAction::Copy));
-        let deadline = app
-            .shortcuts_panel
-            .recording_deadline(Duration::from_secs(30));
+        let deadline = app.shortcuts_panel.recording_deadline();
         let snapshot = app.accessibility_snapshot();
         let copy = *app
             .accessibility
@@ -3125,11 +3123,7 @@ fn shortcut_recording_rejects_filter_focus_and_restores_editability_on_every_exi
                     .filter
                     .is_empty()
             );
-            assert_eq!(
-                app.shortcuts_panel
-                    .recording_deadline(Duration::from_secs(30)),
-                deadline
-            );
+            assert_eq!(app.shortcuts_panel.recording_deadline(), deadline);
             assert!(app.shortcuts_panel.is_recording());
         }
         match exit {
@@ -3138,7 +3132,10 @@ fn shortcut_recording_rejects_filter_focus_and_restores_editability_on_every_exi
                     .handle_key(ShortcutsKey::Escape, &app.shortcut_registry);
             }
             "timeout" => {
-                assert!(app.shortcuts_panel.tick_recording_timeout(Duration::ZERO));
+                assert!(app.shortcuts_panel.tick_recording_timeout(
+                    std::time::Instant::now()
+                        + crate::ui::shortcuts_panel::ShortcutsPanel::RECORDING_TIMEOUT
+                ));
             }
             "capture" => {
                 let chord = KeyChord::new("F24", true, true, true, false);

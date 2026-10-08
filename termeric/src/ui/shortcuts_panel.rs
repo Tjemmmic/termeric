@@ -256,6 +256,9 @@ pub struct ShortcutsPanel {
 }
 
 impl ShortcutsPanel {
+    /// How long recording waits for a chord before giving up.
+    pub const RECORDING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
     pub fn new() -> Self {
         Self {
             animation: OverlayAnimation::new(),
@@ -299,17 +302,14 @@ impl ShortcutsPanel {
         self.recording_started = None;
     }
 
-    /// Cancel recording if it's been idle longer than `timeout`. Returns
-    /// true if a cancellation happened this call (caller may want to
-    /// redraw).
-    pub fn tick_recording_timeout(&mut self, timeout: std::time::Duration) -> bool {
-        if !self.recording {
-            return false;
-        }
-        let Some(started) = self.recording_started else {
-            return false;
-        };
-        if started.elapsed() >= timeout {
+    /// Cancel recording once `RECORDING_TIMEOUT` has passed by `now`, so
+    /// nobody is left stuck recording. Returns true if it was cancelled
+    /// this call (the caller may want to redraw).
+    pub fn tick_recording_timeout(&mut self, now: std::time::Instant) -> bool {
+        if self
+            .recording_deadline()
+            .is_some_and(|deadline| now >= deadline)
+        {
             self.recording = false;
             self.recording_action = None;
             self.recording_started = None;
@@ -319,10 +319,11 @@ impl ShortcutsPanel {
         false
     }
 
-    pub fn recording_deadline(&self, timeout: std::time::Duration) -> Option<std::time::Instant> {
+    /// When an unfinished recording is cancelled.
+    pub fn recording_deadline(&self) -> Option<std::time::Instant> {
         self.recording
             .then_some(self.recording_started?)
-            .map(|started| started + timeout)
+            .map(|started| started + Self::RECORDING_TIMEOUT)
     }
 
     /// Toggle open/close
@@ -901,7 +902,11 @@ mod tests {
         assert!(panel.build_info(&registry).notice.is_none());
 
         panel.handle_key(ShortcutsKey::Enter, &registry);
-        assert!(panel.tick_recording_timeout(std::time::Duration::ZERO));
+        assert!(
+            panel.tick_recording_timeout(
+                std::time::Instant::now() + ShortcutsPanel::RECORDING_TIMEOUT
+            )
+        );
         assert_eq!(
             panel.build_info(&registry).notice.unwrap().message(),
             "Recording timed out"
