@@ -313,6 +313,7 @@ enabled = false
 # [agents.claude-code.profiles.review]
 # description = "Read-only review"
 # args = ["--permission-mode", "plan"]
+# env = {}                       # added to the agent's env, winning on a clash
 #
 # An agent Termeric doesn't ship. When its program is a launcher such as npx,
 # node, docker, or sh, add the agent's own name to `detect`.
