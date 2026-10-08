@@ -983,22 +983,17 @@ fn ime_commit_reaches_the_active_information_overlay_input_only() {
 fn ime_commit_reaches_only_the_focused_pane_pty() {
     use crate::config::ShellConfig;
     use crate::panes::{PaneManager, SplitDirection};
+    use crate::tabs::TerminalIdentity;
     use std::collections::HashMap;
-    use std::time::{Duration, Instant};
 
-    if !std::path::Path::new("/bin/sh").is_file() {
-        return;
-    }
     let shell = ShellConfig {
         program: Some("/bin/sh".into()),
-        args: vec![
-            "-c".into(),
-            "stty raw -echo; dd bs=1 count=6 2>/dev/null | od -An -tx1; sleep 0.1".into(),
-        ],
+        args: vec!["-c".into(), crate::test_support::byte_probe(6)],
         env: Default::default(),
     };
+    // Wide enough that each half shows READY and six bytes on one row.
     let mut panes =
-        PaneManager::for_test(40, 8, shell, 100, 1024 * 1024, 400.0, 160.0, 10.0, 20.0).unwrap();
+        PaneManager::for_test(80, 8, shell, 100, 1024 * 1024, 800.0, 160.0, 10.0, 20.0).unwrap();
     let right = panes
         .split(
             SplitDirection::Vertical,
@@ -1018,34 +1013,29 @@ fn ime_commit_reaches_only_the_focused_pane_pty() {
     )
     .unwrap();
     tabs.active_tab_mut().unwrap().panes = panes;
+    let tab_id = tabs.active_tab_id().unwrap();
     let mut app = App::new_headless(Config::default()).unwrap();
     app.tabs = Some(tabs);
-
-    app.handle_ime_event(Ime::Preedit("にほん".into(), None));
-    let quiet_deadline = Instant::now() + Duration::from_millis(80);
-    while Instant::now() < quiet_deadline {
-        app.process_pty_events();
-        std::thread::yield_now();
+    let left = TerminalIdentity {
+        tab_id,
+        pane_id: PaneId(0),
+    };
+    let right = TerminalIdentity {
+        tab_id,
+        pane_id: right,
+    };
+    for pane in [left, right] {
+        app.wait_for_terminal_text(pane, "READY");
     }
-    let pane_text = |app: &App, id| {
-        app.active_panes()
-            .get_pane(id)
-            .unwrap()
-            .terminal
-            .rows_text(0, 7)
-    };
-    assert!(!pane_text(&app, right).contains("e6 97 a5"));
 
+    // Each probe shows the first six bytes it reads, so the commit's six
+    // bytes showing also proves the preedit before it wrote nothing.
+    app.handle_ime_event(Ime::Preedit("にほん".into(), None));
     app.handle_ime_event(Ime::Commit("日本".into()));
-    let deadline = Instant::now() + Duration::from_secs(2);
-    let output = loop {
-        app.process_pty_events();
-        let output = pane_text(&app, right);
-        if output.contains("e6 97 a5 e6 9c ac") || Instant::now() >= deadline {
-            break output;
-        }
-        std::thread::yield_now();
-    };
-    assert!(output.contains("e6 97 a5 e6 9c ac"), "{output:?}");
-    assert!(!pane_text(&app, PaneId(0)).contains("e6 97 a5"));
+    app.wait_for_terminal_text(right, "e6 97 a5 e6 9c ac");
+
+    // Six bytes written to the other pane are the first it reads.
+    app.active_panes_mut().focus(left.pane_id);
+    app.write_to_pty(b"ZZZZZZ");
+    app.wait_for_terminal_text(left, "5a 5a 5a 5a 5a 5a");
 }
