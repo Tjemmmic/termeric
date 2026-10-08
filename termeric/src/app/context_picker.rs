@@ -19,53 +19,45 @@ impl App {
         )
     }
 
-    /// Keys for the context picker: choosing sources, then typing file paths.
-    pub(super) fn handle_context_picker_key(&mut self, key: &winit::keyboard::Key) {
-        use crate::ui::context_picker::{ContextPickerAction, ContextPickerPhase};
+    /// Keys for the context picker: Tab and Shift+Tab move focus through
+    /// the list or field and the buttons, Enter and Space press the focused
+    /// button (from the list, Enter inserts and Space toggles the selected
+    /// source), Escape cancels or goes back, the arrows and Page Up/Down
+    /// move through the sources, and the focused field takes typing.
+    pub(super) fn handle_context_picker_key(&mut self, key: &winit::keyboard::Key, repeat: bool) {
+        use crate::ui::context_picker::{
+            ContextPickerAction, ContextPickerFocus, ContextPickerPhase,
+        };
         use winit::keyboard::{Key, NamedKey};
         let request_id = self.context_picker.request_id();
-        let action = match (self.context_picker.phase(), key) {
-            (_, Key::Named(NamedKey::Escape)) => ContextPickerAction::Cancel { request_id },
-            (_, Key::Named(NamedKey::Enter)) => ContextPickerAction::Primary { request_id },
-            (ContextPickerPhase::Sources, Key::Named(NamedKey::ArrowUp)) => {
-                ContextPickerAction::Move {
-                    request_id,
-                    delta: -1,
-                }
+        let phase = self.context_picker.phase();
+        let page = self.context_picker.viewport_rows() as isize;
+        let move_by = |delta| ContextPickerAction::Move { request_id, delta };
+        let action = match key {
+            Key::Named(NamedKey::Escape) => ContextPickerAction::Cancel { request_id },
+            Key::Named(NamedKey::Tab) => {
+                self.context_picker
+                    .cycle_focus(request_id, self.modifiers.shift_key());
+                ContextPickerAction::None
             }
-            (ContextPickerPhase::Sources, Key::Named(NamedKey::ArrowDown)) => {
-                ContextPickerAction::Move {
-                    request_id,
-                    delta: 1,
-                }
+            // A held key must not press something it did not mean to reach.
+            Key::Named(NamedKey::Enter | NamedKey::Space) if repeat => ContextPickerAction::None,
+            Key::Named(NamedKey::Enter) => self.context_picker.enter_action(request_id),
+            Key::Named(NamedKey::Space) => self.context_picker.space_action(request_id),
+            Key::Named(named) if phase == ContextPickerPhase::Sources => match named {
+                NamedKey::ArrowUp => move_by(-1),
+                NamedKey::ArrowDown => move_by(1),
+                NamedKey::PageUp => move_by(-page),
+                NamedKey::PageDown => move_by(page),
+                _ => ContextPickerAction::None,
+            },
+            _ if self.context_picker.focus() != ContextPickerFocus::FileInput => {
+                ContextPickerAction::None
             }
-            (ContextPickerPhase::Sources, Key::Named(NamedKey::PageUp)) => {
-                ContextPickerAction::Move {
-                    request_id,
-                    delta: -(self.context_picker.viewport_rows() as isize),
-                }
-            }
-            (ContextPickerPhase::Sources, Key::Named(NamedKey::PageDown)) => {
-                ContextPickerAction::Move {
-                    request_id,
-                    delta: self.context_picker.viewport_rows() as isize,
-                }
-            }
-            (ContextPickerPhase::Sources, Key::Named(NamedKey::Space)) => self
-                .context_picker
-                .selected_source()
-                .map_or(ContextPickerAction::None, |source| {
-                    ContextPickerAction::Toggle { request_id, source }
-                }),
-            (ContextPickerPhase::Sources, Key::Character(key))
-                if key.as_str().eq_ignore_ascii_case("e") =>
-            {
-                ContextPickerAction::EditFiles { request_id }
-            }
-            (ContextPickerPhase::FilePaths, Key::Named(NamedKey::Backspace)) => {
+            Key::Named(NamedKey::Backspace) => {
                 ContextPickerAction::BackspaceFileInput { request_id }
             }
-            (ContextPickerPhase::FilePaths, Key::Character(text)) => {
+            Key::Character(text) => {
                 text.chars()
                     .next()
                     .map_or(ContextPickerAction::None, |character| {
@@ -79,6 +71,17 @@ impl App {
         };
         self.apply_context_picker_action(action);
         self.request_redraw(RedrawReason::KeyboardInput);
+    }
+
+    /// A primary press on the context picker: a button or source row takes
+    /// focus and is pressed, and the file field takes focus.
+    pub(super) fn press_context_picker(&mut self, x: f32, y: f32) {
+        let snapshot = self.context_picker.snapshot();
+        let Some(target) = self.context_picker_layout().target_at(x, y, &snapshot) else {
+            return;
+        };
+        let action = self.context_picker.press(snapshot.request_id, target);
+        self.apply_context_picker_action(action);
     }
 
     /// Open the context picker for the agent in `terminal`. Terminal output
@@ -224,5 +227,130 @@ impl App {
                     && not_an_agent(t, t.focused_terminal_identity().pane_id)
             })
             .and_then(|(_, tab)| tab.focused_terminal().map(tail))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::context_picker::{
+        ContextPickerButton, ContextPickerFocus, ContextPickerPhase, ContextSourceId,
+    };
+    use winit::keyboard::{Key, NamedKey};
+
+    fn open_in(app: &mut App, directory: &std::path::Path) -> u64 {
+        app.context_picker.set_reduced_motion(true);
+        app.context_picker.open(
+            Some(directory.display().to_string()),
+            crate::agents::AgentTarget {
+                identity: crate::tabs::TerminalIdentity {
+                    tab_id: usize::MAX,
+                    pane_id: crate::panes::PaneId(0),
+                },
+                agent_id: "fixture-agent".into(),
+                agent_name: "Fixture Agent".into(),
+            },
+        )
+    }
+
+    fn press(app: &mut App, key: NamedKey) {
+        app.handle_context_picker_key(&Key::Named(key), false);
+    }
+
+    #[test]
+    fn letter_keys_do_nothing_beside_the_sources() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut app = App::new_headless(Config::default()).unwrap();
+        let request = open_in(&mut app, directory.path());
+        let before = app.context_picker.snapshot().sources;
+        for letter in ["e", "E", "x"] {
+            app.handle_context_picker_key(&Key::Character(letter.into()), false);
+        }
+        assert!(app.context_picker.is_awaiting(request));
+        assert_eq!(app.context_picker.phase(), ContextPickerPhase::Sources);
+        assert_eq!(app.context_picker.focus(), ContextPickerFocus::Sources);
+        assert_eq!(app.context_picker.snapshot().sources, before);
+    }
+
+    #[test]
+    fn choose_files_is_reached_with_tab_and_pressed_with_enter_or_space() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("fixture.rs"), "fn fixture() {}\n").unwrap();
+        let mut app = App::new_headless(Config::default()).unwrap();
+        let request = open_in(&mut app, directory.path());
+        press(&mut app, NamedKey::Tab);
+        assert_eq!(
+            app.context_picker.focus(),
+            ContextPickerFocus::Button(ContextPickerButton::ChooseFiles)
+        );
+        app.handle_context_picker_key(&Key::Named(NamedKey::Enter), true);
+        assert_eq!(
+            app.context_picker.phase(),
+            ContextPickerPhase::Sources,
+            "a held key presses nothing"
+        );
+        press(&mut app, NamedKey::Space);
+        assert_eq!(app.context_picker.phase(), ContextPickerPhase::FilePaths);
+        assert_eq!(app.context_picker.focus(), ContextPickerFocus::FileInput);
+
+        for character in "fixture.rs".chars() {
+            app.handle_context_picker_key(&Key::Character(character.to_string().into()), false);
+        }
+        press(&mut app, NamedKey::Tab);
+        app.handle_context_picker_key(&Key::Character("x".into()), false);
+        assert_eq!(
+            app.context_picker.snapshot().file_input,
+            "fixture.rs",
+            "only the focused field takes typing"
+        );
+        press(&mut app, NamedKey::Tab);
+        assert_eq!(
+            app.context_picker.focus(),
+            ContextPickerFocus::Button(ContextPickerButton::Primary)
+        );
+        press(&mut app, NamedKey::Enter);
+        assert_eq!(app.context_picker.phase(), ContextPickerPhase::Sources);
+        assert_eq!(
+            app.context_picker.focus(),
+            ContextPickerFocus::Button(ContextPickerButton::ChooseFiles)
+        );
+        let files = app
+            .context_picker
+            .sources()
+            .iter()
+            .find(|source| source.id == ContextSourceId::SpecificFiles)
+            .unwrap();
+        assert!(files.selected);
+
+        press(&mut app, NamedKey::Enter);
+        press(&mut app, NamedKey::Escape);
+        assert_eq!(
+            app.context_picker.phase(),
+            ContextPickerPhase::Sources,
+            "Escape goes back from the editor"
+        );
+        press(&mut app, NamedKey::ArrowDown);
+        assert_eq!(
+            app.context_picker.focus(),
+            ContextPickerFocus::Sources,
+            "the arrows return focus to the list they move"
+        );
+        press(&mut app, NamedKey::Escape);
+        assert!(!app.context_picker.is_awaiting(request));
+    }
+
+    #[test]
+    fn a_press_on_choose_files_opens_the_editor_from_its_drawn_bounds() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut app = App::new_headless(Config::default()).unwrap();
+        open_in(&mut app, directory.path());
+        let [x, y] = app
+            .context_picker_layout()
+            .choose_files_button
+            .unwrap()
+            .center();
+        app.press_context_picker(x, y);
+        assert_eq!(app.context_picker.phase(), ContextPickerPhase::FilePaths);
+        assert_eq!(app.context_picker.focus(), ContextPickerFocus::FileInput);
     }
 }

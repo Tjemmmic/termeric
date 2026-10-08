@@ -1,5 +1,6 @@
 use super::terminal::append_accessible_cell;
 use super::*;
+use crate::ui::context_picker::ContextPickerButton;
 use termeric_core::CellContent;
 
 #[test]
@@ -4094,13 +4095,19 @@ fn context_picker_is_one_modal_checkbox_tree_with_shared_geometry() {
         .accessibility
         .context
         .nodes
-        .get(&ContextSemanticTarget::Cancel(request))
+        .get(&ContextSemanticTarget::Button(
+            request,
+            ContextPickerButton::Cancel,
+        ))
         .unwrap();
     let primary = *app
         .accessibility
         .context
         .nodes
-        .get(&ContextSemanticTarget::Primary(request))
+        .get(&ContextSemanticTarget::Button(
+            request,
+            ContextPickerButton::Primary,
+        ))
         .unwrap();
 
     assert_eq!(node(ROOT).children(), &[CONTEXT_DIALOG]);
@@ -4141,20 +4148,34 @@ fn context_file_editor_is_settable_and_workspace_bounded_semantically() {
     std::fs::write(directory.path().join("fixture.rs"), "fn fixture() {}\n").unwrap();
     let mut app = App::new_headless(Config::default()).unwrap();
     let request = show_context_fixture(&mut app, 71, Some(directory.path().display().to_string()));
-    app.accessibility_snapshot();
-    let files = *app
+    let sources = app.accessibility_snapshot();
+    let choose = *app
         .accessibility
         .context
         .nodes
-        .get(&ContextSemanticTarget::Source {
-            request_id: request,
-            source: crate::ui::context_picker::ContextSourceId::SpecificFiles,
-        })
+        .get(&ContextSemanticTarget::Button(
+            request,
+            ContextPickerButton::ChooseFiles,
+        ))
         .unwrap();
+    let choose_node = &sources
+        .nodes
+        .iter()
+        .find(|(node_id, _)| *node_id == choose)
+        .unwrap()
+        .1;
+    assert_eq!(choose_node.role(), Role::Button);
+    assert!(choose_node.supports_action(Action::Click));
+    assert_eq!(
+        choose_node.bounds(),
+        Some(bounds_rect(
+            app.context_picker_layout().choose_files_button.unwrap()
+        ))
+    );
     app.handle_accessibility_action(ActionRequest {
         action: Action::Click,
         target_tree: TreeId::ROOT,
-        target_node: files,
+        target_node: choose,
         data: None,
     });
 
@@ -4169,7 +4190,10 @@ fn context_file_editor_is_settable_and_workspace_bounded_semantically() {
         .accessibility
         .context
         .nodes
-        .get(&ContextSemanticTarget::Primary(request))
+        .get(&ContextSemanticTarget::Button(
+            request,
+            ContextPickerButton::Primary,
+        ))
         .unwrap();
     let input_node = &form
         .nodes
@@ -4177,6 +4201,7 @@ fn context_file_editor_is_settable_and_workspace_bounded_semantically() {
         .find(|(node_id, _)| *node_id == input)
         .unwrap()
         .1;
+    assert_eq!(form.focus, input, "the editor opens with its field focused");
     assert_eq!(input_node.role(), Role::TextInput);
     assert!(input_node.supports_action(Action::SetValue));
     app.handle_accessibility_action(ActionRequest {
@@ -4198,8 +4223,92 @@ fn context_file_editor_is_settable_and_workspace_bounded_semantically() {
         .into_iter()
         .find(|source| source.id == crate::ui::context_picker::ContextSourceId::SpecificFiles)
         .unwrap();
-    assert!(source.selected);
+    assert!(source.selected && source.available);
     assert!(source.label.contains("(1)"));
+    let focus = app.accessibility_snapshot().focus;
+    assert_eq!(
+        app.accessibility.context.targets.get(&focus),
+        Some(&ContextSemanticTarget::Button(
+            request,
+            ContextPickerButton::ChooseFiles
+        )),
+        "saving returns focus to Choose Files…"
+    );
+}
+
+#[test]
+fn context_picker_assistive_focus_follows_its_buttons_both_ways() {
+    use crate::ui::context_picker::ContextPickerFocus;
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.context_picker.set_reduced_motion(true);
+    let request = show_context_fixture(&mut app, 72, None);
+    let snapshot = app.accessibility_snapshot();
+    let node = |target| {
+        *app.accessibility
+            .context
+            .nodes
+            .get(&ContextSemanticTarget::Button(request, target))
+            .unwrap()
+    };
+    let (choose, cancel, insert) = (
+        node(ContextPickerButton::ChooseFiles),
+        node(ContextPickerButton::Cancel),
+        node(ContextPickerButton::Primary),
+    );
+    let dialog = &snapshot
+        .nodes
+        .iter()
+        .find(|(id, _)| *id == CONTEXT_DIALOG)
+        .unwrap()
+        .1;
+    assert!(dialog.children().ends_with(&[choose, cancel, insert]));
+    let choose_node = &snapshot
+        .nodes
+        .iter()
+        .find(|(id, _)| *id == choose)
+        .unwrap()
+        .1;
+    assert!(
+        choose_node.is_disabled(),
+        "no working directory, no files to choose"
+    );
+    app.handle_accessibility_action(ActionRequest {
+        action: Action::Click,
+        target_tree: TreeId::ROOT,
+        target_node: choose,
+        data: None,
+    });
+    assert_eq!(
+        app.context_picker.phase(),
+        crate::ui::context_picker::ContextPickerPhase::Sources
+    );
+
+    app.handle_accessibility_action(ActionRequest {
+        action: Action::Focus,
+        target_tree: TreeId::ROOT,
+        target_node: cancel,
+        data: None,
+    });
+    assert_eq!(
+        app.context_picker.focus(),
+        ContextPickerFocus::Button(ContextPickerButton::Cancel)
+    );
+    assert_eq!(app.accessibility_snapshot().focus, cancel);
+
+    app.handle_context_picker_key(
+        &winit::keyboard::Key::Named(winit::keyboard::NamedKey::Tab),
+        false,
+    );
+    assert_eq!(app.accessibility_snapshot().focus, insert);
+    app.handle_context_picker_key(
+        &winit::keyboard::Key::Named(winit::keyboard::NamedKey::Tab),
+        false,
+    );
+    assert_eq!(
+        app.context_picker.focus(),
+        ContextPickerFocus::Sources,
+        "Tab skips the disabled Choose Files… and wraps to the list"
+    );
 }
 
 #[test]
@@ -4211,7 +4320,10 @@ fn context_picker_rejects_stale_background_and_cancelled_gather_actions() {
         .accessibility
         .context
         .nodes
-        .get(&ContextSemanticTarget::Cancel(stale))
+        .get(&ContextSemanticTarget::Button(
+            stale,
+            ContextPickerButton::Cancel,
+        ))
         .unwrap();
     let current = show_context_fixture(&mut app, 81, None);
     app.accessibility_snapshot();
@@ -4245,13 +4357,19 @@ fn context_picker_rejects_stale_background_and_cancelled_gather_actions() {
         .accessibility
         .context
         .nodes
-        .get(&ContextSemanticTarget::Cancel(current))
+        .get(&ContextSemanticTarget::Button(
+            current,
+            ContextPickerButton::Cancel,
+        ))
         .unwrap();
     let primary = *app
         .accessibility
         .context
         .nodes
-        .get(&ContextSemanticTarget::Primary(current))
+        .get(&ContextSemanticTarget::Button(
+            current,
+            ContextPickerButton::Primary,
+        ))
         .unwrap();
     assert!(
         gathering

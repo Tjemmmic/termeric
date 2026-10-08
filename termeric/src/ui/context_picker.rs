@@ -87,6 +87,85 @@ pub enum ContextPickerCompletion {
     Ready { target: AgentTarget, text: String },
 }
 
+/// The picker's buttons. Every action is a row or one of them; there are no
+/// letter keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ContextPickerButton {
+    /// Open the editor for the paths the Specific Files source sends.
+    ChooseFiles,
+    /// Close the picker, or go back from the file editor; Escape answers it.
+    Cancel,
+    /// Insert the chosen context, or save the typed paths.
+    Primary,
+}
+
+impl ContextPickerButton {
+    /// Left to right as drawn, which is also the focus order after the
+    /// phase's list or field.
+    const SOURCES_ROW: [Self; 3] = [Self::ChooseFiles, Self::Cancel, Self::Primary];
+    const DIALOG_ROW: [Self; 2] = [Self::Cancel, Self::Primary];
+
+    /// The buttons `phase` offers: Choose Files… only beside the sources.
+    pub fn row(phase: ContextPickerPhase) -> &'static [Self] {
+        if phase == ContextPickerPhase::Sources {
+            &Self::SOURCES_ROW
+        } else {
+            &Self::DIALOG_ROW
+        }
+    }
+
+    pub fn label(self, phase: ContextPickerPhase) -> &'static str {
+        match (self, phase) {
+            (Self::ChooseFiles, _) => "Choose Files…",
+            (Self::Cancel, ContextPickerPhase::FilePaths) => "Back",
+            (Self::Cancel, _) => "Cancel",
+            (Self::Primary, ContextPickerPhase::Sources) => "Insert",
+            (Self::Primary, ContextPickerPhase::FilePaths) => "Save",
+            (Self::Primary, ContextPickerPhase::Gathering) => "Gathering…",
+        }
+    }
+
+    /// What pressing it does for request `request_id`.
+    pub fn action(self, request_id: u64) -> ContextPickerAction {
+        match self {
+            Self::ChooseFiles => ContextPickerAction::EditFiles { request_id },
+            Self::Cancel => ContextPickerAction::Cancel { request_id },
+            Self::Primary => ContextPickerAction::Primary { request_id },
+        }
+    }
+
+    /// Whether it can be pressed in `phase`: Choose Files… needs a working
+    /// folder for the paths, and nothing inserts while gathering.
+    fn enabled(self, phase: ContextPickerPhase, has_working_folder: bool) -> bool {
+        Self::row(phase).contains(&self)
+            && match self {
+                Self::ChooseFiles => has_working_folder,
+                Self::Cancel => true,
+                Self::Primary => phase != ContextPickerPhase::Gathering,
+            }
+    }
+}
+
+/// Where the picker's keyboard focus is. Tab and Shift+Tab move it through
+/// the phase's list or field and then its enabled buttons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextPickerFocus {
+    /// The source list: the arrows move its selection and Space toggles it.
+    Sources,
+    /// The file-path field, which takes typing.
+    FileInput,
+    Button(ContextPickerButton),
+}
+
+/// What a point on the picker lands on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextPickerTarget {
+    Button(ContextPickerButton),
+    /// The source at this index.
+    Source(usize),
+    FileInput,
+}
+
 #[derive(Debug, Clone)]
 pub struct ContextPickerSnapshot {
     pub request_id: u64,
@@ -98,23 +177,24 @@ pub struct ContextPickerSnapshot {
     pub status: Option<String>,
     pub awaiting: bool,
     pub animation: f32,
+    pub focus: ContextPickerFocus,
+    /// Whether there is a working folder to choose files in.
+    pub has_working_folder: bool,
 }
 
 impl ContextPickerSnapshot {
-    pub fn primary_label(&self) -> &'static str {
-        match self.phase {
-            ContextPickerPhase::Sources => "Insert",
-            ContextPickerPhase::FilePaths => "Save",
-            ContextPickerPhase::Gathering => "Gathering…",
-        }
+    /// The buttons this phase offers, left to right.
+    pub fn buttons(&self) -> &'static [ContextPickerButton] {
+        ContextPickerButton::row(self.phase)
     }
 
-    pub fn cancel_label(&self) -> &'static str {
-        if self.phase == ContextPickerPhase::FilePaths {
-            "Back"
-        } else {
-            "Cancel"
-        }
+    pub fn is_enabled(&self, button: ContextPickerButton) -> bool {
+        button.enabled(self.phase, self.has_working_folder)
+    }
+
+    /// Whether `button` is drawn with the focus ring.
+    pub fn is_focused(&self, button: ContextPickerButton) -> bool {
+        self.awaiting && self.focus == ContextPickerFocus::Button(button)
     }
 }
 
@@ -125,6 +205,8 @@ pub struct ContextPickerLayout {
     pub card: Bounds,
     pub content: Bounds,
     pub file_input: Bounds,
+    /// Present only beside the sources.
+    pub choose_files_button: Option<Bounds>,
     pub cancel_button: Bounds,
     pub primary_button: Bounds,
     /// The status line under the buttons, for gathering progress and errors.
@@ -196,11 +278,33 @@ impl ContextPickerLayout {
         let button_height = (cell_height * 1.8).round();
         let button_gap = (cell_width * 1.5).round();
         let button = |x: f32, width: f32| Bounds::new(x, button_y, width.max(1.0), button_height);
-        let available_button_width = (card_width - padding * 2.0 - button_gap).max(2.0);
-        let cancel_width = (available_button_width * 0.38).round().max(1.0);
-        let primary_width = (available_button_width - cancel_width).max(1.0);
-        let cancel_x = card.x + padding;
-        let primary_x = cancel_x + cancel_width + button_gap;
+        // The row inside the padding, less the gaps between `buttons` buttons.
+        let row_width = |buttons: usize| {
+            (card_width - padding * 2.0 - button_gap * buttons.saturating_sub(1) as f32)
+                .max(buttons as f32)
+        };
+        let row_x = card.x + padding;
+        let (choose_files_button, cancel_button, primary_button) =
+            if phase == ContextPickerPhase::Sources {
+                // Choose Files… and Cancel share the row equally with a
+                // wider Insert.
+                let available = row_width(3);
+                let small = (available * 0.3).round();
+                let step = small + button_gap;
+                (
+                    Some(button(row_x, small)),
+                    button(row_x + step, small),
+                    button(row_x + step * 2.0, available - small * 2.0),
+                )
+            } else {
+                let available = row_width(2);
+                let cancel = (available * 0.38).round();
+                (
+                    None,
+                    button(row_x, cancel),
+                    button(row_x + cancel + button_gap, available - cancel),
+                )
+            };
 
         Self {
             card,
@@ -211,8 +315,9 @@ impl ContextPickerLayout {
                 width: content.width,
                 height: row_height.round(),
             },
-            cancel_button: button(cancel_x, cancel_width),
-            primary_button: button(primary_x, primary_width),
+            choose_files_button,
+            cancel_button,
+            primary_button,
             // Half a cell below the buttons, inside the padding; its text is
             // centred in it.
             status: Bounds::new(
@@ -250,29 +355,38 @@ impl ContextPickerLayout {
             .map(|visible_index| scroll_offset + visible_index)
     }
 
-    pub fn hit_test(
+    /// Where `button` is drawn, if this phase offers it.
+    pub fn button(&self, button: ContextPickerButton) -> Option<Bounds> {
+        match button {
+            ContextPickerButton::ChooseFiles => self.choose_files_button,
+            ContextPickerButton::Cancel => Some(self.cancel_button),
+            ContextPickerButton::Primary => Some(self.primary_button),
+        }
+    }
+
+    /// What a point lands on in `snapshot`'s phase, if anything.
+    pub fn target_at(
         &self,
         x: f32,
         y: f32,
         snapshot: &ContextPickerSnapshot,
-    ) -> ContextPickerAction {
-        let request_id = snapshot.request_id;
-        if self.cancel_button.contains(x, y) {
-            return ContextPickerAction::Cancel { request_id };
+    ) -> Option<ContextPickerTarget> {
+        if let Some(button) = snapshot.buttons().iter().copied().find(|&button| {
+            self.button(button)
+                .is_some_and(|bounds| bounds.contains(x, y))
+        }) {
+            return Some(ContextPickerTarget::Button(button));
         }
-        if self.primary_button.contains(x, y) {
-            return ContextPickerAction::Primary { request_id };
+        match snapshot.phase {
+            ContextPickerPhase::Sources => self
+                .source_row_at(x, y, snapshot.scroll_offset, snapshot.sources.len())
+                .map(ContextPickerTarget::Source),
+            ContextPickerPhase::FilePaths => self
+                .file_input
+                .contains(x, y)
+                .then_some(ContextPickerTarget::FileInput),
+            ContextPickerPhase::Gathering => None,
         }
-        if snapshot.phase == ContextPickerPhase::Sources
-            && let Some(index) =
-                self.source_row_at(x, y, snapshot.scroll_offset, snapshot.sources.len())
-        {
-            return ContextPickerAction::Toggle {
-                request_id,
-                source: snapshot.sources[index].id,
-            };
-        }
-        ContextPickerAction::None
     }
 }
 
@@ -289,6 +403,7 @@ pub struct ContextPicker {
     specific_files: Vec<PathBuf>,
     status: Option<String>,
     request: RequestScope,
+    focus: ContextPickerFocus,
 }
 
 impl ContextPicker {
@@ -306,6 +421,7 @@ impl ContextPicker {
             specific_files: Vec::new(),
             status: None,
             request: RequestScope::default(),
+            focus: ContextPickerFocus::Sources,
         }
     }
 
@@ -344,11 +460,12 @@ impl ContextPicker {
                 true,
             ),
             source(ContextSourceId::TestOutput, "Last Test Output", false, true),
+            // Available once Choose Files… has given it paths.
             source(
                 ContextSourceId::SpecificFiles,
-                "Specific Files…",
+                "Specific Files",
                 false,
-                self.cwd.is_some(),
+                false,
             ),
         ];
         debug_assert_eq!(self.sources.len(), MAX_CONTEXT_SOURCES);
@@ -359,6 +476,7 @@ impl ContextPicker {
         self.file_input.clear();
         self.specific_files.clear();
         self.status = None;
+        self.focus = ContextPickerFocus::Sources;
         self.animation.open();
         request_id
     }
@@ -416,6 +534,136 @@ impl ContextPicker {
             status: self.status.clone(),
             awaiting: self.is_awaiting_current(),
             animation: self.animation(),
+            focus: self.focus,
+            has_working_folder: self.cwd.is_some(),
+        }
+    }
+
+    pub fn focus(&self) -> ContextPickerFocus {
+        self.focus
+    }
+
+    /// The buttons this phase offers, left to right.
+    pub fn buttons(&self) -> &'static [ContextPickerButton] {
+        ContextPickerButton::row(self.phase)
+    }
+
+    pub fn is_enabled(&self, button: ContextPickerButton) -> bool {
+        button.enabled(self.phase, self.cwd.is_some())
+    }
+
+    /// What pressing `button` does now: nothing when it is disabled, not
+    /// offered, or the request is no longer awaited.
+    pub fn button_action(
+        &self,
+        request_id: u64,
+        button: ContextPickerButton,
+    ) -> ContextPickerAction {
+        if self.is_awaiting(request_id) && self.is_enabled(button) {
+            button.action(request_id)
+        } else {
+            ContextPickerAction::None
+        }
+    }
+
+    /// Focus is request-scoped, goes only to what this phase offers and can
+    /// answer, and never activates anything by itself.
+    pub fn set_focus(&mut self, request_id: u64, focus: ContextPickerFocus) -> bool {
+        let offered = match focus {
+            ContextPickerFocus::Sources => self.phase == ContextPickerPhase::Sources,
+            ContextPickerFocus::FileInput => self.phase == ContextPickerPhase::FilePaths,
+            ContextPickerFocus::Button(button) => self.is_enabled(button),
+        };
+        if !self.is_awaiting(request_id) || !offered {
+            return false;
+        }
+        self.focus = focus;
+        true
+    }
+
+    /// The phase's focus stops in order: its list or field, then its
+    /// enabled buttons left to right.
+    fn focus_order(&self) -> Vec<ContextPickerFocus> {
+        let main = match self.phase {
+            ContextPickerPhase::Sources => Some(ContextPickerFocus::Sources),
+            ContextPickerPhase::FilePaths => Some(ContextPickerFocus::FileInput),
+            ContextPickerPhase::Gathering => None,
+        };
+        main.into_iter()
+            .chain(
+                self.buttons()
+                    .iter()
+                    .copied()
+                    .filter(|&button| self.is_enabled(button))
+                    .map(ContextPickerFocus::Button),
+            )
+            .collect()
+    }
+
+    /// Move focus to the next stop, or the previous one, wrapping around.
+    pub fn cycle_focus(&mut self, request_id: u64, backwards: bool) -> bool {
+        let order = self.focus_order();
+        if order.is_empty() {
+            return false;
+        }
+        let next = match (order.iter().position(|&stop| stop == self.focus), backwards) {
+            (Some(index), false) => (index + 1) % order.len(),
+            (Some(index), true) => (index + order.len() - 1) % order.len(),
+            (None, false) => 0,
+            (None, true) => order.len() - 1,
+        };
+        self.set_focus(request_id, order[next])
+    }
+
+    /// What Enter does: press the focused button, or the primary one from
+    /// the list or the field.
+    pub fn enter_action(&self, request_id: u64) -> ContextPickerAction {
+        match self.focus {
+            ContextPickerFocus::Button(button) => self.button_action(request_id, button),
+            ContextPickerFocus::Sources | ContextPickerFocus::FileInput => {
+                self.button_action(request_id, ContextPickerButton::Primary)
+            }
+        }
+    }
+
+    /// What Space does: press the focused button, or toggle the selected
+    /// source from the list.
+    pub fn space_action(&self, request_id: u64) -> ContextPickerAction {
+        match self.focus {
+            ContextPickerFocus::Button(button) => self.button_action(request_id, button),
+            ContextPickerFocus::Sources => self
+                .selected_source()
+                .filter(|_| self.is_awaiting(request_id))
+                .map_or(ContextPickerAction::None, |source| {
+                    ContextPickerAction::Toggle { request_id, source }
+                }),
+            ContextPickerFocus::FileInput => ContextPickerAction::None,
+        }
+    }
+
+    /// A primary press on `target`: it takes focus, and a button or source
+    /// row is pressed.
+    pub fn press(&mut self, request_id: u64, target: ContextPickerTarget) -> ContextPickerAction {
+        match target {
+            ContextPickerTarget::Button(button) => {
+                if self.set_focus(request_id, ContextPickerFocus::Button(button)) {
+                    self.button_action(request_id, button)
+                } else {
+                    ContextPickerAction::None
+                }
+            }
+            ContextPickerTarget::Source(index) => {
+                match self.sources.get(index).map(|source| source.id) {
+                    Some(source) if self.set_focus(request_id, ContextPickerFocus::Sources) => {
+                        ContextPickerAction::Toggle { request_id, source }
+                    }
+                    _ => ContextPickerAction::None,
+                }
+            }
+            ContextPickerTarget::FileInput => {
+                self.set_focus(request_id, ContextPickerFocus::FileInput);
+                ContextPickerAction::None
+            }
         }
     }
 
@@ -445,6 +693,7 @@ impl ContextPicker {
                 if self.phase == ContextPickerPhase::FilePaths {
                     self.phase = ContextPickerPhase::Sources;
                     self.status = None;
+                    self.focus = ContextPickerFocus::Button(ContextPickerButton::ChooseFiles);
                 } else {
                     self.request.revoke();
                     self.status = None;
@@ -460,6 +709,9 @@ impl ContextPicker {
                     .saturating_add_signed(delta)
                     .min(self.sources.len().saturating_sub(1));
                 self.reveal_selection();
+                // The arrows move the list's selection, so the list takes
+                // focus with them.
+                self.focus = ContextPickerFocus::Sources;
             }
             ContextPickerAction::Scroll { delta, .. }
                 if self.phase == ContextPickerPhase::Sources =>
@@ -473,9 +725,7 @@ impl ContextPicker {
                 if let Some(index) = self.sources.iter().position(|entry| entry.id == source) {
                     self.selected_index = index;
                     self.reveal_selection();
-                    if source == ContextSourceId::SpecificFiles {
-                        self.open_file_editor();
-                    } else if self.sources[index].available {
+                    if self.sources[index].available {
                         self.sources[index].selected = !self.sources[index].selected;
                         self.status = None;
                     }
@@ -534,6 +784,8 @@ impl ContextPicker {
         }
         self.phase = ContextPickerPhase::Gathering;
         self.status = Some("Gathering context…".into());
+        // Cancel is the one button that answers while gathering.
+        self.focus = ContextPickerFocus::Button(ContextPickerButton::Cancel);
         Some(ContextGatherRequest {
             request_id,
             cwd: self.cwd.clone(),
@@ -557,6 +809,7 @@ impl ContextPicker {
             Ok(text) => {
                 let Some(target) = self.target.take() else {
                     self.phase = ContextPickerPhase::Sources;
+                    self.focus = ContextPickerFocus::Sources;
                     self.status = Some("The context destination is no longer available".into());
                     return ContextPickerCompletion::Failed;
                 };
@@ -567,6 +820,7 @@ impl ContextPicker {
             }
             Err(error) => {
                 self.phase = ContextPickerPhase::Sources;
+                self.focus = ContextPickerFocus::Sources;
                 self.status = Some(crate::safe_text::truncate_with_ellipsis(&error, 512));
                 ContextPickerCompletion::Failed
             }
@@ -574,12 +828,7 @@ impl ContextPicker {
     }
 
     fn open_file_editor(&mut self) {
-        let available = self
-            .sources
-            .iter()
-            .find(|source| source.id == ContextSourceId::SpecificFiles)
-            .is_some_and(|source| source.available);
-        if !available {
+        if self.cwd.is_none() {
             self.status = Some("Specific files require a working directory".into());
             return;
         }
@@ -594,6 +843,7 @@ impl ContextPicker {
         self.file_input.replace(&paths);
         self.phase = ContextPickerPhase::FilePaths;
         self.status = None;
+        self.focus = ContextPickerFocus::FileInput;
     }
 
     fn commit_file_editor(&mut self) {
@@ -605,11 +855,20 @@ impl ContextPicker {
                     .iter_mut()
                     .find(|source| source.id == ContextSourceId::SpecificFiles)
                 {
-                    source.selected = !self.specific_files.is_empty();
-                    source.label = format!("Specific Files… ({})", self.specific_files.len());
+                    // Saving paths includes them; saving none leaves the
+                    // source nothing to send.
+                    let chosen = !self.specific_files.is_empty();
+                    source.available = chosen;
+                    source.selected = chosen;
+                    source.label = if chosen {
+                        format!("Specific Files ({})", self.specific_files.len())
+                    } else {
+                        "Specific Files".into()
+                    };
                 }
                 self.phase = ContextPickerPhase::Sources;
                 self.status = None;
+                self.focus = ContextPickerFocus::Button(ContextPickerButton::ChooseFiles);
             }
             Err(error) => self.status = Some(error),
         }
@@ -715,15 +974,20 @@ mod tests {
         let snapshot = picker.snapshot();
         assert!(layout.card.height < 300.0);
         assert!(layout.visible_count < picker.sources().len());
+        for button in ContextPickerButton::row(ContextPickerPhase::Sources) {
+            let [x, y] = layout.button(*button).unwrap().center();
+            assert_eq!(
+                layout.target_at(x, y, &snapshot),
+                Some(ContextPickerTarget::Button(*button))
+            );
+        }
         assert_eq!(
-            layout.hit_test(
-                layout.primary_button.x + 1.0,
-                layout.primary_button.y + 1.0,
-                &snapshot,
-            ),
-            ContextPickerAction::Primary {
-                request_id: request
-            }
+            layout.target_at(layout.content.x + 1.0, layout.content.y + 1.0, &snapshot),
+            Some(ContextPickerTarget::Source(0))
+        );
+        assert_eq!(
+            layout.target_at(layout.card.x + 1.0, layout.card.y + 1.0, &snapshot),
+            None
         );
         assert_eq!(
             layout.source_row_at(
@@ -742,6 +1006,209 @@ mod tests {
             picker.snapshot().scroll_offset,
             picker.sources().len() - layout.visible_count
         );
+    }
+
+    #[test]
+    fn choose_files_sits_beside_the_sources_only_and_no_button_overlaps() {
+        for phase in [
+            ContextPickerPhase::Sources,
+            ContextPickerPhase::FilePaths,
+            ContextPickerPhase::Gathering,
+        ] {
+            let layout = ContextPickerLayout::calculate(900.0, 600.0, 10.0, 20.0, 1.0, phase, 6);
+            let buttons: Vec<_> = ContextPickerButton::row(phase)
+                .iter()
+                .map(|button| layout.button(*button).unwrap())
+                .collect();
+            assert_eq!(
+                layout.choose_files_button.is_some(),
+                phase == ContextPickerPhase::Sources
+            );
+            assert_eq!(buttons[0].x, layout.card.x + layout.padding);
+            assert_eq!(
+                buttons.last().unwrap().right(),
+                layout.card.right() - layout.padding
+            );
+            for pair in buttons.windows(2) {
+                assert!(pair[0].right() < pair[1].x, "{phase:?}: {pair:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn focus_cycles_the_list_or_field_and_the_enabled_buttons() {
+        use ContextPickerButton as B;
+        use ContextPickerFocus as F;
+        let directory = tempfile::tempdir().unwrap();
+        let mut picker = ContextPicker::new();
+        let request = picker.open(Some(directory.path().display().to_string()), target(3));
+        assert_eq!(picker.focus(), F::Sources);
+        let mut order = Vec::new();
+        for _ in 0..4 {
+            assert!(picker.cycle_focus(request, false));
+            order.push(picker.focus());
+        }
+        assert_eq!(
+            order,
+            [
+                F::Button(B::ChooseFiles),
+                F::Button(B::Cancel),
+                F::Button(B::Primary),
+                F::Sources
+            ]
+        );
+        assert!(picker.cycle_focus(request, true));
+        assert_eq!(
+            picker.focus(),
+            F::Button(B::Primary),
+            "Shift+Tab wraps back"
+        );
+        assert!(
+            !picker.set_focus(request, F::FileInput),
+            "no field beside the sources"
+        );
+
+        // Choose Files… opens the editor with its field focused; Back
+        // returns focus to it.
+        assert!(picker.set_focus(request, F::Button(B::ChooseFiles)));
+        let choose = picker.enter_action(request);
+        assert_eq!(
+            choose,
+            ContextPickerAction::EditFiles {
+                request_id: request
+            }
+        );
+        assert_eq!(picker.space_action(request), choose);
+        picker.apply(choose);
+        assert_eq!(picker.phase(), ContextPickerPhase::FilePaths);
+        assert_eq!(picker.focus(), F::FileInput);
+        assert_eq!(
+            picker.enter_action(request),
+            ContextPickerAction::Primary {
+                request_id: request
+            },
+            "Enter in the field saves"
+        );
+        assert_eq!(picker.space_action(request), ContextPickerAction::None);
+        assert!(picker.cycle_focus(request, false));
+        assert_eq!(picker.focus(), F::Button(B::Cancel));
+        picker.apply(picker.enter_action(request));
+        assert_eq!(picker.phase(), ContextPickerPhase::Sources);
+        assert_eq!(picker.focus(), F::Button(B::ChooseFiles));
+
+        // From the list, Enter inserts and Space toggles the selection.
+        assert!(picker.set_focus(request, F::Sources));
+        assert_eq!(
+            picker.enter_action(request),
+            ContextPickerAction::Primary {
+                request_id: request
+            }
+        );
+        assert_eq!(
+            picker.space_action(request),
+            ContextPickerAction::Toggle {
+                request_id: request,
+                source: ContextSourceId::GitDiffUnstaged
+            }
+        );
+        let newer = picker.open(None, target(4));
+        assert!(!picker.cycle_focus(request, false), "an earlier request");
+        assert_eq!(picker.enter_action(request), ContextPickerAction::None);
+        assert_eq!(
+            picker.focus(),
+            F::Sources,
+            "each opening starts on the list"
+        );
+        assert!(!picker.is_enabled(B::ChooseFiles));
+        assert!(!picker.set_focus(newer, F::Button(B::ChooseFiles)));
+        assert_eq!(
+            picker.press(newer, ContextPickerTarget::Button(B::ChooseFiles)),
+            ContextPickerAction::None,
+            "a disabled button answers nothing"
+        );
+    }
+
+    #[test]
+    fn specific_files_is_a_checkbox_once_files_are_chosen() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("fixture.rs"), "fn fixture() {}\n").unwrap();
+        let mut picker = ContextPicker::new();
+        let request = picker.open(Some(directory.path().display().to_string()), target(5));
+        let files = |picker: &ContextPicker| {
+            picker
+                .sources()
+                .iter()
+                .find(|source| source.id == ContextSourceId::SpecificFiles)
+                .cloned()
+                .unwrap()
+        };
+        assert!(!files(&picker).available && !files(&picker).selected);
+        let toggle = ContextPickerAction::Toggle {
+            request_id: request,
+            source: ContextSourceId::SpecificFiles,
+        };
+        picker.apply(toggle.clone());
+        assert_eq!(
+            picker.phase(),
+            ContextPickerPhase::Sources,
+            "the row opens nothing"
+        );
+        assert!(!files(&picker).selected);
+
+        picker.apply(ContextPickerButton::ChooseFiles.action(request));
+        picker.apply(ContextPickerAction::SetFileInput {
+            request_id: request,
+            value: "fixture.rs".into(),
+        });
+        picker.apply(ContextPickerAction::Primary {
+            request_id: request,
+        });
+        assert_eq!(picker.phase(), ContextPickerPhase::Sources);
+        assert!(files(&picker).available && files(&picker).selected);
+        assert_eq!(files(&picker).label, "Specific Files (1)");
+        picker.apply(toggle);
+        assert!(!files(&picker).selected, "it toggles like any other source");
+
+        picker.apply(ContextPickerButton::ChooseFiles.action(request));
+        picker.apply(ContextPickerAction::SetFileInput {
+            request_id: request,
+            value: String::new(),
+        });
+        picker.apply(ContextPickerAction::Primary {
+            request_id: request,
+        });
+        assert!(!files(&picker).available && !files(&picker).selected);
+        assert_eq!(files(&picker).label, "Specific Files");
+    }
+
+    #[test]
+    fn a_press_focuses_what_it_lands_on() {
+        use ContextPickerFocus as F;
+        let mut picker = ContextPicker::new();
+        let request = picker.open(None, target(6));
+        assert_eq!(
+            picker.press(
+                request,
+                ContextPickerTarget::Button(ContextPickerButton::Cancel)
+            ),
+            ContextPickerAction::Cancel {
+                request_id: request
+            }
+        );
+        assert_eq!(picker.focus(), F::Button(ContextPickerButton::Cancel));
+        assert_eq!(
+            picker.press(request, ContextPickerTarget::Source(3)),
+            ContextPickerAction::Toggle {
+                request_id: request,
+                source: ContextSourceId::TerminalOutput
+            }
+        );
+        assert_eq!(picker.focus(), F::Sources);
+        assert_eq!(
+            picker.press(request, ContextPickerTarget::FileInput),
+            ContextPickerAction::None
+        );
+        assert_eq!(picker.focus(), F::Sources, "no field beside the sources");
     }
 
     #[test]

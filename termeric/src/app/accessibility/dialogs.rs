@@ -699,7 +699,7 @@ impl App {
     }
 
     pub(super) fn handle_context_accessibility_action(&mut self, request: ActionRequest) {
-        use crate::ui::context_picker::ContextPickerAction;
+        use crate::ui::context_picker::{ContextPickerAction, ContextPickerFocus};
 
         let Some(target) = self
             .accessibility
@@ -713,31 +713,34 @@ impl App {
         let request_id = match target {
             ContextSemanticTarget::List(request_id)
             | ContextSemanticTarget::FileInput(request_id)
-            | ContextSemanticTarget::Cancel(request_id)
-            | ContextSemanticTarget::Primary(request_id) => request_id,
-            ContextSemanticTarget::Source { request_id, .. } => request_id,
+            | ContextSemanticTarget::Button(request_id, _)
+            | ContextSemanticTarget::Source { request_id, .. } => request_id,
         };
         if !self.context_picker.is_awaiting(request_id) {
             return;
         }
         let action = match (request.action, target) {
-            (Action::Focus, ContextSemanticTarget::Source { source, .. }) => {
-                self.context_picker.select_source(request_id, source);
-                self.accessibility.focus_override = Some(request.target_node);
-                ContextPickerAction::None
-            }
-            (Action::Focus, _) => {
-                self.accessibility.focus_override = Some(request.target_node);
+            // Assistive focus moves the picker's own focus.
+            (Action::Focus, target) => {
+                let focus = match target {
+                    ContextSemanticTarget::Source { source, .. } => {
+                        self.context_picker.select_source(request_id, source);
+                        ContextPickerFocus::Sources
+                    }
+                    ContextSemanticTarget::List(_) => ContextPickerFocus::Sources,
+                    ContextSemanticTarget::FileInput(_) => ContextPickerFocus::FileInput,
+                    ContextSemanticTarget::Button(_, button) => ContextPickerFocus::Button(button),
+                };
+                if self.context_picker.set_focus(request_id, focus) {
+                    self.accessibility.focus_override = Some(request.target_node);
+                }
                 ContextPickerAction::None
             }
             (Action::Click, ContextSemanticTarget::Source { source, .. }) => {
                 ContextPickerAction::Toggle { request_id, source }
             }
-            (Action::Click, ContextSemanticTarget::Cancel(_)) => {
-                ContextPickerAction::Cancel { request_id }
-            }
-            (Action::Click, ContextSemanticTarget::Primary(_)) => {
-                ContextPickerAction::Primary { request_id }
+            (Action::Click, ContextSemanticTarget::Button(_, button)) => {
+                self.context_picker.button_action(request_id, button)
             }
             (Action::SetValue, ContextSemanticTarget::FileInput(_)) => {
                 let Some(ActionData::Value(value)) = request.data else {
@@ -762,7 +765,9 @@ impl App {
     }
 
     pub(super) fn context_accessibility_snapshot(&mut self) -> ModalSnapshot {
-        use crate::ui::context_picker::{ContextPickerPhase, ContextSourceId};
+        use crate::ui::context_picker::{
+            ContextPickerButton, ContextPickerFocus, ContextPickerPhase, ContextSourceId,
+        };
 
         let layout = self.context_picker_layout();
         self.context_picker.set_viewport(layout.visible_count);
@@ -770,8 +775,6 @@ impl App {
         let request_id = snapshot.request_id;
         let list_target = ContextSemanticTarget::List(request_id);
         let input_target = ContextSemanticTarget::FileInput(request_id);
-        let cancel_target = ContextSemanticTarget::Cancel(request_id);
-        let primary_target = ContextSemanticTarget::Primary(request_id);
         let visible_sources: Vec<_> = snapshot
             .sources
             .iter()
@@ -780,7 +783,11 @@ impl App {
             .cloned()
             .collect();
 
-        let mut targets = HashSet::from([cancel_target, primary_target]);
+        let mut targets: HashSet<_> = snapshot
+            .buttons()
+            .iter()
+            .map(|&button| ContextSemanticTarget::Button(request_id, button))
+            .collect();
         match snapshot.phase {
             ContextPickerPhase::Sources => {
                 targets.insert(list_target);
@@ -799,8 +806,6 @@ impl App {
         self.accessibility
             .context
             .retain(|target| targets.contains(target));
-        let cancel_id = self.accessibility.context.node(&cancel_target);
-        let primary_id = self.accessibility.context.node(&primary_target);
         let list_id = (snapshot.phase == ContextPickerPhase::Sources)
             .then(|| self.accessibility.context.node(&list_target));
         let input_id = (snapshot.phase == ContextPickerPhase::FilePaths)
@@ -864,10 +869,10 @@ impl App {
                 let source_index = snapshot.scroll_offset + visible_index;
                 let mut node = Node::new(Role::CheckBox);
                 node.set_label(source.label.as_str());
-                node.set_description(if source.id == ContextSourceId::SpecificFiles {
-                    "Opens a workspace-bounded comma-separated file path editor"
-                } else if source.available {
+                node.set_description(if source.available {
                     "Toggle this source in the context bundle"
+                } else if source.id == ContextSourceId::SpecificFiles {
+                    "Choose files first"
                 } else {
                     "Unavailable for the current working directory"
                 });
@@ -928,30 +933,42 @@ impl App {
         status.set_live(Live::Polite);
         nodes.push((CONTEXT_STATUS, status));
 
-        let mut cancel = Node::new(Role::Button);
-        cancel.set_label(snapshot.cancel_label());
-        cancel.set_keyboard_shortcut("Escape");
-        cancel.set_bounds(bounds_rect(layout.cancel_button));
-        if snapshot.awaiting {
-            cancel.add_action(Action::Click);
-            cancel.add_action(Action::Focus);
-        } else {
-            cancel.set_disabled();
+        let mut button_ids = Vec::with_capacity(snapshot.buttons().len());
+        for &button in snapshot.buttons() {
+            let Some(bounds) = layout.button(button) else {
+                continue;
+            };
+            let id = self
+                .accessibility
+                .context
+                .node(&ContextSemanticTarget::Button(request_id, button));
+            let mut node = Node::new(if button == ContextPickerButton::Primary {
+                Role::DefaultButton
+            } else {
+                Role::Button
+            });
+            node.set_label(button.label(snapshot.phase));
+            match button {
+                ContextPickerButton::ChooseFiles => {
+                    node.set_description(if snapshot.is_enabled(button) {
+                        "Opens a comma-separated file path editor bounded to the working directory"
+                    } else {
+                        "Needs a working directory"
+                    })
+                }
+                ContextPickerButton::Cancel => node.set_keyboard_shortcut("Escape"),
+                ContextPickerButton::Primary => {}
+            }
+            node.set_bounds(bounds_rect(bounds));
+            if snapshot.awaiting && snapshot.is_enabled(button) {
+                node.add_action(Action::Click);
+                node.add_action(Action::Focus);
+            } else {
+                node.set_disabled();
+            }
+            nodes.push((id, node));
+            button_ids.push((button, id));
         }
-        nodes.push((cancel_id, cancel));
-
-        let primary_enabled = snapshot.awaiting && snapshot.phase != ContextPickerPhase::Gathering;
-        let mut primary = Node::new(Role::DefaultButton);
-        primary.set_label(snapshot.primary_label());
-        primary.set_keyboard_shortcut("Enter");
-        primary.set_bounds(bounds_rect(layout.primary_button));
-        if primary_enabled {
-            primary.add_action(Action::Click);
-            primary.add_action(Action::Focus);
-        } else {
-            primary.set_disabled();
-        }
-        nodes.push((primary_id, primary));
 
         let mut dialog = Node::new(Role::Dialog);
         dialog.set_label(title_text);
@@ -965,40 +982,34 @@ impl App {
         if let Some(main) = list_id.or(input_id) {
             children.push(main);
         }
-        children.extend([CONTEXT_STATUS, cancel_id, primary_id]);
+        children.push(CONTEXT_STATUS);
+        children.extend(button_ids.iter().map(|(_, id)| *id));
         dialog.set_children(children);
         nodes.push((CONTEXT_DIALOG, dialog));
 
-        let default_focus = match snapshot.phase {
-            ContextPickerPhase::Sources => source_nodes
-                .iter()
-                .enumerate()
-                .find(|(visible_index, (source, _))| {
-                    source.available
-                        && snapshot.scroll_offset + visible_index == snapshot.selected_index
-                })
-                .map(|(_, (_, id))| *id)
-                .or_else(|| {
-                    source_nodes
-                        .iter()
-                        .find(|(source, _)| source.available)
-                        .map(|(_, id)| *id)
-                })
-                .unwrap_or(primary_id),
-            ContextPickerPhase::FilePaths => input_id.unwrap_or(cancel_id),
-            ContextPickerPhase::Gathering => cancel_id,
+        // Assistive focus follows the picker's own focus: from the list, to
+        // the selected source while it is shown and can be toggled.
+        let focus = if snapshot.awaiting {
+            match snapshot.focus {
+                ContextPickerFocus::Sources => source_nodes
+                    .iter()
+                    .enumerate()
+                    .find(|(visible_index, (source, _))| {
+                        source.available
+                            && snapshot.scroll_offset + visible_index == snapshot.selected_index
+                    })
+                    .map(|(_, (_, id))| *id)
+                    .or(list_id),
+                ContextPickerFocus::FileInput => input_id,
+                ContextPickerFocus::Button(focused) => button_ids
+                    .iter()
+                    .find(|(button, _)| *button == focused)
+                    .map(|(_, id)| *id),
+            }
+            .unwrap_or(CONTEXT_DIALOG)
+        } else {
+            CONTEXT_DIALOG
         };
-        let focus = self.accessibility.modal_focus(
-            &nodes,
-            if snapshot.awaiting {
-                default_focus
-            } else {
-                CONTEXT_DIALOG
-            },
-            |accessibility, node| {
-                accessibility.is_context_node(node) && (snapshot.awaiting || node == CONTEXT_DIALOG)
-            },
-        );
         self.accessibility.focus_override = Some(focus);
         ModalSnapshot {
             dialog: CONTEXT_DIALOG,

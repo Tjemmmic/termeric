@@ -220,8 +220,7 @@ enum ContextSemanticTarget {
         source: crate::ui::context_picker::ContextSourceId,
     },
     FileInput(u64),
-    Cancel(u64),
-    Primary(u64),
+    Button(u64, crate::ui::context_picker::ContextPickerButton),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

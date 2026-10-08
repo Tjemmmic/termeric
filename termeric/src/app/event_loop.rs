@@ -431,7 +431,7 @@ impl App {
             // close animation cannot target a replacement dialog.
             ModalLayer::Dialog => self.handle_dialog_key(key, event.repeat),
             ModalLayer::DiffReview => self.handle_diff_review_key(key, event.repeat),
-            ModalLayer::ContextPicker => self.handle_context_picker_key(key),
+            ModalLayer::ContextPicker => self.handle_context_picker_key(key, event.repeat),
             ModalLayer::SproutMenu => {
                 if let Some(request_id) = self
                     .harvest
@@ -587,13 +587,7 @@ impl App {
             }
             Some(ModalLayer::ContextPicker) => {
                 if left && let Some(pos) = pos {
-                    let snapshot = self.context_picker.snapshot();
-                    let action = self.context_picker_layout().hit_test(
-                        pos.0 as f32,
-                        pos.1 as f32,
-                        &snapshot,
-                    );
-                    self.apply_context_picker_action(action);
+                    self.press_context_picker(pos.0 as f32, pos.1 as f32);
                     self.request_redraw(RedrawReason::PointerInput);
                 }
             }

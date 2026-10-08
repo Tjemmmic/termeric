@@ -141,7 +141,9 @@ impl Renderer {
         window_width: f32,
         window_height: f32,
     ) {
-        use crate::ui::context_picker::ContextPickerPhase;
+        use crate::ui::context_picker::{
+            ContextPickerButton, ContextPickerFocus, ContextPickerPhase,
+        };
 
         let snapshot = &info.snapshot;
         let anim = snapshot.animation;
@@ -199,7 +201,11 @@ impl Renderer {
                     .enumerate()
                 {
                     let row = layout.row(visible_row);
-                    if source_index == snapshot.selected_index {
+                    // The selection is tinted while the list holds focus,
+                    // so it is clear where Space goes.
+                    if source_index == snapshot.selected_index
+                        && snapshot.focus == ContextPickerFocus::Sources
+                    {
                         self.rect_pipeline.push_rounded_rect(
                             row.x,
                             row.y,
@@ -299,9 +305,6 @@ impl Renderer {
         }
 
         let (mouse_x, mouse_y) = info.mouse_pos.unwrap_or((-1.0, -1.0));
-        let cancel_hovered = snapshot.awaiting && layout.cancel_button.contains(mouse_x, mouse_y);
-        let primary_enabled = snapshot.awaiting && snapshot.phase != ContextPickerPhase::Gathering;
-        let primary_hovered = primary_enabled && layout.primary_button.contains(mouse_x, mouse_y);
         if snapshot.phase == ContextPickerPhase::Sources {
             self.draw_scrollbar(
                 card_scrollbar_track(
@@ -316,29 +319,29 @@ impl Renderer {
                 anim,
             );
         }
-        self.draw_button(
-            layout.cancel_button,
-            snapshot.cancel_label(),
-            ButtonRole::Cancel,
-            ButtonState {
-                hovered: cancel_hovered,
-                pressed: cancel_hovered && info.mouse_pressed,
-                ..ButtonState::default()
-            },
-            anim,
-        );
-        self.draw_button(
-            layout.primary_button,
-            snapshot.primary_label(),
-            ButtonRole::Suggested,
-            ButtonState {
-                hovered: primary_hovered,
-                pressed: primary_hovered && info.mouse_pressed,
-                focused: false,
-                disabled: !primary_enabled,
-            },
-            anim,
-        );
+        for &button in snapshot.buttons() {
+            let Some(bounds) = layout.button(button) else {
+                continue;
+            };
+            let enabled = snapshot.awaiting && snapshot.is_enabled(button);
+            let hovered = enabled && bounds.contains(mouse_x, mouse_y);
+            self.draw_button(
+                bounds,
+                button.label(snapshot.phase),
+                match button {
+                    ContextPickerButton::ChooseFiles => ButtonRole::Neutral,
+                    ContextPickerButton::Cancel => ButtonRole::Cancel,
+                    ContextPickerButton::Primary => ButtonRole::Suggested,
+                },
+                ButtonState {
+                    hovered,
+                    pressed: hovered && info.mouse_pressed,
+                    focused: snapshot.is_focused(button),
+                    disabled: !snapshot.is_enabled(button),
+                },
+                anim,
+            );
+        }
 
         // What the picker is doing or why it stopped; never a key list.
         if let Some(status) = snapshot.status.as_deref() {
