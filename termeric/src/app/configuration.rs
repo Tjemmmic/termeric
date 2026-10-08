@@ -607,7 +607,10 @@ impl App {
         self.settings_panel.set_runtime_plugin_summary(summary);
         self.refresh_plugin_commands();
         self.refresh_launch_profile_commands();
-        log::info!("Loaded {} plugin(s)", self.plugin_manager.count());
+        log::info!(
+            "Loaded {}",
+            plural(self.plugin_manager.count(), "plugin", "plugins")
+        );
     }
 
     /// Register the built-in commands the configuration offers, with the

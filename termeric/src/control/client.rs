@@ -6,6 +6,7 @@ use super::IO_TIMEOUT;
 use super::paths::ControlEndpoint;
 use super::protocol::{self, ClientFrame, ProcessInventory, Request, Response, ServerFrame};
 use crate::deadline_io::{self, Deadline, PollReader, SocketWriter};
+use crate::ui::text::plural;
 use anyhow::Context;
 use serde::Serialize;
 use std::os::unix::net::UnixStream;
@@ -702,9 +703,17 @@ fn describe(request: &Request, response: &Response) -> String {
             pane_id,
             remaining_panes,
             focused_pane_id,
-        } => format!(
-            "Closed pane {pane_id} in tab {tab_id}, window {window_id}, process {process_id}; {remaining_panes} pane(s) remain and pane {focused_pane_id} is focused (request {request_id})."
-        ),
+        } => {
+            let remaining = plural(usize::from(*remaining_panes), "pane", "panes");
+            let verb = if *remaining_panes == 1 {
+                "remains"
+            } else {
+                "remain"
+            };
+            format!(
+                "Closed pane {pane_id} in tab {tab_id}, window {window_id}, process {process_id}; {remaining} {verb} and pane {focused_pane_id} is focused (request {request_id})."
+            )
+        }
         Response::TabMoved {
             process_id,
             request_id,

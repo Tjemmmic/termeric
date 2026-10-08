@@ -118,6 +118,7 @@ use crate::ui::domain_picker::DomainPicker;
 use crate::ui::info_overlay::InfoOverlay;
 use crate::ui::settings::{SettingsAction, SettingsPanel};
 use crate::ui::shortcuts_panel::{ShortcutsAction, ShortcutsPanel};
+use crate::ui::text::plural;
 use crate::ui::unicode_picker::UnicodePicker;
 
 pub use application::Application;
@@ -2225,7 +2226,12 @@ impl App {
         let expired_synchronized_outputs = self.expire_synchronized_outputs(now);
         if expired_synchronized_outputs > 0 {
             log::warn!(
-                "Released {expired_synchronized_outputs} synchronized-output batch(es) after the safety timeout"
+                "Released {} after the safety timeout",
+                plural(
+                    expired_synchronized_outputs,
+                    "synchronized-output batch",
+                    "synchronized-output batches"
+                )
             );
             self.redraw_scheduler
                 .request(redraw_scheduler::RedrawReason::TerminalOutput);
@@ -3195,9 +3201,9 @@ impl App {
         self.command_palette.replace_plugin_commands(palette_cmds);
 
         log::info!(
-            "Refreshed plugin commands: {} plugin(s), {} command(s)",
-            self.plugin_manager.count(),
-            plugin_commands.len(),
+            "Refreshed plugin commands: {}, {}",
+            plural(self.plugin_manager.count(), "plugin", "plugins"),
+            plural(plugin_commands.len(), "command", "commands"),
         );
     }
 
