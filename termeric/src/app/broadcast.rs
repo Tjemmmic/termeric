@@ -518,13 +518,15 @@ mod tests {
     #[test]
     fn selected_broadcast_reaches_only_targets_and_closure_reconciles_it() {
         use std::collections::HashMap;
-        use std::time::{Duration, Instant};
+        use std::time::Duration;
 
         let shell = crate::config::ShellConfig {
             program: Some("/bin/sh".into()),
             args: vec![
                 "-c".into(),
-                "stty raw -echo; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 1".into(),
+                "stty raw -echo; printf 'READY\r\n'; \
+                 dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 1"
+                    .into(),
             ],
             env: Default::default(),
         };
@@ -562,13 +564,28 @@ mod tests {
             .unwrap();
         let mut app = App::new_headless(Config::default()).unwrap();
         app.tabs = Some(tabs);
-
-        app.toggle_broadcast();
-        assert!(matches!(app.broadcast, BroadcastState::Armed { .. }));
         let (pane_ids, excluded) = {
             let manager = &app.tabs.as_ref().unwrap().active_tab().unwrap().panes;
             (manager.pane_ids(), manager.focused_id())
         };
+        // Each pane shows READY once its input is raw and unechoed, then the
+        // hex of the first byte it reads, and nothing else.
+        let first_byte_read = |app: &App, id: PaneId| {
+            let manager = &app.tabs.as_ref().unwrap().active_tab().unwrap().panes;
+            let output = manager.get_pane(id).unwrap().terminal.rows_text(0, 7);
+            let mut words = output.split_whitespace();
+            (words.next() == Some("READY")).then(|| words.collect::<Vec<_>>().join(" "))
+        };
+        let ready = crate::test_support::poll_until(Duration::from_secs(2), || {
+            app.process_pty_events();
+            pane_ids
+                .iter()
+                .all(|id| first_byte_read(&app, *id).is_some())
+        });
+        assert!(ready, "every pane should be reading raw input");
+
+        app.toggle_broadcast();
+        assert!(matches!(app.broadcast, BroadcastState::Armed { .. }));
         assert!(app.toggle_armed_broadcast_target(excluded));
         assert!(matches!(
             app.broadcast,
@@ -594,23 +611,39 @@ mod tests {
         ));
         assert!(app.write_broadcast_bytes(b"x"));
 
-        let deadline = Instant::now() + Duration::from_secs(2);
-        loop {
+        let targets = pane_ids
+            .iter()
+            .copied()
+            .filter(|id| *id != excluded)
+            .collect::<Vec<_>>();
+        let reached = crate::test_support::poll_until(Duration::from_secs(2), || {
             app.process_pty_events();
-            let manager = &app.tabs.as_ref().unwrap().active_tab().unwrap().panes;
-            let reached = pane_ids.iter().all(|id| {
-                let output = manager.get_pane(*id).unwrap().terminal.rows_text(0, 7);
-                output.contains("78") == (*id != excluded)
-            });
-            if reached || Instant::now() >= deadline {
-                assert!(
-                    reached,
-                    "broadcast byte did not reach exactly the selected targets"
-                );
-                break;
-            }
-            std::thread::yield_now();
-        }
+            targets
+                .iter()
+                .all(|id| first_byte_read(&app, *id).as_deref() == Some("78"))
+        });
+        assert!(reached, "the broadcast byte did not reach every target");
+        // Only now write the excluded pane's own marker: had anything earlier
+        // reached it, the marker would not be the first byte it read.
+        app.tabs
+            .as_mut()
+            .unwrap()
+            .active_tab_mut()
+            .unwrap()
+            .panes
+            .write_to(excluded, b"y")
+            .unwrap();
+        let mut excluded_read = String::new();
+        let shown = crate::test_support::poll_until(Duration::from_secs(2), || {
+            app.process_pty_events();
+            excluded_read = first_byte_read(&app, excluded).unwrap_or_default();
+            !excluded_read.is_empty()
+        });
+        assert!(shown, "the excluded pane never read its marker");
+        assert_eq!(
+            excluded_read, "79",
+            "the excluded pane read input before its marker"
+        );
 
         app.tabs
             .as_mut()
