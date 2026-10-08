@@ -454,7 +454,7 @@ fn hunk_ranges(line: &str) -> Option<(Range, Range)> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -677,5 +677,68 @@ mod tests {
         let raw = &detector.detected[0].raw;
         assert!(raw.contains("--- a/file.rs"));
         assert!(raw.contains("+new"));
+    }
+
+    /// Feed one persistent history past both its count and owned-capacity ceilings.
+    /// All bytes are synthetic; no provider, process, or working tree is involved.
+    /// The resource soak repeats this with one detector across its iterations.
+    pub(crate) fn feed_past_history_limits(detector: &mut DiffDetector, iteration: usize) {
+        let before = detector.history_diagnostics().0;
+        let mut completed = 0;
+        let mut peak_count = 0;
+        let mut peak_bytes = 0;
+        for patch in 0..80 {
+            let payload = if patch < 64 {
+                "small 界".into()
+            } else {
+                "界".repeat(340)
+            };
+            let lines = if patch < 64 { 1 } else { 200 };
+            let mut data = format!(
+                "--- a/soak-{iteration}-{patch}\n+++ b/soak-{iteration}-{patch}\n@@ -0,0 +1,{lines} @@\n"
+            );
+            for _ in 0..lines {
+                data.push('+');
+                data.push_str(&payload);
+                data.push('\n');
+            }
+            data.push_str("shell prompt\n");
+            // Deliberately split UTF-8 scalars and headers across reads.
+            for chunk in data.as_bytes().chunks(257) {
+                detector.feed_bytes(chunk, |diff| {
+                    completed += 1;
+                    assert_eq!(diff.filename, format!("soak-{iteration}-{patch}"));
+                    assert_eq!(diff.id, (iteration * 80 + completed) as u64);
+                });
+            }
+            let (count, bytes) = detector.history_diagnostics();
+            peak_count = peak_count.max(count);
+            peak_bytes = peak_bytes.max(bytes);
+            assert!(count <= 64 && bytes <= 4 * 1024 * 1024);
+        }
+        let retained = detector.history_diagnostics().0;
+        let evicted = before + completed - retained;
+        assert_eq!(completed, 80);
+        assert_eq!(peak_count, 64);
+        assert!(peak_bytes >= 3 * 1024 * 1024);
+        assert!(evicted > 0);
+        assert!(
+            detector
+                .detected_by_id((iteration * 80 + 1) as u64)
+                .is_none()
+        );
+        assert!(
+            detector
+                .take_notices()
+                .all(|notice| notice.contains("evicted"))
+        );
+    }
+
+    #[test]
+    fn a_persistent_history_evicts_by_count_and_by_bytes() {
+        let mut detector = DiffDetector::new();
+        for iteration in 0..3 {
+            feed_past_history_limits(&mut detector, iteration);
+        }
     }
 }
