@@ -84,6 +84,9 @@ pub struct EffortChoice {
     pub description: String,
 }
 
+/// The model value that keeps the agent's own default model.
+pub const DEFAULT_MODEL: &str = "default";
+
 /// What to call a model value: the agent's own name for it when it listed
 /// one, else a readable form of the value.
 pub fn model_name(models: &[ModelChoice], value: &str) -> String {
@@ -93,7 +96,7 @@ pub fn model_name(models: &[ModelChoice], value: &str) -> String {
             .trim_end_matches(" (recommended)")
             .to_owned();
     }
-    if value == "default" {
+    if value == DEFAULT_MODEL {
         return "Default model".to_owned();
     }
     crate::safe_text::capitalized(value)

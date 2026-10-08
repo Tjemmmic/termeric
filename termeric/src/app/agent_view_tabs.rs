@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use super::*;
 use crate::agent_view::agent::AgentKind;
-use crate::agent_view::session::{AgentSession, SessionId, StartOptions};
+use crate::agent_view::session::{AgentSession, SessionId};
 use crate::agent_view::transcript::Activity;
 use crate::agents::AgentBadge;
 use crate::tabs::TabAgentView;
@@ -219,17 +219,11 @@ impl App {
         {
             return;
         }
-        let form = &self.agent_view.state.new_session;
-        let options = StartOptions {
-            agent: form.agent,
-            cwd: cwd.clone(),
-            mode: form.mode_id(),
-            model: form.model.clone().filter(|model| model != "default"),
-            effort: form.effort.clone(),
-            auto_approve: form.auto_approve,
-            resume: None,
-            allow_bypass: self.config.agent_view.allow_bypass_permissions,
-        };
+        let options = self.agent_view.state.new_session.start_options(
+            agent,
+            cwd.clone(),
+            self.config.agent_view.allow_bypass_permissions,
+        );
         match AgentSession::start(
             self.agent_view_program(agent),
             options,

@@ -17,7 +17,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crate::agent_view::agent::AgentKind;
-use crate::agent_view::session::SessionId;
+use crate::agent_view::event::DEFAULT_MODEL;
+use crate::agent_view::session::{SessionId, StartOptions};
 use crate::agent_view::transcript::Attachment;
 use crate::ui::text_area::TextArea;
 use crate::ui::text_input::{TextInput, TextLimit};
@@ -353,6 +354,35 @@ impl NewSessionForm {
         self.mode
             .clone()
             .unwrap_or_else(|| self.agent.default_mode().to_owned())
+    }
+
+    /// How to start `agent` in `cwd` as this form is set up. A form set up
+    /// for another agent says nothing about this one, which then starts with
+    /// its own defaults.
+    pub fn start_options(
+        &self,
+        agent: AgentKind,
+        cwd: PathBuf,
+        allow_bypass: bool,
+    ) -> StartOptions {
+        let chosen = self.agent == agent;
+        StartOptions {
+            agent,
+            cwd,
+            mode: if chosen {
+                self.mode_id()
+            } else {
+                agent.default_mode().to_owned()
+            },
+            model: self
+                .model
+                .clone()
+                .filter(|model| chosen && model != DEFAULT_MODEL),
+            effort: self.effort.clone().filter(|_| chosen),
+            auto_approve: chosen && self.auto_approve,
+            resume: None,
+            allow_bypass,
+        }
     }
 }
 
@@ -711,6 +741,53 @@ impl AgentViewState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_form_starts_its_own_agent_as_set_up_and_another_with_defaults() {
+        let form = NewSessionForm {
+            agent: AgentKind::OpenCode,
+            mode: Some("plan".into()),
+            model: Some("big".into()),
+            effort: Some("high".into()),
+            auto_approve: true,
+            ..NewSessionForm::default()
+        };
+        let options = form.start_options(AgentKind::OpenCode, "/work".into(), true);
+        assert_eq!(
+            (
+                options.cwd.as_path(),
+                options.mode.as_str(),
+                options.model.as_deref(),
+                options.effort.as_deref(),
+                options.auto_approve,
+                options.allow_bypass,
+                options.resume,
+            ),
+            (
+                std::path::Path::new("/work"),
+                "plan",
+                Some("big"),
+                Some("high"),
+                true,
+                true,
+                None
+            )
+        );
+
+        let other = form.start_options(AgentKind::Codex, "/work".into(), false);
+        assert_eq!(other.agent, AgentKind::Codex);
+        assert_eq!(other.mode, AgentKind::Codex.default_mode());
+        assert_eq!((other.model, other.effort), (None, None));
+        assert!(!other.auto_approve);
+
+        // The default model is named by naming none.
+        let default_model = NewSessionForm {
+            model: Some(crate::agent_view::event::DEFAULT_MODEL.into()),
+            ..form
+        };
+        let options = default_model.start_options(AgentKind::OpenCode, "/work".into(), false);
+        assert_eq!(options.model, None);
+    }
 
     #[test]
     fn scrolling_follows_the_end_until_moved_away() {

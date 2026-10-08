@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use super::acp::{self, AcpCodec};
 use super::claude::{self, ClaudeCodec};
 use super::codex::{self, CodexCodec};
-use super::event::{ModeChoice, ModelChoice, model_name};
+use super::event::{DEFAULT_MODEL, ModeChoice, ModelChoice, model_name};
 use super::protocol::Protocol;
 
 /// An agent the agent view drives, and so the protocol it speaks.
@@ -131,8 +131,8 @@ impl AgentKind {
     /// Models offered before the agent has listed its own.
     pub fn fallback_models(self) -> Vec<ModelChoice> {
         let values: &[&str] = match self {
-            AgentKind::ClaudeCode => &["default", "sonnet", "opus", "haiku"],
-            AgentKind::Codex | AgentKind::OpenCode => &["default"],
+            AgentKind::ClaudeCode => &[DEFAULT_MODEL, "sonnet", "opus", "haiku"],
+            AgentKind::Codex | AgentKind::OpenCode => &[DEFAULT_MODEL],
         };
         values
             .iter()
@@ -177,7 +177,7 @@ impl AgentKind {
                     mode: launch.mode.clone(),
                     // Codex takes no model named "default"; naming none
                     // keeps its own.
-                    model: launch.model.clone().filter(|model| model != "default"),
+                    model: launch.model.clone().filter(|model| model != DEFAULT_MODEL),
                     resume: launch.resume.clone(),
                 })),
             ),
@@ -187,7 +187,7 @@ impl AgentKind {
                     agent: self.name(),
                     cwd: launch.cwd.clone(),
                     mode: launch.mode.clone(),
-                    model: launch.model.clone().filter(|model| model != "default"),
+                    model: launch.model.clone().filter(|model| model != DEFAULT_MODEL),
                     effort: launch.effort.clone(),
                     auto_approve: launch.auto_approve,
                     resume: launch.resume.clone(),
