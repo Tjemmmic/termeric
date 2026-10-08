@@ -43,15 +43,7 @@ impl App {
                 }
                 domain
             } else {
-                let response = target.authority.client()?.request(
-                    crate::domain::protocol::Request::Describe {
-                        domain: domain_id.clone(),
-                    },
-                )?;
-                let crate::domain::protocol::Response::Domain { domain } = response else {
-                    anyhow::bail!("domain server returned an invalid describe response");
-                };
-                domain
+                target.authority.client()?.describe(domain_id.clone())?
             };
             let executable = crate::paths::executable_text()?;
             let relay_command = target.authority.relay_command(executable);

@@ -695,7 +695,12 @@ mod tests {
                 .unwrap()
                 .panes_for_test(probe.clone(), 400.0, 160.0, 10.0, 20.0);
             let writable = panes.focused_id();
-            let locked = panes.split(SplitDirection::Vertical).unwrap();
+            let locked = panes
+                .split(
+                    SplitDirection::Vertical,
+                    crate::config::PaneCwdMode::Focused,
+                )
+                .unwrap();
             let identity = |pane_id| crate::tabs::TerminalIdentity { tab_id, pane_id };
             for pane in [writable, locked] {
                 app.wait_for_terminal_text(identity(pane), "READY");

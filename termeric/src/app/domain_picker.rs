@@ -1,7 +1,6 @@
 //! Asynchronous orchestration for the in-app live-domain picker.
 
-use super::{App, AppEvent, EVENT_LOOP_PROXY, RedrawReason, WindowResult};
-use crate::domain::protocol::{Request, Response};
+use super::{App, AppEvent, EVENT_LOOP_PROXY, RedrawReason, WindowKey, WindowResult};
 use crate::ui::domain_picker::{DomainPickerCommand, DomainPickerPrepared};
 
 impl App {
@@ -90,89 +89,64 @@ impl App {
     }
 
     fn discover_domains(&mut self, generation: u64, authority: crate::domain::DomainAuthority) {
-        if self.window.is_none() {
-            self.handle_domain_picker_loaded(
-                generation,
-                Err("Domain discovery requires a native window".into()),
-            );
-            return;
-        }
-        let window_key = self.window_key();
-        let Some(proxy) = EVENT_LOOP_PROXY.get().cloned() else {
-            self.handle_domain_picker_loaded(
-                generation,
-                Err("Domain discovery event channel is unavailable".into()),
-            );
-            return;
-        };
-        let spawn = std::thread::Builder::new()
-            .name("termeric-domain-discovery".into())
-            .spawn(move || {
-                let result = authority
-                    .client()
-                    .and_then(|client| client.request(Request::ListDomains))
-                    .and_then(|response| match response {
-                        Response::Domains { domains } => Ok(domains),
-                        _ => anyhow::bail!("domain server returned an invalid list response"),
-                    })
-                    .map_err(|error| format!("{error:#}"));
-                let _ = proxy.send_event(AppEvent::WindowResult {
-                    window: window_key,
-                    result: WindowResult::DomainPickerLoaded { generation, result },
-                });
-            });
-        if let Err(error) = spawn {
-            self.handle_domain_picker_loaded(
-                generation,
-                Err(format!("Could not start domain discovery: {error}")),
-            );
+        let started = self.spawn_domain_request(
+            "termeric-domain-discovery",
+            "Domain discovery",
+            move || authority.client()?.list_domains(),
+            move |window, result| AppEvent::WindowResult {
+                window,
+                result: WindowResult::DomainPickerLoaded { generation, result },
+            },
+        );
+        if let Err(message) = started {
+            self.handle_domain_picker_loaded(generation, Err(message));
         }
     }
 
     fn prepare_domain_window(&mut self, generation: u64, target: crate::domain::DomainTarget) {
+        let started = self.spawn_domain_request(
+            "termeric-domain-prepare",
+            "Domain attachment",
+            move || target.authority.client()?.describe(target.domain_id),
+            move |window, result| AppEvent::DomainPickerPrepared {
+                window,
+                generation,
+                result,
+            },
+        );
+        if let Err(message) = started {
+            self.handle_domain_picker_prepared(generation, Err(message));
+        }
+    }
+
+    /// Run one domain request on its own thread, since it may wait on a
+    /// daemon or an SSH connection, and hand its result to this window as the
+    /// event `deliver` builds. `what` names the request when it cannot
+    /// start; the error is for the caller to report.
+    fn spawn_domain_request<T: Send + 'static>(
+        &self,
+        thread_name: &str,
+        what: &str,
+        request: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
+        deliver: impl FnOnce(WindowKey, Result<T, String>) -> AppEvent + Send + 'static,
+    ) -> Result<(), String> {
         if self.window.is_none() {
-            self.handle_domain_picker_prepared(
-                generation,
-                Err("Domain attachment requires a native window".into()),
-            );
-            return;
+            return Err(format!("{what} requires a native window"));
         }
-        let window_key = self.window_key();
-        let Some(proxy) = EVENT_LOOP_PROXY.get().cloned() else {
-            self.handle_domain_picker_prepared(
-                generation,
-                Err("Domain attachment event channel is unavailable".into()),
-            );
-            return;
-        };
-        let spawn = std::thread::Builder::new()
-            .name("termeric-domain-prepare".into())
+        let window = self.window_key();
+        let proxy = EVENT_LOOP_PROXY
+            .get()
+            .cloned()
+            .ok_or_else(|| format!("{what} event channel is unavailable"))?;
+        std::thread::Builder::new()
+            .name(thread_name.into())
             .spawn(move || {
-                let result = target
-                    .authority
-                    .client()
-                    .and_then(|client| {
-                        client.request(Request::Describe {
-                            domain: target.domain_id,
-                        })
-                    })
-                    .and_then(|response| match response {
-                        Response::Domain { domain } => Ok(domain),
-                        _ => anyhow::bail!("domain server returned an invalid describe response"),
-                    })
-                    .map_err(|error| format!("{error:#}"));
-                let _ = proxy.send_event(AppEvent::DomainPickerPrepared {
-                    window: window_key,
-                    generation,
-                    result,
-                });
-            });
-        if let Err(error) = spawn {
-            self.handle_domain_picker_prepared(
-                generation,
-                Err(format!("Could not prepare domain attachment: {error}")),
-            );
-        }
+                let result = request().map_err(|error| format!("{error:#}"));
+                // Sending fails only once the event loop has ended.
+                let _ = proxy.send_event(deliver(window, result));
+            })
+            .map(drop)
+            .map_err(|error| format!("{what} could not start: {error}"))
     }
 }
 

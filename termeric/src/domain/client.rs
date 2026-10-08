@@ -418,6 +418,22 @@ impl DomainClient {
         }
     }
 
+    /// Every domain the server holds.
+    pub fn list_domains(&self) -> anyhow::Result<Vec<super::model::DomainSummary>> {
+        match self.request(Request::ListDomains)? {
+            Response::Domains { domains } => Ok(domains),
+            _ => anyhow::bail!("domain server returned an invalid list response"),
+        }
+    }
+
+    /// One domain's tabs and panes, as a window attaching to it lays them out.
+    pub fn describe(&self, domain: String) -> anyhow::Result<super::model::DomainSnapshot> {
+        match self.request(Request::Describe { domain })? {
+            Response::Domain { domain } => Ok(domain),
+            _ => anyhow::bail!("domain server returned an invalid describe response"),
+        }
+    }
+
     /// Copy one regular file or real directory (never a symbolic link) into
     /// the pane's working directory. The daemon publishes it only once every
     /// byte has arrived and never replaces an existing file; a directory
