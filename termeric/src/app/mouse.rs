@@ -814,48 +814,15 @@ impl App {
             return;
         }
 
-        // Overlays above the panels take no hover of their own here.
-        if self
-            .top_modal_layer()
-            .is_some_and(|layer| !layer.is_panel())
-        {
-            return;
-        }
-
         // The native drag-and-drop cursor remains authoritative until Winit
         // reports DroppedFile or HoveredFileCancelled.
         if self.file_drop_hovered {
             return;
         }
 
-        // Set resize cursor when hovering over pane dividers. A dragged tab
-        // owns the pointer's shape until it is released.
-        if !self.pointer_panel_owns_input()
-            && self.tab_dragging.is_none()
-            && let Some(tabs) = &self.tabs
-        {
-            if let Some(tab) = tabs.active_tab() {
-                if let Some(pm) = tab.split_panes() {
-                    let (area_x, area_y) = metrics.pane_area_point(position);
-                    if let Some(divider) = pm.divider_at(area_x, area_y) {
-                        if let Some(window) = &self.window {
-                            let cursor = if divider.vertical {
-                                winit::window::CursorIcon::EwResize
-                            } else {
-                                winit::window::CursorIcon::NsResize
-                            };
-                            window.set_cursor(cursor);
-                        }
-                        return;
-                    } else if let Some(window) = &self.window {
-                        window.set_cursor(winit::window::CursorIcon::Default);
-                    }
-                }
-            }
-        }
-
-        // A panel layer on top tracks hover for its highlights, and the
-        // terminal beneath sees no motion: no selection, no reports.
+        // A panel layer on top tracks hover for its highlights, an overlay
+        // above the panels takes no hover of its own here, and the terminal
+        // beneath sees no motion: no selection, no reports.
         match self.top_modal_layer() {
             Some(ModalLayer::Settings) => {
                 self.hover_settings_panel(position.0 as f32, position.1 as f32);
@@ -885,9 +852,7 @@ impl App {
                 self.update_agents_panel_hover(position.0 as f32, position.1 as f32);
                 return;
             }
-            // The layers above the panels returned before this.
-            None
-            | Some(
+            Some(
                 ModalLayer::Guardrail
                 | ModalLayer::InfoOverlay
                 | ModalLayer::DiffReview
@@ -898,7 +863,32 @@ impl App {
                 | ModalLayer::UnicodePicker
                 | ModalLayer::CommandPalette
                 | ModalLayer::ShortcutsPanel,
-            ) => {}
+            ) => return,
+            None => {}
+        }
+
+        // Set resize cursor when hovering over pane dividers. A dragged tab
+        // owns the pointer's shape until it is released.
+        if self.tab_dragging.is_none()
+            && let Some(pm) = self
+                .tabs
+                .as_ref()
+                .and_then(|tabs| tabs.active_tab()?.split_panes())
+        {
+            let (area_x, area_y) = metrics.pane_area_point(position);
+            if let Some(divider) = pm.divider_at(area_x, area_y) {
+                if let Some(window) = &self.window {
+                    let cursor = if divider.vertical {
+                        winit::window::CursorIcon::EwResize
+                    } else {
+                        winit::window::CursorIcon::NsResize
+                    };
+                    window.set_cursor(cursor);
+                }
+                return;
+            } else if let Some(window) = &self.window {
+                window.set_cursor(winit::window::CursorIcon::Default);
+            }
         }
 
         self.refresh_terminal_pointer_cursor();
