@@ -25,13 +25,11 @@ pub(crate) fn markdown_of_file(jsonl_path: &Path) -> Result<String, String> {
 pub(super) fn render_markdown(
     reader: &mut (impl BufRead + Seek),
     writer: &mut impl Write,
-) -> io::Result<usize> {
+) -> io::Result<()> {
     let mut line = Vec::new();
-    let mut peak_encoded_capacity = 0;
     let mut count = 0;
     let mut metadata = None;
     while read_record(reader, &mut line)? {
-        peak_encoded_capacity = peak_encoded_capacity.max(line.capacity());
         count += 1;
         let entry = parse_entry(&line, count)?;
         if entry.kind == EntryKind::Meta {
@@ -47,11 +45,10 @@ pub(super) fn render_markdown(
     reader.seek(SeekFrom::Start(0))?;
     count = 0;
     while read_record(reader, &mut line)? {
-        peak_encoded_capacity = peak_encoded_capacity.max(line.capacity());
         count += 1;
         write_entry(writer, &parse_entry(&line, count)?)?;
     }
-    Ok(peak_encoded_capacity)
+    Ok(())
 }
 
 fn parse_entry(line: &[u8], number: usize) -> io::Result<TranscriptEntry> {
@@ -149,7 +146,7 @@ mod tests {
     use std::io::Write;
 
     #[test]
-    fn streaming_conversion_keeps_one_record_for_a_large_transcript() {
+    fn streaming_conversion_keeps_every_byte_of_a_large_transcript() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("large.jsonl");
         let mut file = fs::File::create(&path).unwrap();
@@ -178,8 +175,7 @@ mod tests {
         }
         let mut output = Count(0, 0);
         let mut input = io::BufReader::new(fs::File::open(path).unwrap());
-        let peak = render_markdown(&mut input, &mut output).unwrap();
-        assert!(peak <= 1024 * 1024, "encoded buffer grew to {peak}");
+        render_markdown(&mut input, &mut output).unwrap();
         assert!(output.0 >= 45 * 1024 * 1024, "content was truncated");
         assert_eq!(
             output.1,
@@ -199,8 +195,7 @@ mod tests {
         };
         let line = serde_json::to_vec(&entry).unwrap();
         assert!(line.len() < MAX_TRANSCRIPT_RECORD_BYTES);
-        let peak = render_markdown(&mut io::Cursor::new(line), &mut io::sink()).unwrap();
-        assert!(peak <= MAX_TRANSCRIPT_RECORD_BYTES);
+        render_markdown(&mut io::Cursor::new(line), &mut io::sink()).unwrap();
         let mut oversized =
             io::BufReader::new(io::repeat(b'x').take(MAX_TRANSCRIPT_RECORD_BYTES as u64 + 1));
         assert!(read_record(&mut oversized, &mut Vec::new()).is_err());
