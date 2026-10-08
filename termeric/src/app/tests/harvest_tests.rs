@@ -769,4 +769,19 @@ fn growth_indicators_follow_their_row_into_scrollback() {
         marker_rows(&app),
         vec![placement.row_marker(rect, true, 2, cell).y]
     );
+
+    // A prompt already in scrollback shows once scrolling back brings its
+    // row onto the screen, and not before.
+    app.active_panes_mut()
+        .get_pane_mut(focused)
+        .unwrap()
+        .harvest
+        .indicators[0]
+        .prompt_row = -4;
+    assert!(marker_rows(&app).is_empty());
+    scroll_to(&mut app, 6);
+    assert_eq!(
+        marker_rows(&app),
+        vec![placement.row_marker(rect, true, 2, cell).y]
+    );
 }

@@ -332,9 +332,11 @@ impl App {
             .iter()
             .filter(|indicator| !indicator.is_finished())
             .filter_map(|indicator| {
-                // Prompt rows count from the live screen's top; scrolling
-                // back moves that screen down by the scroll offset.
-                let row = indicator.prompt_row.checked_add(scroll_offset)?;
+                // Prompt rows count from the live screen's top, negative in
+                // scrollback; scrolling back moves that screen down by the
+                // scroll offset.
+                let row = i64::from(indicator.prompt_row) + i64::try_from(scroll_offset).ok()?;
+                let row = usize::try_from(row).ok()?;
                 (row < shown_rows).then(|| IndicatorRenderInfo {
                     cell: placement.row_marker(rect, lone, row, cell_size),
                     phase: indicator.phase,

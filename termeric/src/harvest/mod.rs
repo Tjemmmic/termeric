@@ -45,24 +45,13 @@ impl HarvestTerminalState {
         let active = tracker
             .active_region()
             .filter(|region| region.content_available && region.output_row.is_some())
-            .and_then(|region| {
-                usize::try_from(region.prompt_row)
-                    .ok()
-                    .map(|row| (region.id, row))
-            });
+            .map(|region| (region.id, region.prompt_row));
         if active.map(|(id, _)| id) != self.active_region_id {
             self.active_region_id = active.map(|(id, _)| id);
             self.indicators.retain(|indicator| indicator.completed);
             if let Some((id, row)) = active.filter(|_| show_indicators) {
                 self.start_command(id, row);
             }
-        } else if let Some((id, row)) = active
-            && let Some(indicator) = self
-                .indicators
-                .iter_mut()
-                .find(|indicator| indicator.region_id == id)
-        {
-            indicator.prompt_row = row;
         }
 
         let mut completed = Vec::new();
@@ -71,8 +60,8 @@ impl HarvestTerminalState {
             .cloned()
         {
             self.last_completed_region_id = self.last_completed_region_id.max(region.id);
-            if show_indicators && let Ok(row) = usize::try_from(region.prompt_row) {
-                self.start_command(region.id, row);
+            if show_indicators && region.content_available {
+                self.start_command(region.id, region.prompt_row);
                 self.complete_command(region.id, region.exit_code == Some(0));
             }
             if self.active_region_id == Some(region.id) {
@@ -82,6 +71,7 @@ impl HarvestTerminalState {
         }
 
         if show_indicators {
+            self.follow_prompts(tracker);
             for indicator in &mut self.indicators {
                 indicator.update();
             }
@@ -92,7 +82,25 @@ impl HarvestTerminalState {
         completed
     }
 
-    fn start_command(&mut self, region_id: u64, prompt_row: usize) {
+    /// Move each indicator to its prompt's row, which output scrolls up and
+    /// into scrollback, running or finished. One whose rows are no longer
+    /// retained goes with them.
+    fn follow_prompts(&mut self, tracker: &PromptTracker) {
+        let active = tracker.active_region();
+        self.indicators.retain_mut(|indicator| {
+            let Some(region) = active
+                .filter(|region| region.id == indicator.region_id)
+                .or_else(|| tracker.completed_region_by_id(indicator.region_id))
+                .filter(|region| region.content_available)
+            else {
+                return false;
+            };
+            indicator.prompt_row = region.prompt_row;
+            true
+        });
+    }
+
+    fn start_command(&mut self, region_id: u64, prompt_row: i32) {
         if self
             .indicators
             .iter()
@@ -208,6 +216,50 @@ mod tests {
         assert_eq!(first.observe(&tracker, true).len(), 1);
         assert!(first.observe(&tracker, true).is_empty());
         assert_eq!(second.observe(&tracker, true).len(), 1);
+    }
+
+    fn indicator_rows(state: &HarvestTerminalState) -> Vec<(u64, i32)> {
+        state
+            .indicators
+            .iter()
+            .map(|indicator| (indicator.region_id, indicator.prompt_row))
+            .collect()
+    }
+
+    #[test]
+    fn a_running_commands_indicator_follows_its_prompt_into_scrollback() {
+        let mut tracker = PromptTracker::new();
+        tracker.mark_prompt_start(2);
+        tracker.mark_command_start(2);
+        tracker.mark_output_start(3);
+        let mut state = HarvestTerminalState::default();
+        state.observe(&tracker, true);
+        let id = tracker.active_region().unwrap().id;
+        assert_eq!(indicator_rows(&state), [(id, 2)]);
+
+        // Output scrolls the prompt up past the top of the screen.
+        tracker.adjust_for_scroll(5, -100);
+        state.observe(&tracker, true);
+        assert_eq!(indicator_rows(&state), [(id, -3)]);
+
+        // Once its rows leave the scrollback, the indicator goes too.
+        tracker.adjust_for_scroll(100, -100);
+        state.observe(&tracker, true);
+        assert!(state.indicators.is_empty());
+    }
+
+    #[test]
+    fn a_finished_commands_indicator_moves_with_its_prompt() {
+        let mut tracker = one_completed_command();
+        let mut state = HarvestTerminalState::default();
+        state.observe(&tracker, true);
+        let id = tracker.completed_region(0).unwrap().id;
+        assert_eq!(indicator_rows(&state), [(id, 2)]);
+        assert!(state.indicators[0].completed);
+
+        tracker.adjust_for_scroll(4, -100);
+        state.observe(&tracker, true);
+        assert_eq!(indicator_rows(&state), [(id, -2)]);
     }
 
     #[test]

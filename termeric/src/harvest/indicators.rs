@@ -51,8 +51,9 @@ impl GrowthPhase {
 pub struct GrowthIndicator {
     /// Stable shell-region identity for this exact command.
     pub region_id: u64,
-    /// Row where the command prompt is
-    pub prompt_row: usize,
+    /// The prompt's row, counted like the region's: from the top of the live
+    /// screen, negative once it has scrolled into scrollback.
+    pub prompt_row: i32,
     /// Current growth phase
     pub phase: GrowthPhase,
     /// Monotonic command start time.
@@ -67,7 +68,7 @@ pub struct GrowthIndicator {
 
 impl GrowthIndicator {
     /// Create a new growth indicator
-    pub fn new(region_id: u64, prompt_row: usize) -> Self {
+    pub fn new(region_id: u64, prompt_row: i32) -> Self {
         Self {
             region_id,
             prompt_row,
