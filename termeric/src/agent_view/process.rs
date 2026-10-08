@@ -624,10 +624,14 @@ mod tests {
     #[test]
     fn a_crash_reports_what_its_group_writes_to_stderr_as_it_ends() {
         // The agent exits at once, and a command it started writes the
-        // reason a moment later, ignoring the signal that ends the group.
+        // reason as it does, ignoring the signal that ends the group. The
+        // command waits for the end of a pipe only the agent writes to, so
+        // it speaks once the agent has gone, however slowly either runs.
         let mut process = AgentProcess::spawn(
             &shell(
-                "(trap '' TERM; sleep 0.3; echo 'last words' >&2) </dev/null >/dev/null &
+                "pipe=$(mktemp -u) && mkfifo \"$pipe\" || exit 1
+                (trap '' TERM; exec 3<\"$pipe\"; rm \"$pipe\"; cat <&3; echo 'last words' >&2) </dev/null >/dev/null &
+                exec 3>\"$pipe\"
                 echo 'first words' >&2; exit 4",
             ),
             noop_waker(),
