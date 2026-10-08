@@ -3115,7 +3115,7 @@ mod tests {
                 .rows_text(0, 23)
                 .contains("termeric-readline>")
         {
-            tab.poll_events(|_, _| {});
+            tab.poll_events();
             std::thread::sleep(Duration::from_millis(2));
         }
 
@@ -3136,7 +3136,7 @@ mod tests {
         let output_deadline = Instant::now() + Duration::from_secs(3);
         let mut output = String::new();
         while Instant::now() < output_deadline {
-            tab.poll_events(|_, _| {});
+            tab.poll_events();
             output = tab.focused_terminal().unwrap().rows_text(0, 23);
             if ["NORMAL_HEAD", "NORMAL_TAIL", "APP_HEAD", "APP_TAIL"]
                 .iter()

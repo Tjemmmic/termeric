@@ -1452,10 +1452,10 @@ impl TabManager {
 
         for (i, tab) in self.tabs.iter_mut().enumerate() {
             let tab_id = tab.id;
-            let mut saw_output = false;
-            let on_output = |_: PaneId, data: &[u8]| saw_output |= !data.is_empty();
-            let (tab_changed, pane_events) = tab.poll_events(on_output);
-            let events = pane_events
+            let poll = tab.poll_events();
+            let tab_changed = poll.changed;
+            let events = poll
+                .events
                 .into_iter()
                 .map(|pane_event| RoutedTerminalEvent {
                     origin: TerminalEventOrigin {
@@ -1464,7 +1464,7 @@ impl TabManager {
                     },
                     event: pane_event.event,
                 });
-            if saw_output {
+            if poll.saw_output {
                 tab.update_title();
             }
             if tab_changed && i != self.active {

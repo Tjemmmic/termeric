@@ -2,7 +2,7 @@
 //! plus its title, lifecycle, and session save/restore.
 
 use crate::config::ShellConfig;
-use crate::panes::{Pane, PaneId, PaneManager, PaneTerminalEvent};
+use crate::panes::{Pane, PaneId, PaneManager, PanePoll};
 use crate::session::terminal_state::TerminalIntegration;
 #[cfg(test)]
 use crate::session::transcript::TranscriptRecorder;
@@ -215,19 +215,16 @@ impl Tab {
     }
 
     /// Poll every terminal in the tab, consuming each one's protocol replies
-    /// on its own PTY. `on_output` sees each chunk of output read. The tab
-    /// closes once every terminal in it has exited.
-    pub(crate) fn poll_events(
-        &mut self,
-        on_output: impl FnMut(PaneId, &[u8]),
-    ) -> (bool, Vec<PaneTerminalEvent>) {
-        let (changed, events) = self.panes.poll_events(on_output);
+    /// on its own PTY. The tab closes once every terminal in it has exited.
+    pub(crate) fn poll_events(&mut self) -> PanePoll {
+        let mut poll = self.panes.poll_events();
         let newly_closed = !self.closed && self.panes.all_closed();
         if newly_closed {
             log::info!("Every terminal in tab {} exited", self.id);
             self.closed = true;
         }
-        (changed || newly_closed, events)
+        poll.changed |= newly_closed;
+        poll
     }
 
     /// Make this tab show a live domain's tab through relay processes. The

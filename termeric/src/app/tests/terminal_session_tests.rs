@@ -112,10 +112,7 @@ fn single_and_split_diff_capture_waits_for_real_eof_not_poll_boundaries() {
             let (sender, receiver) = std::sync::mpsc::channel();
             tab.panes.get_pane_mut(owner).unwrap().pty_rx = receiver;
             let poll = |tab: &mut crate::tabs::Tab| {
-                tab.panes
-                    .get_pane_mut(owner)
-                    .unwrap()
-                    .poll_events(true, |_, _| {});
+                tab.panes.get_pane_mut(owner).unwrap().poll_events(true);
             };
             let first = "--- a/根\n+++ b/根\n@@ -1 +1 @@\n-old\n+🌱\n";
             for byte in first.as_bytes().chunks(1) {

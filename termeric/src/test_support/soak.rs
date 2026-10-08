@@ -90,7 +90,7 @@ fn scheduled_resource_soak_scenario() {
         );
         let pane_deadline = Instant::now() + Duration::from_secs(2);
         while !panes.all_closed() && Instant::now() < pane_deadline {
-            panes.poll_events(|_, _| {});
+            panes.poll_events();
             std::thread::sleep(Duration::from_millis(1));
         }
         assert!(panes.all_closed(), "pane child did not exit during soak");

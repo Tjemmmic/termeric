@@ -51,6 +51,18 @@ pub struct PaneTerminalEvent {
     pub event: TerminalEvent,
 }
 
+/// What polling one pane, or every pane of a tab, found.
+#[derive(Debug, Default)]
+pub struct PanePoll {
+    /// Whether anything shown changed.
+    pub changed: bool,
+    /// Whether any terminal output was read.
+    pub saw_output: bool,
+    /// App-facing events, at most [`MAX_FORWARDED_TERMINAL_EVENTS_PER_POLL`]
+    /// from each pane.
+    pub events: Vec<PaneTerminalEvent>,
+}
+
 impl PaneDir {
     fn opposite(self) -> Self {
         match self {
@@ -323,12 +335,9 @@ impl Pane {
     /// this pane's own PTY. App-facing events are drained on every 4 KiB output
     /// chunk and bounded before being returned. `agent_features` is whether
     /// they are on in the window that owns the pane.
-    pub fn poll_events(
-        &mut self,
-        agent_features: bool,
-        mut on_output: impl FnMut(PaneId, &[u8]),
-    ) -> (bool, Vec<TerminalEvent>) {
+    pub fn poll_events(&mut self, agent_features: bool) -> PanePoll {
         let mut changed = self.integration.poll_notices();
+        let mut saw_output = false;
         let was_closed = self.closed;
         let mut app_events = Vec::new();
         let mut reader_disconnected = false;
@@ -347,7 +356,7 @@ impl Pane {
                 PtyEvent::Output(data) => {
                     self.integration
                         .observe_output(&data, self.diff_watch(agent_features));
-                    on_output(self.id, &data);
+                    saw_output |= !data.is_empty();
                     self.terminal.process(&data);
                     changed = true;
                     changed |= self.drain_terminal_events(&mut app_events);
@@ -389,10 +398,17 @@ impl Pane {
             self.closed = true;
         }
 
-        (
-            changed || self.closed != was_closed || !app_events.is_empty(),
-            app_events,
-        )
+        PanePoll {
+            changed: changed || self.closed != was_closed || !app_events.is_empty(),
+            saw_output,
+            events: app_events
+                .into_iter()
+                .map(|event| PaneTerminalEvent {
+                    pane_id: self.id,
+                    event,
+                })
+                .collect(),
+        }
     }
 
     /// Whose diffs this pane's output is watched for: none while agent
@@ -1257,24 +1273,17 @@ impl PaneManager {
     }
 
     /// Poll every pane, including unfocused panes, through the same bounded
-    /// event path. The callback observes each raw PTY output chunk without
-    /// retaining another unbounded copy.
-    pub fn poll_events(
-        &mut self,
-        mut on_output: impl FnMut(PaneId, &[u8]),
-    ) -> (bool, Vec<PaneTerminalEvent>) {
-        let mut changed = false;
-        let mut all_events = Vec::new();
+    /// event path.
+    pub fn poll_events(&mut self) -> PanePoll {
+        let mut poll = PanePoll::default();
         let mut dropped_events = 0usize;
-
         for pane in self.panes.values_mut() {
-            let pane_id = pane.id;
-            let (pane_changed, events) =
-                pane.poll_events(self.policy.agent_features, &mut on_output);
-            changed |= pane_changed;
-            for event in events {
-                if all_events.len() < MAX_FORWARDED_TERMINAL_EVENTS_PER_POLL {
-                    all_events.push(PaneTerminalEvent { pane_id, event });
+            let pane_poll = pane.poll_events(self.policy.agent_features);
+            poll.changed |= pane_poll.changed;
+            poll.saw_output |= pane_poll.saw_output;
+            for event in pane_poll.events {
+                if poll.events.len() < MAX_FORWARDED_TERMINAL_EVENTS_PER_POLL {
+                    poll.events.push(event);
                 } else {
                     dropped_events += 1;
                 }
@@ -1289,8 +1298,8 @@ impl PaneManager {
                 MAX_FORWARDED_TERMINAL_EVENTS_PER_POLL
             );
         }
-
-        (changed || !all_events.is_empty(), all_events)
+        poll.changed |= !poll.events.is_empty();
+        poll
     }
 
     /// Whether the panes are already laid out for `area`.
@@ -2749,7 +2758,7 @@ mod tests {
         let wait_for_cwd = |panes: &mut PaneManager, id: PaneId, expected: &std::path::Path| {
             let deadline = Instant::now() + Duration::from_secs(2);
             loop {
-                panes.poll_events(|_, _| {});
+                panes.poll_events();
                 let cwd = panes
                     .get_pane(id)
                     .unwrap()
@@ -2884,7 +2893,7 @@ mod tests {
 
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
-            let (_, events) = panes.poll_events(|_, _| {});
+            let events = panes.poll_events().events;
             assert!(
                 events
                     .iter()
@@ -2946,7 +2955,7 @@ mod tests {
 
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
-            let (_, events) = panes.poll_events(|_, _| {});
+            let events = panes.poll_events().events;
             assert!(events.len() <= MAX_FORWARDED_TERMINAL_EVENTS_PER_POLL);
             assert!(
                 events

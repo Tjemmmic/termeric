@@ -419,7 +419,7 @@ fn splitting_and_closing_back_to_one_pane_keep_the_first_terminal_without_orphan
             .rows_text(0, 23)
             .contains("before")
     {
-        tab.poll_events(|_, _| {});
+        tab.poll_events();
         std::thread::sleep(Duration::from_millis(2));
     }
 
@@ -466,7 +466,7 @@ fn splitting_and_closing_back_to_one_pane_keep_the_first_terminal_without_orphan
                     .rows_text(0, 23)
                     .contains("after")
             {
-                panes.poll_events(|_, _| {});
+                panes.poll_events();
                 std::thread::sleep(Duration::from_millis(2));
             }
         }
@@ -882,7 +882,7 @@ fn a_closed_split_tab_keeps_every_pane_and_is_named_for_the_focused_one() {
     }
     let cwd_deadline = Instant::now() + Duration::from_secs(2);
     loop {
-        panes.poll_events(|_, _| {});
+        panes.poll_events();
         let left_cwd = panes
             .get_pane(PaneId(0))
             .unwrap()

@@ -23,7 +23,7 @@ fn tab_showing(script: &str, expected: &str) -> Tab {
     .expect("the shell starts in a PTY");
     let mut shown = String::new();
     let arrived = crate::test_support::poll_until(Duration::from_secs(2), || {
-        tab.poll_events(|_, _| {});
+        tab.poll_events();
         shown = tab
             .focused_terminal()
             .expect("the tab has a terminal")
