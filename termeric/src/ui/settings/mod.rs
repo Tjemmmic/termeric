@@ -565,14 +565,14 @@ impl SettingKind {
 }
 
 /// How a picked dropdown option becomes an action.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum Choose {
     /// The option's text is the value: a theme or font family.
     Text(fn(String) -> SettingsAction),
     /// The options are On and Off, in that order.
     Toggle(fn(bool) -> SettingsAction),
-    /// The options list a fixed set of values in order; the position picks one.
-    Index(fn(usize) -> SettingsAction),
+    /// The action each option takes, in the options' order.
+    Each(Vec<SettingsAction>),
     /// One position in the font fallback chain; the "None" option removes it.
     FontFallback(usize),
     /// Offer or hide this built-in agent; the options are On and Off.
@@ -580,20 +580,20 @@ pub enum Choose {
 }
 
 impl Choose {
-    fn action(self, options: &[String], index: usize) -> SettingsAction {
+    fn action(&self, options: &[String], index: usize) -> SettingsAction {
         let Some(option) = options.get(index) else {
             return SettingsAction::None;
         };
         match self {
             Self::Text(set) => set(option.clone()),
             Self::Toggle(set) => set(index == 0),
-            Self::Index(set) => set(index),
+            Self::Each(actions) => actions.get(index).cloned().unwrap_or(SettingsAction::None),
             Self::FontFallback(index) => SettingsAction::SetFontFallback {
-                index,
+                index: *index,
                 family: (option != NO_FONT_FALLBACK).then(|| option.clone()),
             },
             Self::Agent(agent_id) => SettingsAction::SetAgentEnabled {
-                agent_id: agent_id.into(),
+                agent_id: (*agent_id).into(),
                 enabled: index == 0,
             },
         }
@@ -664,9 +664,26 @@ fn toggle(label: &'static str, on: bool, set: fn(bool) -> SettingsAction) -> Set
     }
 }
 
-/// The `index`th of `values`, as `set` turns it into an action.
-fn pick<T: Copy>(values: &[T], index: usize, set: fn(T) -> SettingsAction) -> SettingsAction {
-    values.get(index).copied().map_or(SettingsAction::None, set)
+/// A dropdown over a fixed list of values, each shown by its label.
+fn choice<T: Copy + PartialEq>(
+    label: &'static str,
+    values: &[T],
+    current: T,
+    value_label: fn(T) -> &'static str,
+    set: fn(T) -> SettingsAction,
+) -> SettingItem {
+    SettingItem {
+        label,
+        value: value_label(current).into(),
+        kind: SettingKind::Dropdown {
+            options: values.iter().map(|value| value_label(*value).into()).collect(),
+            selected: values
+                .iter()
+                .position(|value| *value == current)
+                .unwrap_or(0),
+            choose: Choose::Each(values.iter().map(|value| set(*value)).collect()),
+        },
+    }
 }
 
 /// A flat entry for the settings modal list (item or category header)
@@ -1278,116 +1295,60 @@ impl SettingsPanel {
                         step: 0.05,
                     },
                 },
-                SettingItem {
-                    label: "Background Image Fit",
-                    value: config.window.background_image.fit.label().into(),
-                    kind: SettingKind::Dropdown {
-                        choose: Choose::Index(|index| {
-                            pick(
-                                BackgroundImageFit::ALL,
-                                index,
-                                SettingsAction::SetBackgroundImageFit,
-                            )
-                        }),
-                        options: BackgroundImageFit::ALL
-                            .iter()
-                            .map(|fit| fit.label().to_string())
-                            .collect(),
-                        selected: BackgroundImageFit::ALL
-                            .iter()
-                            .position(|fit| *fit == config.window.background_image.fit)
-                            .unwrap_or(0),
-                    },
-                },
+                choice(
+                    "Background Image Fit",
+                    BackgroundImageFit::ALL,
+                    config.window.background_image.fit,
+                    BackgroundImageFit::label,
+                    SettingsAction::SetBackgroundImageFit,
+                ),
                 toggle(
                     "Decorations",
                     config.window.decorations,
                     SettingsAction::SetDecorations,
                 ),
-                SettingItem {
-                    label: "Window Level",
-                    value: config.window.level.label().into(),
-                    kind: SettingKind::Dropdown {
-                        choose: Choose::Index(|index| {
-                            pick(
-                                WindowLevelConfig::ALL,
-                                index,
-                                SettingsAction::SetWindowLevel,
-                            )
-                        }),
-                        options: WindowLevelConfig::ALL
-                            .iter()
-                            .map(|level| level.label().to_string())
-                            .collect(),
-                        selected: WindowLevelConfig::ALL
-                            .iter()
-                            .position(|level| *level == config.window.level)
-                            .unwrap_or(0),
-                    },
-                },
-                SettingItem {
-                    label: "Tab Bar Position",
-                    value: config.window.tab_bar_position.label().into(),
-                    kind: SettingKind::Dropdown {
-                        choose: Choose::Index(|index| {
-                            pick(
-                                TabBarPosition::ALL,
-                                index,
-                                SettingsAction::SetTabBarPosition,
-                            )
-                        }),
-                        options: TabBarPosition::ALL
-                            .iter()
-                            .map(|position| position.label().to_string())
-                            .collect(),
-                        selected: TabBarPosition::ALL
-                            .iter()
-                            .position(|position| *position == config.window.tab_bar_position)
-                            .unwrap_or(0),
-                    },
-                },
+                choice(
+                    "Window Level",
+                    WindowLevelConfig::ALL,
+                    config.window.level,
+                    WindowLevelConfig::label,
+                    SettingsAction::SetWindowLevel,
+                ),
+                choice(
+                    "Tab Bar Position",
+                    TabBarPosition::ALL,
+                    config.window.tab_bar_position,
+                    TabBarPosition::label,
+                    SettingsAction::SetTabBarPosition,
+                ),
             ],
         ));
 
         // Cursor
-        {
-            let style_options: Vec<String> = CursorStyle::ALL
-                .iter()
-                .map(|s| s.label().to_string())
-                .collect();
-            let style_selected = CursorStyle::ALL
-                .iter()
-                .position(|s| *s == config.cursor.style)
-                .unwrap_or(0);
-            result.push((
-                SettingsSection::Cursor,
-                vec![
-                    SettingItem {
-                        label: "Style",
-                        value: config.cursor.style.label().into(),
-                        kind: SettingKind::Dropdown {
-                            choose: Choose::Index(|index| {
-                                pick(CursorStyle::ALL, index, SettingsAction::SetCursorStyle)
-                            }),
-                            options: style_options,
-                            selected: style_selected,
-                        },
+        result.push((
+            SettingsSection::Cursor,
+            vec![
+                choice(
+                    "Style",
+                    CursorStyle::ALL,
+                    config.cursor.style,
+                    |style| style.label(),
+                    SettingsAction::SetCursorStyle,
+                ),
+                toggle("Blink", config.cursor.blink, SettingsAction::SetCursorBlink),
+                SettingItem {
+                    label: "Blink Rate",
+                    value: format!("{}ms", config.cursor.blink_rate),
+                    kind: SettingKind::Numeric {
+                        value: config.cursor.blink_rate as f32,
+                        set: |rate| SettingsAction::SetCursorBlinkRate(rate as u32),
+                        min: *crate::config::CURSOR_BLINK_RATE_RANGE.start() as f32,
+                        max: *crate::config::CURSOR_BLINK_RATE_RANGE.end() as f32,
+                        step: 50.0,
                     },
-                    toggle("Blink", config.cursor.blink, SettingsAction::SetCursorBlink),
-                    SettingItem {
-                        label: "Blink Rate",
-                        value: format!("{}ms", config.cursor.blink_rate),
-                        kind: SettingKind::Numeric {
-                            value: config.cursor.blink_rate as f32,
-                            set: |rate| SettingsAction::SetCursorBlinkRate(rate as u32),
-                            min: *crate::config::CURSOR_BLINK_RATE_RANGE.start() as f32,
-                            max: *crate::config::CURSOR_BLINK_RATE_RANGE.end() as f32,
-                            step: 50.0,
-                        },
-                    },
-                ],
-            ));
-        }
+                },
+            ],
+        ));
 
         // Bell
         result.push((
@@ -1453,30 +1414,16 @@ impl SettingsPanel {
         ));
 
         // Startup
-        {
-            let splash_options: Vec<String> = SplashMode::ALL
-                .iter()
-                .map(|m| m.label().to_string())
-                .collect();
-            let splash_selected = SplashMode::ALL
-                .iter()
-                .position(|m| *m == config.splash.mode)
-                .unwrap_or(0);
-            result.push((
-                SettingsSection::Startup,
-                vec![SettingItem {
-                    label: "Splash",
-                    value: config.splash.mode.label().to_string(),
-                    kind: SettingKind::Dropdown {
-                        choose: Choose::Index(|index| {
-                            pick(SplashMode::ALL, index, SettingsAction::SetSplashMode)
-                        }),
-                        options: splash_options,
-                        selected: splash_selected,
-                    },
-                }],
-            ));
-        }
+        result.push((
+            SettingsSection::Startup,
+            vec![choice(
+                "Splash",
+                SplashMode::ALL,
+                config.splash.mode,
+                |mode| mode.label(),
+                SettingsAction::SetSplashMode,
+            )],
+        ));
 
         // Shell
         {
@@ -1585,52 +1532,20 @@ impl SettingsPanel {
         result.push((
             SettingsSection::Accessibility,
             vec![
-                SettingItem {
-                    label: "Reduce Motion",
-                    value: config.accessibility.reduce_motion.label().into(),
-                    kind: SettingKind::Dropdown {
-                        choose: Choose::Index(|index| {
-                            pick(
-                                &AccessibilityPreference::ALL,
-                                index,
-                                SettingsAction::SetReduceMotion,
-                            )
-                        }),
-                        options: AccessibilityPreference::ALL
-                            .into_iter()
-                            .map(|preference| preference.label().into())
-                            .collect(),
-                        selected: AccessibilityPreference::ALL
-                            .iter()
-                            .position(|preference| {
-                                *preference == config.accessibility.reduce_motion
-                            })
-                            .unwrap_or(0),
-                    },
-                },
-                SettingItem {
-                    label: "High Contrast",
-                    value: config.accessibility.high_contrast.label().into(),
-                    kind: SettingKind::Dropdown {
-                        choose: Choose::Index(|index| {
-                            pick(
-                                &AccessibilityPreference::ALL,
-                                index,
-                                SettingsAction::SetHighContrast,
-                            )
-                        }),
-                        options: AccessibilityPreference::ALL
-                            .into_iter()
-                            .map(|preference| preference.label().into())
-                            .collect(),
-                        selected: AccessibilityPreference::ALL
-                            .iter()
-                            .position(|preference| {
-                                *preference == config.accessibility.high_contrast
-                            })
-                            .unwrap_or(0),
-                    },
-                },
+                choice(
+                    "Reduce Motion",
+                    &AccessibilityPreference::ALL,
+                    config.accessibility.reduce_motion,
+                    AccessibilityPreference::label,
+                    SettingsAction::SetReduceMotion,
+                ),
+                choice(
+                    "High Contrast",
+                    &AccessibilityPreference::ALL,
+                    config.accessibility.high_contrast,
+                    AccessibilityPreference::label,
+                    SettingsAction::SetHighContrast,
+                ),
             ],
         ));
 
@@ -1691,13 +1606,12 @@ impl SettingsPanel {
                 label: "Supervisor",
                 value: supervisor_agents[supervisor_index].into(),
                 kind: SettingKind::Dropdown {
-                    choose: Choose::Index(|index| {
-                        pick(
-                            &crate::agents::supervisor::SUPERVISOR_AGENTS,
-                            index,
-                            |agent| SettingsAction::SetSupervisorAgent(agent.into()),
-                        )
-                    }),
+                    choose: Choose::Each(
+                        crate::agents::supervisor::SUPERVISOR_AGENTS
+                            .iter()
+                            .map(|agent| SettingsAction::SetSupervisorAgent((*agent).into()))
+                            .collect(),
+                    ),
                     options: supervisor_agents
                         .iter()
                         .map(|name| (*name).into())
@@ -1705,44 +1619,20 @@ impl SettingsPanel {
                     selected: supervisor_index,
                 },
             });
-            let modes = crate::agents::supervisor::SupervisorMode::ALL;
-            items.push(SettingItem {
-                label: "Supervisor Mode",
-                value: config.supervisor.mode.label().into(),
-                kind: SettingKind::Dropdown {
-                    choose: Choose::Index(|index| {
-                        pick(
-                            &crate::agents::supervisor::SupervisorMode::ALL,
-                            index,
-                            SettingsAction::SetSupervisorMode,
-                        )
-                    }),
-                    options: modes.iter().map(|mode| mode.label().into()).collect(),
-                    selected: modes
-                        .iter()
-                        .position(|mode| *mode == config.supervisor.mode)
-                        .unwrap_or(0),
-                },
-            });
-            let places = crate::agents::config::OpenAgentsIn::ALL;
-            items.push(SettingItem {
-                label: "Open Agents In",
-                value: config.agent_view.open_agents_in.label().into(),
-                kind: SettingKind::Dropdown {
-                    choose: Choose::Index(|index| {
-                        pick(
-                            &crate::agents::config::OpenAgentsIn::ALL,
-                            index,
-                            SettingsAction::SetOpenAgentsIn,
-                        )
-                    }),
-                    options: places.iter().map(|place| place.label().into()).collect(),
-                    selected: places
-                        .iter()
-                        .position(|place| *place == config.agent_view.open_agents_in)
-                        .unwrap_or(0),
-                },
-            });
+            items.push(choice(
+                "Supervisor Mode",
+                &crate::agents::supervisor::SupervisorMode::ALL,
+                config.supervisor.mode,
+                crate::agents::supervisor::SupervisorMode::label,
+                SettingsAction::SetSupervisorMode,
+            ));
+            items.push(choice(
+                "Open Agents In",
+                &crate::agents::config::OpenAgentsIn::ALL,
+                config.agent_view.open_agents_in,
+                crate::agents::config::OpenAgentsIn::label,
+                SettingsAction::SetOpenAgentsIn,
+            ));
             let bypass = config.agent_view.allow_bypass_permissions;
             items.push(toggle(
                 "Allow Bypass Permissions",
