@@ -1945,11 +1945,11 @@ fn c_cancels_the_agent_status_setup_instead_of_copying_it() {
     app.open_agent_hook_setup(true);
     let request_id = app.info_overlay.request_id();
     assert!(app.info_overlay.is_awaiting(request_id));
-    assert!(app.pending_hook_change.is_some());
+    assert!(matches!(app.overlay_flow, Some(OverlayFlow::AgentHooks(_))));
     app.handle_info_overlay_key(&winit::keyboard::Key::Character("c".into()), false);
 
     assert!(!app.info_overlay.is_awaiting(request_id));
-    assert!(app.pending_hook_change.is_none());
+    assert!(app.overlay_flow.is_none());
     assert_eq!(memory.lock().unwrap().clipboard, None);
     assert!(!config_dir.join("settings.json").exists());
 }

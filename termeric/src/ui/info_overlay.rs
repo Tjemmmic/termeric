@@ -66,6 +66,19 @@ pub fn push_key_choice(
     ));
 }
 
+/// Append an indented line reading `label` and a choice on it with no key,
+/// for a confirmation whose consequence a single key press must not reach.
+pub fn push_keyless_choice(
+    lines: &mut Vec<String>,
+    choices: &mut Vec<InfoOverlayChoice>,
+    id: impl Into<String>,
+    label: impl Into<String>,
+) {
+    let label = label.into();
+    lines.push(format!("  {label}"));
+    choices.push(InfoOverlayChoice::new(id, label, lines.len() - 1, None));
+}
+
 impl InfoOverlayChoice {
     pub fn new(
         id: impl Into<String>,
@@ -724,6 +737,22 @@ fn bounded_choices(choices: Vec<InfoOverlayChoice>, line_count: usize) -> Vec<In
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pushed_choices_sit_on_the_line_that_shows_them() {
+        let mut lines = vec!["Question?".to_owned(), String::new()];
+        let mut choices = Vec::new();
+        push_key_choice(&mut lines, &mut choices, "go", 'g', "Go");
+        push_keyless_choice(&mut lines, &mut choices, "stop", "Stop");
+        assert_eq!(lines[2..], ["[G] Go", "  Stop"]);
+        assert_eq!(
+            choices,
+            [
+                InfoOverlayChoice::new("go", "Go", 2, Some('g')),
+                InfoOverlayChoice::new("stop", "Stop", 3, None),
+            ]
+        );
+    }
+
     #[test]
     fn keyboard_focus_reaches_all_choices_and_buttons_with_safe_defaults() {
         let mut overlay = InfoOverlay::new();

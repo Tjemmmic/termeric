@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::agents::setup::{self, HookState, HookedAgent};
-use crate::ui::info_overlay::InfoOverlayChoice;
+use crate::ui::info_overlay::push_key_choice;
 use std::path::Path;
 
 const APPLY_CHOICE: &str = "agent-hooks-apply";
@@ -264,44 +264,37 @@ impl App {
             lines.push("Codex asks you to trust the new hooks the next time it starts.".into());
         }
         lines.push(String::new());
-        let apply_line = lines.len();
-        let (title, action) = if install {
-            ("Set up agent status", "Set Up")
+        let (title, key, action) = if install {
+            ("Set up agent status", 's', "Set Up")
         } else {
-            ("Remove agent status hooks", "Remove")
+            ("Remove agent status hooks", 'r', "Remove")
         };
-        lines.push(format!("  {}  {action}", &action[..1]));
-        lines.push("  C  Cancel".into());
-        let shortcut = action.chars().next().map(|c| c.to_ascii_lowercase());
-        let request_id = self.info_overlay.show_choices(
-            title,
-            lines,
-            vec![
-                InfoOverlayChoice::new(APPLY_CHOICE, action, apply_line, shortcut),
-                InfoOverlayChoice::new(CANCEL_CHOICE, "Cancel", apply_line + 1, Some('c')),
-            ],
-        );
-        self.pending_hook_change = Some(PendingHookChange {
+        let mut choices = Vec::new();
+        push_key_choice(&mut lines, &mut choices, APPLY_CHOICE, key, action);
+        push_key_choice(&mut lines, &mut choices, CANCEL_CHOICE, 'c', "Cancel");
+        let request_id = self.info_overlay.show_choices(title, lines, choices);
+        self.overlay_flow = Some(OverlayFlow::AgentHooks(PendingHookChange {
             request_id,
             install,
             changes,
-        });
+        }));
     }
 
     /// Answer the confirmation dialog. Returns whether the choice was its.
     pub(super) fn handle_agent_hook_choice(&mut self, request_id: u64, choice_id: &str) -> bool {
-        if !matches!(choice_id, APPLY_CHOICE | CANCEL_CHOICE)
-            || self
-                .pending_hook_change
-                .as_ref()
-                .is_none_or(|pending| pending.request_id != request_id)
-        {
-            return false;
-        }
-        self.info_overlay.dismiss(request_id);
-        let Some(pending) = self.pending_hook_change.take() else {
-            return true;
+        let pending = match self.overlay_flow.take() {
+            Some(OverlayFlow::AgentHooks(pending))
+                if pending.request_id == request_id
+                    && matches!(choice_id, APPLY_CHOICE | CANCEL_CHOICE) =>
+            {
+                pending
+            }
+            other => {
+                self.overlay_flow = other;
+                return false;
+            }
         };
+        self.info_overlay.dismiss(request_id);
         if choice_id == APPLY_CHOICE {
             self.apply_hook_changes(pending);
         }
@@ -310,18 +303,9 @@ impl App {
 
     /// Close the setup dialog without changing any file.
     pub(super) fn close_agent_hook_setup(&mut self) {
-        if let Some(pending) = self.pending_hook_change.take() {
+        if let Some(OverlayFlow::AgentHooks(pending)) = &self.overlay_flow {
             self.info_overlay.dismiss(pending.request_id);
-        }
-    }
-
-    pub(super) fn cancel_pending_hook_change(&mut self, request_id: u64) {
-        if self
-            .pending_hook_change
-            .as_ref()
-            .is_some_and(|pending| pending.request_id == request_id)
-        {
-            self.pending_hook_change = None;
+            self.overlay_flow = None;
         }
     }
 

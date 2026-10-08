@@ -11,7 +11,7 @@ use crate::agents::changes::{self, Baseline, ChangeKind, ChangedFile};
 use crate::tabs::TerminalIdentity;
 use crate::ui::command_palette::palette::{CommandSource, PickKind, RegisteredCommand};
 use crate::ui::diff_review::{ChangeOwner, ChangeReviewTarget};
-use crate::ui::info_overlay::InfoOverlayChoice;
+use crate::ui::info_overlay::push_keyless_choice;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
@@ -350,7 +350,7 @@ impl App {
             return;
         };
         self.diff_review.dismiss(request_id);
-        let lines = vec![
+        let mut lines = vec![
             format!(
                 "Put {} back as it was when the agent started?",
                 review.path.display()
@@ -358,39 +358,36 @@ impl App {
             "The agent's edits to this file are lost. Other files, staged".into(),
             "changes, and commits stay as they are.".into(),
             String::new(),
-            "  Revert".into(),
-            "  Keep the changes".into(),
         ];
-        let revert_request = self.info_overlay.show_choices(
-            "Revert file",
-            lines,
-            vec![
-                InfoOverlayChoice::new(REVERT_CHOICE, "Revert", 4, None),
-                InfoOverlayChoice::new(KEEP_CHOICE, "Keep the changes", 5, None),
-            ],
-        );
-        self.pending_revert = Some(PendingRevert {
+        let mut choices = Vec::new();
+        push_keyless_choice(&mut lines, &mut choices, REVERT_CHOICE, "Revert");
+        push_keyless_choice(&mut lines, &mut choices, KEEP_CHOICE, "Keep the changes");
+        let revert_request = self
+            .info_overlay
+            .show_choices("Revert file", lines, choices);
+        self.overlay_flow = Some(OverlayFlow::AgentRevert(PendingRevert {
             request_id: revert_request,
             owner: review.owner,
             baseline: review.baseline,
             path: review.path,
-        });
+        }));
     }
 
     /// Answer the revert confirmation. Returns whether the choice was its.
     pub(super) fn handle_revert_choice(&mut self, request_id: u64, choice_id: &str) -> bool {
-        if !matches!(choice_id, REVERT_CHOICE | KEEP_CHOICE)
-            || self
-                .pending_revert
-                .as_ref()
-                .is_none_or(|pending| pending.request_id != request_id)
-        {
-            return false;
-        }
-        self.info_overlay.dismiss(request_id);
-        let Some(pending) = self.pending_revert.take() else {
-            return true;
+        let pending = match self.overlay_flow.take() {
+            Some(OverlayFlow::AgentRevert(pending))
+                if pending.request_id == request_id
+                    && matches!(choice_id, REVERT_CHOICE | KEEP_CHOICE) =>
+            {
+                pending
+            }
+            other => {
+                self.overlay_flow = other;
+                return false;
+            }
         };
+        self.info_overlay.dismiss(request_id);
         if choice_id == REVERT_CHOICE {
             if self.baseline_is_current(pending.owner, &pending.baseline) {
                 self.start_change_job(
@@ -408,21 +405,12 @@ impl App {
     /// Leave change review: the list, the diff's actions, a revert awaiting
     /// confirmation, and a job whose result would open them again.
     pub(super) fn close_agent_change_review(&mut self) {
-        if let Some(pending) = self.pending_revert.take() {
+        if let Some(OverlayFlow::AgentRevert(pending)) = &self.overlay_flow {
             self.info_overlay.dismiss(pending.request_id);
+            self.overlay_flow = None;
         }
         self.agent_change_review = None;
         self.agent_change_list = None;
         self.agent_change_job = None;
-    }
-
-    pub(super) fn cancel_pending_revert(&mut self, request_id: u64) {
-        if self
-            .pending_revert
-            .as_ref()
-            .is_some_and(|pending| pending.request_id == request_id)
-        {
-            self.pending_revert = None;
-        }
     }
 }

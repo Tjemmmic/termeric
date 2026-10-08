@@ -928,6 +928,10 @@ enum OverlayFlow {
         workspace_id: String,
         closed_tab: bool,
     },
+    /// Agent status hooks to set up or remove, awaiting confirmation.
+    AgentHooks(agent_hooks::PendingHookChange),
+    /// An agent's changes to one file to revert, awaiting confirmation.
+    AgentRevert(agent_changes::PendingRevert),
 }
 
 #[derive(Debug, Clone)]
@@ -1377,14 +1381,10 @@ pub struct App {
     /// Where third-party plugins and their registry live, `None` without a
     /// configuration directory; tests point this at a temporary directory.
     runtime_plugin_paths: Option<crate::plugin::runtime::PluginPaths>,
-    /// Agent status hooks awaiting the person's confirmation.
-    pending_hook_change: Option<agent_hooks::PendingHookChange>,
     /// Git work comparing an agent's changes, running on a worker thread.
     agent_change_job: Option<agent_changes::ChangeJob>,
     /// The terminal whose changed files the palette lists.
     agent_change_list: Option<agent_changes::ChangeList>,
-    /// A file revert awaiting the person's confirmation.
-    pending_revert: Option<agent_changes::PendingRevert>,
     /// The agent change the diff viewer is showing.
     agent_change_review: Option<agent_changes::ChangeReview>,
     /// The agent overseeing this window's other agents, if started.
@@ -1681,10 +1681,8 @@ impl App {
 
             overlay_flow: None,
             runtime_plugin_paths,
-            pending_hook_change: None,
             agent_change_job: None,
             agent_change_list: None,
-            pending_revert: None,
             agent_change_review: None,
             supervisor: None,
             supervisor_rules_path: crate::paths::config_dir().map(|dir| dir.join("supervisor.md")),
@@ -2196,16 +2194,6 @@ impl App {
         match &self.overlay_flow {
             Some(OverlayFlow::FileUpload(pending)) => Some(pending),
             _ => None,
-        }
-    }
-
-    fn take_pending_file_upload(&mut self) -> Option<PendingFileUpload> {
-        match self.overlay_flow.take() {
-            Some(OverlayFlow::FileUpload(pending)) => Some(pending),
-            other => {
-                self.overlay_flow = other;
-                None
-            }
         }
     }
 

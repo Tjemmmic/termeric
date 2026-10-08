@@ -205,12 +205,7 @@ impl App {
             }
             InfoOverlayAction::Dismiss { request_id } => {
                 if self.info_overlay.dismiss(request_id) {
-                    self.dismiss_pending_kitty_download(request_id);
-                    // A replacement notice may have superseded a profile
-                    // picker. Any older hidden action context is obsolete too.
-                    self.overlay_flow = None;
-                    self.cancel_pending_hook_change(request_id);
-                    self.cancel_pending_revert(request_id);
+                    self.forget_overlay_flows(request_id);
                 }
             }
             InfoOverlayAction::Choose {
@@ -251,22 +246,7 @@ impl App {
                 if self.handle_workspace_choice(request_id, &choice_id) {
                     return;
                 }
-                if self
-                    .pending_file_upload()
-                    .is_some_and(|pending| pending.request_id == request_id)
-                    && matches!(
-                        choice_id.as_str(),
-                        "file-upload-confirm" | "file-upload-cancel"
-                    )
-                {
-                    self.info_overlay.dismiss(request_id);
-                    let upload = self.take_pending_file_upload();
-                    if choice_id == "file-upload-confirm" {
-                        if let Some(upload) = upload {
-                            self.start_file_upload(upload);
-                        }
-                    }
-                }
+                self.handle_file_upload_choice(request_id, &choice_id);
             }
             InfoOverlayAction::SubmitInput { request_id } => {
                 if !self.submit_font_feature_manager_input(request_id)
@@ -274,10 +254,7 @@ impl App {
                     && !self.submit_runtime_plugin_manager_input(request_id)
                     && self.info_overlay.dismiss(request_id)
                 {
-                    self.dismiss_pending_kitty_download(request_id);
-                    self.overlay_flow = None;
-                    self.cancel_pending_hook_change(request_id);
-                    self.cancel_pending_revert(request_id);
+                    self.forget_overlay_flows(request_id);
                 }
             }
             InfoOverlayAction::CancelInput { request_id } => {
@@ -286,10 +263,7 @@ impl App {
                     && !self.cancel_runtime_plugin_manager_input(request_id)
                     && self.info_overlay.dismiss(request_id)
                 {
-                    self.dismiss_pending_kitty_download(request_id);
-                    self.overlay_flow = None;
-                    self.cancel_pending_hook_change(request_id);
-                    self.cancel_pending_revert(request_id);
+                    self.forget_overlay_flows(request_id);
                 }
             }
             InfoOverlayAction::Scroll { request_id, by } => {
@@ -297,6 +271,15 @@ impl App {
             }
             InfoOverlayAction::None => {}
         }
+    }
+
+    /// Forget what was waiting on notice `request_id`, just dismissed
+    /// without a choice.
+    fn forget_overlay_flows(&mut self, request_id: u64) {
+        self.dismiss_pending_kitty_download(request_id);
+        // A replacement notice may have superseded a flow's own notice; any
+        // older hidden flow is obsolete too.
+        self.overlay_flow = None;
     }
 }
 

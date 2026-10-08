@@ -7,6 +7,8 @@ use anyhow::Context as _;
 
 const MAX_DROPPED_PATH_BYTES: usize = 4_096;
 const FILE_UPLOAD_PROGRESS_EVENT_BYTES: u64 = 1024 * 1024;
+const UPLOAD_CHOICE: &str = "file-upload-confirm";
+const CANCEL_UPLOAD_CHOICE: &str = "file-upload-cancel";
 
 enum DroppedPathAction {
     InsertLocal(String),
@@ -237,17 +239,11 @@ impl App {
                     String::new(),
                 ];
                 let mut choices = Vec::new();
+                push_key_choice(&mut lines, &mut choices, UPLOAD_CHOICE, 'u', "Upload");
                 push_key_choice(
                     &mut lines,
                     &mut choices,
-                    "file-upload-confirm",
-                    'u',
-                    "Upload",
-                );
-                push_key_choice(
-                    &mut lines,
-                    &mut choices,
-                    "file-upload-cancel",
+                    CANCEL_UPLOAD_CHOICE,
                     'c',
                     "Cancel",
                 );
@@ -269,7 +265,28 @@ impl App {
         }
     }
 
-    pub(super) fn start_file_upload(&mut self, upload: PendingFileUpload) {
+    /// Answer the upload confirmation. Returns whether the choice was its.
+    pub(super) fn handle_file_upload_choice(&mut self, request_id: u64, choice_id: &str) -> bool {
+        let upload = match self.overlay_flow.take() {
+            Some(OverlayFlow::FileUpload(upload))
+                if upload.request_id == request_id
+                    && matches!(choice_id, UPLOAD_CHOICE | CANCEL_UPLOAD_CHOICE) =>
+            {
+                upload
+            }
+            other => {
+                self.overlay_flow = other;
+                return false;
+            }
+        };
+        self.info_overlay.dismiss(request_id);
+        if choice_id == UPLOAD_CHOICE {
+            self.start_file_upload(upload);
+        }
+        true
+    }
+
+    fn start_file_upload(&mut self, upload: PendingFileUpload) {
         let request_id = upload.request_id;
         if self.window.is_none() {
             self.toasts
