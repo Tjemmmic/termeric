@@ -49,6 +49,42 @@ impl Renderer {
         width
     }
 
+    /// A card's heading: one line in the bold UI face at the dialog heading
+    /// size, from `x` and centred in the box from `top` with `height`
+    /// pixels, shortened with an ellipsis to fit `max_width`.
+    pub(super) fn push_card_heading(
+        &mut self,
+        text: &str,
+        x: f32,
+        top: f32,
+        height: f32,
+        max_width: f32,
+        color: [f32; 4],
+    ) {
+        let size_px = physical_font_size(crate::ui::dialog::HEADING_POINTS, self.scale_factor);
+        let face = UiFace::SANS_BOLD;
+        let glyphs = &mut self.glyph_cache;
+        let fitted = fit_with_ellipsis(text, max_width, |candidate| {
+            glyphs.ui_text_width_in(candidate, face, size_px)
+        });
+        if fitted.is_empty() {
+            return;
+        }
+        let baseline = self
+            .glyph_cache
+            .ui_font_metrics(size_px)
+            .centered_baseline(top, height);
+        self.text_pipeline.push_ui_text_in(
+            &fitted,
+            face,
+            x.round(),
+            baseline,
+            size_px,
+            color,
+            None,
+        );
+    }
+
     /// [`Renderer::push_ui_label`] clipped to `clip`, for a label in a
     /// scrolled region that may sit partly outside it.
     pub(super) fn push_ui_label_clipped(

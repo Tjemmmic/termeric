@@ -597,7 +597,7 @@ impl App {
 
         let mut nodes = Vec::with_capacity(7);
 
-        let title_text = format!("Diff: {}", self.diff_review.filename());
+        let title_text = format!("Changes in {}", self.diff_review.filename());
         let mut title = Node::new(Role::Heading);
         title.set_label(title_text.as_str());
         title.set_bounds(rect(
@@ -943,9 +943,7 @@ impl App {
                 ContextPickerPhase::FilePaths => {
                     "Enter comma-separated workspace-relative file paths".into()
                 }
-                ContextPickerPhase::Gathering => {
-                    "Gathering bounded context in the background".into()
-                }
+                ContextPickerPhase::Gathering => "Gathering context in the background".into(),
             });
         let mut status = Node::new(Role::Status);
         status.set_label(status_text);

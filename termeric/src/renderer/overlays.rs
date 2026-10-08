@@ -48,15 +48,13 @@ impl Renderer {
             with_alpha(self.ui.palette_border, 0.4 * anim),
         );
 
-        let label_size = self.ui_label_px();
-        self.push_ui_label(
-            &format!("Diff: {}", info.filename),
+        self.push_card_heading(
+            &format!("Changes in {}", info.filename),
             card_x + padding,
             card_y + padding,
             cell_height,
             card_width - padding * 2.0,
-            label_size,
-            with_alpha(self.ui.palette_accent, anim),
+            with_alpha(self.ui.palette_text, anim),
         );
 
         let content_start_y = layout.content.y;
@@ -122,7 +120,7 @@ impl Renderer {
         );
         for (button, label) in [
             (layout.stage_button, "Stage"),
-            (layout.revert_button, "Revert"),
+            (layout.revert_button, "Revert…"),
         ] {
             let Some(button) = button else {
                 continue;
@@ -151,6 +149,7 @@ impl Renderer {
             },
             anim,
         );
+        // Enter and Escape both answer Done, so it shows the focus ring.
         self.draw_button(
             layout.done_button,
             "Done",
@@ -158,39 +157,10 @@ impl Renderer {
             ButtonState {
                 hovered: done_hovered,
                 pressed: done_hovered && info.mouse_pressed,
-                ..ButtonState::default()
+                focused: info.awaiting,
+                disabled: false,
             },
             anim,
-        );
-
-        let first = info
-            .scroll_offset
-            .saturating_add(1)
-            .min(info.total_rows.max(1));
-        let last = info
-            .scroll_offset
-            .saturating_add(layout.rows_that_fit)
-            .min(info.total_rows);
-        let hint = if layout.stage_button.is_some() {
-            format!(
-                "{first}-{last}/{} | S stage | R revert | C copy | Esc done",
-                info.total_rows
-            )
-        } else {
-            format!(
-                "{first}-{last}/{} c{} | arrows scroll | C copy | Enter/Esc done",
-                info.total_rows,
-                info.horizontal_offset + 1
-            )
-        };
-        self.push_ui_label_centered(
-            &hint,
-            layout.hint.center()[0],
-            layout.hint.y,
-            layout.hint.height,
-            layout.hint.width,
-            label_size,
-            with_alpha(self.ui.palette_text_dim, 0.5 * anim),
         );
     }
 
@@ -229,19 +199,18 @@ impl Renderer {
         // Title
         let title_y = card_y + padding;
         let title = match snapshot.phase {
-            ContextPickerPhase::Sources => "Insert Context",
-            ContextPickerPhase::FilePaths => "Choose Workspace Files",
-            ContextPickerPhase::Gathering => "Gathering Context",
+            ContextPickerPhase::Sources => "Insert context",
+            ContextPickerPhase::FilePaths => "Choose files",
+            ContextPickerPhase::Gathering => "Gathering context…",
         };
         let label_size = self.ui_label_px();
-        self.push_ui_label_centered(
+        self.push_card_heading(
             title,
-            card_x + card_width / 2.0,
+            card_x + padding,
             title_y,
             cell_height,
             card_width - padding * 2.0,
-            label_size,
-            with_alpha(self.ui.palette_accent, anim),
+            with_alpha(self.ui.palette_text, anim),
         );
 
         let text_color = with_alpha(self.ui.palette_text, anim);
@@ -310,7 +279,7 @@ impl Renderer {
             }
             ContextPickerPhase::FilePaths => {
                 self.push_ui_label(
-                    "Comma-separated paths inside the working directory:",
+                    "Files in the working folder, separated by commas:",
                     layout.content.x,
                     layout.content.y,
                     cell_height,
@@ -345,10 +314,7 @@ impl Renderer {
                 }
             }
             ContextPickerPhase::Gathering => {
-                let status = snapshot
-                    .status
-                    .as_deref()
-                    .unwrap_or("Gathering bounded context…");
+                let status = snapshot.status.as_deref().unwrap_or("Gathering context…");
                 self.push_ui_label_centered(
                     status,
                     layout.content.center()[0],
@@ -403,22 +369,18 @@ impl Renderer {
             anim,
         );
 
-        let hint = snapshot.status.as_deref().unwrap_or(match snapshot.phase {
-            ContextPickerPhase::Sources => {
-                "↑↓ Navigate · Space Toggle/Edit · Enter Gather · Esc Cancel"
-            }
-            ContextPickerPhase::FilePaths => "Type paths · Enter Save · Esc Back",
-            ContextPickerPhase::Gathering => "Esc cancels this request",
-        });
-        self.push_ui_label_centered(
-            hint,
-            layout.hint.center()[0],
-            layout.hint.y,
-            layout.hint.height,
-            layout.hint.width,
-            label_size,
-            with_alpha(self.ui.palette_text_dim, 0.5 * anim),
-        );
+        // What the picker is doing or why it stopped; never a key list.
+        if let Some(status) = snapshot.status.as_deref() {
+            self.push_ui_label_centered(
+                status,
+                layout.status.center()[0],
+                layout.status.y,
+                layout.status.height,
+                layout.status.width,
+                label_size,
+                with_alpha(self.ui.dialog_text, anim),
+            );
+        }
     }
 
     /// Build the guardrail confirmation overlay
@@ -466,18 +428,17 @@ impl Renderer {
         self.draw_card_accent(card, border_color, 3.0);
 
         let title_y = card.y + padding;
-        self.push_ui_label_centered(
+        self.push_card_heading(
             if info.is_critical {
-                "DANGEROUS COMMAND"
+                "Run a dangerous command?"
             } else {
-                "Caution"
+                "Run this command?"
             },
-            card.center()[0],
+            card.x + padding,
             title_y,
             cell_height,
             text_width,
-            label_size,
-            border_color,
+            with_alpha(self.ui.palette_text, anim),
         );
 
         // The command itself stays in the terminal's monospace grid.
@@ -525,23 +486,16 @@ impl Renderer {
             with_alpha(self.ui.palette_text_dim, 0.4 * anim),
         );
 
-        // Footer hint keeps the keyboard path discoverable without making
-        // Enter the visually preferred destructive choice.
-        self.push_ui_label_centered(
-            "Enter/Esc Cancel  Ctrl+Enter Run anyway",
-            card.center()[0],
-            layout.cancel_button.y - cell_height * 1.25,
-            cell_height,
-            text_width,
-            label_size,
-            with_alpha(self.ui.palette_text_dim, 0.5 * anim),
-        );
-
+        // Enter and Escape cancel, so Cancel shows the focus ring; only
+        // Ctrl+Enter or a press runs the command.
         self.draw_button(
             layout.cancel_button,
             "Cancel",
             ButtonRole::Cancel,
-            ButtonState::default(),
+            ButtonState {
+                focused: true,
+                ..ButtonState::default()
+            },
             anim,
         );
         self.draw_button(
@@ -549,9 +503,13 @@ impl Renderer {
             if info.is_critical {
                 "Run anyway"
             } else {
-                "Confirm"
+                "Run"
             },
-            ButtonRole::Destructive,
+            if info.is_critical {
+                ButtonRole::Destructive
+            } else {
+                ButtonRole::Neutral
+            },
             ButtonState::default(),
             anim,
         );

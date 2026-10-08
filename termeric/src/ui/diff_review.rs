@@ -106,8 +106,6 @@ pub struct DiffReviewLayout {
     /// Present only when reviewing an agent's change.
     pub stage_button: Option<Bounds>,
     pub revert_button: Option<Bounds>,
-    /// The keyboard hint under the buttons.
-    pub hint: Bounds,
     pub padding: f32,
     pub title_height: f32,
     pub line_height: f32,
@@ -137,7 +135,7 @@ impl DiffReviewLayout {
             animation,
             TextCard::text_line_height(cell_height),
             max_line_chars.clamp(50, 100),
-            "Diff: ".chars().count() + filename.chars().count(),
+            "Changes in ".chars().count() + filename.chars().count(),
             500.0,
             total_rows,
         );
@@ -172,7 +170,6 @@ impl DiffReviewLayout {
             done_button,
             stage_button,
             revert_button,
-            hint: text.hint,
             padding: text.padding,
             title_height: text.title_height,
             line_height: text.line_height,

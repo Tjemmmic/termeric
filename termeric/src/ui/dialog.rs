@@ -9,7 +9,7 @@
 
 mod layout;
 
-pub use layout::{DialogHit, DialogLayout, DialogMetrics};
+pub use layout::{DialogHit, DialogLayout, DialogMetrics, HEADING_POINTS};
 
 use super::animation::OverlayAnimation;
 use super::request_scope::RequestScope;

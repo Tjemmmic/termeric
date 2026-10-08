@@ -15,9 +15,10 @@ use crate::ui::text_input_viewport::TextInputViewport;
 use crate::ui::text_layout::{TextLayout, TextMeasure, TextSize, TextSpan, UiFace};
 
 const PIXELS_PER_POINT: f32 = 96.0 / 72.0;
-/// Body text is the chrome label size; the heading is 1.2× it.
+/// Body text is the chrome label size; the heading is 1.2× it, here and on
+/// the other cards.
 const BODY_POINTS: f32 = 10.0;
-const HEADING_POINTS: f32 = 12.0;
+pub const HEADING_POINTS: f32 = 12.0;
 
 // Logical pixels, scaled to the display.
 const NARROW_WIDTH: f32 = 440.0;

@@ -6,7 +6,7 @@ use super::constants::CONTENT_CHAR_SCALE;
 use super::geometry::Bounds;
 
 /// Geometry of a centred card showing rows of content under a title and
-/// above a row of buttons with a hint line. Rendering, hit testing, viewport
+/// above a row of buttons with a status line. Rendering, hit testing, viewport
 /// sizing, and accessibility all read it, so what is drawn is what answers.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextCard {
@@ -24,9 +24,9 @@ pub struct TextCard {
     pub button_y: f32,
     pub button_height: f32,
     pub button_gap: f32,
-    /// The hint line half a cell below the button row, inside the padding;
-    /// its text is centred in it.
-    pub hint: Bounds,
+    /// The status line half a cell below the button row, inside the
+    /// padding; its text is centred in it.
+    pub status: Bounds,
 }
 
 impl TextCard {
@@ -95,7 +95,7 @@ impl TextCard {
             button_y,
             button_height,
             button_gap: cell_width * 1.5,
-            hint: Bounds::new(
+            status: Bounds::new(
                 content_x,
                 button_y + button_height + cell_height * 0.5,
                 card_width - padding * 2.0,
@@ -297,11 +297,11 @@ mod tests {
             TextCard::calculate(300.0, 200.0, 10.0, 20.0, 0.5, 30.0, 400, 20, 380.0, 1_000);
         assert_eq!(closed.card.y, open.card.y - 10.0);
         assert_eq!(closed.button_y, open.button_y - 10.0);
-        assert_eq!(closed.hint.y, open.hint.y - 10.0);
+        assert_eq!(closed.status.y, open.status.y - 10.0);
     }
 
     #[test]
-    fn the_hint_sits_inside_the_card_half_a_cell_below_its_buttons() {
+    fn the_status_line_sits_inside_the_card_half_a_cell_below_its_buttons() {
         for (window_width, window_height) in [(300.0, 200.0), (1_600.0, 1_000.0)] {
             let card = TextCard::calculate(
                 window_width,
@@ -316,11 +316,11 @@ mod tests {
                 12,
             );
             let buttons = card.button(card.card.x + card.padding, 10.0);
-            assert_eq!(card.hint.y, buttons.bottom() + 10.0);
-            assert_eq!(card.hint.height, 20.0);
-            assert_eq!(card.hint.x, card.card.x + card.padding);
-            assert_eq!(card.hint.right(), card.card.right() - card.padding);
-            assert!(card.hint.bottom() <= card.card.bottom());
+            assert_eq!(card.status.y, buttons.bottom() + 10.0);
+            assert_eq!(card.status.height, 20.0);
+            assert_eq!(card.status.x, card.card.x + card.padding);
+            assert_eq!(card.status.right(), card.card.right() - card.padding);
+            assert!(card.status.bottom() <= card.card.bottom());
         }
     }
 }

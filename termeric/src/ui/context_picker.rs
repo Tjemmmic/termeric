@@ -103,8 +103,8 @@ pub struct ContextPickerSnapshot {
 impl ContextPickerSnapshot {
     pub fn primary_label(&self) -> &'static str {
         match self.phase {
-            ContextPickerPhase::Sources => "Gather & Insert",
-            ContextPickerPhase::FilePaths => "Save Files",
+            ContextPickerPhase::Sources => "Insert",
+            ContextPickerPhase::FilePaths => "Save",
             ContextPickerPhase::Gathering => "Gathering…",
         }
     }
@@ -127,8 +127,8 @@ pub struct ContextPickerLayout {
     pub file_input: Bounds,
     pub cancel_button: Bounds,
     pub primary_button: Bounds,
-    /// The keyboard hint under the buttons.
-    pub hint: Bounds,
+    /// The status line under the buttons, for gathering progress and errors.
+    pub status: Bounds,
     pub padding: f32,
     pub title_height: f32,
     pub row_height: f32,
@@ -182,7 +182,7 @@ impl ContextPickerLayout {
             },
             cancel_button: text.button(cancel_x, cancel_width),
             primary_button: text.button(primary_x, primary_width),
-            hint: text.hint,
+            status: text.status,
             padding: text.padding,
             title_height: text.title_height,
             row_height: text.line_height,
@@ -495,7 +495,7 @@ impl ContextPicker {
             return None;
         }
         self.phase = ContextPickerPhase::Gathering;
-        self.status = Some("Gathering bounded context…".into());
+        self.status = Some("Gathering context…".into());
         Some(ContextGatherRequest {
             request_id,
             cwd: self.cwd.clone(),
