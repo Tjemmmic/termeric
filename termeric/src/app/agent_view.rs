@@ -1153,9 +1153,16 @@ impl App {
             .filter(|text| !text.trim().is_empty())
     }
 
-    /// The focused terminal's last finished command: its text, output, and
-    /// whether it failed.
-    pub(super) fn agent_view_last_command(&self) -> Option<(String, String, bool)> {
+    /// The focused terminal, its last finished command's region, and that
+    /// command's text; `None` while a full-screen program has the screen,
+    /// or when the command's text is empty.
+    fn last_completed_region(
+        &self,
+    ) -> Option<(
+        &termeric_core::Terminal,
+        &termeric_core::CommandRegion,
+        String,
+    )> {
         let terminal = self.active_terminal()?;
         if terminal
             .mode()
@@ -1167,8 +1174,15 @@ impl App {
         let region = tracker.completed_region(tracker.completed_count().checked_sub(1)?)?;
         let (command, _) = App::region_command_text(region);
         let command = command.trim().to_owned();
+        (!command.is_empty()).then_some((terminal, region, command))
+    }
+
+    /// The focused terminal's last finished command: its text, output, and
+    /// whether it failed.
+    pub(super) fn agent_view_last_command(&self) -> Option<(String, String, bool)> {
+        let (terminal, region, command) = self.last_completed_region()?;
         let (output, truncated) = App::extract_output_text(terminal, region);
-        if command.is_empty() || output.trim().is_empty() {
+        if output.trim().is_empty() {
             return None;
         }
         let output = if truncated {
@@ -1187,23 +1201,15 @@ impl App {
             .and_then(|terminal| terminal.selection())
             .filter(|selection| selection.start != selection.end)
             .map(|selection| (selection.end.row - selection.start.row).unsigned_abs() as usize + 1);
-        let last_command = terminal.and_then(|terminal| {
-            if terminal
-                .mode()
-                .contains(termeric_core::term::TerminalMode::ALT_SCREEN)
-            {
-                return None;
-            }
-            let tracker = terminal.prompt_tracker();
-            let region = tracker.completed_region(tracker.completed_count().checked_sub(1)?)?;
-            let (command, _) = App::region_command_text(region);
-            let command = command.trim().to_owned();
-            let rows = match (region.output_row, region.finish_row) {
-                (Some(start), Some(end)) if end > start => usize::try_from(end - start).ok()?,
-                _ => return None,
-            };
-            (!command.is_empty()).then(|| (shorten_command(&command), rows, region.is_failure()))
-        });
+        let last_command = self
+            .last_completed_region()
+            .and_then(|(_, region, command)| {
+                let rows = match (region.output_row, region.finish_row) {
+                    (Some(start), Some(end)) if end > start => usize::try_from(end - start).ok()?,
+                    _ => return None,
+                };
+                Some((shorten_command(&command), rows, region.is_failure()))
+            });
         Suggestions {
             selection_lines,
             last_command,
