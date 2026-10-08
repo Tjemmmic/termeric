@@ -10,18 +10,10 @@ impl App {
                 .warning("Unicode picker is unavailable while broadcast input is active");
             return;
         }
-        let Some(terminal) = self.active_unicode_picker_target() else {
+        let Some(terminal) = self.writable_unicode_picker_target() else {
             self.toasts.warning("No writable terminal is active");
             return;
         };
-        if self.tabs.as_ref().and_then(|tabs| {
-            tabs.origin_for_pane(terminal.tab_id, terminal.pane_id)
-                .and_then(|origin| tabs.origin_read_only(origin))
-        }) != Some(false)
-        {
-            self.toasts.warning("The active pane is read-only");
-            return;
-        }
         self.close_domain_picker();
         self.command_palette.close();
         self.pending_unicode_picker = Some(PendingUnicodePicker { terminal });
@@ -48,19 +40,14 @@ impl App {
                 .warning("Unicode character was not inserted because broadcast input changed");
             return false;
         }
-        if self.active_unicode_picker_target() != Some(pending.terminal) {
-            self.toasts
-                .warning("The original Unicode picker destination is no longer focused");
-            return false;
-        }
-        if self.tabs.as_ref().and_then(|tabs| {
-            tabs.origin_for_pane(pending.terminal.tab_id, pending.terminal.pane_id)
-                .and_then(|origin| tabs.origin_read_only(origin))
-        }) != Some(false)
-        {
-            self.clear_terminal_input_tracking();
-            self.toasts
-                .warning("The original Unicode picker destination is no longer writable");
+        if self.writable_unicode_picker_target() != Some(pending.terminal) {
+            // As every write the focused read-only pane refuses does.
+            if self.focused_pane_read_only() {
+                self.clear_terminal_input_tracking();
+            }
+            self.toasts.warning(
+                "The original Unicode picker destination is no longer focused or writable",
+            );
             return false;
         }
         if selection.text.is_empty() || selection.text.chars().any(char::is_control) {
@@ -77,16 +64,17 @@ impl App {
         true
     }
 
-    pub(super) fn active_unicode_picker_target(&self) -> Option<crate::tabs::TerminalIdentity> {
-        let tab = self.tabs.as_ref().and_then(TabManager::active_tab)?;
+    /// The focused terminal, while it can take a picked character: its tab
+    /// is open, its pane still routes, and it is not read-only.
+    pub(super) fn writable_unicode_picker_target(&self) -> Option<crate::tabs::TerminalIdentity> {
+        let tabs = self.tabs.as_ref()?;
+        let tab = tabs.active_tab()?;
         if tab.closed || tab.is_closing() || tab.focused_terminal().is_none() {
             return None;
         }
         let target = tab.focused_terminal_identity();
-        self.tabs
-            .as_ref()?
-            .origin_for_pane(target.tab_id, target.pane_id)?;
-        Some(target)
+        let origin = tabs.origin_for_pane(target.tab_id, target.pane_id)?;
+        (tabs.origin_read_only(origin) == Some(false)).then_some(target)
     }
 }
 
@@ -167,7 +155,7 @@ mod tests {
         app.open_unicode_picker();
         let captured = app.pending_unicode_picker.unwrap().terminal;
         app.tabs.as_mut().unwrap().new_tab().unwrap();
-        assert_ne!(app.active_unicode_picker_target(), Some(captured));
+        assert_ne!(app.writable_unicode_picker_target(), Some(captured));
 
         assert!(!app.apply_unicode_picker_selection(selection("λ")));
         assert!(app.input_line_buffer.is_empty());
@@ -188,6 +176,13 @@ mod tests {
         app.toggle_focused_pane_read_only();
         app.open_unicode_picker();
         assert!(app.unicode_picker.is_active());
+        // A pane locked while the picker is open refuses the character.
+        app.toggle_focused_pane_read_only();
+        assert!(!app.apply_unicode_picker_selection(selection("λ")));
+        assert!(app.input_line_buffer.is_empty());
+        app.toggle_focused_pane_read_only();
+
+        app.open_unicode_picker();
         let tab_id = app.tabs.as_ref().unwrap().active_tab_id().unwrap();
         app.broadcast = BroadcastState::Armed {
             tab_id,
