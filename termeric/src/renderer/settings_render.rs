@@ -352,7 +352,7 @@ impl Renderer {
             border,
         );
         let status = if info.unsaved {
-            "Unsaved changes · Ctrl+S saves"
+            "Unsaved changes"
         } else {
             "Changes apply immediately"
         };
