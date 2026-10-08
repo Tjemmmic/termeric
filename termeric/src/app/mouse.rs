@@ -274,9 +274,10 @@ impl App {
         let Some(tab) = self.tabs.as_ref().and_then(TabManager::active_tab) else {
             return false;
         };
-        let Some(divider) = tab.split_panes().and_then(|panes| {
-            panes.divider_at(local_x, local_y, crate::panes::PANE_DIVIDER_HIT_MARGIN)
-        }) else {
+        let Some(divider) = tab
+            .split_panes()
+            .and_then(|panes| panes.divider_at(local_x, local_y))
+        else {
             return false;
         };
         let route = tab.live_domain_tab_route();
@@ -836,9 +837,9 @@ impl App {
             if let Some(tab) = tabs.active_tab() {
                 if let Some(pm) = tab.split_panes() {
                     let (area_x, area_y) = metrics.pane_area_point(position);
-                    if let Some(is_vertical) = pm.hit_test_divider(area_x, area_y) {
+                    if let Some(divider) = pm.divider_at(area_x, area_y) {
                         if let Some(window) = &self.window {
-                            let cursor = if is_vertical {
+                            let cursor = if divider.vertical {
                                 winit::window::CursorIcon::EwResize
                             } else {
                                 winit::window::CursorIcon::NsResize
@@ -1379,7 +1380,7 @@ impl App {
             .as_ref()
             .and_then(TabManager::active_tab)
             .and_then(|tab| tab.split_panes())
-            .is_some_and(|panes| panes.hit_test_divider(area_x, area_y).is_some());
+            .is_some_and(|panes| panes.divider_at(area_x, area_y).is_some());
         if !on_divider && self.pane_at_pointer(position, metrics).is_some() {
             self.refresh_terminal_pointer_cursor();
         }

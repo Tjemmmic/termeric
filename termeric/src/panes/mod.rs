@@ -1377,27 +1377,20 @@ impl PaneManager {
         Ok((previous, changed))
     }
 
-    pub fn divider_at(&self, pos_x: f32, pos_y: f32, threshold: f32) -> Option<Divider> {
+    /// The divider within [`PANE_DIVIDER_HIT_MARGIN`] of a point, along
+    /// its length. A zoomed tab shows no dividers, so has none to hit.
+    pub fn divider_at(&self, pos_x: f32, pos_y: f32) -> Option<Divider> {
         self.get_dividers().into_iter().find(|divider| {
             if divider.vertical {
-                (pos_x - divider.position).abs() < threshold
+                (pos_x - divider.position).abs() < PANE_DIVIDER_HIT_MARGIN
                     && pos_y >= divider.start
                     && pos_y <= divider.end
             } else {
-                (pos_y - divider.position).abs() < threshold
+                (pos_y - divider.position).abs() < PANE_DIVIDER_HIT_MARGIN
                     && pos_x >= divider.start
                     && pos_x <= divider.end
             }
         })
-    }
-
-    /// Hit-test dividers. Returns Some(is_vertical) if near a divider.
-    pub fn hit_test_divider(&self, pos_x: f32, pos_y: f32) -> Option<bool> {
-        if self.zoomed.is_some() {
-            return None;
-        }
-        self.divider_at(pos_x, pos_y, PANE_DIVIDER_HIT_MARGIN)
-            .map(|divider| divider.vertical)
     }
 
     /// Get number of panes
@@ -2981,9 +2974,9 @@ mod tests {
             };
             for across in [divider.position - near, divider.position + near] {
                 let (x, y) = at(across);
-                let hit = manager.divider_at(x, y, PANE_DIVIDER_HIT_MARGIN).unwrap();
+                let hit = manager.divider_at(x, y).unwrap();
                 assert_eq!(hit.target, divider.target);
-                assert_eq!(manager.hit_test_divider(x, y), Some(divider.vertical));
+                assert_eq!(hit.vertical, divider.vertical);
             }
             for across in [
                 divider.position - PANE_DIVIDER_HIT_MARGIN,
@@ -2991,9 +2984,7 @@ mod tests {
             ] {
                 let (x, y) = at(across);
                 assert_ne!(
-                    manager
-                        .divider_at(x, y, PANE_DIVIDER_HIT_MARGIN)
-                        .map(|hit| hit.target),
+                    manager.divider_at(x, y).map(|hit| hit.target),
                     Some(divider.target)
                 );
             }
@@ -3004,9 +2995,7 @@ mod tests {
                 (divider.end + 1.0, divider.position)
             };
             assert_ne!(
-                manager
-                    .divider_at(x, y, PANE_DIVIDER_HIT_MARGIN)
-                    .map(|hit| hit.target),
+                manager.divider_at(x, y).map(|hit| hit.target),
                 Some(divider.target)
             );
         }
@@ -3019,8 +3008,7 @@ mod tests {
             } else {
                 (along, divider.position)
             };
-            assert!(manager.divider_at(x, y, PANE_DIVIDER_HIT_MARGIN).is_none());
-            assert_eq!(manager.hit_test_divider(x, y), None);
+            assert!(manager.divider_at(x, y).is_none());
         }
     }
 }
