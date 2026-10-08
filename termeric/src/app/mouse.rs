@@ -359,88 +359,65 @@ impl App {
                     if let Some(renderer) = &self.renderer {
                         let px = position.0 as f32;
                         let py = position.1 as f32;
+                        // Chrome answers where it was drawn: at the renderer's
+                        // size, which can lag the window's during a resize.
+                        let ui = self.ui_metrics();
 
                         // The Settings button is a global tab-bar control. Let
                         // it switch directly from Commands/Sessions to Settings
                         // instead of making the first click close the old panel
                         // and requiring another click to open the new one.
                         if py < renderer.tab_bar_height() {
-                            let window_size = self.window.as_ref().map(|w| w.inner_size());
-                            if let Some(size) = window_size {
-                                let tab_infos =
-                                    self.tabs.as_ref().map(|t| t.tab_info()).unwrap_or_default();
-                                if renderer.tab_bar_hit_test(
-                                    px,
-                                    py,
-                                    &tab_infos,
-                                    size.width as f32,
-                                    size.height as f32,
-                                ) == crate::renderer::TabBarClick::Gear
-                                {
-                                    self.toggle_settings_surface();
-                                    self.request_redraw(RedrawReason::PointerInput);
-                                    return;
-                                }
+                            let tab_infos =
+                                self.tabs.as_ref().map(|t| t.tab_info()).unwrap_or_default();
+                            if renderer.tab_bar_hit_test(px, py, &tab_infos, ui.width, ui.height)
+                                == crate::renderer::TabBarClick::Gear
+                            {
+                                self.toggle_settings_surface();
+                                self.request_redraw(RedrawReason::PointerInput);
+                                return;
                             }
                         }
 
                         // The panel layer on top owns every click, inside it
                         // or beside it (which dismisses it), before the tab
                         // bar or find box beneath its scrim can take it.
-                        let window_size = self.window.as_ref().map(|w| w.inner_size());
                         match self.top_modal_layer() {
                             Some(ModalLayer::Settings) => {
-                                if let Some(size) = window_size {
-                                    let action = self.settings_panel.handle_click(
-                                        px,
-                                        py,
-                                        &self.config,
-                                        &self.shortcut_registry,
-                                        size.width as f32,
-                                        size.height as f32,
-                                        metrics.cell_size.0,
-                                        metrics.cell_size.1,
-                                    );
-                                    self.apply_settings_action(action);
-                                    self.request_redraw(RedrawReason::PointerInput);
-                                    return;
-                                }
+                                let action = self.settings_panel.handle_click(
+                                    px,
+                                    py,
+                                    &self.config,
+                                    &self.shortcut_registry,
+                                    ui.width,
+                                    ui.height,
+                                    metrics.cell_size.0,
+                                    metrics.cell_size.1,
+                                );
+                                self.apply_settings_action(action);
+                                self.request_redraw(RedrawReason::PointerInput);
+                                return;
                             }
                             Some(ModalLayer::WorkspaceMenu) => {
                                 self.click_workspace_menu(px, py);
                                 return;
                             }
                             Some(ModalLayer::WorkspacePanel) => {
-                                if let Some(size) = window_size {
-                                    let info = self.workspace_panel.build_info();
-                                    let action = renderer.workspace_panel_hit_test(
-                                        px,
-                                        py,
-                                        &info,
-                                        size.width as f32,
-                                        size.height as f32,
-                                    );
-                                    let action = self.promote_workspace_double_click(action);
-                                    self.apply_workspace_panel_action(action);
-                                    self.request_redraw(RedrawReason::PointerInput);
-                                    return;
-                                }
+                                let info = self.workspace_panel.build_info();
+                                let action = renderer
+                                    .workspace_panel_hit_test(px, py, &info, ui.width, ui.height);
+                                let action = self.promote_workspace_double_click(action);
+                                self.apply_workspace_panel_action(action);
+                                self.request_redraw(RedrawReason::PointerInput);
+                                return;
                             }
                             Some(ModalLayer::CommandsPanel) => {
-                                if let Some(size) = window_size {
-                                    let info =
-                                        self.commands_panel.build_info(&self.config.commands);
-                                    let action = renderer.commands_panel_hit_test(
-                                        px,
-                                        py,
-                                        &info,
-                                        size.width as f32,
-                                        size.height as f32,
-                                    );
-                                    self.apply_commands_panel_action(action);
-                                    self.request_redraw(RedrawReason::PointerInput);
-                                    return;
-                                }
+                                let info = self.commands_panel.build_info(&self.config.commands);
+                                let action = renderer
+                                    .commands_panel_hit_test(px, py, &info, ui.width, ui.height);
+                                self.apply_commands_panel_action(action);
+                                self.request_redraw(RedrawReason::PointerInput);
+                                return;
                             }
                             Some(ModalLayer::AgentsPanel) => {
                                 self.handle_agents_panel_click(px, py);
@@ -464,47 +441,39 @@ impl App {
                         }
 
                         if py < renderer.tab_bar_height() || px < renderer.tab_bar_width() {
-                            let window_size = self.window.as_ref().map(|w| w.inner_size());
-                            if let Some(size) = window_size {
-                                use crate::renderer::TabBarClick;
-                                let tab_infos =
-                                    self.tabs.as_ref().map(|t| t.tab_info()).unwrap_or_default();
-                                let click = renderer.tab_bar_hit_test(
-                                    px,
-                                    py,
-                                    &tab_infos,
-                                    size.width as f32,
-                                    size.height as f32,
-                                );
-                                match click {
-                                    TabBarClick::Gear => {
-                                        self.toggle_settings_surface();
-                                    }
-                                    TabBarClick::NewTab => {
-                                        self.request_new_tab();
-                                    }
-                                    TabBarClick::PreviousTab => {
-                                        self.handle_action(crate::input::Action::PrevTab);
-                                    }
-                                    TabBarClick::NextTab => {
-                                        self.handle_action(crate::input::Action::NextTab);
-                                    }
-                                    TabBarClick::CloseTab(idx) => {
-                                        self.request_close_tab(idx);
-                                    }
-                                    TabBarClick::Tab(idx) => self.press_tab(idx),
-                                    TabBarClick::WorkspacesMenu => {
-                                        self.toggle_workspace_menu(false);
-                                    }
-                                    TabBarClick::CommandsButton => {
-                                        self.commands_panel.toggle();
-                                    }
-                                    TabBarClick::None => {}
+                            use crate::renderer::TabBarClick;
+                            let tab_infos =
+                                self.tabs.as_ref().map(|t| t.tab_info()).unwrap_or_default();
+                            let click =
+                                renderer.tab_bar_hit_test(px, py, &tab_infos, ui.width, ui.height);
+                            match click {
+                                TabBarClick::Gear => {
+                                    self.toggle_settings_surface();
                                 }
-                                if click != TabBarClick::None {
-                                    self.request_redraw(RedrawReason::PointerInput);
-                                    return;
+                                TabBarClick::NewTab => {
+                                    self.request_new_tab();
                                 }
+                                TabBarClick::PreviousTab => {
+                                    self.handle_action(crate::input::Action::PrevTab);
+                                }
+                                TabBarClick::NextTab => {
+                                    self.handle_action(crate::input::Action::NextTab);
+                                }
+                                TabBarClick::CloseTab(idx) => {
+                                    self.request_close_tab(idx);
+                                }
+                                TabBarClick::Tab(idx) => self.press_tab(idx),
+                                TabBarClick::WorkspacesMenu => {
+                                    self.toggle_workspace_menu(false);
+                                }
+                                TabBarClick::CommandsButton => {
+                                    self.commands_panel.toggle();
+                                }
+                                TabBarClick::None => {}
+                            }
+                            if click != TabBarClick::None {
+                                self.request_redraw(RedrawReason::PointerInput);
+                                return;
                             }
                         }
                     }
@@ -542,14 +511,14 @@ impl App {
         if !self.search_is_visible() {
             return SearchBarClick::None;
         }
-        let (Some(renderer), Some(window)) = (&self.renderer, &self.window) else {
+        let Some(renderer) = &self.renderer else {
             return SearchBarClick::None;
         };
         let info = self.search.build_info(self.search_cursor_pos);
         renderer.search_bar_hit_test(
             position.0 as f32,
             position.1 as f32,
-            window.inner_size().width as f32,
+            self.ui_metrics().width,
             &info,
         )
     }
@@ -765,32 +734,11 @@ impl App {
         {
             let px = position.0 as f32;
             let py = position.1 as f32;
-            let window_size = self.window.as_ref().map(|w| w.inner_size());
+            let ui = self.ui_metrics();
             let tab_infos = self.tabs.as_ref().map(|t| t.tab_info()).unwrap_or_default();
-            let new_hover = if py < tab_bar_height || px < renderer.tab_bar_width() {
-                if let Some(renderer) = &self.renderer {
-                    if let Some(size) = window_size {
-                        let hit = renderer.tab_bar_hit_test(
-                            px,
-                            py,
-                            &tab_infos,
-                            size.width as f32,
-                            size.height as f32,
-                        );
-                        if hit != crate::renderer::TabBarClick::None {
-                            Some(hit)
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+            let new_hover = (py < tab_bar_height || px < renderer.tab_bar_width())
+                .then(|| renderer.tab_bar_hit_test(px, py, &tab_infos, ui.width, ui.height))
+                .filter(|hit| *hit != crate::renderer::TabBarClick::None);
             if new_hover != self.tab_bar_hover {
                 self.tab_bar_hover = new_hover;
                 self.tab_bar_hover_since = Instant::now();
@@ -907,89 +855,80 @@ impl App {
 
     /// Hover over Settings at `(px, py)`: its rows, controls, and open dropdown.
     fn hover_settings_panel(&mut self, px: f32, py: f32) {
-        if let Some(renderer) = &self.renderer {
-            let (cell_width, cell_height) = renderer.cell_size();
-            if let Some(size) = self.window.as_ref().map(|w| w.inner_size()) {
-                let entries = self
-                    .settings_panel
-                    .build_entries(&self.config, &self.shortcut_registry);
-                let layout = crate::ui::settings::SettingsModalLayout::calculate(
-                    size.width as f32,
-                    size.height as f32,
-                    cell_width,
-                    cell_height,
-                    self.settings_panel.animation_progress(),
-                    entries.len(),
-                );
+        let ui = self.ui_metrics();
+        let entries = self
+            .settings_panel
+            .build_entries(&self.config, &self.shortcut_registry);
+        let layout = crate::ui::settings::SettingsModalLayout::calculate(
+            ui.width,
+            ui.height,
+            ui.cell_width,
+            ui.cell_height,
+            self.settings_panel.animation_progress(),
+            entries.len(),
+        );
 
-                // Row and control hover (suppressed while the dropdown
-                // overlay is open so nothing behind it lights up).
-                let open = !self.settings_panel.is_dropdown_open();
-                let hovered = open.then(|| layout.visible_row_at(px, py)).flatten();
-                self.settings_panel.set_hover(hovered);
-                let control = open
-                    .then(|| {
-                        use crate::ui::settings::SettingsControl;
-                        if layout.close_button.contains(px, py) {
-                            Some(SettingsControl::Close)
-                        } else if layout.save_button.contains(px, py) {
-                            Some(SettingsControl::Save)
-                        } else {
-                            layout.page_at(px, py).map(SettingsControl::Page)
-                        }
-                    })
-                    .flatten();
-                self.settings_panel.set_control_hover(control);
-
-                // Dropdown option hover (only when the overlay is open).
-                if self.settings_panel.is_dropdown_open() {
-                    let dd_hover = self
-                        .settings_panel
-                        .dropdown_layout(&layout, &entries)
-                        .filter(|dropdown| dropdown.rect.bounds.contains(px, py))
-                        .and_then(|dropdown| {
-                            dropdown
-                                .rect
-                                .option_at(py)
-                                .filter(|&i| i < dropdown.options.len())
-                        });
-                    self.settings_panel.set_dropdown_hover(dd_hover);
+        // Row and control hover (suppressed while the dropdown
+        // overlay is open so nothing behind it lights up).
+        let open = !self.settings_panel.is_dropdown_open();
+        let hovered = open.then(|| layout.visible_row_at(px, py)).flatten();
+        self.settings_panel.set_hover(hovered);
+        let control = open
+            .then(|| {
+                use crate::ui::settings::SettingsControl;
+                if layout.close_button.contains(px, py) {
+                    Some(SettingsControl::Close)
+                } else if layout.save_button.contains(px, py) {
+                    Some(SettingsControl::Save)
                 } else {
-                    self.settings_panel.set_dropdown_hover(None);
+                    layout.page_at(px, py).map(SettingsControl::Page)
                 }
-            }
+            })
+            .flatten();
+        self.settings_panel.set_control_hover(control);
+
+        // Dropdown option hover (only when the overlay is open).
+        if self.settings_panel.is_dropdown_open() {
+            let dd_hover = self
+                .settings_panel
+                .dropdown_layout(&layout, &entries)
+                .filter(|dropdown| dropdown.rect.bounds.contains(px, py))
+                .and_then(|dropdown| {
+                    dropdown
+                        .rect
+                        .option_at(py)
+                        .filter(|&i| i < dropdown.options.len())
+                });
+            self.settings_panel.set_dropdown_hover(dd_hover);
+        } else {
+            self.settings_panel.set_dropdown_hover(None);
         }
     }
 
     /// Hover over the workspace manager at `(px, py)`: its rows and controls.
     fn hover_workspace_panel(&mut self, px: f32, py: f32) {
-        if let Some(renderer) = &self.renderer {
-            let (ui_cw, cell_height) = renderer.cell_size();
-            let window_size = self.window.as_ref().map(|w| w.inner_size());
-            if let Some(size) = window_size {
-                let info = self.workspace_panel.build_info();
-                let layout = crate::ui::workspace_panel::WorkspacePanelLayout::calculate(
-                    size.width as f32,
-                    size.height as f32,
-                    renderer.tab_bar_height(),
-                    ui_cw,
-                    cell_height,
-                    info.animation,
-                    info.rename_text.is_some(),
-                    info.workspaces,
-                    info.entries.len(),
-                );
-                let control = layout.control_at(px, py, info.snapshot_count);
-                let hovered = if px >= layout.panel.x && control.is_none() {
-                    layout
-                        .visible_row_at(py)
-                        .map(|row| info.scroll_offset + row)
-                } else {
-                    None
-                };
-                self.workspace_panel.set_hover(hovered, control);
-            }
-        }
+        let ui = self.ui_metrics();
+        let info = self.workspace_panel.build_info();
+        let layout = crate::ui::workspace_panel::WorkspacePanelLayout::calculate(
+            ui.width,
+            ui.height,
+            ui.tab_bar_height,
+            ui.cell_width,
+            ui.cell_height,
+            info.animation,
+            info.rename_text.is_some(),
+            info.workspaces,
+            info.entries.len(),
+        );
+        let control = layout.control_at(px, py, info.snapshot_count);
+        let hovered = if px >= layout.panel.x && control.is_none() {
+            layout
+                .visible_row_at(py)
+                .map(|row| info.scroll_offset + row)
+        } else {
+            None
+        };
+        self.workspace_panel.set_hover(hovered, control);
     }
 
     /// Fade-in of the hovered tab bar control, from 0 to 1. It restarts

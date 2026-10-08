@@ -112,9 +112,9 @@ impl App {
     /// along it.
     fn tab_bar_geometry(&self, position: (f64, f64)) -> Option<(Vec<TabSpan>, f32)> {
         let renderer = self.renderer.as_ref()?;
-        let size = self.window.as_ref()?.inner_size();
+        let ui = self.ui_metrics();
         let tabs = self.tabs.as_ref()?.tab_info();
-        let spans = renderer.tab_slot_spans(&tabs, size.width as f32, size.height as f32);
+        let spans = renderer.tab_slot_spans(&tabs, ui.width, ui.height);
         let along = if renderer.tab_bar_is_vertical() {
             position.1
         } else {
@@ -554,17 +554,16 @@ impl App {
             self.tab_bar_hover?;
             let (x, y) = self.last_cursor_pos?;
             let renderer = self.renderer.as_ref()?;
-            let window = self.window.as_ref()?;
-            let size = window.inner_size();
-            if x < 0.0 || y < 0.0 || x >= size.width as f64 || y >= size.height as f64 {
+            if self.outside_window((x, y)) {
                 return None;
             }
+            let ui = self.ui_metrics();
             Some(renderer.tab_bar_hit_test(
                 x as f32,
                 y as f32,
                 &self.tabs.as_ref()?.tab_info(),
-                size.width as f32,
-                size.height as f32,
+                ui.width,
+                ui.height,
             ))
         })();
         self.update_tab_drag_scroll(hit, now);

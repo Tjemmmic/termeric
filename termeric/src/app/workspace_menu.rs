@@ -35,15 +35,14 @@ impl App {
     pub(super) fn workspace_menu_layout(&self) -> Option<PopupMenuLayout> {
         let menu = self.workspace_menu.as_ref()?;
         let renderer = self.renderer.as_ref()?;
-        let size = self.window.as_ref()?.inner_size();
-        let (width, height) = (size.width as f32, size.height as f32);
+        let ui = self.ui_metrics();
         let button =
-            renderer.tab_bar_element_rect(TabBarClick::WorkspacesMenu, &[], width, height)?;
+            renderer.tab_bar_element_rect(TabBarClick::WorkspacesMenu, &[], ui.width, ui.height)?;
         Some(PopupMenuLayout::calculate(
             menu.rows(),
             button.right(),
-            renderer.tab_bar_height(),
-            width,
+            ui.tab_bar_height,
+            ui.width,
             renderer.scale_factor(),
         ))
     }
