@@ -1413,11 +1413,9 @@ fn headless_palette_input_smoke(device: &wgpu::Device, queue: &wgpu::Queue) -> a
                 )
                 .input_viewport(&query, query.len())
                 .unwrap(),
-                crate::ui::settings::SettingsModalLayout::calculate(
-                    width, 600.0, 10.0, 24.0, 1.0, 0,
-                )
-                .input_viewport(&query, query.len(), 24.0)
-                .unwrap(),
+                crate::ui::settings::SettingsModalLayout::calculate(width, 600.0, 10.0, 24.0, 1.0)
+                    .input_viewport(&query, query.len())
+                    .unwrap(),
                 crate::ui::workspace_panel::WorkspacePanelLayout::calculate(
                     width.max(800.0),
                     600.0,

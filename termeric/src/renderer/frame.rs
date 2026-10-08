@@ -26,13 +26,16 @@ pub struct ChromeFrame<'a> {
     pub copy_flash: f32,
     /// 0.0 is fully bright (focused); higher dims an unfocused window.
     pub focus_dim: f32,
-    pub settings_panel: Option<&'a SettingsPanelInfo>,
+    pub settings_panel: Option<(
+        &'a SettingsPanelInfo,
+        &'a crate::ui::settings::SettingsModalLayout,
+    )>,
     pub search_bar: Option<&'a SearchBarInfo>,
     pub ime_preedit: Option<&'a ImePreeditRenderInfo>,
     pub workspace_menu: Option<&'a PopupMenuInfo>,
     /// The workspace panel with the geometry the app laid it out in, which
-    /// its hit tests, IME caret, and accessibility also use. The palette and
-    /// Shortcuts come with theirs the same way.
+    /// its hit tests, IME caret, and accessibility also use. Settings, the
+    /// palette, and Shortcuts come with theirs the same way.
     pub workspace_panel: Option<(
         &'a crate::ui::workspace_panel::WorkspacePanelInfo,
         &'a crate::ui::workspace_panel::WorkspacePanelLayout,
@@ -494,14 +497,14 @@ impl Renderer {
                     }
                 }
                 ModalLayer::Settings => {
-                    if let Some(sp) = settings_panel
+                    if let Some((sp, layout)) = settings_panel
                         && sp.animation > 0.001
                     {
-                        self.build_settings_panel(sp, window_width, window_height);
+                        self.build_settings_panel(sp, layout, window_width, window_height);
                         if sp.dropdown_open {
                             self.rect_pipeline.mark_layer();
                             self.text_pipeline.mark_layer();
-                            self.build_dropdown_overlay(sp, window_width, window_height);
+                            self.build_dropdown_overlay(sp, layout);
                         }
                     }
                 }

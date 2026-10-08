@@ -165,41 +165,16 @@ impl App {
         }
     }
 
-    pub(super) fn settings_accessibility_layout(
-        &self,
-        info: &crate::ui::settings::SettingsPanelInfo,
-    ) -> crate::ui::settings::SettingsModalLayout {
-        let UiMetrics {
-            width,
-            height,
-            cell_width,
-            cell_height,
-            ..
-        } = self.ui_metrics();
-        crate::ui::settings::SettingsModalLayout::calculate(
-            width,
-            height,
-            cell_width,
-            cell_height,
-            info.animation,
-            info.entries.len(),
-        )
-    }
-
     pub(super) fn settings_accessibility_snapshot(&mut self) -> ModalSnapshot {
         use crate::ui::settings::SettingKind;
 
+        let layout = self.settings_layout();
+        self.settings_panel.set_max_visible(layout.rows_that_fit);
         let mut info = self
             .settings_panel
             .build_info(&self.config, &self.shortcut_registry);
-        let mut layout = self.settings_accessibility_layout(&info);
-        self.settings_panel.set_max_visible(layout.rows_that_fit);
-        info = self
-            .settings_panel
-            .build_info(&self.config, &self.shortcut_registry);
         info.unsaved = self.config_has_unsaved_changes();
-        layout = self.settings_accessibility_layout(&info);
-        let end = (info.scroll_offset + layout.visible_count).min(info.entries.len());
+        let end = (info.scroll_offset + layout.rows_that_fit).min(info.entries.len());
         let visible_entries = &info.entries[info.scroll_offset..end];
 
         let mut nodes = Vec::with_capacity(visible_entries.len() + 16);
@@ -352,7 +327,7 @@ impl App {
             first_row.x,
             layout.list_y,
             first_row.width,
-            layout.list_height,
+            visible_entries.len() as f32 * layout.row_height,
         ));
         list.set_children(list_children);
         nodes.push((SETTINGS_LIST, list));

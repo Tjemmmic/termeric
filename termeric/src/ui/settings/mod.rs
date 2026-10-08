@@ -57,15 +57,15 @@ pub struct SettingsModalLayout {
     pub row_height: f32,
     pub scrollbar_width: f32,
     pub list_y: f32,
-    pub list_height: f32,
+    /// How many rows the content column shows, whatever the page holds.
     pub rows_that_fit: usize,
-    pub visible_count: usize,
     /// Left edge of the value column.
     pub value_x: f32,
     pub footer_y: f32,
     pub footer_height: f32,
     pub save_button: Bounds,
     pub cell_width: f32,
+    pub cell_height: f32,
 }
 
 impl SettingsModalLayout {
@@ -74,40 +74,33 @@ impl SettingsModalLayout {
         text: &str,
         cursor: usize,
         position: (f32, f32),
-        cell_height: f32,
     ) -> Option<usize> {
         let (x, y) = position;
         if !self.input.contains(x, y) {
             return None;
         }
-        self.input_viewport(text, cursor, cell_height)?
+        self.input_viewport(text, cursor)?
             .cursor_at(text, x, self.cell_width)
     }
 
-    pub fn input_viewport(
-        &self,
-        text: &str,
-        cursor: usize,
-        cell_height: f32,
-    ) -> Option<TextInputViewport> {
+    pub fn input_viewport(&self, text: &str, cursor: usize) -> Option<TextInputViewport> {
         crate::ui::filter_field::text_viewport(
             text,
             cursor,
             self.input,
             self.cell_width,
-            cell_height,
+            self.cell_height,
         )
     }
 
     /// Compute the dialog geometry. The dialog keeps one size while pages
-    /// and results change; `entry_count` only limits `visible_count`.
+    /// and results change, so nothing it shows enters into it.
     pub fn calculate(
         window_width: f32,
         window_height: f32,
         cell_width: f32,
         cell_height: f32,
         animation: f32,
-        entry_count: usize,
     ) -> Self {
         let panel_width = (cell_width * 100.0)
             .clamp(560.0, 900.0)
@@ -162,7 +155,6 @@ impl SettingsModalLayout {
         let list_y = content_title_y + cell_height * 2.2;
         let list_space = (footer_y - padding * 0.5 - list_y).max(0.0);
         let rows_that_fit = (list_space / row_height).floor().max(1.0) as usize;
-        let visible_count = entry_count.min(rows_that_fit);
         let save_height = cell_height * 1.6;
         let save_width = cell_width * 9.0;
 
@@ -180,9 +172,7 @@ impl SettingsModalLayout {
             row_height,
             scrollbar_width: 3.0,
             list_y,
-            list_height: visible_count as f32 * row_height,
             rows_that_fit,
-            visible_count,
             value_x: content_x + content_width * 0.5,
             footer_y,
             footer_height,
@@ -193,6 +183,7 @@ impl SettingsModalLayout {
                 height: save_height,
             },
             cell_width,
+            cell_height,
         }
     }
 
@@ -229,15 +220,10 @@ impl SettingsModalLayout {
         }
     }
 
-    /// Map a point to a 0-based row within the visible window, if any.
+    /// Map a point to a 0-based row within the visible window, if any. A
+    /// row below the page's last entry is still a row; callers look it up.
     pub fn visible_row_at(&self, x: f32, y: f32) -> Option<usize> {
-        let first = self.row_rect(0);
-        let rows = Bounds::new(first.x, self.list_y, first.width, self.list_height);
-        if !rows.contains(x, y) {
-            return None;
-        }
-        let row = ((y - self.list_y) / self.row_height) as usize;
-        (row < self.visible_count).then_some(row)
+        (0..self.rows_that_fit).find(|&row| self.row_rect(row).contains(x, y))
     }
 
     /// Width of a numeric stepper's − and + buttons.
@@ -293,7 +279,7 @@ impl SettingsModalLayout {
             return None;
         }
         let visible_row = entry_abs_idx - scroll_offset;
-        if visible_row >= self.visible_count {
+        if visible_row >= self.rows_that_fit {
             return None;
         }
 
@@ -1883,57 +1869,23 @@ impl SettingsPanel {
 
     /// Where a press at `x, y` lands in the filter field, as a caret
     /// position: `None` off the field, or while a dropdown covers the dialog.
-    /// Like [`Self::input_viewport`], it needs no settings list.
     pub fn filter_caret_at(
         &self,
-        (x, y): (f32, f32),
-        width: f32,
-        height: f32,
-        cell_width: f32,
-        cell_height: f32,
+        position: (f32, f32),
+        layout: &SettingsModalLayout,
     ) -> Option<usize> {
         if !self.is_active() || self.dropdown_open {
             return None;
         }
-        let layout = SettingsModalLayout::calculate(
-            width,
-            height,
-            cell_width,
-            cell_height,
-            self.animation_progress(),
-            0,
-        );
-        if !layout.input.contains(x, y) {
-            return None;
-        }
-        layout.input_cursor_at(
-            self.filter.text(),
-            self.filter.cursor(),
-            (x, y),
-            cell_height,
-        )
+        layout.input_cursor_at(self.filter.text(), self.filter.cursor(), position)
     }
 
-    /// Candidate geometry needs only filter state, never a rebuilt settings list.
-    pub fn input_viewport(
-        &self,
-        width: f32,
-        height: f32,
-        cell_width: f32,
-        cell_height: f32,
-    ) -> Option<TextInputViewport> {
+    /// Where the filter's text and caret are drawn in `layout`, for the IME.
+    pub fn input_viewport(&self, layout: &SettingsModalLayout) -> Option<TextInputViewport> {
         if !self.is_active() || self.dropdown_open {
             return None;
         }
-        SettingsModalLayout::calculate(
-            width,
-            height,
-            cell_width,
-            cell_height,
-            self.animation_progress(),
-            0,
-        )
-        .input_viewport(self.filter.text(), self.filter.cursor(), cell_height)
+        layout.input_viewport(self.filter.text(), self.filter.cursor())
     }
 
     /// Find the selectable index of the first item in `section`.
@@ -2238,31 +2190,20 @@ impl SettingsPanel {
         action
     }
 
-    /// Handle a mouse click at the given window coordinates (centered modal geometry).
+    /// Handle a mouse click at the given window coordinates in `layout`.
     pub fn handle_click(
         &mut self,
         x: f32,
         y: f32,
         config: &Config,
         registry: &ShortcutRegistry,
-        window_width: f32,
-        window_height: f32,
-        cell_width: f32,
-        cell_height: f32,
+        layout: &SettingsModalLayout,
     ) -> SettingsAction {
         if !self.is_active() {
             return SettingsAction::None;
         }
 
         let entries = self.build_entries(config, registry);
-        let layout = SettingsModalLayout::calculate(
-            window_width,
-            window_height,
-            cell_width,
-            cell_height,
-            self.animation_progress(),
-            entries.len(),
-        );
 
         // Click outside panel = close
         if !layout.contains(x, y) {
@@ -2272,7 +2213,7 @@ impl SettingsPanel {
 
         // If a dropdown is open, resolve clicks against it first.
         if self.dropdown_open {
-            if let Some(dropdown) = self.dropdown_layout(&layout, &entries) {
+            if let Some(dropdown) = self.dropdown_layout(layout, &entries) {
                 if dropdown.rect.bounds.contains(x, y) {
                     if let Some(opt_idx) = dropdown.rect.option_at(y) {
                         self.dropdown_open = false;
@@ -2306,12 +2247,7 @@ impl SettingsPanel {
         // consumes the click, and dropdown dismissal above never moves a caret.
         if layout.input.contains(x, y) {
             return layout
-                .input_cursor_at(
-                    self.filter.text(),
-                    self.filter.cursor(),
-                    (x, y),
-                    cell_height,
-                )
+                .input_cursor_at(self.filter.text(), self.filter.cursor(), (x, y))
                 .map_or(SettingsAction::None, SettingsAction::PlaceFilterCaret);
         }
 
@@ -2621,13 +2557,13 @@ mod tests {
         use unicode_segmentation::UnicodeSegmentation;
         for (width, cw, ch) in [(1000.0, 8.0, 16.0), (500.0, 15.0, 30.0)] {
             for animation in [0.2, 0.7, 1.0] {
-                let layout = SettingsModalLayout::calculate(width, 700.0, cw, ch, animation, 8);
+                let layout = SettingsModalLayout::calculate(width, 700.0, cw, ch, animation);
                 for text in [
                     "e\u{301}界👩\u{200d}💻🇺🇸".to_string(),
                     "a界e\u{301}👩\u{200d}💻".repeat(20),
                 ] {
                     let cursor = text.len();
-                    let view = layout.input_viewport(&text, cursor, ch).unwrap();
+                    let view = layout.input_viewport(&text, cursor).unwrap();
                     let mut x = view.text_x;
                     for (offset, grapheme) in text[view.text_range.clone()].grapheme_indices(true) {
                         let pixels = termeric_core::unicode::grapheme_width(grapheme) as f32 * cw;
@@ -2639,8 +2575,7 @@ mod tests {
                                 layout.input_cursor_at(
                                     &text,
                                     cursor,
-                                    (x + fraction * pixels, view.text_y),
-                                    ch
+                                    (x + fraction * pixels, view.text_y)
                                 ),
                                 Some(expected)
                             );
@@ -2648,15 +2583,14 @@ mod tests {
                         x += pixels;
                     }
                     assert_eq!(
-                        layout.input_cursor_at(&text, cursor, (layout.input.x, view.text_y), ch),
+                        layout.input_cursor_at(&text, cursor, (layout.input.x, view.text_y)),
                         Some(view.text_range.start)
                     );
                     assert_eq!(
                         layout.input_cursor_at(
                             &text,
                             cursor,
-                            (layout.input.right() - 0.5, view.text_y),
-                            ch
+                            (layout.input.right() - 0.5, view.text_y)
                         ),
                         Some(view.text_range.end)
                     );
@@ -2665,7 +2599,7 @@ mod tests {
                         (f32::NAN, view.text_y),
                         (view.text_x, f32::INFINITY),
                     ] {
-                        assert_eq!(layout.input_cursor_at(&text, cursor, position, ch), None);
+                        assert_eq!(layout.input_cursor_at(&text, cursor, position), None);
                     }
                 }
             }
@@ -2684,12 +2618,12 @@ mod tests {
         assert!(panel.insert_filter_text(text));
         panel.selected = 2;
         panel.scroll_offset = 1;
-        let layout = SettingsModalLayout::calculate(1000.0, 700.0, 8.0, 16.0, 1.0, 0);
+        let layout = SettingsModalLayout::calculate(1000.0, 700.0, 8.0, 16.0, 1.0);
         let (x, y) = (
             layout.input.x + crate::ui::constants::FILTER_TEXT_INSET_CELLS * 8.0 + 6.0,
             layout.input.y,
         );
-        let action = panel.handle_click(x, y, &config, &registry, 1000.0, 700.0, 8.0, 16.0);
+        let action = panel.handle_click(x, y, &config, &registry, &layout);
         let SettingsAction::PlaceFilterCaret(cursor) = action else {
             panic!("expected filter caret");
         };
@@ -2708,24 +2642,21 @@ mod tests {
         panel.dropdown_open = true;
         assert!(!panel.place_filter_caret(0));
         assert!(matches!(
-            panel.handle_click(x, y, &config, &registry, 1000.0, 700.0, 8.0, 16.0),
+            panel.handle_click(x, y, &config, &registry, &layout),
             SettingsAction::None
         ));
         assert!(!panel.dropdown_open);
         assert_eq!(panel.filter.cursor(), cursor);
         assert!(panel.insert_filter_text("@"));
         assert_eq!(panel.filter.text(), "e\u{301}@界👩\u{200d}💻");
-        let collapsed = SettingsModalLayout::calculate(60.0, 700.0, 8.0, 16.0, 1.0, 0);
+        let collapsed = SettingsModalLayout::calculate(60.0, 700.0, 8.0, 16.0, 1.0);
         assert!(matches!(
             panel.handle_click(
                 collapsed.input.x,
                 collapsed.input.y,
                 &config,
                 &registry,
-                60.0,
-                700.0,
-                8.0,
-                16.0
+                &collapsed
             ),
             SettingsAction::None
         ));
@@ -2735,16 +2666,14 @@ mod tests {
     }
 
     #[test]
-    fn filter_viewport_is_clipped_grapheme_safe_and_independent_of_result_count() {
+    fn filter_viewport_is_clipped_and_grapheme_safe() {
         use unicode_segmentation::UnicodeSegmentation;
         let text = "界e\u{301}👩\u{200d}💻".repeat(25);
         for (width, height, cw, ch) in [(320.0, 500.0, 8.0, 16.0), (1600.0, 1000.0, 16.0, 32.0)] {
             for animation in [0.2, 0.7, 1.0] {
-                let layout = SettingsModalLayout::calculate(width, height, cw, ch, animation, 100);
-                let empty = SettingsModalLayout::calculate(width, height, cw, ch, animation, 0);
+                let layout = SettingsModalLayout::calculate(width, height, cw, ch, animation);
                 for cursor in [0, "界".len(), text.len()] {
-                    let view = layout.input_viewport(&text, cursor, ch).unwrap();
-                    assert_eq!(Some(view.clone()), empty.input_viewport(&text, cursor, ch));
+                    let view = layout.input_viewport(&text, cursor).unwrap();
                     assert!(view.cursor_x >= view.text_x);
                     assert!(view.cursor_x + cw <= view.right + 0.001);
                     assert!(view.text_x >= layout.input.x);
@@ -2765,17 +2694,19 @@ mod tests {
                         assert!(view.text_range.start > 0);
                     }
                 }
-                assert!(layout.input_viewport(&text, 1, ch).is_none());
+                assert!(layout.input_viewport(&text, 1).is_none());
             }
         }
+        let window = SettingsModalLayout::calculate(800.0, 600.0, 8.0, 16.0, 1.0);
+        let narrow = SettingsModalLayout::calculate(40.0, 600.0, 8.0, 16.0, 1.0);
         let mut panel = SettingsPanel::new();
-        assert!(panel.input_viewport(800.0, 600.0, 8.0, 16.0).is_none());
+        assert!(panel.input_viewport(&window).is_none());
         panel.open();
         assert!(panel.insert_filter_text(&text));
-        assert!(panel.input_viewport(40.0, 600.0, 8.0, 16.0).is_none());
-        assert!(panel.input_viewport(800.0, 600.0, 8.0, 16.0).is_some());
+        assert!(panel.input_viewport(&narrow).is_none());
+        assert!(panel.input_viewport(&window).is_some());
         panel.dropdown_open = true;
-        assert!(panel.input_viewport(800.0, 600.0, 8.0, 16.0).is_none());
+        assert!(panel.input_viewport(&window).is_none());
     }
 
     #[test]
@@ -3302,8 +3233,7 @@ mod tests {
             &registry,
         ));
         let info = panel.build_info(&config, &registry);
-        let layout =
-            SettingsModalLayout::calculate(1_000.0, 800.0, 10.0, 20.0, 1.0, info.entries.len());
+        let layout = SettingsModalLayout::calculate(1_000.0, 800.0, 10.0, 20.0, 1.0);
         let drawn = info.dropdown_layout(&layout).expect("open dropdown");
         let resolved = panel
             .dropdown_layout(&layout, &info.entries)
@@ -3316,7 +3246,7 @@ mod tests {
 
     #[test]
     fn long_dropdown_keeps_highlight_visible_and_hit_tests_absolute_option() {
-        let layout = SettingsModalLayout::calculate(1_000.0, 800.0, 10.0, 20.0, 1.0, 20);
+        let layout = SettingsModalLayout::calculate(1_000.0, 800.0, 10.0, 20.0, 1.0);
         let rect = layout
             .dropdown_rect(1, 0, 20, 12, 12)
             .expect("visible dropdown");
@@ -3470,24 +3400,15 @@ mod tests {
 
         let entries = panel.build_entries(&config, &registry);
         assert_eq!(entries.len(), 2, "filtered list contains header and action");
-        let layout = SettingsModalLayout::calculate(
-            1000.0,
-            800.0,
-            10.0,
-            20.0,
-            panel.animation_progress(),
-            entries.len(),
-        );
+        let layout =
+            SettingsModalLayout::calculate(1000.0, 800.0, 10.0, 20.0, panel.animation_progress());
         let row = layout.row_rect(1);
         let action = panel.handle_click(
             row.x + row.width * 0.25,
             row.y + row.height / 2.0,
             &config,
             &registry,
-            1000.0,
-            800.0,
-            10.0,
-            20.0,
+            &layout,
         );
         assert!(matches!(action, SettingsAction::ManageRuntimePlugins));
     }
@@ -3515,24 +3436,15 @@ mod tests {
 
         let entries = panel.build_entries(&config, &registry);
         assert_eq!(entries.len(), 2, "filtered list contains header and action");
-        let layout = SettingsModalLayout::calculate(
-            1000.0,
-            800.0,
-            10.0,
-            20.0,
-            panel.animation_progress(),
-            entries.len(),
-        );
+        let layout =
+            SettingsModalLayout::calculate(1000.0, 800.0, 10.0, 20.0, panel.animation_progress());
         let row = layout.row_rect(1);
         let action = panel.handle_click(
             row.x + row.width * 0.25,
             row.y + row.height / 2.0,
             &config,
             &registry,
-            1000.0,
-            800.0,
-            10.0,
-            20.0,
+            &layout,
         );
         assert!(matches!(action, SettingsAction::ManageFontRangeOverrides));
     }
@@ -3560,24 +3472,15 @@ mod tests {
 
         let entries = panel.build_entries(&config, &registry);
         assert_eq!(entries.len(), 2, "filtered list contains header and action");
-        let layout = SettingsModalLayout::calculate(
-            1000.0,
-            800.0,
-            10.0,
-            20.0,
-            panel.animation_progress(),
-            entries.len(),
-        );
+        let layout =
+            SettingsModalLayout::calculate(1000.0, 800.0, 10.0, 20.0, panel.animation_progress());
         let row = layout.row_rect(1);
         let action = panel.handle_click(
             row.x + row.width * 0.25,
             row.y + row.height / 2.0,
             &config,
             &registry,
-            1000.0,
-            800.0,
-            10.0,
-            20.0,
+            &layout,
         );
         assert!(matches!(action, SettingsAction::ManageFontFeatures));
     }
@@ -3716,13 +3619,17 @@ mod tests {
 
     #[test]
     fn rows_are_hit_from_their_left_and_top_edges_but_not_their_right_or_bottom() {
-        let layout = SettingsModalLayout::calculate(1001.0, 801.0, 10.0, 20.0, 1.0, 3);
+        let layout = SettingsModalLayout::calculate(1001.0, 801.0, 10.0, 20.0, 1.0);
         let row = layout.row_rect(0);
         assert_eq!(layout.visible_row_at(row.x, row.y), Some(0));
         assert_eq!(layout.visible_row_at(row.right() - 0.5, row.y), Some(0));
         assert_eq!(layout.visible_row_at(row.right(), row.y), None);
-        let last = layout.row_rect(2);
-        assert_eq!(layout.visible_row_at(last.x, last.bottom() - 0.5), Some(2));
+        let last_row = layout.rows_that_fit - 1;
+        let last = layout.row_rect(last_row);
+        assert_eq!(
+            layout.visible_row_at(last.x, last.bottom() - 0.5),
+            Some(last_row)
+        );
         assert_eq!(layout.visible_row_at(last.x, last.bottom()), None);
         // The dialog lands on whole pixels, as the renderer draws it.
         let panel = layout.panel;
@@ -3738,17 +3645,11 @@ mod tests {
         panel.open();
         let config = Config::default();
         let registry = default_registry();
-        let layout = SettingsModalLayout::calculate(
-            1000.0,
-            800.0,
-            10.0,
-            20.0,
-            panel.animation_progress(),
-            0,
-        );
+        let layout =
+            SettingsModalLayout::calculate(1000.0, 800.0, 10.0, 20.0, panel.animation_progress());
         let centre = |rect: Bounds| (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
         let click = |panel: &mut SettingsPanel, (x, y): (f32, f32)| {
-            panel.handle_click(x, y, &config, &registry, 1000.0, 800.0, 10.0, 20.0)
+            panel.handle_click(x, y, &config, &registry, &layout)
         };
 
         let plugins = SettingsPage::all()
@@ -3856,14 +3757,8 @@ mod tests {
         let config = Config::default();
         let registry = default_registry();
         let entries = panel.build_entries(&config, &registry);
-        let layout = SettingsModalLayout::calculate(
-            1000.0,
-            800.0,
-            10.0,
-            20.0,
-            panel.animation_progress(),
-            entries.len(),
-        );
+        let layout =
+            SettingsModalLayout::calculate(1000.0, 800.0, 10.0, 20.0, panel.animation_progress());
         // The Font page is one section, so Size is the first row.
         assert_eq!(entries[0].label, "Size");
         let y = layout.list_y + layout.row_height * 0.5;
@@ -3873,10 +3768,7 @@ mod tests {
             y,
             &config,
             &registry,
-            1000.0,
-            800.0,
-            10.0,
-            20.0,
+            &layout,
         );
         assert!(matches!(decrease, SettingsAction::SetFontSize(11.0)));
 
@@ -3885,10 +3777,7 @@ mod tests {
             y,
             &config,
             &registry,
-            1000.0,
-            800.0,
-            10.0,
-            20.0,
+            &layout,
         );
         assert!(matches!(increase, SettingsAction::SetFontSize(13.0)));
 
@@ -3897,10 +3786,7 @@ mod tests {
             y,
             &config,
             &registry,
-            1000.0,
-            800.0,
-            10.0,
-            20.0,
+            &layout,
         );
         assert!(matches!(value_click, SettingsAction::None));
     }

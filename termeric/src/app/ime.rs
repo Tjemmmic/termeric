@@ -128,12 +128,9 @@ impl App {
                 self.shortcuts_panel
                     .input_viewport(&self.shortcuts_panel_layout(&info))
             }
-            TextTarget::SettingsFilter => self.settings_panel.input_viewport(
-                metrics.width,
-                metrics.height,
-                metrics.cell_width,
-                metrics.cell_height,
-            ),
+            TextTarget::SettingsFilter => {
+                self.settings_panel.input_viewport(&self.settings_layout())
+            }
             TextTarget::WorkspaceRename => self
                 .workspace_panel
                 .rename_input_viewport(&self.workspace_panel_layout()),

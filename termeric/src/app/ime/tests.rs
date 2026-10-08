@@ -91,7 +91,6 @@ fn settings_ime_matches_scrolled_filter_and_refuses_dropdown_or_higher_owners() 
             cell,
             cell * 2.0,
             info.animation,
-            info.entries.len(),
         );
         let view = ime_viewport_of(
             &mut app,
@@ -104,7 +103,7 @@ fn settings_ime_matches_scrolled_filter_and_refuses_dropdown_or_higher_owners() 
         .unwrap();
         assert_eq!(
             Some(view.clone()),
-            layout.input_viewport(&info.filter, info.filter_cursor, cell * 2.0)
+            layout.input_viewport(&info.filter, info.filter_cursor)
         );
         assert!(view.text_range.start > 0);
         assert_ne!(app.text_target(), TextTarget::CommandsForm);

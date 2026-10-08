@@ -1817,8 +1817,7 @@ impl App {
         if self.renderer.is_none() || self.active_terminal().is_none() {
             return;
         }
-        let metrics = self.ui_metrics();
-        let (chrome, animating) = self.build_chrome(&metrics, reduced_motion);
+        let (chrome, animating) = self.build_chrome(reduced_motion);
         let harvest_render_info = self.harvest_frame_info(reduced_motion);
         let mut tab_info = self.tab_bar_info();
 
@@ -1954,7 +1953,10 @@ impl App {
                 tabs: &tab_info,
                 copy_flash,
                 focus_dim,
-                settings_panel: chrome.settings.as_ref(),
+                settings_panel: chrome
+                    .settings
+                    .as_ref()
+                    .map(|(info, layout)| (info, layout)),
                 search_bar: chrome.search_bar.as_ref(),
                 ime_preedit: ime_preedit_info.as_ref(),
                 workspace_menu: chrome.workspace_menu.as_ref(),

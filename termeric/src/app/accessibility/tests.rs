@@ -1323,10 +1323,7 @@ fn settings_is_one_modal_tree_with_typed_controls_and_shared_geometry() {
     let mut app = App::new_headless(Config::default()).unwrap();
     app.settings_panel.toggle();
     app.settings_panel.select_page(SettingsPage::Font);
-    let info = app
-        .settings_panel
-        .build_info(&app.config, &app.shortcut_registry);
-    let layout = app.settings_accessibility_layout(&info);
+    let layout = app.settings_layout();
     let snapshot = app.accessibility_snapshot();
     let node = |id| {
         &snapshot

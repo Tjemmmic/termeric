@@ -19,6 +19,7 @@ impl Renderer {
     pub(super) fn build_settings_panel(
         &mut self,
         info: &SettingsPanelInfo,
+        layout: &SettingsModalLayout,
         window_width: f32,
         window_height: f32,
     ) {
@@ -26,22 +27,14 @@ impl Renderer {
         if anim <= 0.0 {
             return;
         }
-        let cell_width = self.cell_width();
-        let cell_height = self.cell_height();
+        let cell_width = layout.cell_width;
+        let cell_height = layout.cell_height;
         let fade = |color: [f32; 4], alpha: f32| scale_alpha(color, alpha * anim);
 
         let scrim = fade(self.ui.palette_scrim, 1.0);
         self.rect_pipeline
             .push_rect(0.0, 0.0, window_width, window_height, scrim);
 
-        let layout = SettingsModalLayout::calculate(
-            window_width,
-            window_height,
-            cell_width,
-            cell_height,
-            anim,
-            info.entries.len(),
-        );
         let Bounds {
             x: panel_x,
             y: panel_y,
@@ -70,7 +63,7 @@ impl Renderer {
         let input = layout.input;
         let field = fade(self.ui.palette_input_bg, 0.8);
         self.draw_filter_field(input, field, dim);
-        if let Some(view) = layout.input_viewport(&info.filter, info.filter_cursor, cell_height) {
+        if let Some(view) = layout.input_viewport(&info.filter, info.filter_cursor) {
             self.draw_field_text(
                 input,
                 &view,
@@ -166,7 +159,7 @@ impl Renderer {
             .filter(|entry| !entry.is_header)
             .count();
         let mut selectable_index = first_selectable;
-        let end = (info.scroll_offset + layout.visible_count).min(info.entries.len());
+        let end = (info.scroll_offset + layout.rows_that_fit).min(info.entries.len());
         let value_right = layout.content_x + layout.content_width;
         for (row_index, entry) in info.entries[info.scroll_offset.min(end)..end]
             .iter()
@@ -351,8 +344,7 @@ impl Renderer {
     pub(super) fn build_dropdown_overlay(
         &mut self,
         info: &SettingsPanelInfo,
-        window_width: f32,
-        window_height: f32,
+        layout: &SettingsModalLayout,
     ) {
         if !info.dropdown_open {
             return;
@@ -363,19 +355,9 @@ impl Renderer {
         }
 
         let cell_width = self.cell_width();
-        let cell_height = self.cell_height();
-
-        let layout = SettingsModalLayout::calculate(
-            window_width,
-            window_height,
-            cell_width,
-            cell_height,
-            anim,
-            info.entries.len(),
-        );
 
         // The same dropdown the panel hit-tests clicks and hover against.
-        let Some(dropdown) = info.dropdown_layout(&layout) else {
+        let Some(dropdown) = info.dropdown_layout(layout) else {
             return;
         };
         let rect = dropdown.rect;

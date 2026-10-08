@@ -51,9 +51,6 @@ impl App {
     pub(super) fn middle_press_field(&mut self, x: f32, y: f32) -> bool {
         use super::modal_layer::ModalLayer;
         use crate::ui::commands::panel::CommandsPanelAction;
-        let metrics = self.ui_metrics();
-        let (width, height) = (metrics.width, metrics.height);
-        let (cell_width, cell_height) = (metrics.cell_width, metrics.cell_height);
         let target = match self.top_modal_layer() {
             Some(
                 ModalLayer::DomainPicker | ModalLayer::UnicodePicker | ModalLayer::CommandPalette,
@@ -77,13 +74,10 @@ impl App {
                 TextTarget::ShortcutsFilter
             }
             Some(ModalLayer::Settings) => {
-                let Some(cursor) = self.settings_panel.filter_caret_at(
-                    (x, y),
-                    width,
-                    height,
-                    cell_width,
-                    cell_height,
-                ) else {
+                let Some(cursor) = self
+                    .settings_panel
+                    .filter_caret_at((x, y), &self.settings_layout())
+                else {
                     return true;
                 };
                 self.apply_settings_action(crate::ui::settings::SettingsAction::PlaceFilterCaret(

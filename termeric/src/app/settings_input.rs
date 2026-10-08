@@ -6,6 +6,19 @@ use crate::ui::text_input::TextInputEdit;
 use winit::keyboard::{Key, NamedKey};
 
 impl App {
+    /// The Settings dialog's geometry: what it is drawn with, and so what its
+    /// pointer presses and hover, IME caret, and accessibility use.
+    pub(super) fn settings_layout(&self) -> crate::ui::settings::SettingsModalLayout {
+        let metrics = self.ui_metrics();
+        crate::ui::settings::SettingsModalLayout::calculate(
+            metrics.width,
+            metrics.height,
+            metrics.cell_width,
+            metrics.cell_height,
+            self.settings_panel.animation_progress(),
+        )
+    }
+
     /// Keys for Settings: its own toggle shortcut, the filter, and the controls.
     pub(super) fn handle_settings_panel_key(&mut self, key: &Key) {
         // The same shortcut opens and closes Settings. Check it
@@ -220,26 +233,16 @@ mod tests {
         let info = app
             .settings_panel
             .build_info(&app.config, &app.shortcut_registry);
-        let layout = crate::ui::settings::SettingsModalLayout::calculate(
-            800.0,
-            700.0,
-            8.0,
-            16.0,
-            info.animation,
-            info.entries.len(),
-        );
+        let layout = app.settings_layout();
         let view = layout
-            .input_viewport(&info.filter, info.filter_cursor, 16.0)
+            .input_viewport(&info.filter, info.filter_cursor)
             .unwrap();
         let action = app.settings_panel.handle_click(
             view.text_x,
             view.text_y,
             &app.config,
             &app.shortcut_registry,
-            800.0,
-            700.0,
-            8.0,
-            16.0,
+            &layout,
         );
         app.apply_settings_action(action);
         assert!(app.handle_settings_filter_key(&Key::Named(NamedKey::Backspace)));

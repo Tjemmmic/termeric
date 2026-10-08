@@ -389,10 +389,7 @@ impl App {
                                     py,
                                     &self.config,
                                     &self.shortcut_registry,
-                                    ui.width,
-                                    ui.height,
-                                    metrics.cell_size.0,
-                                    metrics.cell_size.1,
+                                    &self.settings_layout(),
                                 );
                                 self.apply_settings_action(action);
                                 self.request_redraw(RedrawReason::PointerInput);
@@ -854,18 +851,10 @@ impl App {
 
     /// Hover over Settings at `(px, py)`: its rows, controls, and open dropdown.
     fn hover_settings_panel(&mut self, px: f32, py: f32) {
-        let ui = self.ui_metrics();
         let entries = self
             .settings_panel
             .build_entries(&self.config, &self.shortcut_registry);
-        let layout = crate::ui::settings::SettingsModalLayout::calculate(
-            ui.width,
-            ui.height,
-            ui.cell_width,
-            ui.cell_height,
-            self.settings_panel.animation_progress(),
-            entries.len(),
-        );
+        let layout = self.settings_layout();
 
         // Row and control hover (suppressed while the dropdown
         // overlay is open so nothing behind it lights up).

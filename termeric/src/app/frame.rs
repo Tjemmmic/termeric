@@ -10,7 +10,7 @@ use crate::ui::command_palette::PaletteInfo;
 use crate::ui::commands::panel::CommandsPanelInfo;
 use crate::ui::list_dialog::ListDialogLayout;
 use crate::ui::search_bar::SearchBarInfo;
-use crate::ui::settings::SettingsPanelInfo;
+use crate::ui::settings::{SettingsModalLayout, SettingsPanelInfo};
 use crate::ui::shortcuts_panel::ShortcutsPanelInfo;
 use crate::ui::workspace_panel::{WorkspacePanelInfo, WorkspacePanelLayout};
 
@@ -18,7 +18,7 @@ use crate::ui::workspace_panel::{WorkspacePanelInfo, WorkspacePanelLayout};
 /// takes them. `None` surfaces are closed. A laid-out surface comes with the
 /// geometry its hit tests, IME caret, and accessibility also use.
 pub(super) struct ChromeInfo {
-    pub(super) settings: Option<SettingsPanelInfo>,
+    pub(super) settings: Option<(SettingsPanelInfo, SettingsModalLayout)>,
     pub(super) search_bar: Option<SearchBarInfo>,
     pub(super) workspace_menu: Option<PopupMenuInfo>,
     pub(super) workspace_panel: Option<(WorkspacePanelInfo, WorkspacePanelLayout)>,
@@ -37,15 +37,11 @@ impl App {
     /// Build every chrome surface for this frame. Each surface steps its
     /// animation in the same place relative to its own build as it always
     /// has; the result says whether any of them needs another frame.
-    pub(super) fn build_chrome(
-        &mut self,
-        metrics: &UiMetrics,
-        reduced_motion: bool,
-    ) -> (ChromeInfo, bool) {
+    pub(super) fn build_chrome(&mut self, reduced_motion: bool) -> (ChromeInfo, bool) {
         let mut animating = false;
         let workspace_menu = self.workspace_menu_render_info();
         let agents_panel = (!self.agents_panel.is_closed()).then(|| self.agents_panel_info());
-        let settings = self.settings_frame_info(metrics);
+        let settings = self.settings_frame_info();
         let search_bar =
             (self.search.is_active() || self.search.has_results() || self.search.is_searching())
                 .then(|| self.search.build_info(self.search_cursor_pos));
@@ -95,27 +91,20 @@ impl App {
         )
     }
 
-    fn settings_frame_info(&mut self, metrics: &UiMetrics) -> Option<SettingsPanelInfo> {
+    fn settings_frame_info(&mut self) -> Option<(SettingsPanelInfo, SettingsModalLayout)> {
         if !self.settings_panel.is_visible() {
             return None;
         }
         // Tell the panel how many rows it can scroll through so its
         // scroll/selection logic stays in sync with the rendered viewport.
-        let layout = crate::ui::settings::SettingsModalLayout::calculate(
-            metrics.width,
-            metrics.height,
-            metrics.cell_width,
-            metrics.cell_height,
-            self.settings_panel.animation_progress(),
-            0,
-        );
+        let layout = self.settings_layout();
         self.settings_panel.set_max_visible(layout.rows_that_fit);
         let unsaved = self.config_has_unsaved_changes();
         let mut info = self
             .settings_panel
             .build_info(&self.config, &self.shortcut_registry);
         info.unsaved = unsaved;
-        Some(info)
+        Some((info, layout))
     }
 
     fn workspace_panel_frame_info(&mut self) -> Option<(WorkspacePanelInfo, WorkspacePanelLayout)> {
