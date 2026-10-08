@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::tabs::TabType;
-use crate::ui::info_overlay::InfoOverlayChoice;
+use crate::ui::info_overlay::push_keyless_choice;
 use crate::workspace::{
     WorkspaceConfigReference, WorkspaceLaunch, WorkspaceRestoreOutcome, WorkspaceSnapshot,
     WorkspaceTabSnapshot,
@@ -544,22 +544,18 @@ impl App {
         let name = confirmation_name(id);
         let tabs = tab_count(tabs);
         let close = format!("Close {tabs} and open {name}");
-        let lines = vec![
+        let mut lines = vec![
             format!("Open {name} in this window?"),
             format!("It replaces the {tabs} here, and the programs running"),
             "in them end. Save the window first to keep them.".into(),
             String::new(),
-            format!("  {close}"),
-            "  Cancel".into(),
         ];
-        let request_id = self.info_overlay.show_choices(
-            "Open Workspace",
-            lines,
-            vec![
-                InfoOverlayChoice::new(WORKSPACE_OPEN_CHOICE, close, 4, None),
-                InfoOverlayChoice::new(WORKSPACE_CANCEL_CHOICE, "Cancel", 5, None),
-            ],
-        );
+        let mut choices = Vec::new();
+        push_keyless_choice(&mut lines, &mut choices, WORKSPACE_OPEN_CHOICE, close);
+        push_keyless_choice(&mut lines, &mut choices, WORKSPACE_CANCEL_CHOICE, "Cancel");
+        let request_id = self
+            .info_overlay
+            .show_choices("Open Workspace", lines, choices);
         self.overlay_flow = Some(OverlayFlow::WorkspaceOpen {
             request_id,
             workspace_id: id.to_owned(),
@@ -570,14 +566,15 @@ impl App {
     /// can't be undone.
     pub(super) fn confirm_workspace_delete(&mut self, id: &str, closed_tab: bool) {
         let name = confirmation_name(id);
-        let lines = vec![
+        let mut lines = vec![
             format!("Delete {name}?"),
             "Its layout and saved scrollback are removed from disk.".into(),
             "This can't be undone.".into(),
             String::new(),
-            "  Delete".into(),
-            "  Cancel".into(),
         ];
+        let mut choices = Vec::new();
+        push_keyless_choice(&mut lines, &mut choices, WORKSPACE_DELETE_CHOICE, "Delete");
+        push_keyless_choice(&mut lines, &mut choices, WORKSPACE_CANCEL_CHOICE, "Cancel");
         let request_id = self.info_overlay.show_choices(
             if closed_tab {
                 "Delete Tab Snapshot"
@@ -585,10 +582,7 @@ impl App {
                 "Delete Workspace"
             },
             lines,
-            vec![
-                InfoOverlayChoice::new(WORKSPACE_DELETE_CHOICE, "Delete", 4, None),
-                InfoOverlayChoice::new(WORKSPACE_CANCEL_CHOICE, "Cancel", 5, None),
-            ],
+            choices,
         );
         self.overlay_flow = Some(OverlayFlow::WorkspaceDelete {
             request_id,

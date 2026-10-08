@@ -392,9 +392,13 @@ fn kitty_download_consent_is_request_scoped_and_terminal_type_gated() {
     // Pointer hit-testing, hover, and focus follow each choice's source line,
     // so every choice must sit on the line that shows its shortcut.
     for choice in app.info_overlay.choices() {
-        let line = app.info_overlay.lines()[choice.source_line].trim_start();
+        let line = &app.info_overlay.lines()[choice.source_line];
         let key = choice.shortcut.unwrap().to_ascii_uppercase();
-        assert!(line.starts_with(key), "{} sits on {line:?}", choice.id);
+        assert!(
+            line.starts_with(&format!("[{key}]")),
+            "{} sits on {line:?}",
+            choice.id
+        );
     }
     assert!(
         app.kitty_file_transfers

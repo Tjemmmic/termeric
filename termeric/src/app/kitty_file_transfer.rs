@@ -5,7 +5,7 @@
 
 use super::{App, AppEvent, EVENT_LOOP_PROXY};
 use crate::tabs::{TerminalEventOrigin, TerminalIdentity};
-use crate::ui::info_overlay::InfoOverlayChoice;
+use crate::ui::info_overlay::push_key_choice;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
@@ -430,24 +430,19 @@ impl App {
             "Directories, links, and non-regular files will be refused.".into(),
             "Only continue if you trust the command that requested these exact files.".into(),
             String::new(),
-            "  A  Allow these reads once".into(),
-            "  D  Deny".into(),
         ]);
-        let allow_line = lines.len() - 2;
-        let deny_line = lines.len() - 1;
-        let request_id = self.info_overlay.show_choices(
-            "Allow terminal to read host files?",
-            lines,
-            vec![
-                InfoOverlayChoice::new(
-                    "kitty-upload-allow",
-                    "Allow these reads once",
-                    allow_line,
-                    Some('a'),
-                ),
-                InfoOverlayChoice::new("kitty-upload-deny", "Deny", deny_line, Some('d')),
-            ],
+        let mut choices = Vec::new();
+        push_key_choice(
+            &mut lines,
+            &mut choices,
+            "kitty-upload-allow",
+            'a',
+            "Allow these reads once",
         );
+        push_key_choice(&mut lines, &mut choices, "kitty-upload-deny", 'd', "Deny");
+        let request_id =
+            self.info_overlay
+                .show_choices("Allow terminal to read host files?", lines, choices);
         if let Some(pending) = self.kitty_file_transfers.pending_upload.as_mut() {
             pending.request_id = Some(request_id);
         }
@@ -501,7 +496,7 @@ impl App {
         else {
             return;
         };
-        let lines = vec![
+        let mut lines = vec![
             "The exact originating terminal wants to create files on this computer.".into(),
             String::new(),
             format!("Session: {}", command.id),
@@ -516,29 +511,19 @@ impl App {
             "Existing entries will not be replaced.".into(),
             "Only continue if you trust the remote computer and the command you ran.".into(),
             String::new(),
-            "  A  Allow this transfer".into(),
-            "  D  Deny".into(),
         ];
-        let allow_line = lines.len() - 2;
-        let deny_line = lines.len() - 1;
-        let request_id = self.info_overlay.show_choices(
-            "Allow remote file transfer?",
-            lines,
-            vec![
-                InfoOverlayChoice::new(
-                    "kitty-download-allow",
-                    "Allow transfer",
-                    allow_line,
-                    Some('a'),
-                ),
-                InfoOverlayChoice::new(
-                    "kitty-download-deny",
-                    "Deny transfer",
-                    deny_line,
-                    Some('d'),
-                ),
-            ],
+        let mut choices = Vec::new();
+        push_key_choice(
+            &mut lines,
+            &mut choices,
+            "kitty-download-allow",
+            'a',
+            "Allow this transfer",
         );
+        push_key_choice(&mut lines, &mut choices, "kitty-download-deny", 'd', "Deny");
+        let request_id =
+            self.info_overlay
+                .show_choices("Allow remote file transfer?", lines, choices);
         self.kitty_file_transfers.pending = Some(PendingConsent {
             request_id,
             token,
