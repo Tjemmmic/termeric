@@ -4,16 +4,16 @@
 use super::*;
 
 impl Application {
+    /// Answer `request`, which the caller has canonicalized.
     pub(super) fn handle_control_request(
         &mut self,
         event_loop: &ActiveEventLoop,
-        mut request: crate::control::protocol::Request,
+        request: crate::control::protocol::Request,
         peer_process: Option<u32>,
     ) -> std::result::Result<crate::control::protocol::Response, String> {
         use crate::control::protocol::{Request, Response};
 
         request.validate()?;
-        request.canonicalize();
         if let Some(replay) = self.control_replays.replay(&request) {
             return replay;
         }
@@ -30,7 +30,7 @@ impl Application {
             .request_id()
             .is_some_and(|id| self.control_launches.contains(id))
         {
-            return Err("Launch request ID remains retained but its mutation replay expired; query launch-status or use a new request ID".into());
+            return Err(LAUNCH_REPLAY_EXPIRED.into());
         }
         if request == Request::Inventory {
             return Ok(Response::Inventory(self.control_inventory()));

@@ -20,9 +20,7 @@ impl Application {
             .find(|pending| pending.request.request_id() == Some(request_id))
         {
             if pending.request != *request {
-                let _ = responder.send(Err(
-                    "GUI control request ID was already used for a different action".into(),
-                ));
+                let _ = responder.send(Err(REQUEST_ID_REUSED.into()));
             } else if pending.responders.len() >= MAX_PENDING_DOMAIN_WAITERS {
                 let _ = responder.send(Err(
                     "Too many clients are waiting for this live-domain control request".into(),
@@ -37,7 +35,7 @@ impl Application {
             return None;
         }
         if self.control_launches.contains(request_id) {
-            let _ = responder.send(Err("Launch request ID remains retained but its mutation replay expired; query launch-status or use a new request ID".into()));
+            let _ = responder.send(Err(LAUNCH_REPLAY_EXPIRED.into()));
             return None;
         }
 

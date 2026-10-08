@@ -85,6 +85,11 @@ struct CreatedWindow {
     initial_tab_id: u64,
 }
 
+/// A request ID that names an earlier, different request.
+const REQUEST_ID_REUSED: &str = "GUI control request ID was already used for a different action";
+/// A launch whose request ID is still held, though its replay was evicted.
+const LAUNCH_REPLAY_EXPIRED: &str = "Launch request ID remains retained but its mutation replay expired; query launch-status or use a new request ID";
+
 const MAX_CONTROL_REPLAYS: usize = 256;
 const MAX_PENDING_DOMAIN_CONTROLS: usize = 32;
 const MAX_PENDING_DOMAIN_WAITERS: usize = 16;
@@ -234,7 +239,7 @@ impl ControlReplayCache {
                 Err(_) => return None,
             }
         } else {
-            Err("GUI control request ID was already used for a different action".into())
+            Err(REQUEST_ID_REUSED.into())
         })
     }
 
@@ -830,6 +835,8 @@ impl ApplicationHandler<AppEvent> for Application {
                 peer_process,
                 respond_to,
             } => {
+                // Replays and deferred live-domain controls compare requests,
+                // so every path sees the one canonical spelling.
                 request.canonicalize();
                 let Some(respond_to) = self.defer_live_domain_control(&request, respond_to) else {
                     return;
