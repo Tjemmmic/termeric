@@ -158,7 +158,6 @@ impl App {
             layout,
             body: dialog.body().to_vec(),
             field: dialog.field(dialog.request_id()),
-            rows: dialog.rows().to_vec(),
             buttons: dialog.buttons().to_vec(),
             focus: dialog.focus(),
             scroll: dialog.scroll_offset(),

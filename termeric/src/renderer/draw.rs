@@ -400,6 +400,53 @@ impl Renderer {
         }
     }
 
+    /// An On/Off switch in `bounds`: a pill filled with the accent while on
+    /// and inset while off, its knob at the end it is set to.
+    pub(super) fn draw_switch(&mut self, bounds: Bounds, on: bool, anim: f32) {
+        let accent = self.ui.button(ButtonRole::Suggested);
+        let radius = bounds.height / 2.0;
+        let track = if on { accent.fill } else { self.ui.inset_bg };
+        self.rect_pipeline.push_rounded_rect(
+            bounds.x,
+            bounds.y,
+            bounds.width,
+            bounds.height,
+            scale_alpha(track, anim),
+            radius,
+        );
+        if !on {
+            self.rect_pipeline.push_rounded_outline(
+                bounds.x,
+                bounds.y,
+                bounds.width,
+                bounds.height,
+                scale_alpha(self.ui.menu_border, anim),
+                radius,
+                self.px(BORDER_WIDTH),
+            );
+        }
+        let inset = self.px(3.0).min(radius / 2.0);
+        let knob = bounds.height - inset * 2.0;
+        let knob_x = if on {
+            bounds.right() - inset - knob
+        } else {
+            bounds.x + inset
+        };
+        let knob_color = if on {
+            accent.text
+        } else {
+            self.ui.menu_text_dim
+        };
+        self.rect_pipeline.push_rounded_rect(
+            knob_x,
+            bounds.y + inset,
+            knob,
+            knob,
+            scale_alpha(knob_color, anim),
+            knob / 2.0,
+        );
+    }
+
     /// The keyboard focus ring every chrome control shows: two logical
     /// pixels just inside `bounds`, rounded by the logical `radius` of the
     /// control it surrounds.

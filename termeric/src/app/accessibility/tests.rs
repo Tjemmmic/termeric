@@ -1498,47 +1498,120 @@ fn settings_accessibility_actions_use_the_existing_validated_action_path() {
 }
 
 #[test]
-fn runtime_plugin_manager_setting_is_an_accessible_button() {
+fn an_installed_plugin_row_and_its_switch_are_accessible() {
     use crate::ui::settings::SettingsSection;
 
+    let temp = tempfile::tempdir().unwrap();
+    let registry = temp.path().join("registry.toml");
+    let root = temp.path().join("installed");
+    let source = temp.path().join("source");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(
+        source.join(crate::plugin::runtime::MANIFEST_NAME),
+        r#"api_version = 1
+id = "quiet-tool"
+name = "Quiet Tool"
+version = "1.0.0"
+permissions = ["process-spawn"]
+
+[[profiles]]
+id = "open"
+name = "Open"
+program = "termeric-test-fixture-must-not-run"
+"#,
+    )
+    .unwrap();
+    crate::plugin::runtime::execute_admin_at(
+        crate::plugin::runtime::PluginAdminCommand::Install {
+            directory: source,
+            grants: crate::plugin::permission::PluginPermissions::from_permissions([
+                "process-spawn".parse().unwrap(),
+            ])
+            .unwrap(),
+            enable: false,
+            replace: false,
+        },
+        &registry,
+        &root,
+    )
+    .unwrap();
     let mut app = App::new_headless(Config::default()).unwrap();
+    app.set_runtime_plugin_test_paths(registry.clone(), root.clone());
+    app.settings_panel.set_reduced_motion(true);
     app.settings_panel.toggle();
     app.settings_panel
         .select_page(SettingsSection::Plugins.page());
-    assert!(app.settings_panel.accessibility_focus_setting(
-        SettingsSection::Plugins,
-        "Manage Third-party Plugins",
-        &app.config,
-        &app.shortcut_registry,
-    ));
-    let snapshot = app.accessibility_snapshot();
-    let manager = *app
-        .accessibility
-        .settings
-        .nodes
-        .get(&SettingsSemanticTarget::Setting {
-            section: SettingsSection::Plugins,
-            label: "Manage Third-party Plugins".into(),
-        })
-        .unwrap();
-    let node = &snapshot
-        .nodes
-        .iter()
-        .find(|(node_id, _)| *node_id == manager)
-        .unwrap()
-        .1;
-    assert_eq!(node.role(), Role::Button);
-    assert!(node.supports_action(Action::Click));
+    let enabled = || {
+        crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root)
+            .unwrap()
+            .1[0]
+            .enabled
+    };
 
+    let snapshot = app.accessibility_snapshot();
+    let row = app.accessibility.settings.nodes[&SettingsSemanticTarget::Setting {
+        section: SettingsSection::Plugins,
+        label: "Quiet Tool".into(),
+    }];
+    let switch = app.accessibility.settings.nodes[&SettingsSemanticTarget::Switch {
+        section: SettingsSection::Plugins,
+        label: "Quiet Tool".into(),
+    }];
+    let node = |snapshot: &SemanticSnapshot, id| {
+        snapshot
+            .nodes
+            .iter()
+            .find(|(node_id, _)| *node_id == id)
+            .map(|(_, node)| node.clone())
+            .unwrap()
+    };
+    let row_node = node(&snapshot, row);
+    assert_eq!(row_node.role(), Role::Button);
+    assert_eq!(row_node.children(), &[switch]);
+    let switch_node = node(&snapshot, switch);
+    assert_eq!(switch_node.role(), Role::Switch);
+    assert_eq!(switch_node.toggled(), Some(accesskit::Toggled::False));
+    let layout = app.settings_layout();
+    let dialog = node(&snapshot, SETTINGS_DIALOG).bounds().unwrap();
+    let bounds = switch_node.bounds().unwrap();
+    // The switch's bounds are where it is drawn and pressed: the second row.
+    let drawn = layout.row_switch(1);
+    assert_eq!(
+        (
+            bounds.x0 - dialog.x0 + f64::from(layout.panel.x),
+            bounds.y0 - dialog.y0 + f64::from(layout.panel.y),
+        ),
+        (f64::from(drawn.x), f64::from(drawn.y))
+    );
+
+    // Clicking the switch turns the plugin on, as the switch does.
     app.handle_accessibility_action(ActionRequest {
         action: Action::Click,
         target_tree: TreeId::ROOT,
-        target_node: manager,
+        target_node: switch,
         data: None,
     });
-    assert!(!app.settings_panel.is_active());
-    assert!(app.dialog.is_awaiting_current());
-    assert_eq!(app.dialog.title(), "Third-party plugins");
+    assert!(enabled());
+    let snapshot = app.accessibility_snapshot();
+    assert_eq!(
+        node(&snapshot, switch).toggled(),
+        Some(accesskit::Toggled::True)
+    );
+
+    // Clicking the row opens its page.
+    app.handle_accessibility_action(ActionRequest {
+        action: Action::Click,
+        target_tree: TreeId::ROOT,
+        target_node: row,
+        data: None,
+    });
+    let snapshot = app.accessibility_snapshot();
+    assert_eq!(node(&snapshot, SETTINGS_LIST).label(), Some("Quiet Tool"));
+    assert_eq!(
+        node(&snapshot, SETTINGS_BACK).label(),
+        Some("Back to Plugins")
+    );
 }
 
 #[test]
@@ -3525,22 +3598,16 @@ fn pending_domain_picker_exposes_read_only_live_status() {
 /// A confirmation whose body is far taller than any window, above a list
 /// of rows, so the body scrolls.
 fn show_dialog_fixture(app: &mut App) -> u64 {
-    use crate::ui::dialog::{ButtonRole, DialogBlock, DialogButton, DialogRow, DialogSpec};
-    let mut spec = DialogSpec::list(
+    use crate::ui::dialog::{ButtonRole, DialogBlock, DialogSpec};
+    app.dialog.show(DialogSpec::confirm(
         "Hermetic question?",
         (0..40)
             .map(|index| DialogBlock::text(format!("fixture line {index}")))
             .collect(),
-        vec![DialogRow::new("safe-choice", "Safe fixture choice").with_detail("detail")],
-    )
-    .button(DialogButton::cancel())
-    .button(DialogButton::answer(
         "delete",
         "Delete",
         ButtonRole::Destructive,
-    ));
-    spec.kind = crate::ui::dialog::DialogKind::Confirmation;
-    app.dialog.show(spec)
+    ))
 }
 
 /// The node of the open dialog's `index`th button.
@@ -3548,13 +3615,6 @@ fn dialog_button(app: &App, index: usize) -> NodeId {
     app.accessibility.dialog.nodes[&DialogSemanticTarget::Button {
         request_id: app.dialog.request_id(),
         index,
-    }]
-}
-
-fn dialog_row(app: &App, id: &str) -> NodeId {
-    app.accessibility.dialog.nodes[&DialogSemanticTarget::Row {
-        request_id: app.dialog.request_id(),
-        id: id.into(),
     }]
 }
 
@@ -3574,27 +3634,25 @@ fn dialog_keyboard_and_assistive_focus_share_the_same_owner_and_bounds() {
     let cancel = dialog_button(&app, 0);
     assert_eq!(snapshot.focus, cancel);
 
-    // Tab reaches the list; the row's node takes focus at its drawn bounds.
-    app.dialog.set_focus(request, Some(DialogFocus::Button(1)));
+    // Tab moves to Delete; its node takes focus at its drawn bounds.
     app.dialog.cycle_focus(request, false);
     let snapshot = app.accessibility_snapshot();
-    let row = dialog_row(&app, "safe-choice");
-    assert_eq!(snapshot.focus, row);
+    let delete = dialog_button(&app, 1);
+    assert_eq!(snapshot.focus, delete);
     let layout = app.dialog_layout().unwrap();
-    let node = &snapshot.nodes.iter().find(|(id, _)| *id == row).unwrap().1;
-    assert_eq!(node.role(), Role::ListItem);
-    assert!(node.is_selected().unwrap_or(false));
-    assert_eq!(
-        node.bounds(),
-        Some(bounds_rect(
-            layout.row(0, app.dialog.scroll_offset()).unwrap()
-        ))
-    );
+    let node = &snapshot
+        .nodes
+        .iter()
+        .find(|(id, _)| *id == delete)
+        .unwrap()
+        .1;
+    assert_eq!(node.role(), Role::Button);
+    assert_eq!(node.bounds(), Some(bounds_rect(layout.buttons[1])));
     assert_eq!(
         app.dialog.activate_focused(request),
         DialogAction::Answer {
             request_id: request,
-            id: "safe-choice".into()
+            id: "delete".into()
         }
     );
 
@@ -3623,7 +3681,7 @@ fn dialog_keyboard_and_assistive_focus_share_the_same_owner_and_bounds() {
     app.handle_accessibility_action(ActionRequest {
         action: Action::Focus,
         target_tree: TreeId::ROOT,
-        target_node: row,
+        target_node: delete,
         data: None,
     });
     assert_eq!(app.dialog.focus(), Some(DialogFocus::Button(0)));
@@ -3672,7 +3730,6 @@ fn a_dialog_is_one_scrollable_modal_tree_with_shared_geometry() {
     assert_eq!(node(DIALOG_BODY).bounds(), Some(bounds_rect(layout.body)));
     assert!(node(DIALOG_BODY).supports_action(Action::ScrollDown));
     assert!(!node(DIALOG_BODY).supports_action(Action::ScrollUp));
-    assert_eq!(node(DIALOG_LIST).role(), Role::ListBox);
     assert_eq!(node(cancel).role(), Role::Button);
     assert_eq!(node(cancel).label(), Some("Cancel"));
     assert_eq!(node(cancel).bounds(), Some(bounds_rect(layout.buttons[0])));
@@ -3702,14 +3759,13 @@ fn a_dialog_rejects_retired_nodes_and_background_actions() {
     show_dialog_fixture(&mut app);
     app.accessibility_snapshot();
     let stale_delete = dialog_button(&app, 1);
-    let stale_row = dialog_row(&app, "safe-choice");
 
     let current = app.dialog.show(crate::ui::dialog::DialogSpec::message(
         "Replacement notice",
         vec![],
     ));
     app.accessibility_snapshot();
-    for target_node in [stale_delete, stale_row, SETTINGS] {
+    for target_node in [stale_delete, SETTINGS] {
         app.handle_accessibility_action(ActionRequest {
             action: Action::Click,
             target_tree: TreeId::ROOT,

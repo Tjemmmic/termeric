@@ -10,20 +10,24 @@ use crate::ui::text_input_viewport::TextInputViewport;
 use std::borrow::Cow;
 
 mod font_rules;
+mod plugins;
 
 use crate::config::FontRangeOverride;
 use crate::ui::dialog::ButtonRole;
 pub use font_rules::{
     FontFeatureAction, FontRangeAction, format_codepoint, range_label, range_text,
 };
+pub use plugins::{InstalledPlugins, PluginAction, setting_value_text};
 
 /// A page within a page, shown in its place with a way back: one font
-/// range or OpenType feature, named by what it shows.
+/// range, OpenType feature, or installed plugin, named by what it shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SettingsSubPage {
     FontRange(FontRangeOverride),
     /// A feature by its tag.
     FontFeature(String),
+    /// A third-party plugin by its ID.
+    Plugin(String),
 }
 
 impl SettingsSubPage {
@@ -31,22 +35,7 @@ impl SettingsSubPage {
     pub fn page(&self) -> SettingsPage {
         match self {
             Self::FontRange(_) | Self::FontFeature(_) => SettingsPage::Font,
-        }
-    }
-
-    /// Its heading.
-    pub fn title(&self) -> String {
-        match self {
-            Self::FontRange(rule) => range_label(rule),
-            Self::FontFeature(tag) => tag.clone(),
-        }
-    }
-
-    /// Whether what it shows still exists: a reload can take it away.
-    fn exists(&self, config: &Config) -> bool {
-        match self {
-            Self::FontRange(rule) => config.font.range_overrides.contains(rule),
-            Self::FontFeature(tag) => config.font.features.contains_key(tag),
+            Self::Plugin(_) => SettingsPage::Plugins,
         }
     }
 }
@@ -255,6 +244,20 @@ impl SettingsModalLayout {
         } else {
             self.content_x
         }
+    }
+
+    /// The On/Off switch of a switched row, right of its value and left of
+    /// its chevron.
+    pub fn row_switch(&self, row: usize) -> Bounds {
+        let row = self.row_rect(row);
+        let height = self.cell_height.round();
+        let width = (self.cell_height * 1.8).round();
+        Bounds::new(
+            (self.content_x + self.content_width - self.cell_width * 2.0 - width).round(),
+            row.y + ((row.height - height) / 2.0).round(),
+            width,
+            height,
+        )
     }
 
     /// The push button of a button row, at the start of the row and
@@ -538,6 +541,12 @@ pub enum SettingsSection {
     Harvest,
     Accessibility,
     Plugins,
+    /// A plugin's sub-page: where it came from and its default profile.
+    PluginGeneral,
+    PluginPermissions,
+    PluginSettings,
+    /// A plugin's sub-page: Update, Reset, and Remove.
+    PluginManage,
 }
 
 impl SettingsSection {
@@ -562,6 +571,10 @@ impl SettingsSection {
             Self::Harvest => "Harvest",
             Self::Accessibility => "Accessibility",
             Self::Plugins => "Plugins",
+            Self::PluginGeneral => "General",
+            Self::PluginPermissions => "Permissions",
+            Self::PluginSettings => "Plugin Settings",
+            Self::PluginManage => "Manage",
         }
     }
 
@@ -581,7 +594,11 @@ impl SettingsSection {
             Self::Agents => SettingsPage::Agents,
             Self::Startup | Self::Sessions => SettingsPage::Sessions,
             Self::Accessibility => SettingsPage::Accessibility,
-            Self::Plugins => SettingsPage::Plugins,
+            Self::Plugins
+            | Self::PluginGeneral
+            | Self::PluginPermissions
+            | Self::PluginSettings
+            | Self::PluginManage => SettingsPage::Plugins,
             Self::Harvest => SettingsPage::Experimental,
         }
     }
@@ -624,6 +641,15 @@ pub enum SettingKind {
     /// persisted configuration value, such as opening a sub-page or a
     /// prompt. It shows its value dimmed and a trailing chevron.
     Action { action: SettingsAction },
+    /// An action row that also carries an On/Off switch, such as an
+    /// installed plugin: Enter or a press on the row takes `action`; Left
+    /// and Right, or a press on the switch, turn it off and on with `flip`,
+    /// which sets the switch to the state it isn't in.
+    SwitchedAction {
+        action: SettingsAction,
+        on: bool,
+        flip: SettingsAction,
+    },
     /// A push button at the start of the row, such as Delete: only the
     /// button answers the pointer.
     Button {
@@ -648,8 +674,18 @@ impl SettingKind {
     fn opens(&self, sub_page: &SettingsSubPage) -> bool {
         matches!(
             self,
-            Self::Action { action: SettingsAction::OpenSubPage(opened) } if opened == sub_page
+            Self::Action { action: SettingsAction::OpenSubPage(opened) }
+                | Self::SwitchedAction { action: SettingsAction::OpenSubPage(opened), .. }
+                if opened == sub_page
         )
+    }
+
+    /// What flipping a switched row's switch does.
+    fn flip(&self) -> SettingsAction {
+        match self {
+            Self::SwitchedAction { flip, .. } => flip.clone(),
+            _ => SettingsAction::None,
+        }
     }
 }
 
@@ -897,7 +933,7 @@ pub enum SettingsAction {
     /// Follow the system or override higher-contrast application chrome.
     SetHighContrast(AccessibilityPreference),
     /// Open the installed third-party plugin manager.
-    ManageRuntimePlugins,
+    Plugin(PluginAction),
     /// Leave Settings for the Keyboard Shortcuts dialog.
     OpenKeyboardShortcuts,
     /// Save current config
@@ -969,7 +1005,7 @@ pub struct SettingsPanel {
     /// Bounded third-party status summary. The adjacent action opens the
     /// request-scoped manager where full source and permission details remain
     /// visible before mutations.
-    runtime_plugin_summary: String,
+    plugins: InstalledPlugins,
     /// Built-in agents with their installed and enabled state, supplied by
     /// the application because finding executables touches the file system.
     agent_rows: Vec<AgentSettingsRow>,
@@ -1013,7 +1049,7 @@ impl SettingsPanel {
             dropdown_hovered: None,
             theme_meta: None,
             pending_section_jump: None,
-            runtime_plugin_summary: "None installed (use `termeric plugin --help`)".into(),
+            plugins: InstalledPlugins::default(),
             agent_rows: Vec::new(),
             custom_agent_summary: "None".into(),
             agent_status_summary: "Not set up".into(),
@@ -1057,8 +1093,10 @@ impl SettingsPanel {
         self.agent_status_summary = status_summary;
     }
 
-    pub fn set_runtime_plugin_summary(&mut self, summary: String) {
-        self.runtime_plugin_summary = summary;
+    /// Set the installed third-party plugins the Plugins page lists, as
+    /// the application last read them from the registry.
+    pub fn set_runtime_plugins(&mut self, plugins: InstalledPlugins) {
+        self.plugins = plugins;
     }
 
     /// Toggle the panel open/closed
@@ -1813,31 +1851,14 @@ impl SettingsPanel {
             result.push((SettingsSection::Agents, items));
         }
 
-        // Plugins
-        {
-            result.push((
-                SettingsSection::Plugins,
-                vec![
-                    SettingItem {
-                        label: "Status".into(),
-                        value: "Experimental beta".into(),
-                        kind: SettingKind::ReadOnly,
-                    },
-                    SettingItem {
-                        label: "Third-party Plugins".into(),
-                        value: self.runtime_plugin_summary.clone(),
-                        kind: SettingKind::ReadOnly,
-                    },
-                    SettingItem {
-                        label: "Manage Third-party Plugins".into(),
-                        value: "Open manager".into(),
-                        kind: SettingKind::Action {
-                            action: SettingsAction::ManageRuntimePlugins,
-                        },
-                    },
-                ],
-            ));
-        }
+        // Plugins: the beta's status, then each installed plugin.
+        let mut items = vec![SettingItem {
+            label: "Status".into(),
+            value: "Experimental beta".into(),
+            kind: SettingKind::ReadOnly,
+        }];
+        items.extend(plugins::page_rows(&self.plugins));
+        result.push((SettingsSection::Plugins, items));
 
         result
     }
@@ -1937,9 +1958,11 @@ impl SettingsPanel {
     /// The sub-page shown: the one opened, while its subject (a font range,
     /// a feature) still exists. A reload can take it away.
     fn shown_sub_page(&self, config: &Config) -> Option<&SettingsSubPage> {
-        self.sub_page
-            .as_ref()
-            .filter(|sub_page| sub_page.exists(config))
+        self.sub_page.as_ref().filter(|sub_page| match sub_page {
+            SettingsSubPage::FontRange(rule) => config.font.range_overrides.contains(rule),
+            SettingsSubPage::FontFeature(tag) => config.font.features.contains_key(tag),
+            SettingsSubPage::Plugin(id) => self.plugins.get(id).is_some(),
+        })
     }
 
     /// The rows of `sub_page`, by section.
@@ -1953,6 +1976,23 @@ impl SettingsPanel {
                 font_rules::range_page(rule, &self.installed_families)
             }
             SettingsSubPage::FontFeature(tag) => font_rules::feature_page(tag, config),
+            SettingsSubPage::Plugin(id) => self
+                .plugins
+                .get(id)
+                .map(plugins::plugin_page)
+                .unwrap_or_default(),
+        }
+    }
+
+    /// A sub-page's heading.
+    fn sub_page_title(&self, sub_page: &SettingsSubPage) -> String {
+        match sub_page {
+            SettingsSubPage::FontRange(rule) => range_label(rule),
+            SettingsSubPage::FontFeature(tag) => tag.clone(),
+            SettingsSubPage::Plugin(id) => self
+                .plugins
+                .get(id)
+                .map_or_else(|| id.clone(), |status| self.plugins.label(status)),
         }
     }
 
@@ -2053,6 +2093,12 @@ impl SettingsPanel {
             SettingsKey::Right | SettingsKey::Enter => {
                 if let Some(entry) = Self::nth_selectable(&entries, self.selected) {
                     match &entry.kind {
+                        // Enter opens a switched row; Right is its switch.
+                        SettingKind::SwitchedAction { action, .. }
+                            if matches!(key, SettingsKey::Enter) =>
+                        {
+                            action.clone()
+                        }
                         SettingKind::Dropdown { selected, .. }
                         | SettingKind::SteppedList { selected, .. } => {
                             self.dropdown_open = true;
@@ -2308,7 +2354,9 @@ impl SettingsPanel {
                     SettingsAction::None
                 }
             }
-            SettingKind::ReadOnly => SettingsAction::None,
+            // Left turns the switch off and Right on, as it is drawn.
+            SettingKind::SwitchedAction { on, .. } if (direction > 0) != *on => entry.kind.flip(),
+            SettingKind::SwitchedAction { .. } | SettingKind::ReadOnly => SettingsAction::None,
         }
     }
 
@@ -2371,9 +2419,29 @@ impl SettingsPanel {
             return SettingsAction::None;
         };
         match &entry.kind {
-            SettingKind::Action { action } | SettingKind::Button { action, .. } => action.clone(),
+            SettingKind::Action { action }
+            | SettingKind::Button { action, .. }
+            | SettingKind::SwitchedAction { action, .. } => action.clone(),
             _ => SettingsAction::None,
         }
+    }
+
+    /// Flip a switched row's switch through the same identity and mapping
+    /// as the keyboard and pointer.
+    pub fn accessibility_flip_switch(
+        &mut self,
+        section: SettingsSection,
+        label: &str,
+        config: &Config,
+        registry: &ShortcutRegistry,
+    ) -> SettingsAction {
+        if !self.accessibility_focus_setting(section, label, config, registry) {
+            return SettingsAction::None;
+        }
+        self.dropdown_open = false;
+        let entries = self.build_entries(config, registry);
+        Self::nth_selectable(&entries, self.selected)
+            .map_or(SettingsAction::None, |entry| entry.kind.flip())
     }
 
     /// Open or close a setting's dropdown without bypassing its current
@@ -2540,7 +2608,12 @@ impl SettingsPanel {
                 .map_or(SettingsAction::None, |direction| {
                     self.adjust_selected_value(&entries, direction)
                 }),
-            SettingKind::Action { action } | SettingKind::Button { action, .. } => action.clone(),
+            SettingKind::SwitchedAction { .. } if layout.row_switch(visible_row).contains(x, y) => {
+                entry.kind.flip()
+            }
+            SettingKind::Action { action }
+            | SettingKind::Button { action, .. }
+            | SettingKind::SwitchedAction { action, .. } => action.clone(),
             SettingKind::ReadOnly => SettingsAction::None,
         }
     }
@@ -2697,7 +2770,11 @@ impl SettingsPanel {
             page: self.shown_page(&entries),
             sub_page_title: self
                 .shows_back(config)
-                .then(|| self.sub_page.as_ref().map(SettingsSubPage::title))
+                .then(|| {
+                    self.sub_page
+                        .as_ref()
+                        .map(|sub_page| self.sub_page_title(sub_page))
+                })
                 .flatten(),
             hovered_control: self.hovered_control,
             unsaved: false,
@@ -3624,64 +3701,145 @@ mod tests {
         assert!(matches!(opacity.kind, SettingKind::Numeric { .. }));
     }
 
-    #[test]
-    fn third_party_permission_status_is_visible_in_plugin_settings() {
-        let mut panel = SettingsPanel::new();
-        panel.set_runtime_plugin_summary(
-            "task-runner:on req=[process-spawn] grant=[process-spawn]".into(),
-        );
-        panel.select_page(SettingsPage::Plugins);
-        let entries = panel.build_entries(&Config::default(), &ShortcutRegistry::new());
-        let status = entries
-            .iter()
-            .find(|entry| entry.label == "Third-party Plugins")
-            .expect("third-party status row");
-        assert!(status.value.contains("task-runner:on"));
-        assert!(status.value.contains("req=[process-spawn]"));
-        assert!(status.value.contains("grant=[process-spawn]"));
-        assert!(matches!(status.kind, SettingKind::ReadOnly));
-
-        let manager = entries
-            .iter()
-            .find(|entry| entry.label == "Manage Third-party Plugins")
-            .expect("third-party manager action row");
-        assert!(matches!(manager.kind, SettingKind::Action { .. }));
-        assert!(matches!(
-            panel.accessibility_activate_setting(
-                SettingsSection::Plugins,
-                "Manage Third-party Plugins",
-                &Config::default(),
-                &ShortcutRegistry::new(),
-            ),
-            SettingsAction::ManageRuntimePlugins
-        ));
+    fn plugin_status(
+        id: &str,
+        name: &str,
+        enabled: bool,
+    ) -> crate::plugin::runtime::RuntimePluginStatus {
+        crate::plugin::runtime::RuntimePluginStatus {
+            id: id.into(),
+            name: name.into(),
+            version: "1.2.0".into(),
+            enabled,
+            source: "/plugins/source".into(),
+            requested: Default::default(),
+            granted: Default::default(),
+            profiles: Vec::new(),
+            configured_default_profile: None,
+            settings: Default::default(),
+            setting_definitions: Vec::new(),
+            configured_settings: Default::default(),
+            configured_setting_count: 0,
+            diagnostic: None,
+        }
     }
 
     #[test]
-    fn runtime_plugin_manager_action_has_shared_keyboard_and_pointer_routing() {
+    fn an_installed_plugin_is_a_row_with_its_switch_and_its_page() {
         let mut panel = SettingsPanel::new();
         panel.open();
+        panel.set_runtime_plugins(InstalledPlugins {
+            statuses: vec![plugin_status("task-runner", "Task Runner", false)],
+            error: None,
+        });
+        panel.select_page(SettingsPage::Plugins);
         let config = Config::default();
         let registry = default_registry();
-        assert!(panel.insert_filter_text("manage third-party"));
-        assert!(matches!(
-            panel.handle_key(SettingsKey::Enter, &config, &registry),
-            SettingsAction::ManageRuntimePlugins
-        ));
-
         let entries = panel.build_entries(&config, &registry);
-        assert_eq!(entries.len(), 2, "filtered list contains header and action");
-        let layout =
-            SettingsModalLayout::calculate(1000.0, 800.0, 10.0, 20.0, panel.animation_progress());
+        let labels: Vec<_> = entries.iter().map(|entry| entry.label.as_ref()).collect();
+        assert_eq!(labels, ["Status", "Task Runner", "Install a plugin…"]);
+        assert_eq!(entries[1].value, "1.2.0 · Off");
+        let enable = |enabled| {
+            SettingsAction::Plugin(PluginAction::SetEnabled {
+                id: "task-runner".into(),
+                enabled,
+            })
+        };
+        let opens = |action: &SettingsAction| matches!(action, SettingsAction::OpenSubPage(SettingsSubPage::Plugin(id)) if id == "task-runner");
+
+        // Keyboard: Right is On, Left Off (nothing while already off), and
+        // Enter opens it.
+        panel.selected = 1;
+        assert!(matches!(
+            panel.handle_key(SettingsKey::Left, &config, &registry),
+            SettingsAction::None
+        ));
+        assert_eq!(
+            format!(
+                "{:?}",
+                panel.handle_key(SettingsKey::Right, &config, &registry)
+            ),
+            format!("{:?}", enable(true))
+        );
+        assert!(opens(&panel.handle_key(
+            SettingsKey::Enter,
+            &config,
+            &registry
+        )));
+
+        // Pointer: the switch flips it; the rest of the row opens it.
+        let layout = SettingsModalLayout::calculate(1000.0, 800.0, 10.0, 20.0, 1.0);
+        let [x, y] = layout.row_switch(1).center();
+        assert_eq!(
+            format!(
+                "{:?}",
+                panel.handle_click(x, y, &config, &registry, &layout)
+            ),
+            format!("{:?}", enable(true))
+        );
         let row = layout.row_rect(1);
-        let action = panel.handle_click(
+        assert!(opens(&panel.handle_click(
             row.x + row.width * 0.25,
-            row.y + row.height / 2.0,
+            row.center()[1],
             &config,
             &registry,
             &layout,
+        )));
+        // The switch sits inside its row, clear of the label and value.
+        let switch = layout.row_switch(1);
+        assert!(switch.x > layout.value_x && switch.right() < row.right());
+
+        // Search finds it by its name.
+        assert!(panel.insert_filter_text("task"));
+        assert!(
+            panel
+                .build_entries(&config, &registry)
+                .iter()
+                .any(|entry| entry.label == "Task Runner")
         );
-        assert!(matches!(action, SettingsAction::ManageRuntimePlugins));
+    }
+
+    #[test]
+    fn a_plugin_page_shows_where_it_came_from_and_its_buttons() {
+        let mut panel = SettingsPanel::new();
+        panel.open();
+        let mut status = plugin_status("task-runner", "Task Runner", true);
+        status.diagnostic = Some("manifest changed".into());
+        panel.set_runtime_plugins(InstalledPlugins {
+            statuses: vec![status],
+            error: Some("one entry was skipped".into()),
+        });
+        panel.select_page(SettingsPage::Plugins);
+        let config = Config::default();
+        let registry = default_registry();
+        let entries = panel.build_entries(&config, &registry);
+        assert!(entries.iter().any(|entry| entry.label == "Plugin Registry"));
+        assert_eq!(entries[2].value, "1.2.0 · Error");
+
+        panel.open_sub_page(SettingsSubPage::Plugin("task-runner".into()));
+        let info = panel.build_info(&config, &registry);
+        assert_eq!(info.sub_page_title.as_deref(), Some("Task Runner"));
+        let labels: Vec<_> = info
+            .entries
+            .iter()
+            .filter(|entry| !entry.is_header)
+            .map(|entry| entry.label.as_ref())
+            .collect();
+        assert_eq!(
+            labels,
+            ["Version", "Source", "Problem", "Update…", "Remove…"]
+        );
+        assert!(info.entries.iter().any(|entry| matches!(
+            entry.kind,
+            SettingKind::Button {
+                role: ButtonRole::Destructive,
+                ..
+            }
+        ) && entry.label == "Remove…"));
+
+        // Removed elsewhere, its page gives way to the Plugins page.
+        panel.set_runtime_plugins(InstalledPlugins::default());
+        assert_eq!(panel.build_info(&config, &registry).sub_page_title, None);
     }
 
     #[test]

@@ -185,7 +185,6 @@ pub struct DialogInfo {
     pub layout: crate::ui::dialog::DialogLayout,
     pub body: Vec<crate::ui::dialog::DialogBlock>,
     pub field: Option<crate::ui::dialog::DialogFieldView>,
-    pub rows: Vec<crate::ui::dialog::DialogRow>,
     pub buttons: Vec<crate::ui::dialog::DialogButton>,
     pub focus: Option<crate::ui::dialog::DialogFocus>,
     /// The body's scroll offset in physical pixels.

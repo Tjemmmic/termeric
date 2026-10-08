@@ -96,7 +96,7 @@ impl App {
                 "Couldn't check: {error}. Nothing was changed."
             ))),
         }
-        let spec = DialogSpec::list("Which font draws it", body, Vec::new())
+        let spec = DialogSpec::report("Which font draws it", body)
             .button(DialogButton::answer(
                 RETRY,
                 "Check other text…",

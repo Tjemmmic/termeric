@@ -1,11 +1,11 @@
 //! Dialogs: messages, confirmations, and prompts in one quiet modal card.
 //!
 //! A dialog is built from a [`DialogSpec`]: a heading, body blocks, an
-//! optional text field, an optional list of rows, and a right-aligned row of
-//! buttons with roles. Each showing is its own request
-//! ([`RequestScope`]), and every action names the request it was meant for,
-//! so an action aimed at an earlier or dismissed dialog does nothing. The
-//! geometry every consumer shares is [`DialogLayout`].
+//! optional text field, and a right-aligned row of buttons with roles. Each
+//! showing is its own request ([`RequestScope`]), and every action names the
+//! request it was meant for, so an action aimed at an earlier or dismissed
+//! dialog does nothing. The geometry every consumer shares is
+//! [`DialogLayout`].
 
 mod layout;
 
@@ -19,7 +19,6 @@ pub const MAX_TITLE_CHARS: usize = 256;
 pub const MAX_BLOCKS: usize = 64;
 pub const MAX_BLOCK_LINES: usize = 256;
 pub const MAX_LINE_CHARS: usize = 4096;
-pub const MAX_ROWS: usize = 256;
 pub const MAX_BUTTONS: usize = 6;
 pub const MAX_FIELD_BYTES: usize = 4096;
 
@@ -39,8 +38,8 @@ pub enum DialogKind {
     Confirmation,
     /// A question answered by typing.
     Prompt,
-    /// A list of rows to pick from (the interim managers).
-    List,
+    /// A longer read that scrolls, such as the glyph coverage report.
+    Report,
 }
 
 impl DialogKind {
@@ -50,9 +49,9 @@ impl DialogKind {
         matches!(self, Self::Error | Self::Confirmation)
     }
 
-    /// Prompts and lists get the wider card.
+    /// Prompts and reports get the wider card.
     pub fn is_wide(self) -> bool {
-        matches!(self, Self::Prompt | Self::List)
+        matches!(self, Self::Prompt | Self::Report)
     }
 }
 
@@ -133,11 +132,6 @@ impl DialogButton {
         Self::answer(CANCEL, "Cancel", ButtonRole::Cancel)
     }
 
-    /// "Back", answering [`CANCEL`]: the way out of one step of a manager.
-    pub fn back() -> Self {
-        Self::answer(CANCEL, "Back", ButtonRole::Cancel)
-    }
-
     /// A message's one button.
     pub fn close() -> Self {
         Self {
@@ -160,30 +154,6 @@ impl DialogButton {
             ButtonAction::Answer(id) => Some(id),
             _ => None,
         }
-    }
-}
-
-/// A row of a dialog's list: activating it answers `id`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DialogRow {
-    pub id: String,
-    pub label: String,
-    /// Dim text at the row's right end, such as a value or a state.
-    pub detail: Option<String>,
-}
-
-impl DialogRow {
-    pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
-        Self {
-            id: id.into(),
-            label: label.into(),
-            detail: None,
-        }
-    }
-
-    pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
-        self.detail = Some(detail.into());
-        self
     }
 }
 
@@ -220,7 +190,6 @@ pub struct DialogSpec {
     pub title: String,
     pub body: Vec<DialogBlock>,
     pub field: Option<FieldSpec>,
-    pub rows: Vec<DialogRow>,
     /// Left to right as drawn.
     pub buttons: Vec<DialogButton>,
 }
@@ -232,7 +201,6 @@ impl DialogSpec {
             title: title.into(),
             body,
             field: None,
-            rows: Vec::new(),
             buttons: Vec::new(),
         }
     }
@@ -281,11 +249,9 @@ impl DialogSpec {
         spec
     }
 
-    /// Rows to pick from, with the buttons added after.
-    pub fn list(title: impl Into<String>, body: Vec<DialogBlock>, rows: Vec<DialogRow>) -> Self {
-        let mut spec = Self::new(DialogKind::List, title, body);
-        spec.rows = rows;
-        spec
+    /// A longer read, with the buttons added after.
+    pub fn report(title: impl Into<String>, body: Vec<DialogBlock>) -> Self {
+        Self::new(DialogKind::Report, title, body)
     }
 
     /// Add a button at the right end of the row.
@@ -311,7 +277,6 @@ impl DialogSpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DialogFocus {
     Field,
-    Row(usize),
     Button(usize),
 }
 
@@ -327,7 +292,7 @@ pub enum DialogScroll {
 /// Something a person did to a dialog, for the request it names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DialogAction {
-    /// A button or row answered `id`.
+    /// A button answered `id`.
     Answer {
         request_id: u64,
         id: String,
@@ -388,17 +353,12 @@ pub struct Dialog {
     title: String,
     body: Vec<DialogBlock>,
     field: Option<DialogField>,
-    rows: Vec<DialogRow>,
     buttons: Vec<DialogButton>,
     focus: Option<DialogFocus>,
-    /// The row Tab returns to in the list.
-    list_row: usize,
     extent: BodyExtent,
     scroll: f32,
     /// Focus moved and the next measure should scroll it into view.
     reveal_focus: bool,
-    /// The person scrolled and a focused row now out of view loses focus.
-    scrolled: bool,
 }
 
 impl Default for Dialog {
@@ -416,14 +376,11 @@ impl Dialog {
             title: String::new(),
             body: Vec::new(),
             field: None,
-            rows: Vec::new(),
             buttons: Vec::new(),
             focus: None,
-            list_row: 0,
             extent: BodyExtent::default(),
             scroll: 0.0,
             reveal_focus: false,
-            scrolled: false,
         }
     }
 
@@ -437,18 +394,10 @@ impl Dialog {
             self.title = "Notice".into();
         }
         self.body = bounded_blocks(spec.body);
-        let (rows, omitted) = bounded_rows(spec.rows);
-        if omitted > 0 {
-            self.body
-                .push(DialogBlock::Text(format!("{omitted} more aren't shown.")));
-        }
-        self.rows = rows;
         self.buttons = bounded_buttons(spec.buttons);
         self.field = spec.field.map(bounded_field);
-        self.list_row = 0;
         self.scroll = 0.0;
         self.extent = BodyExtent::default();
-        self.scrolled = false;
         self.focus = Some(self.initial_focus());
         self.reveal_focus = true;
         self.animation.open();
@@ -506,10 +455,6 @@ impl Dialog {
         &self.body
     }
 
-    pub fn rows(&self) -> &[DialogRow] {
-        &self.rows
-    }
-
     pub fn buttons(&self) -> &[DialogButton] {
         &self.buttons
     }
@@ -526,14 +471,13 @@ impl Dialog {
         })
     }
 
-    /// Whether the current request has a button or row answering `id`.
+    /// Whether the current request has a button answering `id`.
     pub fn answers(&self, request_id: u64, id: &str) -> bool {
         self.is_awaiting(request_id)
-            && (self
+            && self
                 .buttons
                 .iter()
                 .any(|button| button.answer_id() == Some(id))
-                || self.rows.iter().any(|row| row.id == id))
     }
 
     pub fn focus(&self) -> Option<DialogFocus> {
@@ -549,9 +493,6 @@ impl Dialog {
         if !self.is_awaiting(request_id) || focus.is_some_and(|focus| !self.focusable(focus)) {
             return false;
         }
-        if let Some(DialogFocus::Row(row)) = focus {
-            self.list_row = row;
-        }
         self.focus = focus;
         self.reveal_focus = true;
         true
@@ -560,31 +501,23 @@ impl Dialog {
     fn focusable(&self, focus: DialogFocus) -> bool {
         match focus {
             DialogFocus::Field => self.field.is_some(),
-            DialogFocus::Row(row) => row < self.rows.len(),
             DialogFocus::Button(button) => button < self.buttons.len(),
         }
     }
 
-    /// Tab and Shift+Tab: the field, the list (one stop, at the row it was
-    /// left on), then each button, wrapping.
+    /// Tab and Shift+Tab: the field, then each button, wrapping.
     pub fn cycle_focus(&mut self, request_id: u64, backwards: bool) -> bool {
         if !self.is_awaiting(request_id) {
             return false;
         }
-        let mut stops = Vec::with_capacity(self.buttons.len() + 2);
+        let mut stops = Vec::with_capacity(self.buttons.len() + 1);
         if self.field.is_some() {
             stops.push(DialogFocus::Field);
         }
-        if !self.rows.is_empty() {
-            stops.push(DialogFocus::Row(self.list_row.min(self.rows.len() - 1)));
-        }
         stops.extend((0..self.buttons.len()).map(DialogFocus::Button));
-        let current = self.focus().and_then(|focus| {
-            stops.iter().position(|stop| match (stop, focus) {
-                (DialogFocus::Row(_), DialogFocus::Row(_)) => true,
-                (stop, focus) => *stop == focus,
-            })
-        });
+        let current = self
+            .focus()
+            .and_then(|focus| stops.iter().position(|stop| *stop == focus));
         let next = match (current, backwards) {
             (Some(index), true) => (index + stops.len() - 1) % stops.len(),
             (Some(index), false) => (index + 1) % stops.len(),
@@ -608,37 +541,8 @@ impl Dialog {
         next != button && self.set_focus(request_id, Some(DialogFocus::Button(next)))
     }
 
-    /// Whether focus is in the list.
-    pub fn list_focused(&self) -> bool {
-        matches!(self.focus(), Some(DialogFocus::Row(_)))
-    }
-
-    /// Up and Down (and Page Up/Down by `delta` rows) within the list,
-    /// stopping at either end.
-    pub fn move_row(&mut self, request_id: u64, delta: isize) -> bool {
-        let Some(DialogFocus::Row(row)) = self.focus() else {
-            return false;
-        };
-        let last = self.rows.len().saturating_sub(1);
-        let next = row.saturating_add_signed(delta).min(last);
-        next != row && self.set_focus(request_id, Some(DialogFocus::Row(next)))
-    }
-
-    /// Home and End in the list.
-    pub fn row_edge(&mut self, request_id: u64, last: bool) -> bool {
-        if !self.list_focused() {
-            return false;
-        }
-        let row = if last {
-            self.rows.len().saturating_sub(1)
-        } else {
-            0
-        };
-        self.set_focus(request_id, Some(DialogFocus::Row(row)))
-    }
-
-    /// Enter: the focused button or row; in the field, the Suggested
-    /// button. With nothing focused, nothing.
+    /// Enter: the focused button; in the field, the Suggested button. With
+    /// nothing focused, nothing.
     pub fn activate_focused(&self, request_id: u64) -> DialogAction {
         if !self.is_awaiting(request_id) {
             return DialogAction::None;
@@ -651,7 +555,6 @@ impl Dialog {
                 .map_or(DialogAction::None, |button| {
                     self.activate_button(request_id, button)
                 }),
-            Some(DialogFocus::Row(row)) => self.activate_row(request_id, row),
             Some(DialogFocus::Button(button)) => self.activate_button(request_id, button),
             None => DialogAction::None,
         }
@@ -686,16 +589,6 @@ impl Dialog {
             ButtonAction::Close => DialogAction::Close { request_id },
             ButtonAction::CopyDetails => DialogAction::Copy { request_id },
         }
-    }
-
-    pub fn activate_row(&self, request_id: u64, row: usize) -> DialogAction {
-        self.rows
-            .get(row)
-            .filter(|_| self.is_awaiting(request_id))
-            .map_or(DialogAction::None, |row| DialogAction::Answer {
-                request_id,
-                id: row.id.clone(),
-            })
     }
 
     pub fn field(&self, request_id: u64) -> Option<DialogFieldView> {
@@ -754,9 +647,7 @@ impl Dialog {
         })
     }
 
-    /// Scroll the body for the current request; whether anything moved. A
-    /// row scrolled out of view loses focus at the next measure, so Enter
-    /// cannot act on something no longer shown.
+    /// Scroll the body for the current request; whether anything moved.
     pub fn scroll(&mut self, request_id: u64, by: DialogScroll) -> bool {
         if !self.is_awaiting(request_id) {
             return false;
@@ -774,7 +665,6 @@ impl Dialog {
             return false;
         }
         self.scroll = target;
-        self.scrolled = true;
         true
     }
 
@@ -788,9 +678,9 @@ impl Dialog {
     }
 
     /// Take the body's measure from the layout just drawn: clamp the scroll
-    /// to it, scroll focus moved by keyboard into view, and drop focus from
-    /// a row the person scrolled away from. `span` gives where a focus sits
-    /// in the body, top and bottom, when it sits there at all.
+    /// to it and scroll focus moved by keyboard into view. `span` gives
+    /// where a focus sits in the body, top and bottom, when it sits there at
+    /// all.
     pub fn sync_body(
         &mut self,
         extent: BodyExtent,
@@ -798,24 +688,17 @@ impl Dialog {
     ) {
         self.extent = extent;
         let max = extent.max_offset();
-        let focused = self.focus().and_then(|focus| Some((focus, span(focus)?)));
         if self.reveal_focus
-            && let Some((_, (top, bottom))) = focused
+            && let Some((top, bottom)) = self.focus().and_then(&span)
         {
             if top < self.scroll {
                 self.scroll = top;
             } else if bottom > self.scroll + extent.viewport {
                 self.scroll = bottom - extent.viewport;
             }
-        } else if self.scrolled
-            && let Some((DialogFocus::Row(_), (top, bottom))) = focused
-            && (top < self.scroll || bottom > self.scroll + extent.viewport)
-        {
-            self.focus = None;
         }
         self.scroll = self.scroll.clamp(0.0, max).round();
         self.reveal_focus = false;
-        self.scrolled = false;
     }
 
     pub fn is_active(&self) -> bool {
@@ -839,7 +722,6 @@ impl Dialog {
         if !self.animation.is_active() && !self.animation.is_visible() {
             self.title.clear();
             self.body.clear();
-            self.rows.clear();
             self.buttons.clear();
             self.field = None;
             self.scroll = 0.0;
@@ -874,32 +756,6 @@ fn bounded_blocks(blocks: Vec<DialogBlock>) -> Vec<DialogBlock> {
         })
         .filter(|block| !block.content().is_empty())
         .collect()
-}
-
-/// The rows a dialog keeps, unique by id and with something to show, and
-/// how many past [`MAX_ROWS`] it leaves out.
-fn bounded_rows(rows: Vec<DialogRow>) -> (Vec<DialogRow>, usize) {
-    let mut kept: Vec<DialogRow> = Vec::new();
-    let mut omitted = 0;
-    for row in rows {
-        let row = DialogRow {
-            id: crate::safe_text::display_line(&row.id, 256, 1),
-            label: crate::safe_text::display_line(&row.label, 512, 1),
-            detail: row
-                .detail
-                .map(|detail| crate::safe_text::display_line(&detail, 256, 1))
-                .filter(|detail| !detail.is_empty()),
-        };
-        if row.id.is_empty() || row.label.is_empty() || kept.iter().any(|kept| kept.id == row.id) {
-            continue;
-        }
-        if kept.len() == MAX_ROWS {
-            omitted += 1;
-            continue;
-        }
-        kept.push(row);
-    }
-    (kept, omitted)
 }
 
 /// At most [`MAX_BUTTONS`] labelled buttons answering distinct ids, and
@@ -945,25 +801,16 @@ fn bounded_field(field: FieldSpec) -> DialogField {
 mod tests {
     use super::*;
 
-    fn rows(count: usize) -> Vec<DialogRow> {
-        (0..count)
-            .map(|index| DialogRow::new(format!("row:{index}"), format!("Row {index}")))
-            .collect()
-    }
-
-    /// A body of `rows` 10-pixel lines in a 30-pixel viewport, rows at
-    /// their own line.
-    fn sync(dialog: &mut Dialog, rows: usize) {
+    /// A body of `lines` 10-pixel lines in a 30-pixel viewport, its field
+    /// on the seventh.
+    fn sync(dialog: &mut Dialog, lines: usize) {
         dialog.sync_body(
             BodyExtent {
                 viewport: 30.0,
-                content: rows as f32 * 10.0,
+                content: lines as f32 * 10.0,
                 line: 10.0,
             },
-            |focus| match focus {
-                DialogFocus::Row(row) => Some((row as f32 * 10.0, row as f32 * 10.0 + 10.0)),
-                _ => None,
-            },
+            |focus| (focus == DialogFocus::Field).then_some((60.0, 70.0)),
         );
     }
 
@@ -1008,6 +855,9 @@ mod tests {
             "Save",
         );
         assert!(prompt.field.is_some() && prompt.kind.is_wide() && !prompt.kind.is_alert());
+        let report = DialogSpec::report("Which font draws it", vec![DialogBlock::value("U+0041")]);
+        assert!(report.kind.is_wide() && !report.kind.is_alert());
+        assert!(report.buttons.is_empty(), "its buttons are added after");
         assert_eq!(prompt.buttons[1].role, ButtonRole::Suggested);
         assert_eq!(
             DialogSpec::confirm("?", vec![], "go", "Go", ButtonRole::Suggested)
@@ -1056,57 +906,37 @@ mod tests {
         assert_eq!(dialog.focus(), Some(DialogFocus::Button(1)), "Close");
 
         dialog.show(
-            DialogSpec::list("Pick", vec![], rows(3)).button(DialogButton::answer(
-                "back",
-                "Back",
-                ButtonRole::Neutral,
-            )),
+            DialogSpec::report("Report", vec![])
+                .button(DialogButton::answer("again", "Again", ButtonRole::Neutral))
+                .button(DialogButton::answer("next", "Next", ButtonRole::Neutral)),
         );
         assert_eq!(dialog.focus(), Some(DialogFocus::Button(0)), "the first");
     }
 
     #[test]
-    fn tab_visits_field_list_and_buttons_and_arrows_stay_in_their_group() {
+    fn tab_visits_the_field_and_buttons_and_arrows_stay_on_the_buttons() {
         let mut dialog = Dialog::new();
-        let mut spec = DialogSpec::list("Pick", vec![], rows(5))
-            .button(DialogButton::cancel())
-            .button(DialogButton::answer("add", "Add", ButtonRole::Suggested));
-        spec.field = Some(FieldSpec::new("Filter", "", 16));
-        let request = dialog.show(spec);
+        let request = dialog.show(DialogSpec::prompt(
+            "Name?",
+            vec![],
+            FieldSpec::new("Name", "", 16),
+            "add",
+            "Add",
+        ));
         assert_eq!(dialog.focus(), Some(DialogFocus::Field));
         let mut visited = Vec::new();
-        for _ in 0..4 {
+        for _ in 0..3 {
             assert!(dialog.cycle_focus(request, false));
             visited.push(dialog.focus().unwrap());
         }
         assert_eq!(
             visited,
             [
-                DialogFocus::Row(0),
                 DialogFocus::Button(0),
                 DialogFocus::Button(1),
                 DialogFocus::Field
             ]
         );
-
-        // Up and Down move within the list; Tab leaves it and comes back to
-        // the row it left.
-        dialog.cycle_focus(request, false);
-        assert!(dialog.move_row(request, 3));
-        assert_eq!(dialog.focus(), Some(DialogFocus::Row(3)));
-        assert!(
-            dialog.move_row(request, 9),
-            "a page past the end stops at it"
-        );
-        assert_eq!(dialog.focus(), Some(DialogFocus::Row(4)));
-        assert!(!dialog.move_row(request, 1), "the end of the list");
-        assert!(dialog.row_edge(request, false));
-        assert_eq!(dialog.focus(), Some(DialogFocus::Row(0)));
-        assert!(dialog.move_row(request, 2));
-        dialog.cycle_focus(request, false);
-        assert_eq!(dialog.focus(), Some(DialogFocus::Button(0)));
-        dialog.cycle_focus(request, true);
-        assert_eq!(dialog.focus(), Some(DialogFocus::Row(2)));
 
         // Left and Right move between buttons and stop at the ends.
         assert!(!dialog.step_button(request, true), "not on a button");
@@ -1177,23 +1007,22 @@ mod tests {
             Some("Failed\n\nDisk full")
         );
 
-        let request = dialog.show(DialogSpec::list("Pick", vec![], rows(2)));
+        // A report with no Cancel closes on Escape.
+        let request = dialog.show(
+            DialogSpec::report("Report", vec![]).button(DialogButton::answer(
+                "again",
+                "Again",
+                ButtonRole::Neutral,
+            )),
+        );
         assert_eq!(
             dialog.escape(request),
             DialogAction::Close {
                 request_id: request
             }
         );
-        dialog.set_focus(request, Some(DialogFocus::Row(1)));
-        assert_eq!(
-            dialog.activate_focused(request),
-            DialogAction::Answer {
-                request_id: request,
-                id: "row:1".into()
-            }
-        );
-        assert!(dialog.answers(request, "row:0"));
-        assert!(!dialog.answers(request, "row:2"));
+        assert!(dialog.answers(request, "again"));
+        assert!(!dialog.answers(request, "other"));
     }
 
     #[test]
@@ -1274,8 +1103,14 @@ mod tests {
     #[test]
     fn scrolling_clamps_to_the_body_and_reveals_keyboard_focus() {
         let mut dialog = Dialog::new();
-        let request =
-            dialog.show(DialogSpec::list("Pick", vec![], rows(10)).button(DialogButton::cancel()));
+        let request = dialog.show(DialogSpec::prompt(
+            "Name?",
+            vec![],
+            FieldSpec::new("Name", "", 16),
+            "save",
+            "Save",
+        ));
+        dialog.set_focus(request, Some(DialogFocus::Button(0)));
         sync(&mut dialog, 10);
         assert!(dialog.scroll(request, DialogScroll::Lines(100)));
         assert_eq!(dialog.scroll_offset(), 70.0);
@@ -1284,20 +1119,19 @@ mod tests {
         assert_eq!(dialog.scroll_offset(), 50.0);
         assert!(dialog.scroll(request, DialogScroll::Top));
 
-        // Keyboard focus on a row out of view scrolls just enough to show it.
-        dialog.set_focus(request, Some(DialogFocus::Row(6)));
+        // Keyboard focus on the field out of view scrolls just enough to
+        // show it.
+        dialog.set_focus(request, Some(DialogFocus::Field));
         sync(&mut dialog, 10);
         assert_eq!(dialog.scroll_offset(), 40.0);
-        dialog.move_row(request, -4);
+        // Typing into it after scrolling away brings it back.
+        dialog.scroll(request, DialogScroll::Bottom);
         sync(&mut dialog, 10);
-        assert_eq!(dialog.scroll_offset(), 20.0);
-
-        // Scrolling a focused row out of view drops its focus, so Enter
-        // cannot answer something no longer shown.
-        dialog.scroll(request, DialogScroll::Lines(3));
+        assert!(dialog.insert_field_text(request, "a"));
+        dialog.scroll(request, DialogScroll::Top);
+        assert!(dialog.insert_field_text(request, "b"));
         sync(&mut dialog, 10);
-        assert_eq!(dialog.focus(), None);
-        assert_eq!(dialog.activate_focused(request), DialogAction::None);
+        assert_eq!(dialog.scroll_offset(), 40.0);
 
         // A body that shrinks keeps the scroll inside it.
         dialog.scroll(request, DialogScroll::Bottom);
@@ -1310,18 +1144,13 @@ mod tests {
     #[test]
     fn content_is_bounded_and_a_dialog_always_has_a_way_out() {
         let mut dialog = Dialog::new();
-        let mut spec = DialogSpec::list(
+        let spec = DialogSpec::report(
             "x".repeat(1_000),
             vec![DialogBlock::text("line\n".repeat(MAX_BLOCK_LINES + 10)); MAX_BLOCKS + 5],
-            rows(MAX_ROWS + 3),
         );
-        spec.rows.push(DialogRow::new("row:0", "Duplicate"));
-        spec.rows.push(DialogRow::new("", "No id"));
         let request = dialog.show(spec);
         assert!(dialog.title().chars().count() <= MAX_TITLE_CHARS);
-        assert_eq!(dialog.rows().len(), MAX_ROWS);
-        // The rows left out are said to be, after the bounded blocks.
-        assert_eq!(dialog.body().len(), MAX_BLOCKS + 1);
+        assert_eq!(dialog.body().len(), MAX_BLOCKS);
         assert!(dialog.body()[0].content().lines().count() <= MAX_BLOCK_LINES + 1);
         assert_eq!(dialog.buttons(), [DialogButton::close()]);
         assert_eq!(

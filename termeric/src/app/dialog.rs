@@ -13,8 +13,7 @@ use winit::keyboard::{Key, NamedKey};
 impl App {
     /// The dialog's geometry, shared by drawing, pointer hits, the IME
     /// caret, and accessibility. Measuring it also tells the dialog how far
-    /// its body scrolls, so keyboard focus scrolls into view and a row
-    /// scrolled away from loses focus.
+    /// its body scrolls, so keyboard focus scrolls into view.
     pub(super) fn dialog_layout(&mut self) -> Option<DialogLayout> {
         let metrics = self.ui_metrics();
         let scale = self
@@ -92,7 +91,7 @@ impl App {
             Key::Named(NamedKey::Enter) if repeat => DialogAction::None,
             Key::Named(NamedKey::Enter) => self.dialog.activate_focused(request_id),
             _ if self.dialog.field_focused() => self.dialog_field_key(key, request_id),
-            // Space presses the focused button or row, as Enter does.
+            // Space presses the focused button, as Enter does.
             Key::Named(NamedKey::Space) if !repeat => self.dialog.activate_focused(request_id),
             Key::Named(direction @ (NamedKey::ArrowLeft | NamedKey::ArrowRight)) => {
                 self.dialog
@@ -100,55 +99,23 @@ impl App {
                 DialogAction::None
             }
             Key::Named(direction @ (NamedKey::ArrowUp | NamedKey::ArrowDown)) => {
-                let delta = if *direction == NamedKey::ArrowUp {
+                scroll(DialogScroll::Lines(if *direction == NamedKey::ArrowUp {
                     -1
                 } else {
                     1
-                };
-                if self.dialog.list_focused() {
-                    self.dialog.move_row(request_id, delta);
-                    DialogAction::None
-                } else {
-                    scroll(DialogScroll::Lines(delta))
-                }
+                }))
             }
             Key::Named(direction @ (NamedKey::PageUp | NamedKey::PageDown)) => {
-                let sign = if *direction == NamedKey::PageUp {
+                scroll(DialogScroll::Pages(if *direction == NamedKey::PageUp {
                     -1
                 } else {
                     1
-                };
-                if self.dialog.list_focused() {
-                    let rows = self.dialog_rows_in_view();
-                    self.dialog.move_row(request_id, sign * rows);
-                    DialogAction::None
-                } else {
-                    scroll(DialogScroll::Pages(sign))
-                }
+                }))
             }
-            Key::Named(edge @ (NamedKey::Home | NamedKey::End)) => {
-                let end = *edge == NamedKey::End;
-                if self.dialog.list_focused() && !self.modifiers.control_key() {
-                    self.dialog.row_edge(request_id, end);
-                    DialogAction::None
-                } else {
-                    scroll(if end {
-                        DialogScroll::Bottom
-                    } else {
-                        DialogScroll::Top
-                    })
-                }
-            }
+            Key::Named(NamedKey::Home) => scroll(DialogScroll::Top),
+            Key::Named(NamedKey::End) => scroll(DialogScroll::Bottom),
             _ => DialogAction::None,
         }
-    }
-
-    /// How many list rows the body shows at once: a Page Up or Down in the
-    /// list.
-    fn dialog_rows_in_view(&mut self) -> isize {
-        self.dialog_layout().map_or(1, |layout| {
-            ((layout.body.height / layout.row_height).floor() as isize).max(1)
-        })
     }
 
     /// A key while the field is focused: editing, typing, and paging the
@@ -188,7 +155,7 @@ impl App {
     }
 
     /// A primary or middle press on the dialog. The primary button works
-    /// its buttons, rows, and field. The middle button on the field focuses
+    /// its buttons and field. The middle button on the field focuses
     /// it at the press and pastes the primary selection there, as on every
     /// other field; anywhere else it does nothing.
     pub(super) fn press_dialog(&mut self, button: winit::event::MouseButton, x: f32, y: f32) {
@@ -204,11 +171,6 @@ impl App {
                 self.dialog
                     .set_focus(request_id, Some(DialogFocus::Button(index)));
                 self.dialog.activate_button(request_id, index)
-            }
-            Some(DialogHit::Row(index)) if primary => {
-                self.dialog
-                    .set_focus(request_id, Some(DialogFocus::Row(index)));
-                self.dialog.activate_row(request_id, index)
             }
             Some(DialogHit::Field) if matches!(button, MouseButton::Left | MouseButton::Middle) => {
                 if self.dialog.set_focus(request_id, Some(DialogFocus::Field))
@@ -249,7 +211,7 @@ impl App {
                     || self.handle_font_feature_choice(request_id, &id)
                     || self.handle_font_range_choice(request_id, &id)
                     || self.handle_font_coverage_choice(request_id, &id)
-                    || self.handle_runtime_plugin_manager_choice(request_id, &id)
+                    || self.handle_plugin_choice(request_id, &id)
                     || self.handle_agent_hook_choice(request_id, &id)
                     || self.handle_revert_choice(request_id, &id)
                     || self.handle_config_reset_choice(request_id, &id)
@@ -281,7 +243,7 @@ impl App {
 
 #[cfg(test)]
 impl App {
-    /// Answer the open dialog with `id`, as its button or row would.
+    /// Answer the open dialog with `id`, as its button would.
     pub(super) fn answer_dialog(&mut self, id: &str) {
         let request_id = self.dialog.request_id();
         assert!(
@@ -306,22 +268,13 @@ impl App {
         self.apply_dialog_action(action);
     }
 
-    /// Everything the open dialog says: its heading, body, field error, and
-    /// rows.
+    /// Everything the open dialog says: its heading, body, and field error.
     pub(super) fn dialog_text(&self) -> String {
         let request_id = self.dialog.request_id();
         let mut text = self.dialog.copy_text(request_id).unwrap_or_default();
         if let Some(error) = self.dialog.field(request_id).and_then(|field| field.error) {
             text.push_str("\n\n");
             text.push_str(&error);
-        }
-        for row in self.dialog.rows() {
-            text.push('\n');
-            text.push_str(&row.label);
-            if let Some(detail) = &row.detail {
-                text.push(' ');
-                text.push_str(detail);
-            }
         }
         text
     }

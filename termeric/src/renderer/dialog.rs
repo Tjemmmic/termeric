@@ -12,9 +12,6 @@ use crate::ui::constants::{BORDER_WIDTH, BUTTON_CORNER_RADIUS};
 use crate::ui::dialog::{DialogBlock, DialogFocus, DialogHit};
 use crate::ui::text_layout::UiFace;
 
-/// How much of a row the detail on its right may take.
-const ROW_DETAIL_SHARE: f32 = 0.4;
-
 impl Renderer {
     pub(super) fn build_dialog(
         &mut self,
@@ -57,7 +54,6 @@ impl Renderer {
         let outer_clip = self.rect_pipeline.set_clip(Some(clip));
         self.build_dialog_blocks(info, clip);
         self.build_dialog_field(info, focus, clip);
-        self.build_dialog_rows(info, hovered, focus, clip);
         self.rect_pipeline.set_clip(outer_clip);
 
         if let Some(track) = layout.scrollbar {
@@ -205,82 +201,6 @@ impl Renderer {
                 |_| (UiFace::SANS, color),
                 Some(clip),
             );
-        }
-    }
-
-    /// The interim list: each row's label, its dim detail on the right, a
-    /// tint under the pointer, and the selection with its focus ring.
-    fn build_dialog_rows(
-        &mut self,
-        info: &DialogInfo,
-        hovered: Option<DialogHit>,
-        focus: Option<DialogFocus>,
-        clip: TextClip,
-    ) {
-        let layout = &info.layout;
-        let anim = info.animation;
-        let size = self.ui_label_px();
-        let inset = layout.control_inset;
-        let radius = self.px(BUTTON_CORNER_RADIUS);
-        for (index, row) in info.rows.iter().enumerate() {
-            let Some(bounds) = layout.row(index, info.scroll) else {
-                continue;
-            };
-            if layout.visible(bounds).is_none() {
-                continue;
-            }
-            let focused = focus == Some(DialogFocus::Row(index));
-            let surface = if focused {
-                Some(self.ui.menu_highlight)
-            } else if hovered == Some(DialogHit::Row(index)) {
-                Some(scale_alpha(self.ui.menu_highlight, 0.6))
-            } else {
-                None
-            };
-            if let Some(surface) = surface {
-                self.rect_pipeline.push_rounded_rect(
-                    bounds.x,
-                    bounds.y,
-                    bounds.width,
-                    bounds.height,
-                    scale_alpha(surface, anim),
-                    radius,
-                );
-            }
-            let mut label_right = bounds.right() - inset;
-            if let Some(detail) = &row.detail {
-                let room = bounds.width * ROW_DETAIL_SHARE;
-                let width = self.fit_ui_label(detail, room, size).1;
-                let x = bounds.right() - inset - width;
-                self.push_ui_label_clipped(
-                    detail,
-                    x,
-                    bounds.y,
-                    bounds.height,
-                    room,
-                    size,
-                    scale_alpha(self.ui.menu_text_dim, anim),
-                    clip,
-                );
-                label_right = x - inset;
-            }
-            self.push_ui_label_clipped(
-                &row.label,
-                bounds.x + inset,
-                bounds.y,
-                bounds.height,
-                label_right - bounds.x - inset,
-                size,
-                scale_alpha(self.ui.palette_text, anim),
-                clip,
-            );
-            if focused {
-                self.draw_focus_ring(
-                    bounds,
-                    with_alpha(self.ui.focus_ring, anim),
-                    BUTTON_CORNER_RADIUS,
-                );
-            }
         }
     }
 }

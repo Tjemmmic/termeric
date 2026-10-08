@@ -1,5 +1,5 @@
 //! A dialog's geometry, on whole physical pixels: the card, the heading,
-//! the scrolled body (blocks, field, and list rows), and the right-aligned
+//! the scrolled body (blocks and field), and the right-aligned
 //! button row. Drawing, hit tests, hover, the IME caret, scrolling, and
 //! accessibility bounds all read the one [`DialogLayout`].
 //!
@@ -37,7 +37,6 @@ const FIELD_LABEL_GAP: f32 = 6.0;
 const FIELD_HEIGHT: f32 = 32.0;
 const FIELD_TEXT_INSET: f32 = 10.0;
 const FIELD_ERROR_GAP: f32 = 6.0;
-const ROW_HEIGHT: f32 = 30.0;
 const BUTTON_HEIGHT: f32 = 32.0;
 const BUTTON_MIN_WIDTH: f32 = 88.0;
 const BUTTON_PADDING: f32 = 16.0;
@@ -92,7 +91,6 @@ pub struct FieldLayout {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DialogHit {
     Button(usize),
-    Row(usize),
     Field,
     /// The body, between its controls.
     Body,
@@ -115,10 +113,6 @@ pub struct DialogLayout {
     pub content_height: f32,
     pub blocks: Vec<BlockLayout>,
     pub field: Option<FieldLayout>,
-    /// Top of the first list row in the body's content.
-    pub rows_top: f32,
-    pub row_height: f32,
-    pub row_count: usize,
     pub buttons: Vec<Bounds>,
     /// The scrollbar's track, while the body scrolls.
     pub scrollbar: Option<Bounds>,
@@ -135,7 +129,6 @@ pub struct DialogLayout {
 struct Body {
     blocks: Vec<BlockLayout>,
     field: Option<FieldLayout>,
-    rows_top: f32,
     height: f32,
 }
 
@@ -177,8 +170,7 @@ impl DialogLayout {
         );
         let heading_height = heading.height.ceil().max(heading_size.line_px);
 
-        let has_body =
-            !dialog.body().is_empty() || dialog.field.is_some() || !dialog.rows().is_empty();
+        let has_body = !dialog.body().is_empty() || dialog.field.is_some();
         let sizes = BodySizes {
             body: body_size,
             value: value_size,
@@ -244,9 +236,6 @@ impl DialogLayout {
             content_height: body.height,
             blocks: body.blocks,
             field: body.field,
-            rows_top: body.rows_top,
-            row_height: px(ROW_HEIGHT),
-            row_count: dialog.rows().len(),
             buttons,
             scrollbar,
             heading_size,
@@ -275,10 +264,6 @@ impl DialogLayout {
                 .field
                 .as_ref()
                 .map(|field| (field.label_top, field.box_top + field.box_height)),
-            DialogFocus::Row(row) => (row < self.row_count).then(|| {
-                let top = self.rows_top + row as f32 * self.row_height;
-                (top, top + self.row_height)
-            }),
             DialogFocus::Button(_) => None,
         }
     }
@@ -320,16 +305,6 @@ impl DialogLayout {
         Some((self.on_screen(*top, text.height.ceil(), offset), text))
     }
 
-    pub fn row(&self, index: usize, offset: f32) -> Option<Bounds> {
-        (index < self.row_count).then(|| {
-            self.on_screen(
-                self.rows_top + index as f32 * self.row_height,
-                self.row_height,
-                offset,
-            )
-        })
-    }
-
     /// What the point (`x`, `y`) lands on with the body scrolled by
     /// `offset`. Every region is half-open, so a pixel on the edge between
     /// two belongs to one.
@@ -343,16 +318,6 @@ impl DialogLayout {
                 .is_some_and(|field| field.contains(x, y))
             {
                 return Some(DialogHit::Field);
-            }
-            let first = self.body.y + self.rows_top - offset;
-            if self.row_count > 0 && y >= first && x < self.body.x + self.content_width {
-                let row = ((y - first) / self.row_height).floor() as usize;
-                if self
-                    .row(row, offset)
-                    .is_some_and(|bounds| bounds.contains(x, y))
-                {
-                    return Some(DialogHit::Row(row));
-                }
             }
             return Some(DialogHit::Body);
         }
@@ -472,16 +437,9 @@ fn lay_out_body(
         }
     });
 
-    let rows = dialog.rows().len();
-    let rows_top = if rows > 0 {
-        place(rows as f32 * px(ROW_HEIGHT))
-    } else {
-        top
-    };
     Body {
         blocks,
         field,
-        rows_top,
         height: top,
     }
 }
@@ -529,7 +487,7 @@ fn lay_out_buttons(
 
 #[cfg(test)]
 mod tests {
-    use super::super::{ButtonRole, DialogButton, DialogRow, DialogSpec, FieldSpec};
+    use super::super::{ButtonRole, DialogButton, DialogSpec, FieldSpec};
     use super::*;
     use crate::ui::text_layout::FixedMeasure;
 
@@ -671,14 +629,13 @@ mod tests {
 
     #[test]
     fn only_the_body_scrolls_and_hits_follow_what_is_drawn() {
-        let spec = DialogSpec::list(
-            "Pick a plugin",
-            vec![super::super::DialogBlock::text("Installed plugins.")],
-            (0..60)
-                .map(|index| DialogRow::new(format!("row:{index}"), format!("Row {index}")))
+        let spec = DialogSpec::report(
+            "Which font draws it",
+            (0..40)
+                .map(|index| super::super::DialogBlock::value(format!("U+{index:04X}")))
                 .collect(),
         )
-        .button(DialogButton::cancel());
+        .button(DialogButton::close());
         let (_, layout) = lay_out(spec, metrics(1.0));
         assert!(layout.content_height > layout.body.height);
         let track = layout.scrollbar.expect("the body scrolls");
@@ -696,32 +653,17 @@ mod tests {
                 layout.hit(heading[0], heading[1], offset),
                 Some(DialogHit::Card)
             );
-            // A row answers exactly where it is drawn, and only inside the
-            // viewport.
-            for row in 0..60 {
-                let bounds = layout.row(row, offset).unwrap();
-                let x = bounds.x + 1.0;
-                match layout.visible(bounds) {
-                    Some(visible) => {
-                        assert_eq!(layout.hit(x, visible.y, offset), Some(DialogHit::Row(row)));
-                        assert_eq!(
-                            layout.hit(x, visible.bottom() - 0.01, offset),
-                            Some(DialogHit::Row(row))
-                        );
-                    }
-                    None => assert_ne!(
-                        layout.hit(x, bounds.center()[1], offset),
-                        Some(DialogHit::Row(row))
-                    ),
+            // A block scrolled under the heading is not hit there.
+            for index in 0..40 {
+                let block = layout.block(index, offset).unwrap();
+                if layout.visible(block).is_none() {
+                    assert_ne!(
+                        layout.hit(block.x + 1.0, block.center()[1], offset),
+                        Some(DialogHit::Body)
+                    );
                 }
             }
         }
-        // The pixel between two rows belongs to the lower one.
-        let second = layout.row(1, 0.0).unwrap();
-        assert_eq!(
-            layout.hit(second.x + 1.0, second.y, 0.0),
-            Some(DialogHit::Row(1))
-        );
         // Half-open buttons: the right edge is outside.
         assert_ne!(
             layout.hit(button.right(), button.y + 1.0, 0.0),

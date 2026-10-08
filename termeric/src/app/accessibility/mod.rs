@@ -92,7 +92,6 @@ const GUARDRAIL_CONTEXT: NodeId = NodeId(83);
 const DIALOG: NodeId = NodeId(90);
 const DIALOG_HEADING: NodeId = NodeId(91);
 const DIALOG_BODY: NodeId = NodeId(92);
-const DIALOG_LIST: NodeId = NodeId(93);
 const DIFF_DIALOG: NodeId = NodeId(100);
 const DIFF_TITLE: NodeId = NodeId(101);
 const DIFF_STATUS: NodeId = NodeId(102);
@@ -165,6 +164,11 @@ enum SettingsSemanticTarget {
         label: String,
         value: String,
     },
+    /// The On/Off switch of a switched row.
+    Switch {
+        section: crate::ui::settings::SettingsSection,
+        label: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -203,7 +207,6 @@ enum GuardrailSemanticTarget {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum DialogSemanticTarget {
     Field(u64),
-    Row { request_id: u64, id: String },
     Button { request_id: u64, index: usize },
 }
 
@@ -475,8 +478,7 @@ impl AccessibilityState {
     }
 
     fn is_dialog_node(&self, node: NodeId) -> bool {
-        matches!(node, DIALOG | DIALOG_HEADING | DIALOG_BODY | DIALOG_LIST)
-            || self.dialog.contains(node)
+        matches!(node, DIALOG | DIALOG_HEADING | DIALOG_BODY) || self.dialog.contains(node)
     }
 
     fn is_diff_node(&self, node: NodeId) -> bool {

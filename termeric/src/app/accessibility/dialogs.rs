@@ -219,23 +219,17 @@ impl App {
             None => request_id,
             Some(
                 DialogSemanticTarget::Field(request_id)
-                | DialogSemanticTarget::Row { request_id, .. }
                 | DialogSemanticTarget::Button { request_id, .. },
             ) => *request_id,
         };
         if !self.dialog.is_awaiting(target_request) {
             return;
         }
-        let row_index =
-            |app: &Self, id: &str| app.dialog.rows().iter().position(|row| row.id == id);
         let action = match (request.action, target) {
             (Action::Focus, target) => {
                 let focus = match target {
                     None => None,
                     Some(DialogSemanticTarget::Field(_)) => Some(DialogFocus::Field),
-                    Some(DialogSemanticTarget::Row { id, .. }) => {
-                        row_index(self, &id).map(DialogFocus::Row)
-                    }
                     Some(DialogSemanticTarget::Button { index, .. }) => {
                         Some(DialogFocus::Button(index))
                     }
@@ -248,10 +242,6 @@ impl App {
             (Action::Click, Some(DialogSemanticTarget::Button { index, .. })) => {
                 self.dialog.activate_button(request_id, index)
             }
-            (Action::Click, Some(DialogSemanticTarget::Row { id, .. })) => row_index(self, &id)
-                .map_or(DialogAction::None, |row| {
-                    self.dialog.activate_row(request_id, row)
-                }),
             (Action::SetValue, Some(DialogSemanticTarget::Field(_))) => {
                 let Some(ActionData::Value(value)) = request.data.as_ref() else {
                     return;
@@ -277,7 +267,7 @@ impl App {
 
     /// The dialog's nodes: an alert dialog for confirmations and errors and
     /// a dialog otherwise, labelled by its heading and described by its
-    /// body, with its field, list rows, and buttons, all bounded by the
+    /// body, with its field and buttons, all bounded by the
     /// layout it is drawn with.
     pub(super) fn dialog_accessibility_snapshot(&mut self) -> ModalSnapshot {
         use crate::ui::dialog::{ButtonRole, DialogFocus};
@@ -287,37 +277,27 @@ impl App {
         let awaiting = self.dialog.is_awaiting_current();
         let offset = self.dialog.scroll_offset();
         let field = self.dialog.field(request_id);
-        let rows = self.dialog.rows().to_vec();
         let buttons = self.dialog.buttons().to_vec();
 
         let field_target = DialogSemanticTarget::Field(request_id);
-        let row_target = |id: &str| DialogSemanticTarget::Row {
-            request_id,
-            id: id.to_owned(),
-        };
         let button_target = |index| DialogSemanticTarget::Button { request_id, index };
         let mut targets: HashSet<DialogSemanticTarget> =
             (0..buttons.len()).map(button_target).collect();
         if field.is_some() {
             targets.insert(field_target.clone());
         }
-        targets.extend(rows.iter().map(|row| row_target(&row.id)));
         self.accessibility
             .dialog
             .retain(|target| targets.contains(target));
         let field_id = field
             .is_some()
             .then(|| self.accessibility.dialog.node(&field_target));
-        let row_ids: Vec<NodeId> = rows
-            .iter()
-            .map(|row| self.accessibility.dialog.node(&row_target(&row.id)))
-            .collect();
         let button_ids: Vec<NodeId> = (0..buttons.len())
             .map(|index| self.accessibility.dialog.node(&button_target(index)))
             .collect();
 
         let bounds = |bounds: Option<crate::ui::geometry::Bounds>| bounds.map(bounds_rect);
-        let mut nodes = Vec::with_capacity(4 + rows.len() + buttons.len());
+        let mut nodes = Vec::with_capacity(4 + buttons.len());
         let title = self.dialog.title().to_owned();
         let description = self
             .dialog
@@ -356,47 +336,6 @@ impl App {
             nodes.push((field_id, node));
             body_children.push(field_id);
         }
-        if !rows.is_empty() {
-            let focused_row = match self.dialog.focus() {
-                Some(DialogFocus::Row(row)) => Some(row),
-                _ => None,
-            };
-            for (index, (row, node_id)) in rows.iter().zip(&row_ids).enumerate() {
-                let mut node = Node::new(Role::ListItem);
-                node.set_label(row.label.as_str());
-                if let Some(detail) = &row.detail {
-                    node.set_description(detail.as_str());
-                }
-                node.set_selected(focused_row == Some(index));
-                if let Some(rect) =
-                    bounds(layout.as_ref().and_then(|layout| layout.row(index, offset)))
-                {
-                    node.set_bounds(rect);
-                }
-                if awaiting {
-                    node.add_action(Action::Click);
-                    node.add_action(Action::Focus);
-                } else {
-                    node.set_disabled();
-                }
-                nodes.push((*node_id, node));
-            }
-            let mut list = Node::new(Role::ListBox);
-            list.set_label(title.clone());
-            if let Some(layout) = &layout {
-                let first = layout.rows_top - offset;
-                list.set_bounds(bounds_rect(crate::ui::geometry::Bounds::new(
-                    layout.body.x,
-                    layout.body.y + first,
-                    layout.content_width,
-                    layout.row_height * rows.len() as f32,
-                )));
-            }
-            list.set_children(row_ids.clone());
-            nodes.push((DIALOG_LIST, list));
-            body_children.push(DIALOG_LIST);
-        }
-
         let mut body = Node::new(Role::Document);
         body.set_label(title.clone());
         body.set_value(description.clone());
@@ -462,7 +401,6 @@ impl App {
         // Assistive focus follows the dialog's own focus.
         let model_focus = self.dialog.focus().and_then(|focus| match focus {
             DialogFocus::Field => field_id,
-            DialogFocus::Row(row) => row_ids.get(row).copied(),
             DialogFocus::Button(button) => button_ids.get(button).copied(),
         });
         let focus = model_focus.unwrap_or(if awaiting { DIALOG_BODY } else { DIALOG });

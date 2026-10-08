@@ -544,7 +544,6 @@ impl PluginRegistry {
 pub struct RuntimePluginProfileSummary {
     pub id: String,
     pub name: String,
-    pub description: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -764,7 +763,6 @@ fn discover_from_registry(
                         .map(|profile| RuntimePluginProfileSummary {
                             id: profile.id.clone(),
                             name: profile.name.clone(),
-                            description: profile.description.clone(),
                         })
                         .collect(),
                     configured_default_profile: installed.default_profile.clone(),

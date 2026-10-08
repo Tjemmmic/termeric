@@ -1,66 +1,74 @@
-//! Request-scoped in-app management for installed declarative plugins.
+//! Installed third-party plugins, managed on the Plugins page of Settings:
+//! the registry operations its rows ask for, and the questions some of them
+//! ask first (the folder to install from, the install, update, and
+//! permission reviews, a setting's new value, Reset and Remove). Every
+//! question is its own dialog request, so an answer meant for an earlier
+//! one does nothing, and every review is refused by the registry when what
+//! it showed has changed since.
 
 use super::*;
 use crate::plugin::permission::{PluginPermission, PluginPermissions};
 use crate::plugin::runtime::{
     DeclarativeSetting, PluginAdminCommand, PluginConfigurationChange, PluginGrantsPreview,
-    PluginInstallPreview, PluginSettingValue, PluginUpdatePreview, RuntimePluginStatus,
-    preview_install,
+    PluginInstallPreview, PluginUpdatePreview, RuntimePluginStatus, preview_install,
 };
 use crate::ui::dialog::{
-    ButtonRole, CANCEL, DialogBlock, DialogButton, DialogRow, DialogSpec, FieldSpec,
-    MAX_FIELD_BYTES,
+    ButtonRole, CANCEL, DialogBlock, DialogButton, DialogSpec, FieldSpec, MAX_FIELD_BYTES,
 };
+use crate::ui::settings::{PluginAction, SettingsSubPage, setting_value_text};
 
 /// The answer that submits a prompt's field.
 const SAVE: &str = "save";
+const INSTALL_DISABLED: &str = "install-disabled";
+const INSTALL_ENABLED: &str = "install-enabled";
+const UPDATE_DISABLED: &str = "update-disabled";
+const UPDATE_ENABLED: &str = "update-enabled";
+/// Grant the one permission a review asks about.
+const GRANT: &str = "grant";
+/// Withhold a permission from a plugin that is on, which turns it off.
+const WITHHOLD: &str = "withhold";
+/// Grant every permission a plugin asks for and turn it on.
+const TURN_ON: &str = "turn-on";
+/// A setting prompt's "Use default".
+const UNSET: &str = "unset";
+/// Reset or Remove, confirmed.
+const CONFIRM: &str = "confirm";
 
+/// A plugin question awaiting its answer.
 #[derive(Debug, Clone)]
-pub(super) struct PendingRuntimePluginManagement {
+pub(super) struct PendingPluginQuestion {
     request_id: u64,
-    view: RuntimePluginManagerView,
+    question: PluginQuestion,
 }
 
 #[derive(Debug, Clone)]
-enum RuntimePluginManagerView {
-    List,
+enum PluginQuestion {
+    /// The folder of a plugin to install.
     InstallPath,
-    ReviewInstall {
-        preview: crate::plugin::runtime::PluginInstallPreview,
-        grants: crate::plugin::permission::PluginPermissions,
+    ReviewInstall(PluginInstallPreview),
+    ReviewUpdate(Box<PluginUpdatePreview>),
+    /// Grant `permission`, which the plugin requests.
+    Grant {
+        preview: Box<PluginGrantsPreview>,
+        permission: PluginPermission,
     },
-    ReviewUpdate {
-        preview: Box<crate::plugin::runtime::PluginUpdatePreview>,
-        grants: crate::plugin::permission::PluginPermissions,
+    /// Withhold `permission` from a plugin that is on.
+    Withhold {
+        preview: Box<PluginGrantsPreview>,
+        permission: PluginPermission,
     },
-    ReviewPermissions {
-        preview: Box<crate::plugin::runtime::PluginGrantsPreview>,
-        grants: crate::plugin::permission::PluginPermissions,
-    },
-    Detail {
-        plugin_id: String,
-    },
-    DefaultProfile {
-        plugin_id: String,
-    },
-    Settings {
-        plugin_id: String,
-    },
-    Setting {
-        plugin_id: String,
-        setting: crate::plugin::runtime::DeclarativeSetting,
-    },
+    /// Grant every permission a plugin lacks and turn it on.
+    TurnOn(Box<PluginGrantsPreview>),
+    /// A number or text setting's new value; `changed` while it isn't
+    /// the default.
     EditSetting {
         plugin_id: String,
-        setting: crate::plugin::runtime::DeclarativeSetting,
+        setting: DeclarativeSetting,
+        changed: bool,
     },
     Confirm {
         plugin_id: String,
         operation: RuntimePluginOperation,
-    },
-    /// Something failed; Back returns to the plugin, or the list.
-    Failed {
-        plugin_id: Option<String>,
     },
 }
 
@@ -71,15 +79,6 @@ enum RuntimePluginOperation {
 }
 
 impl App {
-    pub(super) fn pending_runtime_plugin_management(
-        &self,
-    ) -> Option<&PendingRuntimePluginManagement> {
-        match &self.dialog_flow {
-            Some(DialogFlow::RuntimePlugins(pending)) => Some(pending),
-            _ => None,
-        }
-    }
-
     pub(super) fn discover_runtime_plugins_for_app(
         &self,
     ) -> Result<(
@@ -110,1034 +109,490 @@ impl App {
         crate::plugin::runtime::preview_update_at(plugin_id, &paths.registry, &paths.root)
     }
 
+    fn preview_runtime_plugin_grants(&self, plugin_id: &str) -> Result<PluginGrantsPreview> {
+        let paths = self.runtime_plugin_paths()?;
+        crate::plugin::runtime::preview_grants_at(plugin_id, &paths.registry, &paths.root)
+    }
+
     #[cfg(test)]
     pub(crate) fn set_runtime_plugin_test_paths(&mut self, registry: PathBuf, root: PathBuf) {
         self.runtime_plugin_paths = Some(crate::plugin::runtime::PluginPaths { registry, root });
         self.sync_plugins_from_config();
     }
 
-    pub(super) fn open_runtime_plugin_manager(&mut self) {
-        self.settings_panel.close();
-        self.dialog_flow = None;
-        self.show_runtime_plugin_list();
+    /// Do what a row of the Plugins page asks.
+    pub(super) fn apply_plugin_action(&mut self, action: PluginAction) {
+        match action {
+            PluginAction::Install => {
+                self.ask_plugin(PluginQuestion::InstallPath, String::new(), None)
+            }
+            PluginAction::SetEnabled { id, enabled } => self.set_plugin_enabled(id, enabled),
+            PluginAction::SetPermission {
+                id,
+                permission,
+                granted,
+            } => self.set_plugin_permission(id, permission, granted),
+            PluginAction::SetDefaultProfile { id, profile } => {
+                self.set_plugin_default_profile(id, profile);
+            }
+            PluginAction::SetSetting { id, setting, value } => {
+                if self.runtime_plugin_setting_schema_is_current(&id, &setting) {
+                    let key = setting.id().to_string();
+                    let change = match value {
+                        Some(value) => PluginConfigurationChange::Set { key, value },
+                        None => PluginConfigurationChange::Unset { key },
+                    };
+                    if let Err(error) = self.configure_plugin(id, change) {
+                        self.show_plugin_error("Couldn't change the setting", &error);
+                    }
+                }
+            }
+            PluginAction::EditSetting { id, setting } => {
+                if !self.runtime_plugin_setting_schema_is_current(&id, &setting) {
+                    return;
+                }
+                let Some(status) = self.current_runtime_plugin_status(&id) else {
+                    return;
+                };
+                let changed = status.configured_settings.contains_key(setting.id());
+                let value = status
+                    .settings
+                    .get(setting.id())
+                    .map_or_else(String::new, raw_setting_value);
+                self.ask_plugin(
+                    PluginQuestion::EditSetting {
+                        plugin_id: id,
+                        setting: *setting,
+                        changed,
+                    },
+                    value,
+                    None,
+                );
+            }
+            PluginAction::Update(id) => match self.preview_runtime_plugin_update(&id) {
+                Ok(preview) => self.ask_plugin(
+                    PluginQuestion::ReviewUpdate(Box::new(preview)),
+                    String::new(),
+                    None,
+                ),
+                Err(error) => {
+                    self.show_plugin_error("Couldn't check for an update", &format!("{error:#}"));
+                }
+            },
+            PluginAction::ResetSettings(id) => self.ask_plugin(
+                PluginQuestion::Confirm {
+                    plugin_id: id,
+                    operation: RuntimePluginOperation::ResetSettings,
+                },
+                String::new(),
+                None,
+            ),
+            PluginAction::Remove(id) => self.ask_plugin(
+                PluginQuestion::Confirm {
+                    plugin_id: id,
+                    operation: RuntimePluginOperation::Remove,
+                },
+                String::new(),
+                None,
+            ),
+        }
     }
 
-    fn show_runtime_plugin_flow(&mut self, spec: DialogSpec, view: RuntimePluginManagerView) {
+    /// Turn a plugin off, or on: directly when it has every permission it
+    /// asks for, and otherwise after a review that grants them.
+    fn set_plugin_enabled(&mut self, plugin_id: String, enabled: bool) {
+        let Some(status) = self.current_runtime_plugin_status(&plugin_id) else {
+            return;
+        };
+        if status.enabled == enabled {
+            return;
+        }
+        let command = if !enabled {
+            PluginAdminCommand::Disable { id: plugin_id }
+        } else if status.requested.uncovered_by(&status.granted).is_empty() {
+            PluginAdminCommand::Enable {
+                id: plugin_id,
+                grants: PluginPermissions::default(),
+            }
+        } else {
+            match self.preview_runtime_plugin_grants(&plugin_id) {
+                Ok(preview) => self.ask_plugin(
+                    PluginQuestion::TurnOn(Box::new(preview)),
+                    String::new(),
+                    None,
+                ),
+                Err(error) => {
+                    self.show_plugin_error("Couldn't read its permissions", &format!("{error:#}"));
+                }
+            }
+            return;
+        };
+        self.run_plugin_command(command, "Couldn't change the plugin");
+    }
+
+    /// Grant a requested permission after its review, or withhold it: at
+    /// once from a plugin that is off, and after asking from one that is
+    /// on, since it can run only with every permission it asks for.
+    fn set_plugin_permission(
+        &mut self,
+        plugin_id: String,
+        permission: PluginPermission,
+        granted: bool,
+    ) {
+        let preview = match self.preview_runtime_plugin_grants(&plugin_id) {
+            Ok(preview) => Box::new(preview),
+            Err(error) => {
+                return self
+                    .show_plugin_error("Couldn't read its permissions", &format!("{error:#}"));
+            }
+        };
+        if preview.requested.scope(permission.capability) != Some(permission.scope) {
+            return self.toasts.warning(format!(
+                "{} no longer asks for that permission; nothing was changed",
+                preview.name
+            ));
+        }
+        let held = preview.current_grants.covers(permission);
+        if granted == held {
+            return;
+        }
+        let question = if granted {
+            PluginQuestion::Grant {
+                preview,
+                permission,
+            }
+        } else if preview.enabled {
+            PluginQuestion::Withhold {
+                preview,
+                permission,
+            }
+        } else {
+            let grants = without(&preview.current_grants, permission);
+            let command = preview.command(grants, false);
+            self.run_plugin_command(command, "Couldn't change its permissions");
+            return;
+        };
+        self.ask_plugin(question, String::new(), None);
+    }
+
+    fn set_plugin_default_profile(&mut self, plugin_id: String, profile: Option<String>) {
+        let Some(status) = self.current_runtime_plugin_status(&plugin_id) else {
+            return;
+        };
+        let change = match profile {
+            Some(profile) if status.profiles.iter().any(|known| known.id == profile) => {
+                PluginConfigurationChange::DefaultProfile(profile)
+            }
+            Some(profile) => {
+                return self.toasts.warning(format!(
+                    "Profile {profile:?} no longer exists; nothing was changed"
+                ));
+            }
+            None => PluginConfigurationChange::ClearDefaultProfile,
+        };
+        if let Err(error) = self.configure_plugin(plugin_id, change) {
+            self.show_plugin_error("Couldn't change the default profile", &error);
+        }
+    }
+
+    /// Ask `question`, with `value` in its field (or the reviewed folder)
+    /// and the `error` that refused the last answer.
+    fn ask_plugin(&mut self, question: PluginQuestion, value: String, error: Option<&str>) {
+        let spec = match &question {
+            PluginQuestion::InstallPath => DialogSpec::prompt(
+                "Install a plugin",
+                vec![DialogBlock::text(format!(
+                    "Type the full path of the plugin's folder. It must hold a {} file.",
+                    crate::plugin::runtime::MANIFEST_NAME
+                ))],
+                FieldSpec::new("Folder", value, MAX_FIELD_BYTES)
+                    .with_error(error.map(crate::safe_text::capitalized)),
+                SAVE,
+                "Review",
+            ),
+            PluginQuestion::ReviewInstall(preview) => install_review(preview, error),
+            PluginQuestion::ReviewUpdate(preview) => update_review(preview, error),
+            PluginQuestion::Grant {
+                preview,
+                permission,
+            } => {
+                let mut body = vec![DialogBlock::value(permission.to_string())];
+                if !preview.enabled {
+                    body.push(DialogBlock::text(
+                        "It stays off until it's turned on; it can run only with every permission it asks for.",
+                    ));
+                }
+                push_error(&mut body, "Couldn't grant it", error);
+                DialogSpec::confirm(
+                    format!(
+                        "Allow {} to {}?",
+                        preview.name,
+                        lowercase_first(&permission.label())
+                    ),
+                    body,
+                    GRANT,
+                    "Allow",
+                    ButtonRole::Suggested,
+                )
+            }
+            PluginQuestion::Withhold {
+                preview,
+                permission,
+            } => {
+                let mut body = vec![DialogBlock::text(format!(
+                    "It can run only with every permission it asks for, so withholding \"{}\" turns it off.",
+                    permission.label()
+                ))];
+                push_error(&mut body, "Couldn't withhold it", error);
+                DialogSpec::confirm(
+                    format!("Turn off {}?", preview.name),
+                    body,
+                    WITHHOLD,
+                    "Withhold and turn off",
+                    ButtonRole::Suggested,
+                )
+            }
+            PluginQuestion::TurnOn(preview) => {
+                let missing = preview.requested.uncovered_by(&preview.current_grants);
+                let mut body = vec![
+                    DialogBlock::text(
+                        "It can run only with every permission it asks for. Turning it on grants these:",
+                    ),
+                    DialogBlock::value(permission_lines(missing)),
+                ];
+                push_error(&mut body, "Couldn't turn it on", error);
+                DialogSpec::confirm(
+                    format!("Turn on {}?", preview.name),
+                    body,
+                    TURN_ON,
+                    "Allow and turn on",
+                    ButtonRole::Suggested,
+                )
+            }
+            PluginQuestion::EditSetting {
+                setting, changed, ..
+            } => setting_prompt(setting, *changed, value, error),
+            PluginQuestion::Confirm {
+                plugin_id,
+                operation,
+            } => {
+                let (title, text, label) = match operation {
+                    RuntimePluginOperation::ResetSettings => (
+                        format!("Reset the settings of {plugin_id}?"),
+                        "Every setting goes back to its default.",
+                        "Reset",
+                    ),
+                    RuntimePluginOperation::Remove => (
+                        format!("Remove {plugin_id}?"),
+                        "Its installed copy and registry entry are deleted. The folder it came from is left alone.",
+                        "Remove",
+                    ),
+                };
+                DialogSpec::confirm(
+                    title,
+                    vec![DialogBlock::text(text)],
+                    CONFIRM,
+                    label,
+                    ButtonRole::Destructive,
+                )
+            }
+        };
         let request_id = self.dialog.show(spec);
-        self.dialog_flow = Some(DialogFlow::RuntimePlugins(PendingRuntimePluginManagement {
+        self.dialog_flow = Some(DialogFlow::Plugin(PendingPluginQuestion {
             request_id,
-            view,
+            question,
         }));
     }
 
-    fn show_runtime_plugin_list(&mut self) {
-        let statuses = match self.discover_runtime_plugins_for_app() {
-            Ok((_, statuses)) => statuses,
-            Err(error) => {
-                self.show_runtime_plugin_error(
-                    None,
-                    "Couldn't read the plugin registry",
-                    &format!("{error:#}"),
-                );
-                return;
+    /// Answer a plugin question. Returns whether the answer was its; a
+    /// plain Cancel isn't, and closes the dialog.
+    pub(super) fn handle_plugin_choice(&mut self, request_id: u64, choice_id: &str) -> bool {
+        let question = match &self.dialog_flow {
+            Some(DialogFlow::Plugin(pending)) if pending.request_id == request_id => {
+                pending.question.clone()
             }
+            _ => return false,
         };
-        let mut body = vec![DialogBlock::text(
-            "Pick a plugin to see where it came from, what it may do, and its settings.",
-        )];
-        if statuses.is_empty() {
-            body.push(DialogBlock::text("No third-party plugins are installed."));
-        }
-        let rows = statuses
-            .iter()
-            .map(|status| {
-                let health = if status.diagnostic.is_some() {
-                    "error"
-                } else if status.enabled {
-                    "on"
+        let field = self.dialog.field_value(request_id).map(ToOwned::to_owned);
+        let finish = |app: &mut Self| {
+            app.dialog.dismiss(request_id);
+            app.dialog_flow = None;
+        };
+        match (question, choice_id) {
+            (PluginQuestion::InstallPath, SAVE) => {
+                finish(self);
+                self.review_plugin_install(field.unwrap_or_default());
+            }
+            // Back from the review returns to its folder.
+            (PluginQuestion::ReviewInstall(preview), CANCEL) => {
+                finish(self);
+                let folder = preview.source.display().to_string();
+                self.ask_plugin(PluginQuestion::InstallPath, folder, None);
+            }
+            (PluginQuestion::ReviewInstall(preview), INSTALL_DISABLED | INSTALL_ENABLED) => {
+                finish(self);
+                let enable = choice_id == INSTALL_ENABLED;
+                let grants = if enable {
+                    preview.permissions.clone()
                 } else {
-                    "off"
+                    PluginPermissions::default()
                 };
-                DialogRow::new(format!("plugin:{}", status.id), status.name.as_str())
-                    .with_detail(format!("{} · {health}", status.version))
-            })
-            .collect();
-        let spec = DialogSpec::list("Third-party plugins", body, rows)
-            .button(DialogButton::answer(CANCEL, "Close", ButtonRole::Cancel))
-            .button(DialogButton::answer(
-                "install",
-                "Install…",
-                ButtonRole::Suggested,
-            ));
-        self.show_runtime_plugin_flow(spec, RuntimePluginManagerView::List);
-    }
-
-    fn show_runtime_plugin_install_path(&mut self, initial: String, error: Option<&str>) {
-        let spec = DialogSpec::prompt(
-            "Install a plugin",
-            vec![DialogBlock::text(format!(
-                "Type the full path of the plugin's folder. It must hold a {} file.",
-                crate::plugin::runtime::MANIFEST_NAME
-            ))],
-            FieldSpec::new("Folder", initial, MAX_FIELD_BYTES)
-                .with_error(error.map(crate::safe_text::capitalized)),
-            SAVE,
-            "Review",
-        );
-        self.show_runtime_plugin_flow(spec, RuntimePluginManagerView::InstallPath);
-    }
-
-    fn show_runtime_plugin_install_review(
-        &mut self,
-        preview: PluginInstallPreview,
-        grants: PluginPermissions,
-        error: Option<&str>,
-    ) {
-        let mut body = Vec::new();
-        if !preview.description.is_empty() {
-            body.push(DialogBlock::text(preview.description.as_str()));
-        }
-        body.push(DialogBlock::value(
-            [
-                format!("{} {}", preview.id, preview.version),
-                format!(
-                    "{} profiles · {} commands",
-                    preview.profile_count, preview.command_count
-                ),
-                format!("From {}", preview.source.display()),
-                format!("Fingerprint {}", preview.source_fingerprint),
-            ]
-            .join("\n"),
-        ));
-        if let Some(error) = error {
-            body.push(DialogBlock::error(format!("Couldn't install it: {error}")));
-        }
-        let enable = grants == preview.permissions;
-        push_permission_prompt(&mut body, &preview.permissions, enable);
-        let rows = permission_rows(&preview.permissions, &grants, |_| None);
-        let mut spec = DialogSpec::list(format!("Install {}?", preview.name), body, rows)
-            .button(DialogButton::back())
-            .button(DialogButton::answer(
-                "install-disabled",
-                "Install turned off",
-                ButtonRole::Neutral,
-            ));
-        if enable {
-            spec = spec.button(DialogButton::answer(
-                "install-enabled",
-                "Install and turn on",
-                ButtonRole::Suggested,
-            ));
-        }
-        self.show_runtime_plugin_flow(
-            spec,
-            RuntimePluginManagerView::ReviewInstall { preview, grants },
-        );
-    }
-
-    fn open_runtime_plugin_update_review(&mut self, plugin_id: String) {
-        match self.preview_runtime_plugin_update(&plugin_id) {
-            Ok(preview) => {
-                let grants = preview
-                    .current_grants
-                    .intersection(&preview.candidate_permissions);
-                self.show_runtime_plugin_update_review(Box::new(preview), grants, None);
+                self.install_plugin(preview, grants, enable);
             }
-            Err(error) => {
-                let error = format!("{error:#}");
-                self.toasts
-                    .error(format!("Plugin update preview failed: {error}"));
-                self.show_runtime_plugin_error(
-                    Some(plugin_id),
-                    "Couldn't check for an update",
-                    &error,
-                );
-            }
-        }
-    }
-
-    fn show_runtime_plugin_update_review(
-        &mut self,
-        preview: Box<PluginUpdatePreview>,
-        grants: PluginPermissions,
-        error: Option<&str>,
-    ) {
-        let added = preview
-            .candidate_permissions
-            .uncovered_by(&preview.current_permissions);
-        let removed = preview
-            .current_permissions
-            .uncovered_by(&preview.candidate_permissions);
-        let mut body = vec![DialogBlock::value(
-            [
-                format!(
-                    "{} {} → {}",
-                    preview.id, preview.current_version, preview.candidate_version
-                ),
-                format!(
-                    "{} → {} profiles · {} → {} commands",
-                    preview.current_profile_count,
-                    preview.candidate_profile_count,
-                    preview.current_command_count,
-                    preview.candidate_command_count
-                ),
-                format!("From {}", preview.source.display()),
-                format!(
-                    "Installed fingerprint {}",
-                    preview.current_source_fingerprint
-                ),
-                format!("New fingerprint {}", preview.candidate_source_fingerprint),
-                format!(
-                    "Newly requested: {}",
-                    display_permissions(added.iter().copied())
-                ),
-                format!(
-                    "No longer requested: {}",
-                    display_permissions(removed.iter().copied())
-                ),
-            ]
-            .join("\n"),
-        )];
-        if preview.default_profile_will_be_cleared {
-            body.push(DialogBlock::text(format!(
-                "The default profile {:?} isn't in the new version, so profiles go back to manifest order.",
-                preview.configured_default_profile.as_deref().unwrap_or_default()
-            )));
-        }
-        if let Some(error) = error {
-            body.push(DialogBlock::error(format!("Couldn't update it: {error}")));
-        }
-        let enable = grants == preview.candidate_permissions;
-        push_permission_prompt(&mut body, &preview.candidate_permissions, enable);
-        let rows = permission_rows(&preview.candidate_permissions, &grants, |permission| {
-            added.contains(&permission).then_some("new")
-        });
-        let (disabled_label, enabled_label) = if preview.enabled {
-            ("Update and turn off", "Update and keep on")
-        } else {
-            ("Update turned off", "Update and turn on")
-        };
-        let mut spec = DialogSpec::list(format!("Update {}?", preview.name), body, rows)
-            .button(DialogButton::back())
-            .button(DialogButton::answer(
-                "update-disabled",
-                disabled_label,
-                ButtonRole::Neutral,
-            ));
-        if enable {
-            spec = spec.button(DialogButton::answer(
-                "update-enabled",
-                enabled_label,
-                ButtonRole::Suggested,
-            ));
-        }
-        self.show_runtime_plugin_flow(
-            spec,
-            RuntimePluginManagerView::ReviewUpdate { preview, grants },
-        );
-    }
-
-    fn open_runtime_plugin_permission_review(&mut self, plugin_id: String) {
-        let preview = self.runtime_plugin_paths().and_then(|paths| {
-            crate::plugin::runtime::preview_grants_at(&plugin_id, &paths.registry, &paths.root)
-        });
-        match preview {
-            Ok(preview) => {
-                // A grant narrower than its request is shown ungranted, and
-                // selecting it grants the requested scope.
-                let grants = preview.current_grants.intersection(&preview.requested);
-                self.show_runtime_plugin_permission_review(Box::new(preview), grants, None);
-            }
-            Err(error) => self.show_runtime_plugin_error(
-                Some(plugin_id),
-                "Couldn't read its permissions",
-                &format!("{error:#}"),
-            ),
-        }
-    }
-
-    fn show_runtime_plugin_permission_review(
-        &mut self,
-        preview: Box<PluginGrantsPreview>,
-        grants: PluginPermissions,
-        error: Option<&str>,
-    ) {
-        let mut body = vec![DialogBlock::value(format!(
-            "{} {} · {}",
-            preview.id,
-            preview.version,
-            if preview.enabled { "on" } else { "off" }
-        ))];
-        if let Some(error) = error {
-            body.push(DialogBlock::error(format!(
-                "Couldn't change its permissions: {error}"
-            )));
-        }
-        let enable = preview.requested.uncovered_by(&grants).is_empty();
-        push_permission_prompt(&mut body, &preview.requested, enable);
-        let rows = permission_rows(&preview.requested, &grants, |_| None);
-        let (disabled_label, enabled_label) = if preview.enabled {
-            ("Save and turn off", "Save and keep on")
-        } else {
-            ("Save turned off", "Save and turn on")
-        };
-        let mut spec = DialogSpec::list(format!("{} permissions", preview.name), body, rows)
-            .button(DialogButton::back())
-            .button(DialogButton::answer(
-                "save-disabled",
-                disabled_label,
-                ButtonRole::Neutral,
-            ));
-        if enable {
-            spec = spec.button(DialogButton::answer(
-                "save-enabled",
-                enabled_label,
-                ButtonRole::Suggested,
-            ));
-        }
-        self.show_runtime_plugin_flow(
-            spec,
-            RuntimePluginManagerView::ReviewPermissions { preview, grants },
-        );
-    }
-
-    fn show_runtime_plugin_detail(&mut self, plugin_id: String) {
-        let status = match self.discover_runtime_plugins_for_app() {
-            Ok((_, statuses)) => statuses.into_iter().find(|status| status.id == plugin_id),
-            Err(error) => {
-                self.show_runtime_plugin_error(
-                    None,
-                    "Couldn't read the plugin registry",
-                    &format!("{error:#}"),
-                );
-                return;
-            }
-        };
-        let Some(status) = status else {
-            self.toasts.warning(format!(
-                "Plugin {plugin_id} is no longer installed; refreshed the list"
-            ));
-            self.show_runtime_plugin_list();
-            return;
-        };
-
-        let default_profile = if let Some(profile) = status
-            .configured_default_profile
-            .as_deref()
-            .and_then(|id| status.profiles.iter().find(|profile| profile.id == id))
-            .or_else(|| status.profiles.first())
-        {
-            let origin = if status.configured_default_profile.is_some() {
-                "chosen"
-            } else {
-                "manifest order"
-            };
-            format!(
-                "Default profile: {} ({}), {origin}",
-                profile.name, profile.id
-            )
-        } else if status.diagnostic.is_some() {
-            "Default profile: none while the plugin has an error".into()
-        } else {
-            "Default profile: none (no launch profiles)".into()
-        };
-        let mut details = vec![
-            format!(
-                "{} {} · {}",
-                status.id,
-                status.version,
-                if status.enabled { "on" } else { "off" }
-            ),
-            format!("From {}", status.source.display()),
-            default_profile,
-            format!(
-                "Requested: {}",
-                display_permissions(status.requested.iter())
-            ),
-            format!("Granted: {}", display_permissions(status.granted.iter())),
-            format!(
-                "{} settings, {} changed",
-                status.settings.len(),
-                status.configured_setting_count
-            ),
-        ];
-        details.extend(
-            status
-                .settings
-                .iter()
-                .map(|(key, value)| format!("  {key} = {}", display_setting_value(value))),
-        );
-        let mut body = vec![DialogBlock::value(details.join("\n"))];
-        if let Some(diagnostic) = &status.diagnostic {
-            body.push(DialogBlock::error(diagnostic.as_str()));
-        }
-
-        let mut rows = Vec::new();
-        if status.diagnostic.is_none() && !status.profiles.is_empty() {
-            rows.push(DialogRow::new("choose-default-profile", "Default profile…"));
-        }
-        if status.diagnostic.is_none() && !status.setting_definitions.is_empty() {
-            rows.push(DialogRow::new("configure-settings", "Settings…"));
-        }
-        rows.push(DialogRow::new(
-            "toggle",
-            if status.enabled {
-                "Turn off"
-            } else {
-                "Turn on"
-            },
-        ));
-        if status.diagnostic.is_none() {
-            rows.push(DialogRow::new("permissions", "Permissions…"));
-        }
-        rows.push(DialogRow::new("update", "Update from its folder…"));
-        if status.configured_setting_count > 0 {
-            rows.push(DialogRow::new("reset-settings", "Reset settings…"));
-        }
-        rows.push(DialogRow::new("remove", "Remove…"));
-
-        let spec = DialogSpec::list(status.name.as_str(), body, rows).button(DialogButton::back());
-        self.show_runtime_plugin_flow(spec, RuntimePluginManagerView::Detail { plugin_id });
-    }
-
-    fn show_runtime_plugin_default_profiles(&mut self, plugin_id: String) {
-        let Some(status) = self.current_runtime_plugin_status(&plugin_id) else {
-            return;
-        };
-        if status.diagnostic.is_some() || status.profiles.is_empty() {
-            self.show_runtime_plugin_detail(plugin_id);
-            return;
-        }
-        let effective_id = status
-            .configured_default_profile
-            .as_deref()
-            .or_else(|| status.profiles.first().map(|profile| profile.id.as_str()));
-        let rows = status
-            .profiles
-            .iter()
-            .map(|profile| {
-                let row = DialogRow::new(
-                    format!("profile:{}", profile.id),
-                    format!("{} ({})", profile.name, profile.id),
-                );
-                if effective_id == Some(profile.id.as_str()) {
-                    row.with_detail("Default")
-                } else if !profile.description.is_empty() {
-                    row.with_detail(profile.description.as_str())
+            (PluginQuestion::ReviewUpdate(preview), UPDATE_DISABLED | UPDATE_ENABLED) => {
+                finish(self);
+                let enable = choice_id == UPDATE_ENABLED;
+                // Permissions that stay keep their grants; turning it on
+                // grants what the update newly asks for, as reviewed.
+                let grants = if enable {
+                    preview.candidate_permissions.clone()
                 } else {
-                    row
-                }
-            })
-            .collect();
-        let origin = if status.configured_default_profile.is_some() {
-            "You chose the default."
-        } else {
-            "The default is the first in the manifest."
-        };
-        let mut spec = DialogSpec::list(
-            format!("Default profile for {}", status.name),
-            vec![DialogBlock::text(format!(
-                "It's used when a launch or restore doesn't name a profile. {origin}"
-            ))],
-            rows,
-        )
-        .button(DialogButton::back());
-        if status.configured_default_profile.is_some() {
-            spec = spec.button(DialogButton::answer(
-                "manifest-order",
-                "Use manifest order",
-                ButtonRole::Neutral,
-            ));
-        }
-        self.show_runtime_plugin_flow(spec, RuntimePluginManagerView::DefaultProfile { plugin_id });
-    }
-
-    fn show_runtime_plugin_settings(&mut self, plugin_id: String) {
-        let Some(status) = self.current_runtime_plugin_status(&plugin_id) else {
-            return;
-        };
-        if status.diagnostic.is_some() {
-            self.show_runtime_plugin_detail(plugin_id);
-            return;
-        }
-        let mut body = vec![DialogBlock::text("Pick a setting to change it.")];
-        if status.setting_definitions.is_empty() {
-            body.push(DialogBlock::text("This plugin has no settings."));
-        }
-        let rows = status
-            .setting_definitions
-            .iter()
-            .map(|setting| {
-                let id = setting.id();
-                let value = status
-                    .settings
-                    .get(id)
-                    .map(display_setting_value)
-                    .unwrap_or_else(|| "unavailable".into());
-                let changed = if status.configured_settings.contains_key(id) {
-                    ", changed"
-                } else {
-                    ""
+                    preview
+                        .current_grants
+                        .intersection(&preview.candidate_permissions)
                 };
-                DialogRow::new(
-                    format!("setting:{id}"),
-                    format!("{} ({id})", setting.name()),
-                )
-                .with_detail(format!("{value}{changed}"))
-            })
-            .collect();
-        let spec = DialogSpec::list(format!("{} settings", status.name), body, rows)
-            .button(DialogButton::back());
-        self.show_runtime_plugin_flow(spec, RuntimePluginManagerView::Settings { plugin_id });
-    }
-
-    fn show_runtime_plugin_setting(&mut self, plugin_id: String, setting: DeclarativeSetting) {
-        let Some(status) = self.current_runtime_plugin_status(&plugin_id) else {
-            return;
-        };
-        let Some(current) = status
-            .setting_definitions
-            .iter()
-            .find(|candidate| candidate.id() == setting.id())
-        else {
-            self.toasts.warning(format!(
-                "Setting {} no longer exists; refreshed plugin settings",
-                setting.id()
-            ));
-            self.show_runtime_plugin_settings(plugin_id);
-            return;
-        };
-        if current != &setting {
-            self.toasts.warning(format!(
-                "Setting {} changed after the editor opened; review it again",
-                setting.id()
-            ));
-            self.show_runtime_plugin_settings(plugin_id);
-            return;
-        }
-        let effective = status
-            .settings
-            .get(setting.id())
-            .cloned()
-            .unwrap_or_else(|| setting.default_value());
-        let configured = status.configured_settings.contains_key(setting.id());
-        let mut details = vec![
-            format!("{} · {}", setting.id(), setting_kind(&setting)),
-            format!(
-                "Now {}{}",
-                display_setting_value(&effective),
-                if configured {
-                    ", changed"
-                } else {
-                    ", the default"
-                }
-            ),
-            format!(
-                "Default {}",
-                display_setting_value(&setting.default_value())
-            ),
-        ];
-        match &setting {
-            DeclarativeSetting::Integer { min, max, .. } => {
-                details.push(format!("From {min} to {max}"));
+                let command = preview.command(grants, enable);
+                self.run_plugin_review(command, PluginQuestion::ReviewUpdate(preview));
             }
-            DeclarativeSetting::Text { .. } => details.push(format!(
-                "One line, at most {} UTF-8 bytes",
-                crate::plugin::runtime::MAX_SETTING_TEXT_BYTES
-            )),
-            DeclarativeSetting::Boolean { .. } | DeclarativeSetting::Choice { .. } => {}
-        }
-        let mut body = Vec::new();
-        if !setting.description().is_empty() {
-            body.push(DialogBlock::text(setting.description()));
-        }
-        body.push(DialogBlock::value(details.join("\n")));
-        let use_default = || DialogButton::answer("unset", "Use default", ButtonRole::Neutral);
-        let title = format!("Change {}", setting.name());
-
-        match &setting {
-            DeclarativeSetting::Integer { .. } | DeclarativeSetting::Text { .. } => {
-                let initial = match effective {
-                    PluginSettingValue::Integer(value) => value.to_string(),
-                    PluginSettingValue::Text(value) => value,
-                    PluginSettingValue::Boolean(_) => String::new(),
-                };
-                let max_bytes = if matches!(setting, DeclarativeSetting::Integer { .. }) {
-                    32
-                } else {
-                    crate::plugin::runtime::MAX_SETTING_TEXT_BYTES
-                };
-                let mut spec = DialogSpec::prompt(
-                    title,
-                    body,
-                    FieldSpec::new("Value", initial, max_bytes),
-                    SAVE,
-                    "Save",
-                );
-                if configured {
-                    spec.buttons.insert(1, use_default());
-                }
-                self.show_runtime_plugin_flow(
-                    spec,
-                    RuntimePluginManagerView::EditSetting { plugin_id, setting },
-                );
-            }
-            DeclarativeSetting::Boolean { .. } | DeclarativeSetting::Choice { .. } => {
-                let current = display_setting_value(&effective);
-                let rows: Vec<DialogRow> = match &setting {
-                    DeclarativeSetting::Choice { choices, .. } => choices
-                        .iter()
-                        .enumerate()
-                        .map(|(index, value)| {
-                            DialogRow::new(format!("value:{index}"), value.as_str())
-                        })
-                        .collect(),
-                    _ => ["true", "false"]
-                        .into_iter()
-                        .map(|value| DialogRow::new(format!("value:{value}"), value))
-                        .collect(),
-                };
-                let rows = rows
-                    .into_iter()
-                    .map(|row| {
-                        if row.label == current || format!("{:?}", row.label) == current {
-                            row.with_detail("Now")
-                        } else {
-                            row
-                        }
-                    })
-                    .collect();
-                let mut spec = DialogSpec::list(title, body, rows).button(DialogButton::back());
-                if configured {
-                    spec = spec.button(use_default());
-                }
-                self.show_runtime_plugin_flow(
-                    spec,
-                    RuntimePluginManagerView::Setting { plugin_id, setting },
-                );
-            }
-        }
-    }
-
-    fn current_runtime_plugin_status(&mut self, plugin_id: &str) -> Option<RuntimePluginStatus> {
-        match self.discover_runtime_plugins_for_app() {
-            Ok((_, statuses)) => {
-                let status = statuses.into_iter().find(|status| status.id == plugin_id);
-                if status.is_none() {
-                    self.toasts.warning(format!(
-                        "Plugin {plugin_id} is no longer installed; refreshed the list"
-                    ));
-                    self.show_runtime_plugin_list();
-                }
-                status
-            }
-            Err(error) => {
-                self.show_runtime_plugin_error(
-                    None,
-                    "Couldn't read the plugin registry",
-                    &format!("{error:#}"),
-                );
-                None
-            }
-        }
-    }
-
-    fn show_runtime_plugin_confirmation(
-        &mut self,
-        plugin_id: String,
-        operation: RuntimePluginOperation,
-    ) {
-        let spec = match operation {
-            RuntimePluginOperation::ResetSettings => DialogSpec::confirm(
-                format!("Reset the settings of {plugin_id}?"),
-                vec![DialogBlock::text("Every setting goes back to its default.")],
-                "confirm",
-                "Reset",
-                ButtonRole::Destructive,
-            ),
-            RuntimePluginOperation::Remove => DialogSpec::confirm(
-                format!("Remove {plugin_id}?"),
-                vec![DialogBlock::text(
-                    "Its installed copy and registry entry are deleted. The folder it came from is left alone.",
-                )],
-                "confirm",
-                "Remove",
-                ButtonRole::Destructive,
-            ),
-        };
-        self.show_runtime_plugin_flow(
-            spec,
-            RuntimePluginManagerView::Confirm {
-                plugin_id,
-                operation,
-            },
-        );
-    }
-
-    /// A failure with the plugin it happened to, if any, to go back to.
-    fn show_runtime_plugin_error(&mut self, plugin_id: Option<String>, title: &str, error: &str) {
-        let mut spec = DialogSpec::error(title, vec![DialogBlock::value(error)]);
-        spec.buttons = vec![
-            DialogButton::copy_details(),
-            DialogButton::answer("back", "Back", ButtonRole::Suggested),
-        ];
-        self.show_runtime_plugin_flow(spec, RuntimePluginManagerView::Failed { plugin_id });
-    }
-
-    /// Answer the manager's dialog. Returns whether the answer was its.
-    pub(super) fn handle_runtime_plugin_manager_choice(
-        &mut self,
-        request_id: u64,
-        choice_id: &str,
-    ) -> bool {
-        let Some(pending) = self
-            .pending_runtime_plugin_management()
-            .filter(|pending| pending.request_id == request_id)
-            .cloned()
-        else {
-            return false;
-        };
-        if choice_id == SAVE
-            && matches!(
-                pending.view,
-                RuntimePluginManagerView::InstallPath
-                    | RuntimePluginManagerView::EditSetting { .. }
-            )
-        {
-            self.submit_runtime_plugin_field(request_id, pending.view);
-            return true;
-        }
-        self.dialog.dismiss(request_id);
-        self.dialog_flow = None;
-        match pending.view {
-            RuntimePluginManagerView::List => match choice_id {
-                "install" => self.show_runtime_plugin_install_path(String::new(), None),
-                choice if choice.starts_with("plugin:") => {
-                    self.show_runtime_plugin_detail(choice["plugin:".len()..].to_string());
-                }
-                // Close leaves the manager.
-                _ => {}
-            },
-            RuntimePluginManagerView::InstallPath => self.show_runtime_plugin_list(),
-            RuntimePluginManagerView::ReviewInstall {
-                preview,
-                mut grants,
-            } => match choice_id {
-                "grant-all" => {
-                    grants = preview.permissions.clone();
-                    self.show_runtime_plugin_install_review(preview, grants, None);
-                }
-                "clear-grants" => self.show_runtime_plugin_install_review(
+            (
+                PluginQuestion::Grant {
                     preview,
-                    PluginPermissions::default(),
-                    None,
-                ),
-                "install-disabled" => self.apply_runtime_plugin_install(preview, grants, false),
-                "install-enabled" if grants == preview.permissions => {
-                    self.apply_runtime_plugin_install(preview, grants, true)
-                }
-                CANCEL => self
-                    .show_runtime_plugin_install_path(preview.source.display().to_string(), None),
-                choice if choice.starts_with("permission:") => {
-                    toggle_requested_grant(
-                        &mut grants,
-                        &preview.permissions,
-                        &choice["permission:".len()..],
-                    );
-                    self.show_runtime_plugin_install_review(preview, grants, None);
-                }
-                _ => self.show_runtime_plugin_install_review(preview, grants, None),
-            },
-            RuntimePluginManagerView::ReviewUpdate {
-                preview,
-                mut grants,
-            } => match choice_id {
-                "grant-all" => {
-                    grants = preview.candidate_permissions.clone();
-                    self.show_runtime_plugin_update_review(preview, grants, None);
-                }
-                "clear-grants" => self.show_runtime_plugin_update_review(
+                    permission,
+                },
+                GRANT,
+            ) => {
+                finish(self);
+                let mut grants = preview.current_grants.clone();
+                grants.set(permission);
+                let enable = preview.enabled && preview.requested.uncovered_by(&grants).is_empty();
+                let command = preview.command(grants, enable);
+                self.run_plugin_review(
+                    command,
+                    PluginQuestion::Grant {
+                        preview,
+                        permission,
+                    },
+                );
+            }
+            (
+                PluginQuestion::Withhold {
                     preview,
-                    PluginPermissions::default(),
-                    None,
-                ),
-                "update-disabled" => self.apply_runtime_plugin_update(preview, grants, false),
-                "update-enabled" if grants == preview.candidate_permissions => {
-                    self.apply_runtime_plugin_update(preview, grants, true)
-                }
-                CANCEL => self.show_runtime_plugin_detail(preview.id.clone()),
-                choice if choice.starts_with("permission:") => {
-                    toggle_requested_grant(
-                        &mut grants,
-                        &preview.candidate_permissions,
-                        &choice["permission:".len()..],
-                    );
-                    self.show_runtime_plugin_update_review(preview, grants, None);
-                }
-                _ => self.show_runtime_plugin_update_review(preview, grants, None),
-            },
-            RuntimePluginManagerView::ReviewPermissions {
-                preview,
-                mut grants,
-            } => match choice_id {
-                "grant-all" => {
-                    grants = preview.requested.clone();
-                    self.show_runtime_plugin_permission_review(preview, grants, None);
-                }
-                "clear-grants" => self.show_runtime_plugin_permission_review(
-                    preview,
-                    PluginPermissions::default(),
-                    None,
-                ),
-                "save-disabled" => self.apply_runtime_plugin_grants(preview, grants, false),
-                "save-enabled" if preview.requested.uncovered_by(&grants).is_empty() => {
-                    self.apply_runtime_plugin_grants(preview, grants, true)
-                }
-                CANCEL => self.show_runtime_plugin_detail(preview.id.clone()),
-                choice if choice.starts_with("permission:") => {
-                    toggle_requested_grant(
-                        &mut grants,
-                        &preview.requested,
-                        &choice["permission:".len()..],
-                    );
-                    self.show_runtime_plugin_permission_review(preview, grants, None);
-                }
-                _ => self.show_runtime_plugin_permission_review(preview, grants, None),
-            },
-            RuntimePluginManagerView::Detail { plugin_id } => match choice_id {
-                "choose-default-profile" => self.show_runtime_plugin_default_profiles(plugin_id),
-                "configure-settings" => self.show_runtime_plugin_settings(plugin_id),
-                "toggle" => {
-                    let Some(status) = self.current_runtime_plugin_status(&plugin_id) else {
-                        return true;
-                    };
-                    if status.enabled {
-                        let command = PluginAdminCommand::Disable {
-                            id: plugin_id.clone(),
-                        };
-                        self.apply_runtime_plugin_operation(command, plugin_id, false);
-                    } else if status.requested.uncovered_by(&status.granted).is_empty() {
-                        let command = PluginAdminCommand::Enable {
-                            id: plugin_id.clone(),
-                            grants: PluginPermissions::default(),
-                        };
-                        self.apply_runtime_plugin_operation(command, plugin_id, false);
-                    } else {
-                        // Enabling needs every request granted: review them.
-                        self.open_runtime_plugin_permission_review(plugin_id);
-                    }
-                }
-                "permissions" => self.open_runtime_plugin_permission_review(plugin_id),
-                "update" => self.open_runtime_plugin_update_review(plugin_id),
-                "reset-settings" => self.show_runtime_plugin_confirmation(
+                    permission,
+                },
+                WITHHOLD,
+            ) => {
+                finish(self);
+                let command = preview.command(without(&preview.current_grants, permission), false);
+                self.run_plugin_review(
+                    command,
+                    PluginQuestion::Withhold {
+                        preview,
+                        permission,
+                    },
+                );
+            }
+            (PluginQuestion::TurnOn(preview), TURN_ON) => {
+                finish(self);
+                let command = preview.command(preview.requested.clone(), true);
+                self.run_plugin_review(command, PluginQuestion::TurnOn(preview));
+            }
+            (
+                PluginQuestion::EditSetting {
                     plugin_id,
-                    RuntimePluginOperation::ResetSettings,
-                ),
-                "remove" => {
-                    self.show_runtime_plugin_confirmation(plugin_id, RuntimePluginOperation::Remove)
+                    setting,
+                    changed,
+                },
+                SAVE | UNSET,
+            ) => {
+                finish(self);
+                if !self.runtime_plugin_setting_schema_is_current(&plugin_id, &setting) {
+                    return true;
                 }
-                CANCEL => self.show_runtime_plugin_list(),
-                _ => self.show_runtime_plugin_detail(plugin_id),
-            },
-            RuntimePluginManagerView::DefaultProfile { plugin_id } => match choice_id {
-                "manifest-order" => self.apply_runtime_plugin_default_profile_change(
-                    plugin_id,
-                    PluginConfigurationChange::ClearDefaultProfile,
-                ),
-                CANCEL => self.show_runtime_plugin_detail(plugin_id),
-                choice if choice.starts_with("profile:") => {
-                    let profile_id = &choice["profile:".len()..];
-                    let exists =
-                        self.current_runtime_plugin_status(&plugin_id)
-                            .is_some_and(|status| {
-                                status
-                                    .profiles
-                                    .iter()
-                                    .any(|profile| profile.id == profile_id)
-                            });
-                    if exists {
-                        self.apply_runtime_plugin_default_profile_change(
+                let value = field.unwrap_or_default();
+                let key = setting.id().to_string();
+                let change = if choice_id == UNSET {
+                    PluginConfigurationChange::Unset { key }
+                } else {
+                    PluginConfigurationChange::Set {
+                        key,
+                        value: value.clone(),
+                    }
+                };
+                if let Err(error) = self.configure_plugin(plugin_id.clone(), change) {
+                    self.ask_plugin(
+                        PluginQuestion::EditSetting {
                             plugin_id,
-                            PluginConfigurationChange::DefaultProfile(profile_id.into()),
-                        );
-                    } else {
-                        self.toasts.warning(format!(
-                            "Profile {profile_id:?} no longer exists; refreshed plugin profiles"
-                        ));
-                        self.show_runtime_plugin_default_profiles(plugin_id);
-                    }
-                }
-                _ => self.show_runtime_plugin_default_profiles(plugin_id),
-            },
-            RuntimePluginManagerView::Settings { plugin_id } => match choice_id {
-                CANCEL => self.show_runtime_plugin_detail(plugin_id),
-                choice if choice.starts_with("setting:") => {
-                    let setting_id = &choice["setting:".len()..];
-                    let setting =
-                        self.current_runtime_plugin_status(&plugin_id)
-                            .and_then(|status| {
-                                status
-                                    .setting_definitions
-                                    .into_iter()
-                                    .find(|setting| setting.id() == setting_id)
-                            });
-                    if let Some(setting) = setting {
-                        self.show_runtime_plugin_setting(plugin_id, setting);
-                    } else {
-                        self.show_runtime_plugin_settings(plugin_id);
-                    }
-                }
-                _ => self.show_runtime_plugin_settings(plugin_id),
-            },
-            RuntimePluginManagerView::Setting { plugin_id, setting } => {
-                if choice_id == CANCEL {
-                    self.show_runtime_plugin_settings(plugin_id);
-                } else if choice_id == "unset" {
-                    if self.runtime_plugin_setting_schema_is_current(&plugin_id, &setting) {
-                        let key = setting.id().to_string();
-                        self.apply_runtime_plugin_setting_change(
-                            plugin_id,
-                            PluginConfigurationChange::Unset { key },
-                        );
-                    }
-                } else if let Some(encoded) = choice_id.strip_prefix("value:") {
-                    let value = match &setting {
-                        DeclarativeSetting::Boolean { .. }
-                            if matches!(encoded, "true" | "false") =>
-                        {
-                            encoded.to_string()
-                        }
-                        DeclarativeSetting::Choice { choices, .. } => encoded
-                            .parse::<usize>()
-                            .ok()
-                            .and_then(|index| choices.get(index).cloned())
-                            .unwrap_or_default(),
-                        _ => String::new(),
-                    };
-                    if !value.is_empty()
-                        && self.runtime_plugin_setting_schema_is_current(&plugin_id, &setting)
-                    {
-                        self.apply_runtime_plugin_setting_change(
-                            plugin_id,
-                            PluginConfigurationChange::Set {
-                                key: setting.id().to_string(),
-                                value,
-                            },
-                        );
-                    }
+                            setting,
+                            changed,
+                        },
+                        value,
+                        Some(&error),
+                    );
                 }
             }
-            RuntimePluginManagerView::EditSetting { plugin_id, setting } => {
-                if choice_id == "unset"
-                    && self.runtime_plugin_setting_schema_is_current(&plugin_id, &setting)
+            (
+                PluginQuestion::Confirm {
+                    plugin_id,
+                    operation,
+                },
+                CONFIRM,
+            ) => {
+                finish(self);
+                let command = match operation {
+                    RuntimePluginOperation::ResetSettings => PluginAdminCommand::Configure {
+                        id: plugin_id.clone(),
+                        change: PluginConfigurationChange::ResetSettings,
+                    },
+                    RuntimePluginOperation::Remove => PluginAdminCommand::Remove {
+                        id: plugin_id.clone(),
+                    },
+                };
+                if self.run_plugin_command(command, "Couldn't change the plugin")
+                    && operation == RuntimePluginOperation::Remove
                 {
-                    self.apply_runtime_plugin_setting_change(
-                        plugin_id,
-                        PluginConfigurationChange::Unset {
-                            key: setting.id().to_string(),
-                        },
-                    );
-                } else if choice_id == CANCEL {
-                    self.show_runtime_plugin_settings(plugin_id);
+                    self.settings_panel
+                        .close_sub_page(&SettingsSubPage::Plugin(plugin_id));
                 }
             }
-            RuntimePluginManagerView::Confirm {
-                plugin_id,
-                operation,
-            } => match choice_id {
-                "confirm" => {
-                    let command = match operation {
-                        RuntimePluginOperation::ResetSettings => PluginAdminCommand::Configure {
-                            id: plugin_id.clone(),
-                            change: PluginConfigurationChange::ResetSettings,
-                        },
-                        RuntimePluginOperation::Remove => PluginAdminCommand::Remove {
-                            id: plugin_id.clone(),
-                        },
-                    };
-                    self.apply_runtime_plugin_operation(
-                        command,
-                        plugin_id,
-                        operation == RuntimePluginOperation::Remove,
-                    );
-                }
-                _ => self.show_runtime_plugin_detail(plugin_id),
-            },
-            RuntimePluginManagerView::Failed { plugin_id } => match plugin_id {
-                Some(plugin_id) => self.show_runtime_plugin_detail(plugin_id),
-                None => self.show_runtime_plugin_list(),
-            },
+            _ => return false,
         }
         true
     }
 
-    /// Submit the field of the install-path or setting prompt.
-    fn submit_runtime_plugin_field(&mut self, request_id: u64, view: RuntimePluginManagerView) {
-        let Some(value) = self.dialog.field_value(request_id).map(ToOwned::to_owned) else {
-            return;
+    /// Read the plugin in `folder` and review installing it, or ask for
+    /// the folder again with why it can't be.
+    fn review_plugin_install(&mut self, folder: String) {
+        let directory = PathBuf::from(&folder);
+        let preview = if folder.is_empty() {
+            Err(anyhow::anyhow!("type the plugin's folder"))
+        } else if !directory.is_absolute() {
+            Err(anyhow::anyhow!("type the full path, starting with /"))
+        } else {
+            preview_install(&directory)
         };
-        match view {
-            RuntimePluginManagerView::InstallPath => {
-                self.dialog.dismiss(request_id);
-                self.dialog_flow = None;
-                let directory = PathBuf::from(&value);
-                let preview = if value.is_empty() {
-                    Err(anyhow::anyhow!("type the plugin's folder"))
-                } else if !directory.is_absolute() {
-                    Err(anyhow::anyhow!("type the full path, starting with /"))
-                } else {
-                    preview_install(&directory)
-                };
-                match preview {
-                    Ok(preview) => {
-                        let duplicate =
-                            self.discover_runtime_plugins_for_app()
-                                .map(|(_, statuses)| {
-                                    statuses.iter().any(|status| status.id == preview.id)
-                                });
-                        match duplicate {
-                            Ok(true) => self.show_runtime_plugin_install_path(
-                                value,
-                                Some(&format!(
-                                    "{:?} is already installed; update it from its page instead",
-                                    preview.id
-                                )),
-                            ),
-                            Ok(false) => self.show_runtime_plugin_install_review(
-                                preview,
-                                PluginPermissions::default(),
-                                None,
-                            ),
-                            Err(error) => self.show_runtime_plugin_install_path(
-                                value,
-                                Some(&format!("couldn't read the plugin registry: {error:#}")),
-                            ),
-                        }
-                    }
-                    Err(error) => {
-                        self.show_runtime_plugin_install_path(value, Some(&format!("{error:#}")))
-                    }
+        let refusal = match preview {
+            Ok(preview) => match self.discover_runtime_plugins_for_app() {
+                Ok((_, statuses)) if statuses.iter().any(|status| status.id == preview.id) => {
+                    format!(
+                        "{:?} is already installed; update it from its page instead",
+                        preview.id
+                    )
                 }
-            }
-            RuntimePluginManagerView::EditSetting { plugin_id, setting } => {
-                if !self.runtime_plugin_setting_schema_is_current(&plugin_id, &setting) {
-                    return;
+                Ok(_) => {
+                    return self.ask_plugin(
+                        PluginQuestion::ReviewInstall(preview),
+                        String::new(),
+                        None,
+                    );
                 }
-                self.dialog.dismiss(request_id);
-                self.dialog_flow = None;
-                self.apply_runtime_plugin_setting_change(
-                    plugin_id,
-                    PluginConfigurationChange::Set {
-                        key: setting.id().to_string(),
-                        value,
-                    },
-                );
-            }
-            _ => unreachable!("only the prompts have a field"),
-        }
+                Err(error) => format!("couldn't read the plugin registry: {error:#}"),
+            },
+            Err(error) => format!("{error:#}"),
+        };
+        self.ask_plugin(PluginQuestion::InstallPath, folder, Some(&refusal));
     }
 
-    fn apply_runtime_plugin_install(
+    fn install_plugin(
         &mut self,
         preview: PluginInstallPreview,
         grants: PluginPermissions,
@@ -1145,7 +600,7 @@ impl App {
     ) {
         let command = PluginAdminCommand::InstallReviewed {
             directory: preview.source.clone(),
-            grants: grants.clone(),
+            grants,
             enable,
             expected_source_fingerprint: preview.source_fingerprint.clone(),
         };
@@ -1153,88 +608,88 @@ impl App {
             Ok(message) => {
                 self.reload_plugins();
                 self.toasts.success(message);
-                self.show_runtime_plugin_detail(preview.id);
+                self.settings_panel
+                    .open_sub_page(SettingsSubPage::Plugin(preview.id));
             }
-            Err(error) => {
-                let error = format!("{error:#}");
-                self.toasts
-                    .error(format!("Plugin installation failed: {error}"));
-                self.show_runtime_plugin_install_review(preview, grants, Some(&error));
-            }
+            Err(error) => self.ask_plugin(
+                PluginQuestion::ReviewInstall(preview),
+                String::new(),
+                Some(&format!("{error:#}")),
+            ),
         }
     }
 
-    fn apply_runtime_plugin_update(
-        &mut self,
-        preview: Box<PluginUpdatePreview>,
-        grants: PluginPermissions,
-        enable: bool,
-    ) {
-        let command = preview.command(grants.clone(), enable);
+    /// Run a reviewed command, or show its review again with why it was
+    /// refused, such as the registry having changed since.
+    fn run_plugin_review(&mut self, command: PluginAdminCommand, review: PluginQuestion) {
         match self.execute_runtime_plugin_admin(command) {
             Ok(message) => {
                 self.reload_plugins();
                 self.toasts.success(message);
-                self.show_runtime_plugin_detail(preview.id.clone());
             }
-            Err(error) => {
-                let error = format!("{error:#}");
-                self.toasts.error(format!("Plugin update failed: {error}"));
-                self.show_runtime_plugin_update_review(preview, grants, Some(&error));
-            }
+            Err(error) => self.ask_plugin(review, String::new(), Some(&format!("{error:#}"))),
         }
     }
 
-    fn apply_runtime_plugin_grants(
-        &mut self,
-        preview: Box<PluginGrantsPreview>,
-        grants: PluginPermissions,
-        enable: bool,
-    ) {
-        let command = preview.command(grants.clone(), enable);
+    /// Run `command`, showing what went wrong under `failure`. Returns
+    /// whether it ran.
+    fn run_plugin_command(&mut self, command: PluginAdminCommand, failure: &str) -> bool {
         match self.execute_runtime_plugin_admin(command) {
             Ok(message) => {
                 self.reload_plugins();
                 self.toasts.success(message);
-                self.show_runtime_plugin_detail(preview.id.clone());
+                true
             }
             Err(error) => {
-                let error = format!("{error:#}");
-                self.toasts
-                    .error(format!("Plugin permission change failed: {error}"));
-                self.show_runtime_plugin_permission_review(preview, grants, Some(&error));
+                self.show_plugin_error(failure, &format!("{error:#}"));
+                false
             }
         }
     }
 
-    fn apply_runtime_plugin_default_profile_change(
+    fn configure_plugin(
         &mut self,
         plugin_id: String,
         change: PluginConfigurationChange,
-    ) {
+    ) -> std::result::Result<(), String> {
         let command = PluginAdminCommand::Configure {
-            id: plugin_id.clone(),
+            id: plugin_id,
             change,
         };
-        match self.execute_runtime_plugin_admin(command) {
-            Ok(message) => {
-                self.reload_plugins();
-                self.toasts.success(message);
-                self.show_runtime_plugin_detail(plugin_id);
+        let message = self
+            .execute_runtime_plugin_admin(command)
+            .map_err(|error| format!("{error:#}"))?;
+        self.reload_plugins();
+        self.toasts.success(message);
+        Ok(())
+    }
+
+    fn show_plugin_error(&mut self, title: &str, error: &str) {
+        self.dialog
+            .show(DialogSpec::error(title, vec![DialogBlock::value(error)]));
+    }
+
+    /// The plugin's status as the registry has it now, or why not, told
+    /// as a toast or an error.
+    fn current_runtime_plugin_status(&mut self, plugin_id: &str) -> Option<RuntimePluginStatus> {
+        match self.discover_runtime_plugins_for_app() {
+            Ok((_, statuses)) => {
+                let status = statuses.into_iter().find(|status| status.id == plugin_id);
+                if status.is_none() {
+                    self.toasts
+                        .warning(format!("Plugin {plugin_id} is no longer installed"));
+                }
+                status
             }
             Err(error) => {
-                let error = format!("{error:#}");
-                self.toasts
-                    .error(format!("Default profile update failed: {error}"));
-                self.show_runtime_plugin_error(
-                    Some(plugin_id),
-                    "Couldn't change the default profile",
-                    &error,
-                );
+                self.show_plugin_error("Couldn't read the plugin registry", &format!("{error:#}"));
+                None
             }
         }
     }
 
+    /// Whether `setting` is still what the plugin's manifest declares, as
+    /// the row or prompt showed it; a toast says when it isn't.
     fn runtime_plugin_setting_schema_is_current(
         &mut self,
         plugin_id: &str,
@@ -1248,82 +703,35 @@ impl App {
                     .into_iter()
                     .find(|candidate| candidate.id() == setting.id())
             });
-        if current.as_ref() == Some(setting) {
-            true
-        } else {
+        let same = current.as_ref() == Some(setting);
+        if !same {
             self.toasts.warning(format!(
-                "Setting {} changed after the editor opened; review it again",
+                "Setting {} changed after it was shown; review it again",
                 setting.id()
             ));
-            self.show_runtime_plugin_settings(plugin_id.to_string());
-            false
         }
-    }
-
-    fn apply_runtime_plugin_setting_change(
-        &mut self,
-        plugin_id: String,
-        change: PluginConfigurationChange,
-    ) {
-        let command = PluginAdminCommand::Configure {
-            id: plugin_id.clone(),
-            change,
-        };
-        match self.execute_runtime_plugin_admin(command) {
-            Ok(message) => {
-                self.reload_plugins();
-                self.toasts.success(message);
-                self.show_runtime_plugin_settings(plugin_id);
-            }
-            Err(error) => {
-                let error = format!("{error:#}");
-                self.toasts
-                    .error(format!("Plugin setting update failed: {error}"));
-                self.show_runtime_plugin_error(
-                    Some(plugin_id),
-                    "Couldn't change the setting",
-                    &error,
-                );
-            }
-        }
-    }
-
-    fn apply_runtime_plugin_operation(
-        &mut self,
-        command: PluginAdminCommand,
-        plugin_id: String,
-        removed: bool,
-    ) {
-        match self.execute_runtime_plugin_admin(command) {
-            Ok(message) => {
-                self.reload_plugins();
-                self.toasts.success(message);
-                if removed {
-                    self.show_runtime_plugin_list();
-                } else {
-                    self.show_runtime_plugin_detail(plugin_id);
-                }
-            }
-            Err(error) => {
-                let error = format!("{error:#}");
-                self.toasts
-                    .error(format!("Plugin operation failed: {error}"));
-                self.show_runtime_plugin_error(
-                    Some(plugin_id),
-                    "Couldn't change the plugin",
-                    &error,
-                );
-            }
-        }
+        same
     }
 }
 
-fn setting_kind(setting: &DeclarativeSetting) -> &'static str {
-    match setting {
-        DeclarativeSetting::Boolean { .. } => "true or false",
-        DeclarativeSetting::Integer { .. } => "a whole number",
-        DeclarativeSetting::Text { .. } => "text",
-        DeclarativeSetting::Choice { .. } => "one of a list",
+/// `grants` without `permission`'s capability.
+fn without(grants: &PluginPermissions, permission: PluginPermission) -> PluginPermissions {
+    let mut grants = grants.clone();
+    grants.remove(permission.capability);
+    grants
+}
+
+fn lowercase_first(text: &str) -> String {
+    let mut characters = text.chars();
+    characters
+        .next()
+        .map(|first| first.to_lowercase().chain(characters).collect())
+        .unwrap_or_default()
+}
+
+fn push_error(body: &mut Vec<DialogBlock>, prefix: &str, error: Option<&str>) {
+    if let Some(error) = error {
+        body.push(DialogBlock::error(format!("{prefix}: {error}")));
     }
 }
 
@@ -1339,86 +747,193 @@ fn display_permissions(permissions: impl IntoIterator<Item = PluginPermission>) 
     }
 }
 
-/// What a review says above its permission rows.
-fn push_permission_prompt(
-    body: &mut Vec<DialogBlock>,
-    requested: &PluginPermissions,
-    enable: bool,
-) {
-    let count = requested.iter().count();
-    body.push(DialogBlock::text(if count == 0 {
-        "It asks for no permissions.".to_owned()
+/// One line per permission: what it allows, with its window scope, and its
+/// name.
+fn permission_lines(permissions: impl IntoIterator<Item = PluginPermission>) -> String {
+    permissions
+        .into_iter()
+        .map(|permission| format!("{} · {permission}", permission.label()))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// What a review says about the permissions it grants.
+fn push_requests(body: &mut Vec<DialogBlock>, requested: &PluginPermissions) {
+    if requested.is_empty() {
+        body.push(DialogBlock::text("It asks for no permissions."));
     } else {
-        format!("It asks for {count} permissions. Pick one to grant or withhold it.")
-    }));
-    if !enable {
         body.push(DialogBlock::text(
-            "It can be turned on only with every permission granted.",
+            "It asks for these permissions. Turning it on grants them all; turned off, it gets none until you grant them on its page.",
         ));
+        body.push(DialogBlock::value(permission_lines(requested.iter())));
     }
 }
 
-/// One row per requested permission, showing what it allows with its
-/// window scope and whether the pending grants cover it, then rows to
-/// grant every request or clear every grant.
-fn permission_rows(
-    requested: &PluginPermissions,
-    grants: &PluginPermissions,
-    note: impl Fn(PluginPermission) -> Option<&'static str>,
-) -> Vec<DialogRow> {
-    let mut rows: Vec<DialogRow> = requested
-        .iter()
-        .map(|permission| {
-            let state = if grants.covers(permission) {
-                "Granted"
-            } else {
-                "Not granted"
-            };
-            let detail = match note(permission) {
-                Some(note) => format!("{state}, {note}"),
-                None => state.to_owned(),
-            };
-            DialogRow::new(
-                format!("permission:{permission}"),
-                format!("{} · {permission}", permission.label()),
-            )
-            .with_detail(detail)
-        })
-        .collect();
-    if grants != requested {
-        rows.push(DialogRow::new("grant-all", "Grant all"));
+fn install_review(preview: &PluginInstallPreview, error: Option<&str>) -> DialogSpec {
+    let mut body = Vec::new();
+    if !preview.description.is_empty() {
+        body.push(DialogBlock::text(preview.description.as_str()));
     }
-    if !grants.is_empty() {
-        rows.push(DialogRow::new("clear-grants", "Withhold all"));
-    }
-    rows
+    body.push(DialogBlock::value(
+        [
+            format!("{} {}", preview.id, preview.version),
+            format!(
+                "{} profiles · {} commands",
+                preview.profile_count, preview.command_count
+            ),
+            format!("From {}", preview.source.display()),
+            format!("Fingerprint {}", preview.source_fingerprint),
+        ]
+        .join("\n"),
+    ));
+    push_requests(&mut body, &preview.permissions);
+    push_error(&mut body, "Couldn't install it", error);
+    let spec = DialogSpec::confirm(
+        format!("Install {}?", preview.name),
+        body,
+        INSTALL_ENABLED,
+        "Install and turn on",
+        ButtonRole::Suggested,
+    )
+    .cancel_label("Back");
+    between(
+        spec,
+        DialogButton::answer(INSTALL_DISABLED, "Install turned off", ButtonRole::Neutral),
+    )
 }
 
-/// Toggle the grant for one requested permission at exactly its requested
-/// scope. A narrower existing grant is widened rather than removed.
-fn toggle_requested_grant(
-    grants: &mut PluginPermissions,
-    requested: &PluginPermissions,
-    choice: &str,
-) {
-    let Ok(permission) = choice.parse::<PluginPermission>() else {
-        return;
-    };
-    if requested.scope(permission.capability) != Some(permission.scope) {
-        return;
+/// `spec` with `button` between its Cancel and its action.
+fn between(mut spec: DialogSpec, button: DialogButton) -> DialogSpec {
+    spec.buttons.insert(1, button);
+    spec
+}
+
+fn update_review(preview: &PluginUpdatePreview, error: Option<&str>) -> DialogSpec {
+    let added = preview
+        .candidate_permissions
+        .uncovered_by(&preview.current_permissions);
+    let removed = preview
+        .current_permissions
+        .uncovered_by(&preview.candidate_permissions);
+    let mut body = vec![DialogBlock::value(
+        [
+            format!(
+                "{} {} → {}",
+                preview.id, preview.current_version, preview.candidate_version
+            ),
+            format!(
+                "{} → {} profiles · {} → {} commands",
+                preview.current_profile_count,
+                preview.candidate_profile_count,
+                preview.current_command_count,
+                preview.candidate_command_count
+            ),
+            format!("From {}", preview.source.display()),
+            format!(
+                "Installed fingerprint {}",
+                preview.current_source_fingerprint
+            ),
+            format!("New fingerprint {}", preview.candidate_source_fingerprint),
+            format!(
+                "Newly requested: {}",
+                display_permissions(added.iter().copied())
+            ),
+            format!(
+                "No longer requested: {}",
+                display_permissions(removed.iter().copied())
+            ),
+        ]
+        .join("\n"),
+    )];
+    if preview.default_profile_will_be_cleared {
+        body.push(DialogBlock::text(format!(
+            "The default profile {:?} isn't in the new version, so profiles go back to manifest order.",
+            preview.configured_default_profile.as_deref().unwrap_or_default()
+        )));
     }
-    if grants.covers(permission) {
-        grants.remove(permission.capability);
+    body.push(DialogBlock::text(if added.is_empty() {
+        "Permissions that stay keep their grants. It can run only with every permission it asks for."
     } else {
-        grants.set(permission);
+        "Permissions that stay keep their grants. Turning it on also grants the new ones; it can run only with every permission it asks for."
+    }));
+    if !preview.candidate_permissions.is_empty() {
+        body.push(DialogBlock::value(permission_lines(
+            preview.candidate_permissions.iter(),
+        )));
+    }
+    push_error(&mut body, "Couldn't update it", error);
+    let (disabled_label, enabled_label) = if preview.enabled {
+        ("Update and turn off", "Update and keep on")
+    } else {
+        ("Update turned off", "Update and turn on")
+    };
+    let spec = DialogSpec::confirm(
+        format!("Update {}?", preview.name),
+        body,
+        UPDATE_ENABLED,
+        enabled_label,
+        ButtonRole::Suggested,
+    );
+    between(
+        spec,
+        DialogButton::answer(UPDATE_DISABLED, disabled_label, ButtonRole::Neutral),
+    )
+}
+
+/// The prompt for a number or text setting's new value, with "Use
+/// default" while it is `changed`.
+fn setting_prompt(
+    setting: &DeclarativeSetting,
+    changed: bool,
+    value: String,
+    error: Option<&str>,
+) -> DialogSpec {
+    let mut details = vec![format!(
+        "Default {}",
+        setting_value_text(&setting.default_value())
+    )];
+    let max_bytes = match setting {
+        DeclarativeSetting::Integer { min, max, .. } => {
+            details.push(format!("From {min} to {max}"));
+            32
+        }
+        _ => {
+            details.push(format!(
+                "One line, at most {} UTF-8 bytes",
+                crate::plugin::runtime::MAX_SETTING_TEXT_BYTES
+            ));
+            crate::plugin::runtime::MAX_SETTING_TEXT_BYTES
+        }
+    };
+    let mut body = Vec::new();
+    if !setting.description().is_empty() {
+        body.push(DialogBlock::text(setting.description()));
+    }
+    body.push(DialogBlock::value(details.join("\n")));
+    let spec = DialogSpec::prompt(
+        format!("Change {}", setting.name()),
+        body,
+        FieldSpec::new("Value", value, max_bytes)
+            .with_error(error.map(crate::safe_text::capitalized)),
+        SAVE,
+        "Save",
+    );
+    if changed {
+        between(
+            spec,
+            DialogButton::answer(UNSET, "Use default", ButtonRole::Neutral),
+        )
+    } else {
+        spec
     }
 }
 
-fn display_setting_value(value: &PluginSettingValue) -> String {
+/// A setting's value as typed into its prompt.
+fn raw_setting_value(value: &crate::plugin::runtime::PluginSettingValue) -> String {
     match value {
-        PluginSettingValue::Boolean(value) => value.to_string(),
-        PluginSettingValue::Integer(value) => value.to_string(),
-        PluginSettingValue::Text(value) => format!("{value:?}"),
+        crate::plugin::runtime::PluginSettingValue::Boolean(value) => value.to_string(),
+        crate::plugin::runtime::PluginSettingValue::Integer(value) => value.to_string(),
+        crate::plugin::runtime::PluginSettingValue::Text(value) => value.clone(),
     }
 }
 
@@ -1426,8 +941,9 @@ fn display_setting_value(value: &PluginSettingValue) -> String {
 mod tests {
     use super::*;
     use crate::plugin::permission::{Capability, PermissionScope};
-    use crate::plugin::runtime::{InstalledPlugin, PluginAdminCommand, PluginConfigurationChange};
-    use crate::ui::dialog::{CANCEL, DialogAction};
+    use crate::plugin::runtime::{InstalledPlugin, PluginSettingValue};
+    use crate::ui::dialog::DialogAction;
+    use crate::ui::settings::{SettingKind, SettingsAction, SettingsPage, SettingsSection};
 
     fn permissions(values: &[&str]) -> PluginPermissions {
         PluginPermissions::from_permissions(values.iter().map(|value| value.parse().unwrap()))
@@ -1676,235 +1192,6 @@ program = "termeric-test-fixture-must-not-run"
         source
     }
 
-    #[test]
-    fn a_custom_agent_taking_an_installed_plugin_id_is_reported_by_name() {
-        let temp = tempfile::tempdir().unwrap();
-        let registry = temp.path().join("registry.toml");
-        let root = temp.path().join("installed");
-        std::fs::create_dir_all(&root).unwrap();
-        install_fixture(temp.path(), &registry, &root, "local-tool", false);
-        crate::plugin::runtime::execute_admin_at(
-            PluginAdminCommand::Enable {
-                id: "local-tool".into(),
-                grants: PluginPermissions::default(),
-            },
-            &registry,
-            &root,
-        )
-        .unwrap();
-        let mut config = Config::default();
-        config.agents.insert(
-            "local-tool".into(),
-            crate::agents::AgentConfig {
-                name: Some("Local Agent".into()),
-                program: Some("/bin/true".into()),
-                ..Default::default()
-            },
-        );
-        let mut app = App::new_headless(config).unwrap();
-        app.set_runtime_plugin_test_paths(registry, root);
-        app.sync_plugins_from_config();
-        assert!(app.toasts.iter().any(|toast| toast.message
-            == "Third-party plugin local-tool was not loaded: the agent Local Agent uses the same ID"));
-    }
-
-    #[test]
-    fn manager_reviews_permissions_and_installs_local_plugin() {
-        let temp = tempfile::tempdir().unwrap();
-        let registry = temp.path().join("registry.toml");
-        let root = temp.path().join("installed");
-        let source = temp.path().join("source-local-tool");
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::create_dir_all(&source).unwrap();
-        std::fs::write(
-            source.join(crate::plugin::runtime::MANIFEST_NAME),
-            fixture_manifest("local-tool", "1.0.0", false),
-        )
-        .unwrap();
-
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.set_runtime_plugin_test_paths(registry.clone(), root.clone());
-        app.open_runtime_plugin_manager();
-        assert!(app.dialog.answers(app.dialog.request_id(), "install"));
-        app.answer_dialog("install");
-        let cancelled_request = app.dialog.request_id();
-        app.apply_dialog_action(DialogAction::Answer {
-            request_id: cancelled_request,
-            id: CANCEL.into(),
-        });
-        assert!(app.dialog.answers(app.dialog.request_id(), "install"));
-        app.answer_dialog("install");
-        app.submit_dialog_field("relative/plugin");
-        assert_eq!(app.dialog.title(), "Install a plugin");
-        assert!(
-            app.dialog
-                .field(app.dialog.request_id())
-                .unwrap()
-                .error
-                .is_some()
-        );
-
-        app.submit_dialog_field(&source.display().to_string());
-        assert_eq!(app.dialog.title(), "Install Fixture local-tool?");
-        assert!(app.dialog_text().contains(&source.display().to_string()));
-        assert!(app.dialog_text().contains("fnv1a64:"));
-        assert!(
-            app.dialog
-                .answers(app.dialog.request_id(), "permission:process-spawn")
-        );
-        assert!(
-            !app.dialog
-                .answers(app.dialog.request_id(), "install-enabled")
-        );
-        app.answer_dialog("permission:process-spawn");
-        assert!(
-            app.dialog
-                .answers(app.dialog.request_id(), "install-enabled")
-        );
-        app.answer_dialog("install-enabled");
-
-        let (_, statuses) =
-            crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
-        assert_eq!(statuses.len(), 1);
-        assert_eq!(statuses[0].id, "local-tool");
-        assert!(statuses[0].enabled);
-        assert_eq!(statuses[0].granted, permissions(&["process-spawn"]));
-        assert!(!app.dialog.answers(app.dialog.request_id(), "install"));
-        assert!(app.dialog.answers(app.dialog.request_id(), "remove"));
-
-        app.answer_dialog(CANCEL);
-        app.answer_dialog("install");
-        app.submit_dialog_field(&source.display().to_string());
-        assert_eq!(app.dialog.title(), "Install a plugin");
-        assert!(
-            app.dialog
-                .field(app.dialog.request_id())
-                .unwrap()
-                .error
-                .is_some()
-        );
-        let (_, statuses) =
-            crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
-        assert_eq!(statuses.len(), 1);
-    }
-
-    #[test]
-    fn manager_reviews_an_installed_plugins_permissions_before_enabling_it() {
-        let temp = tempfile::tempdir().unwrap();
-        let registry = temp.path().join("registry.toml");
-        let root = temp.path().join("installed");
-        let source = temp.path().join("source-local-tool");
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::create_dir_all(&source).unwrap();
-        std::fs::write(
-            source.join(crate::plugin::runtime::MANIFEST_NAME),
-            fixture_manifest("local-tool", "1.0.0", false),
-        )
-        .unwrap();
-        crate::plugin::runtime::execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: PluginPermissions::default(),
-                enable: false,
-                replace: false,
-            },
-            &registry,
-            &root,
-        )
-        .unwrap();
-        // The review reads the installed manifest, not the source.
-        std::fs::remove_dir_all(&source).unwrap();
-        let status = || {
-            let (_, statuses) =
-                crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
-            (statuses[0].granted.clone(), statuses[0].enabled)
-        };
-
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.set_runtime_plugin_test_paths(registry.clone(), root.clone());
-        app.open_runtime_plugin_manager();
-        app.answer_dialog("plugin:local-tool");
-        assert_eq!(app.dialog.title(), "Fixture local-tool");
-
-        // Enabling a plugin that lacks a grant opens its permission review.
-        app.answer_dialog("toggle");
-        assert_eq!(app.dialog.title(), "Fixture local-tool permissions");
-        let request_id = app.dialog.request_id();
-        assert!(!app.dialog.answers(request_id, "save-enabled"));
-        assert!(app.dialog.answers(request_id, "save-disabled"));
-        app.answer_dialog("permission:process-spawn");
-        app.answer_dialog("save-enabled");
-        assert_eq!(status(), (permissions(&["process-spawn"]), true));
-        assert_eq!(app.dialog.title(), "Fixture local-tool");
-
-        // The same review withdraws grants, which disables the plugin.
-        app.answer_dialog("permissions");
-        app.answer_dialog("clear-grants");
-        assert!(!app.dialog.answers(app.dialog.request_id(), "save-enabled"));
-        app.answer_dialog("save-disabled");
-        assert_eq!(status(), (PluginPermissions::default(), false));
-
-        // A review the registry has moved past is refused, not applied.
-        app.answer_dialog("permissions");
-        crate::plugin::runtime::execute_admin_at(
-            PluginAdminCommand::Grant {
-                id: "local-tool".into(),
-                grants: permissions(&["process-spawn"]),
-            },
-            &registry,
-            &root,
-        )
-        .unwrap();
-        app.answer_dialog("save-disabled");
-        assert_eq!(app.dialog.title(), "Fixture local-tool permissions");
-        assert!(app.dialog_text().contains("changed after review"));
-        assert_eq!(status(), (permissions(&["process-spawn"]), false));
-    }
-
-    #[test]
-    fn manager_rejects_source_changed_after_install_review() {
-        let temp = tempfile::tempdir().unwrap();
-        let registry = temp.path().join("registry.toml");
-        let root = temp.path().join("installed");
-        let source = temp.path().join("source-stale-tool");
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::create_dir_all(&source).unwrap();
-        std::fs::write(
-            source.join(crate::plugin::runtime::MANIFEST_NAME),
-            fixture_manifest("stale-tool", "1.0.0", false),
-        )
-        .unwrap();
-
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.set_runtime_plugin_test_paths(registry.clone(), root.clone());
-        app.open_runtime_plugin_manager();
-        app.answer_dialog("install");
-        app.submit_dialog_field(&source.display().to_string());
-        let stale_request = app.dialog.request_id();
-        std::fs::write(
-            source.join(crate::plugin::runtime::MANIFEST_NAME),
-            fixture_manifest("stale-tool", "2.0.0", false),
-        )
-        .unwrap();
-        app.apply_dialog_action(DialogAction::Answer {
-            request_id: stale_request + 1,
-            id: "install-disabled".into(),
-        });
-        assert_eq!(app.dialog.request_id(), stale_request);
-        app.apply_dialog_action(DialogAction::Answer {
-            request_id: stale_request,
-            id: "permission:not-a-permission".into(),
-        });
-        assert_eq!(app.dialog.request_id(), stale_request);
-        app.answer_dialog("install-disabled");
-        assert_eq!(app.dialog.title(), "Install Fixture stale-tool?");
-        assert!(app.dialog_text().contains("source changed after review"));
-        let (_, statuses) =
-            crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
-        assert!(statuses.is_empty());
-        assert!(!root.join("stale-tool").exists());
-    }
-
     fn every_permission() -> PluginPermissions {
         PluginPermissions::from_permissions(Capability::ALL.into_iter().map(|capability| {
             PluginPermission {
@@ -1919,52 +1206,333 @@ program = "termeric-test-fixture-must-not-run"
         .unwrap()
     }
 
-    /// The label and detail of the open review's row answering `id`.
-    fn row(app: &App, id: &str) -> (String, Option<String>) {
-        let row = app
-            .dialog
-            .rows()
-            .iter()
-            .find(|row| row.id == id)
-            .unwrap_or_else(|| panic!("no row {id}"));
-        (row.label.clone(), row.detail.clone())
+    /// A test registry and installed-plugin root under a temporary
+    /// directory.
+    struct Fixture {
+        temp: tempfile::TempDir,
+        registry: PathBuf,
+        root: PathBuf,
     }
 
-    fn assert_every_permission_is_listed_with_its_scope(app: &mut App) {
-        let request_id = app.dialog.request_id();
-        // One scrolling list holds every permission.
-        for permission in every_permission().iter() {
-            assert!(
-                app.dialog
-                    .answers(request_id, &format!("permission:{permission}")),
-                "{permission}"
-            );
+    impl Fixture {
+        fn new() -> Self {
+            let temp = tempfile::tempdir().unwrap();
+            let registry = temp.path().join("registry.toml");
+            let root = temp.path().join("installed");
+            std::fs::create_dir_all(&root).unwrap();
+            Self {
+                temp,
+                registry,
+                root,
+            }
         }
-        let granted = |app: &App, id: &str| {
-            row(app, id)
-                .1
-                .is_some_and(|detail| detail.starts_with("Granted"))
-        };
-        let (label, _) = row(app, "permission:pane-create:all-windows");
-        assert_eq!(
-            label,
-            "Create panes (all windows) · pane-create:all-windows"
-        );
-        assert_eq!(
-            row(app, "permission:process-spawn").0,
-            "Start processes · process-spawn"
-        );
-        assert!(!granted(app, "permission:pane-create:all-windows"));
 
-        // A row must name the exact requested scope to toggle a grant.
-        app.answer_dialog("permission:pane-create:all-windows");
-        assert!(granted(app, "permission:pane-create:all-windows"));
-        let request_id = app.dialog.request_id();
+        fn base(&self) -> &std::path::Path {
+            self.temp.path()
+        }
+
+        fn statuses(&self) -> Vec<RuntimePluginStatus> {
+            crate::plugin::runtime::discover_runtime_plugins_at(&self.registry, &self.root)
+                .unwrap()
+                .1
+        }
+
+        /// Settings open on the Plugins page over these plugins.
+        fn app(&self) -> App {
+            let mut app = App::new_headless(Config::default()).unwrap();
+            app.set_runtime_plugin_test_paths(self.registry.clone(), self.root.clone());
+            app.settings_panel.set_reduced_motion(true);
+            app.dialog.set_reduced_motion(true);
+            app.settings_panel.toggle();
+            app.settings_panel.select_page(SettingsPage::Plugins);
+            app
+        }
+    }
+
+    /// Activate the row `label` of `section` as a press or Enter would.
+    fn activate(app: &mut App, section: SettingsSection, label: &str) {
+        let action = app.settings_panel.accessibility_activate_setting(
+            section,
+            label,
+            &app.config,
+            &app.shortcut_registry,
+        );
+        assert!(
+            !matches!(action, SettingsAction::None),
+            "{label:?} does nothing"
+        );
+        app.apply_settings_action(action);
+    }
+
+    /// Pick `option` from the dropdown of the row `label`.
+    fn choose(app: &mut App, section: SettingsSection, label: &str, option: &str) {
+        assert!(app.settings_panel.accessibility_set_dropdown_expanded(
+            section,
+            label,
+            true,
+            &app.config,
+            &app.shortcut_registry,
+        ));
+        let action = app.settings_panel.accessibility_choose_dropdown_option(
+            section,
+            label,
+            option,
+            &app.config,
+            &app.shortcut_registry,
+        );
+        assert!(
+            !matches!(action, SettingsAction::None),
+            "{label:?} has no {option:?}"
+        );
+        app.apply_settings_action(action);
+    }
+
+    /// Flip a plugin row's switch.
+    fn flip(app: &mut App, label: &str) {
+        let action = app.settings_panel.accessibility_flip_switch(
+            SettingsSection::Plugins,
+            label,
+            &app.config,
+            &app.shortcut_registry,
+        );
+        app.apply_settings_action(action);
+    }
+
+    fn open_plugin(app: &mut App, id: &str) {
+        app.apply_settings_action(SettingsAction::OpenSubPage(SettingsSubPage::Plugin(
+            id.into(),
+        )));
+        assert_eq!(
+            app.settings_panel.sub_page(),
+            Some(&SettingsSubPage::Plugin(id.into()))
+        );
+    }
+
+    fn rows(app: &App) -> Vec<crate::ui::settings::SettingEntry> {
+        app.settings_panel
+            .build_entries(&app.config, &app.shortcut_registry)
+    }
+
+    fn row(app: &App, label: &str) -> Option<crate::ui::settings::SettingEntry> {
+        rows(app).into_iter().find(|entry| entry.label == label)
+    }
+
+    fn shows_error(app: &App) -> bool {
+        app.dialog
+            .body()
+            .iter()
+            .any(|block| matches!(block, DialogBlock::Error(_)))
+    }
+
+    #[test]
+    fn a_custom_agent_taking_an_installed_plugin_id_is_reported_by_name() {
+        let fixture = Fixture::new();
+        install_fixture(
+            fixture.base(),
+            &fixture.registry,
+            &fixture.root,
+            "local-tool",
+            false,
+        );
+        crate::plugin::runtime::execute_admin_at(
+            PluginAdminCommand::Enable {
+                id: "local-tool".into(),
+                grants: PluginPermissions::default(),
+            },
+            &fixture.registry,
+            &fixture.root,
+        )
+        .unwrap();
+        let mut config = Config::default();
+        config.agents.insert(
+            "local-tool".into(),
+            crate::agents::AgentConfig {
+                name: Some("Local Agent".into()),
+                program: Some("/bin/true".into()),
+                ..Default::default()
+            },
+        );
+        let mut app = App::new_headless(config).unwrap();
+        app.set_runtime_plugin_test_paths(fixture.registry.clone(), fixture.root.clone());
+        app.sync_plugins_from_config();
+        assert!(app.toasts.iter().any(|toast| toast.message
+            == "Third-party plugin local-tool was not loaded: the agent Local Agent uses the same ID"));
+    }
+
+    #[test]
+    fn install_reviews_the_plugin_and_opens_its_page() {
+        let fixture = Fixture::new();
+        let source = fixture.base().join("source-local-tool");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(
+            source.join(crate::plugin::runtime::MANIFEST_NAME),
+            fixture_manifest("local-tool", "1.0.0", false),
+        )
+        .unwrap();
+        let mut app = fixture.app();
+
+        activate(&mut app, SettingsSection::Plugins, "Install a plugin…");
+        app.answer_dialog(CANCEL);
+        assert!(!app.dialog.is_awaiting_current());
+        activate(&mut app, SettingsSection::Plugins, "Install a plugin…");
+        app.submit_dialog_field("relative/plugin");
+        let field = app.dialog.field(app.dialog.request_id()).unwrap();
+        assert_eq!(field.value, "relative/plugin");
+        assert!(field.error.is_some());
+
+        app.submit_dialog_field(&source.display().to_string());
+        let text = app.dialog_text();
+        assert!(text.contains(&source.display().to_string()));
+        assert!(text.contains("fnv1a64:"));
+        assert!(text.contains("Start processes · process-spawn"));
+        // Back returns to the folder it reviewed.
+        app.answer_dialog(CANCEL);
+        assert_eq!(
+            app.dialog.field_value(app.dialog.request_id()),
+            Some(source.display().to_string().as_str())
+        );
+        app.submit_dialog_field(&source.display().to_string());
+        app.answer_dialog(INSTALL_ENABLED);
+
+        let statuses = fixture.statuses();
+        assert_eq!(statuses.len(), 1);
+        assert!(statuses[0].enabled);
+        assert_eq!(statuses[0].granted, permissions(&["process-spawn"]));
+        open_plugin(&mut app, "local-tool");
+        assert!(row(&app, "Remove…").is_some());
+
+        // The same plugin again is refused at its folder.
+        app.settings_panel.leave_sub_page();
+        activate(&mut app, SettingsSection::Plugins, "Install a plugin…");
+        app.submit_dialog_field(&source.display().to_string());
+        assert!(
+            app.dialog
+                .field(app.dialog.request_id())
+                .unwrap()
+                .error
+                .is_some()
+        );
+        assert_eq!(fixture.statuses().len(), 1);
+    }
+
+    #[test]
+    fn turning_on_reviews_missing_grants_and_withholding_one_turns_it_off() {
+        let fixture = Fixture::new();
+        let source = fixture.base().join("source-local-tool");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(
+            source.join(crate::plugin::runtime::MANIFEST_NAME),
+            fixture_manifest("local-tool", "1.0.0", false),
+        )
+        .unwrap();
+        crate::plugin::runtime::execute_admin_at(
+            PluginAdminCommand::Install {
+                directory: source.clone(),
+                grants: PluginPermissions::default(),
+                enable: false,
+                replace: false,
+            },
+            &fixture.registry,
+            &fixture.root,
+        )
+        .unwrap();
+        // The review reads the installed manifest, not the source.
+        std::fs::remove_dir_all(&source).unwrap();
+        let status = || {
+            let statuses = fixture.statuses();
+            (statuses[0].granted.clone(), statuses[0].enabled)
+        };
+        let mut app = fixture.app();
+        let label = "Fixture local-tool";
+        assert_eq!(row(&app, label).unwrap().value, "1.0.0 · Off");
+
+        // Its switch asks before granting what it lacks.
+        flip(&mut app, label);
+        assert!(app.dialog.answers(app.dialog.request_id(), TURN_ON));
+        assert!(app.dialog_text().contains("process-spawn"));
+        assert_eq!(status(), (PluginPermissions::default(), false));
+        app.answer_dialog(TURN_ON);
+        assert_eq!(status(), (permissions(&["process-spawn"]), true));
+        assert_eq!(row(&app, label).unwrap().value, "1.0.0 · On");
+
+        // Withholding from a plugin that is on asks, then turns it off.
+        open_plugin(&mut app, "local-tool");
+        choose(
+            &mut app,
+            SettingsSection::PluginPermissions,
+            "Start processes",
+            "Off",
+        );
+        assert_eq!(status(), (permissions(&["process-spawn"]), true));
+        app.answer_dialog(WITHHOLD);
+        assert_eq!(status(), (PluginPermissions::default(), false));
+
+        // Granting asks too, and leaves it off.
+        choose(
+            &mut app,
+            SettingsSection::PluginPermissions,
+            "Start processes",
+            "On",
+        );
+        let review = app.dialog.request_id();
+        // A review the registry has moved past is refused, not applied.
+        crate::plugin::runtime::execute_admin_at(
+            PluginAdminCommand::Grant {
+                id: "local-tool".into(),
+                grants: permissions(&["process-spawn"]),
+            },
+            &fixture.registry,
+            &fixture.root,
+        )
+        .unwrap();
+        app.answer_dialog(GRANT);
+        assert_ne!(app.dialog.request_id(), review);
+        assert!(shows_error(&app));
+        assert_eq!(status(), (permissions(&["process-spawn"]), false));
+
+        // The switch turns it off directly.
+        app.answer_dialog(CANCEL);
+        flip(&mut app, label);
+        app.settings_panel.leave_sub_page();
+        flip(&mut app, label);
+        assert_eq!(status(), (permissions(&["process-spawn"]), true));
+        flip(&mut app, label);
+        assert_eq!(status(), (permissions(&["process-spawn"]), false));
+    }
+
+    #[test]
+    fn an_install_refuses_a_source_changed_after_its_review() {
+        let fixture = Fixture::new();
+        let source = fixture.base().join("source-stale-tool");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(
+            source.join(crate::plugin::runtime::MANIFEST_NAME),
+            fixture_manifest("stale-tool", "1.0.0", false),
+        )
+        .unwrap();
+        let mut app = fixture.app();
+        activate(&mut app, SettingsSection::Plugins, "Install a plugin…");
+        app.submit_dialog_field(&source.display().to_string());
+        let review = app.dialog.request_id();
+        std::fs::write(
+            source.join(crate::plugin::runtime::MANIFEST_NAME),
+            fixture_manifest("stale-tool", "2.0.0", false),
+        )
+        .unwrap();
+        // An answer for another request does nothing.
         app.apply_dialog_action(DialogAction::Answer {
-            request_id,
-            id: "permission:pane-create".into(),
+            request_id: review + 1,
+            id: INSTALL_DISABLED.into(),
         });
-        assert!(granted(app, "permission:pane-create:all-windows"));
+        assert_eq!(app.dialog.request_id(), review);
+        app.answer_dialog(INSTALL_DISABLED);
+        assert!(
+            app.dialog
+                .answers(app.dialog.request_id(), INSTALL_DISABLED)
+        );
+        assert!(shows_error(&app));
+        assert!(fixture.statuses().is_empty());
+        assert!(!fixture.root.join("stale-tool").exists());
     }
 
     #[test]
@@ -1981,8 +1549,15 @@ program = "termeric-test-fixture-must-not-run"
             command_count: 0,
         };
         let mut app = App::new_headless(Config::default()).unwrap();
-        app.show_runtime_plugin_install_review(preview, PluginPermissions::default(), None);
-        assert_every_permission_is_listed_with_its_scope(&mut app);
+        app.ask_plugin(PluginQuestion::ReviewInstall(preview), String::new(), None);
+        let text = app.dialog_text();
+        for permission in every_permission().iter() {
+            assert!(
+                text.contains(&format!("{} · {permission}", permission.label())),
+                "{permission}"
+            );
+        }
+        assert!(text.contains("Create panes (all windows) · pane-create:all-windows"));
     }
 
     #[test]
@@ -2017,21 +1592,30 @@ program = "termeric-test-fixture-must-not-run"
             expected_installed,
         };
         let mut app = App::new_headless(Config::default()).unwrap();
-        app.show_runtime_plugin_update_review(
-            Box::new(preview),
-            PluginPermissions::default(),
+        app.ask_plugin(
+            PluginQuestion::ReviewUpdate(Box::new(preview)),
+            String::new(),
             None,
         );
-        assert_every_permission_is_listed_with_its_scope(&mut app);
+        let text = app.dialog_text();
+        for permission in every_permission().iter() {
+            assert!(
+                text.contains(&format!("{} · {permission}", permission.label())),
+                "{permission}"
+            );
+        }
     }
 
     #[test]
-    fn manager_selects_and_clears_default_profile_without_other_mutation() {
-        let temp = tempfile::tempdir().unwrap();
-        let registry = temp.path().join("registry.toml");
-        let root = temp.path().join("installed");
-        std::fs::create_dir_all(&root).unwrap();
-        install_profile_fixture(temp.path(), &registry, &root, "profile-tool", 2);
+    fn the_default_profile_is_chosen_and_cleared_without_other_changes() {
+        let fixture = Fixture::new();
+        install_profile_fixture(
+            fixture.base(),
+            &fixture.registry,
+            &fixture.root,
+            "profile-tool",
+            2,
+        );
         crate::plugin::runtime::execute_admin_at(
             PluginAdminCommand::Configure {
                 id: "profile-tool".into(),
@@ -2040,82 +1624,60 @@ program = "termeric-test-fixture-must-not-run"
                     value: "false".into(),
                 },
             },
-            &registry,
-            &root,
+            &fixture.registry,
+            &fixture.root,
         )
         .unwrap();
-        let installed_manifest = root
+        let installed_manifest = fixture
+            .root
             .join("profile-tool")
             .join(crate::plugin::runtime::MANIFEST_NAME);
         let installed_bytes = std::fs::read(&installed_manifest).unwrap();
-        let (_, before) =
-            crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
-        let before = before.into_iter().next().unwrap();
+        let before = fixture.statuses().remove(0);
 
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.set_runtime_plugin_test_paths(registry.clone(), root.clone());
-        app.open_runtime_plugin_manager();
-        app.answer_dialog("plugin:profile-tool");
-        assert!(
-            app.dialog_text()
-                .contains("Default profile: Profile 0 (profile-0), manifest order")
+        let mut app = fixture.app();
+        open_plugin(&mut app, "profile-tool");
+        let general = SettingsSection::PluginGeneral;
+        assert_eq!(
+            row(&app, "Default Profile").unwrap().value,
+            "Default (Profile 0)"
         );
-        app.answer_dialog("choose-default-profile");
-        let picker_request = app.dialog.request_id();
-        app.apply_dialog_action(DialogAction::Answer {
-            request_id: picker_request + 1,
-            id: "profile:profile-1".into(),
-        });
-        assert_eq!(app.dialog.request_id(), picker_request);
-        app.apply_dialog_action(DialogAction::Answer {
-            request_id: picker_request,
-            id: "profile:not-declared".into(),
-        });
-        assert_eq!(app.dialog.request_id(), picker_request);
-        app.answer_dialog("profile:profile-1");
-
-        let (_, selected) =
-            crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
-        let selected = selected.into_iter().next().unwrap();
+        choose(&mut app, general, "Default Profile", "Profile 1");
+        let selected = fixture.statuses().remove(0);
         assert_eq!(
             selected.configured_default_profile.as_deref(),
             Some("profile-1")
         );
-        assert!(
-            app.dialog_text()
-                .contains("Default profile: Profile 1 (profile-1), chosen")
-        );
+        assert_eq!(row(&app, "Default Profile").unwrap().value, "Profile 1");
         assert_eq!(selected.enabled, before.enabled);
         assert_eq!(selected.source, before.source);
         assert_eq!(selected.requested, before.requested);
         assert_eq!(selected.granted, before.granted);
         assert_eq!(selected.settings, before.settings);
-        assert_eq!(std::fs::read(&installed_manifest).unwrap(), installed_bytes);
 
-        app.answer_dialog("choose-default-profile");
-        assert!(
-            app.dialog
-                .answers(app.dialog.request_id(), "manifest-order")
-        );
-        app.answer_dialog("manifest-order");
-        let (_, reset) =
-            crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
-        assert!(reset[0].configured_default_profile.is_none());
-        assert!(
-            app.dialog_text()
-                .contains("Default profile: Profile 0 (profile-0), manifest order")
-        );
+        choose(&mut app, general, "Default Profile", "Default (Profile 0)");
+        assert!(fixture.statuses()[0].configured_default_profile.is_none());
         assert_eq!(std::fs::read(installed_manifest).unwrap(), installed_bytes);
+
+        // A profile the plugin no longer has is refused.
+        app.apply_settings_action(SettingsAction::Plugin(PluginAction::SetDefaultProfile {
+            id: "profile-tool".into(),
+            profile: Some("not-declared".into()),
+        }));
+        assert!(fixture.statuses()[0].configured_default_profile.is_none());
     }
 
     #[test]
-    fn default_profile_picker_lists_every_profile_and_is_hidden_for_event_only_plugins() {
-        let temp = tempfile::tempdir().unwrap();
-        let registry = temp.path().join("registry.toml");
-        let root = temp.path().join("installed");
-        std::fs::create_dir_all(&root).unwrap();
-        install_profile_fixture(temp.path(), &registry, &root, "many-profiles", 32);
-        let event_source = temp.path().join("source-event-only");
+    fn every_profile_is_offered_and_an_event_only_plugin_has_no_default_profile() {
+        let fixture = Fixture::new();
+        install_profile_fixture(
+            fixture.base(),
+            &fixture.registry,
+            &fixture.root,
+            "many-profiles",
+            32,
+        );
+        let event_source = fixture.base().join("source-event-only");
         std::fs::create_dir_all(&event_source).unwrap();
         std::fs::write(
             event_source.join(crate::plugin::runtime::MANIFEST_NAME),
@@ -2129,87 +1691,43 @@ program = "termeric-test-fixture-must-not-run"
                 enable: false,
                 replace: false,
             },
-            &registry,
-            &root,
+            &fixture.registry,
+            &fixture.root,
         )
         .unwrap();
 
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.set_runtime_plugin_test_paths(registry, root);
-        app.open_runtime_plugin_manager();
-        app.answer_dialog("plugin:many-profiles");
-        app.answer_dialog("choose-default-profile");
-        // Every profile in one list, and Back to the plugin.
-        assert_eq!(app.dialog.rows().len(), 32);
-        assert!(app.dialog.answers(app.dialog.request_id(), CANCEL));
-
-        app.open_runtime_plugin_manager();
-        app.answer_dialog("plugin:event-only");
-        assert!(
-            !app.dialog
-                .answers(app.dialog.request_id(), "choose-default-profile")
-        );
-        assert!(app.dialog_text().contains("Default profile: none"));
-    }
-
-    #[test]
-    fn removed_profile_cannot_be_selected_from_a_stale_picker() {
-        let temp = tempfile::tempdir().unwrap();
-        let registry = temp.path().join("registry.toml");
-        let root = temp.path().join("installed");
-        std::fs::create_dir_all(&root).unwrap();
-        let source = install_profile_fixture(temp.path(), &registry, &root, "changing-tool", 2);
-
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.set_runtime_plugin_test_paths(registry.clone(), root.clone());
-        app.open_runtime_plugin_manager();
-        app.answer_dialog("plugin:changing-tool");
-        app.answer_dialog("choose-default-profile");
-        let stale_request = app.dialog.request_id();
-        assert!(app.dialog.answers(stale_request, "profile:profile-1"));
-        std::fs::write(
-            source.join(crate::plugin::runtime::MANIFEST_NAME),
-            profile_fixture_manifest("changing-tool", "2.0.0", 1),
-        )
-        .unwrap();
-        crate::plugin::runtime::execute_admin_at(
-            PluginAdminCommand::Update {
-                id: "changing-tool".into(),
-            },
-            &registry,
-            &root,
-        )
-        .unwrap();
-        app.apply_dialog_action(DialogAction::Answer {
-            request_id: stale_request,
-            id: "profile:profile-1".into(),
-        });
-
-        let (_, statuses) =
-            crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
-        assert!(statuses[0].configured_default_profile.is_none());
+        let mut app = fixture.app();
+        open_plugin(&mut app, "many-profiles");
+        let profile = row(&app, "Default Profile").unwrap();
+        let SettingKind::Dropdown { options, .. } = profile.kind else {
+            panic!("the default profile is a dropdown");
+        };
+        assert_eq!(options.len(), 33, "the default and every profile");
+        app.settings_panel.leave_sub_page();
+        open_plugin(&mut app, "event-only");
+        assert!(row(&app, "Default Profile").is_none());
+        // Its permissions are toggles, one per request.
         assert_eq!(
-            app.dialog.title(),
-            "Default profile for Fixture changing-tool"
-        );
-        assert!(
-            !app.dialog
-                .answers(app.dialog.request_id(), "profile:profile-1")
-        );
-        assert!(
-            app.toasts
+            rows(&app)
                 .iter()
-                .any(|toast| toast.message.contains("no longer exists"))
+                .filter(
+                    |entry| entry.section == SettingsSection::PluginPermissions && !entry.is_header
+                )
+                .count(),
+            2
         );
     }
 
     #[test]
-    fn manager_uses_request_scoped_validated_actions_and_preserves_original_source() {
-        let temp = tempfile::tempdir().unwrap();
-        let registry = temp.path().join("registry.toml");
-        let root = temp.path().join("installed");
-        std::fs::create_dir_all(&root).unwrap();
-        let source = install_fixture(temp.path(), &registry, &root, "fixture-tool", true);
+    fn update_reset_and_remove_ask_first_and_keep_the_source() {
+        let fixture = Fixture::new();
+        let source = install_fixture(
+            fixture.base(),
+            &fixture.registry,
+            &fixture.root,
+            "fixture-tool",
+            true,
+        );
         crate::plugin::runtime::execute_admin_at(
             PluginAdminCommand::Configure {
                 id: "fixture-tool".into(),
@@ -2218,90 +1736,69 @@ program = "termeric-test-fixture-must-not-run"
                     value: "false".into(),
                 },
             },
-            &registry,
-            &root,
+            &fixture.registry,
+            &fixture.root,
         )
         .unwrap();
-
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.set_runtime_plugin_test_paths(registry.clone(), root.clone());
-        app.open_runtime_plugin_manager();
-        let dismissed_request = app.dialog.request_id();
-        app.apply_dialog_action(DialogAction::Close {
-            request_id: dismissed_request,
-        });
-        assert!(app.pending_runtime_plugin_management().is_none());
-
-        app.open_runtime_plugin_manager();
-        let list_request = app.dialog.request_id();
-        app.apply_dialog_action(DialogAction::Answer {
-            request_id: list_request + 1,
-            id: "plugin:fixture-tool".into(),
-        });
-        assert_eq!(app.dialog.request_id(), list_request);
-        assert!(matches!(
-            app.pending_runtime_plugin_management()
-                .map(|pending| &pending.view),
-            Some(RuntimePluginManagerView::List)
-        ));
-
-        app.answer_dialog("plugin:fixture-tool");
-        assert!(app.dialog_text().contains(&source.display().to_string()));
-        assert!(app.dialog_text().contains("verbose = false"));
-        assert!(
-            app.dialog
-                .answers(app.dialog.request_id(), "reset-settings")
+        let mut app = fixture.app();
+        open_plugin(&mut app, "fixture-tool");
+        assert_eq!(
+            row(&app, "Source").unwrap().value,
+            source.display().to_string()
         );
+        assert_eq!(row(&app, "Verbose").unwrap().value, "Off");
+        let manage = SettingsSection::PluginManage;
 
         std::fs::write(
             source.join(crate::plugin::runtime::MANIFEST_NAME),
             fixture_manifest("fixture-tool", "2.0.0", true),
         )
         .unwrap();
-        app.answer_dialog("update");
-        assert_eq!(app.dialog.title(), "Update Fixture fixture-tool?");
-        app.answer_dialog("update-disabled");
-        let (_, statuses) =
-            crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
+        activate(&mut app, manage, "Update…");
+        let review = app.dialog.request_id();
+        app.apply_dialog_action(DialogAction::Answer {
+            request_id: review + 1,
+            id: UPDATE_DISABLED.into(),
+        });
+        assert_eq!(fixture.statuses()[0].version, "1.0.0");
+        app.answer_dialog(UPDATE_DISABLED);
+        let statuses = fixture.statuses();
         assert_eq!(statuses[0].version, "2.0.0");
         assert_eq!(statuses[0].configured_setting_count, 1);
+        assert_eq!(row(&app, "Version").unwrap().value, "2.0.0");
 
-        app.answer_dialog("reset-settings");
-        assert_eq!(app.dialog.title(), "Reset the settings of fixture-tool?");
-        app.answer_dialog("confirm");
-        let (_, statuses) =
-            crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
-        assert_eq!(statuses[0].configured_setting_count, 0);
-        assert!(
-            !app.dialog
-                .answers(app.dialog.request_id(), "reset-settings")
+        activate(&mut app, manage, "Reset settings…");
+        assert_eq!(
+            app.dialog.focus(),
+            Some(crate::ui::dialog::DialogFocus::Button(0)),
+            "Cancel is focused"
         );
+        app.answer_dialog(CONFIRM);
+        assert_eq!(fixture.statuses()[0].configured_setting_count, 0);
+        assert!(row(&app, "Reset settings…").is_none());
 
-        app.answer_dialog("toggle");
-        let (_, statuses) =
-            crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
-        assert!(statuses[0].enabled);
-
-        app.answer_dialog("remove");
-        assert_eq!(app.dialog.title(), "Remove fixture-tool?");
+        activate(&mut app, manage, "Remove…");
         app.answer_dialog(CANCEL);
-        assert!(!app.dialog.answers(app.dialog.request_id(), "install"));
-        assert!(app.dialog.answers(app.dialog.request_id(), "remove"));
-        app.answer_dialog("remove");
-        app.answer_dialog("confirm");
-        let (_, statuses) =
-            crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
-        assert!(statuses.is_empty());
+        assert_eq!(fixture.statuses().len(), 1);
+        activate(&mut app, manage, "Remove…");
+        app.answer_dialog(CONFIRM);
+        assert!(fixture.statuses().is_empty());
         assert!(source.is_dir(), "the original source must never be removed");
+        // Back on the Plugins page.
+        assert_eq!(app.settings_panel.sub_page(), None);
+        assert!(row(&app, "Install a plugin…").is_some());
     }
 
     #[test]
-    fn manager_reviews_permission_deltas_before_enabling_an_update() {
-        let temp = tempfile::tempdir().unwrap();
-        let registry = temp.path().join("registry.toml");
-        let root = temp.path().join("installed");
-        std::fs::create_dir_all(&root).unwrap();
-        let source = install_fixture(temp.path(), &registry, &root, "permission-tool", false);
+    fn an_update_reviews_permission_changes_before_turning_it_on() {
+        let fixture = Fixture::new();
+        let source = install_fixture(
+            fixture.base(),
+            &fixture.registry,
+            &fixture.root,
+            "permission-tool",
+            false,
+        );
         let candidate = fixture_manifest("permission-tool", "2.0.0", false).replace(
             "permissions = [\"process-spawn\"]",
             "permissions = [\"process-spawn\", \"workspace-query\"]",
@@ -2311,35 +1808,14 @@ program = "termeric-test-fixture-must-not-run"
             candidate,
         )
         .unwrap();
-
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.set_runtime_plugin_test_paths(registry.clone(), root.clone());
-        app.open_runtime_plugin_manager();
-        app.answer_dialog("plugin:permission-tool");
-        app.answer_dialog("update");
-        assert_eq!(app.dialog.title(), "Update Fixture permission-tool?");
-        assert!(app.dialog_text().contains("1.0.0 → 2.0.0"));
-        assert!(
-            app.dialog_text()
-                .contains("Newly requested: workspace-query")
-        );
-        assert!(
-            app.dialog
-                .answers(app.dialog.request_id(), "permission:workspace-query")
-        );
-        assert!(
-            !app.dialog
-                .answers(app.dialog.request_id(), "update-enabled")
-        );
-
-        app.answer_dialog("permission:workspace-query");
-        assert!(
-            app.dialog
-                .answers(app.dialog.request_id(), "update-enabled")
-        );
-        app.answer_dialog("update-enabled");
-        let (_, statuses) =
-            crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
+        let mut app = fixture.app();
+        open_plugin(&mut app, "permission-tool");
+        activate(&mut app, SettingsSection::PluginManage, "Update…");
+        let text = app.dialog_text();
+        assert!(text.contains("1.0.0 → 2.0.0"));
+        assert!(text.contains("Newly requested: workspace-query"));
+        app.answer_dialog(UPDATE_ENABLED);
+        let statuses = fixture.statuses();
         assert_eq!(statuses[0].version, "2.0.0");
         assert!(statuses[0].enabled);
         assert_eq!(
@@ -2353,173 +1829,173 @@ program = "termeric-test-fixture-must-not-run"
             "permissions = [\"process-spawn\", \"workspace-query:all-windows\"]",
         );
         std::fs::write(source.join(crate::plugin::runtime::MANIFEST_NAME), widened).unwrap();
-        app.answer_dialog("update");
+        activate(&mut app, SettingsSection::PluginManage, "Update…");
         assert!(
             app.dialog_text()
                 .contains("Newly requested: workspace-query:all-windows")
         );
+        app.answer_dialog(UPDATE_ENABLED);
         assert_eq!(
-            row(&app, "permission:workspace-query:all-windows"),
-            (
-                "Inspect windows, tabs, and panes (all windows) · workspace-query:all-windows"
-                    .into(),
-                Some("Not granted, new".into())
-            )
-        );
-        assert!(
-            !app.dialog
-                .answers(app.dialog.request_id(), "update-enabled")
-        );
-        app.answer_dialog("permission:workspace-query:all-windows");
-        app.answer_dialog("update-enabled");
-        let (_, statuses) =
-            crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
-        assert_eq!(statuses[0].version, "2.1.0");
-        assert_eq!(
-            statuses[0].granted,
+            fixture.statuses()[0].granted,
             permissions(&["process-spawn", "workspace-query:all-windows"])
         );
 
+        // An update that drops a permission drops its grant and stays on.
         std::fs::write(
             source.join(crate::plugin::runtime::MANIFEST_NAME),
             fixture_manifest("permission-tool", "3.0.0", false),
         )
         .unwrap();
-        app.answer_dialog("update");
+        activate(&mut app, SettingsSection::PluginManage, "Update…");
         assert!(
             app.dialog_text()
                 .contains("No longer requested: workspace-query:all-windows")
         );
-        assert!(
-            app.dialog
-                .answers(app.dialog.request_id(), "update-enabled"),
-            "removed permissions must not leave stale grants that block an enabled update"
-        );
-        app.answer_dialog("update-enabled");
-        let (_, statuses) =
-            crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
+        app.answer_dialog(UPDATE_ENABLED);
+        let statuses = fixture.statuses();
         assert_eq!(statuses[0].version, "3.0.0");
         assert_eq!(statuses[0].granted, permissions(&["process-spawn"]));
         assert!(statuses[0].enabled);
+
+        // Kept turned off, it keeps only the grants it had.
+        let again = fixture_manifest("permission-tool", "4.0.0", false).replace(
+            "permissions = [\"process-spawn\"]",
+            "permissions = [\"process-spawn\", \"workspace-query\"]",
+        );
+        std::fs::write(source.join(crate::plugin::runtime::MANIFEST_NAME), again).unwrap();
+        activate(&mut app, SettingsSection::PluginManage, "Update…");
+        app.answer_dialog(UPDATE_DISABLED);
+        let statuses = fixture.statuses();
+        assert_eq!(statuses[0].version, "4.0.0");
+        assert_eq!(statuses[0].granted, permissions(&["process-spawn"]));
+        assert!(!statuses[0].enabled);
     }
 
     #[test]
-    fn manager_keeps_review_open_when_update_source_drifts() {
-        let temp = tempfile::tempdir().unwrap();
-        let registry = temp.path().join("registry.toml");
-        let root = temp.path().join("installed");
-        std::fs::create_dir_all(&root).unwrap();
-        let source = install_fixture(temp.path(), &registry, &root, "drift-tool", false);
+    fn an_update_review_stays_open_when_its_source_drifts() {
+        let fixture = Fixture::new();
+        let source = install_fixture(
+            fixture.base(),
+            &fixture.registry,
+            &fixture.root,
+            "drift-tool",
+            false,
+        );
         std::fs::write(
             source.join(crate::plugin::runtime::MANIFEST_NAME),
             fixture_manifest("drift-tool", "2.0.0", false),
         )
         .unwrap();
-        let installed_manifest = root
+        let installed_manifest = fixture
+            .root
             .join("drift-tool")
             .join(crate::plugin::runtime::MANIFEST_NAME);
         let installed_before = std::fs::read(&installed_manifest).unwrap();
-        let registry_before = std::fs::read(&registry).unwrap();
-
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.set_runtime_plugin_test_paths(registry.clone(), root.clone());
-        app.open_runtime_plugin_manager();
-        app.answer_dialog("plugin:drift-tool");
-        app.answer_dialog("update");
-        let stale_request = app.dialog.request_id();
-        app.apply_dialog_action(DialogAction::Answer {
-            request_id: stale_request + 1,
-            id: "update-disabled".into(),
-        });
-        assert_eq!(app.dialog.request_id(), stale_request);
-        assert_eq!(std::fs::read(&registry).unwrap(), registry_before);
-        app.apply_dialog_action(DialogAction::Answer {
-            request_id: stale_request,
-            id: "permission:workspace-query".into(),
-        });
-        assert_eq!(std::fs::read(&registry).unwrap(), registry_before);
+        let registry_before = std::fs::read(&fixture.registry).unwrap();
+        let mut app = fixture.app();
+        open_plugin(&mut app, "drift-tool");
+        activate(&mut app, SettingsSection::PluginManage, "Update…");
         std::fs::write(
             source.join(crate::plugin::runtime::MANIFEST_NAME),
             fixture_manifest("drift-tool", "2.0.1", false),
         )
         .unwrap();
-        app.answer_dialog("update-disabled");
-
-        assert_eq!(app.dialog.title(), "Update Fixture drift-tool?");
-        assert!(app.dialog_text().contains("source changed after review"));
+        app.answer_dialog(UPDATE_DISABLED);
+        assert!(app.dialog.answers(app.dialog.request_id(), UPDATE_DISABLED));
+        assert!(shows_error(&app));
         assert_eq!(
             std::fs::read(&installed_manifest).unwrap(),
             installed_before
         );
-        assert_eq!(std::fs::read(&registry).unwrap(), registry_before);
+        assert_eq!(std::fs::read(&fixture.registry).unwrap(), registry_before);
     }
 
     #[test]
-    fn manager_lists_every_plugin_in_one_scrolling_list() {
-        let temp = tempfile::tempdir().unwrap();
-        let registry = temp.path().join("registry.toml");
-        let root = temp.path().join("installed");
-        std::fs::create_dir_all(&root).unwrap();
+    fn every_plugin_is_a_row_and_like_names_show_their_ids() {
+        let fixture = Fixture::new();
         for index in 0..25 {
             install_fixture(
-                temp.path(),
-                &registry,
-                &root,
+                fixture.base(),
+                &fixture.registry,
+                &fixture.root,
                 &format!("fixture-{index:02}"),
                 false,
             );
         }
-
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.set_runtime_plugin_test_paths(registry, root);
-        app.open_runtime_plugin_manager();
-        // One scrolling list instead of pages, and no letter keys.
-        assert_eq!(app.dialog.rows().len(), 25);
-        assert_eq!(app.dialog.rows()[0].id, "plugin:fixture-00");
-        app.answer_dialog("plugin:fixture-24");
-        assert_eq!(app.dialog.title(), "Fixture fixture-24");
+        // Two plugins by one name, and one named like a row of the page.
+        for (id, name) in [("twin-a", "Twin"), ("twin-b", "Twin"), ("status", "Status")] {
+            let source = fixture.base().join(format!("source-{id}"));
+            std::fs::create_dir_all(&source).unwrap();
+            std::fs::write(
+                source.join(crate::plugin::runtime::MANIFEST_NAME),
+                fixture_manifest(id, "1.0.0", false).replace(
+                    &format!("name = \"Fixture {id}\""),
+                    &format!("name = \"{name}\""),
+                ),
+            )
+            .unwrap();
+            crate::plugin::runtime::execute_admin_at(
+                PluginAdminCommand::Install {
+                    directory: source,
+                    grants: PluginPermissions::default(),
+                    enable: false,
+                    replace: false,
+                },
+                &fixture.registry,
+                &fixture.root,
+            )
+            .unwrap();
+        }
+        let mut app = fixture.app();
+        let labels: Vec<String> = rows(&app)
+            .into_iter()
+            .filter(|entry| matches!(entry.kind, SettingKind::SwitchedAction { .. }))
+            .map(|entry| entry.label.into_owned())
+            .collect();
+        assert_eq!(labels.len(), 28);
+        for label in [
+            "Fixture fixture-00",
+            "Twin (twin-a)",
+            "Twin (twin-b)",
+            "Status (status)",
+        ] {
+            assert!(labels.iter().any(|shown| shown == label), "{label}");
+        }
+        activate(&mut app, SettingsSection::Plugins, "Fixture fixture-24");
+        assert_eq!(
+            app.settings_panel.sub_page(),
+            Some(&SettingsSubPage::Plugin("fixture-24".into()))
+        );
+        assert_eq!(
+            app.settings_panel
+                .build_info(&app.config, &app.shortcut_registry)
+                .sub_page_title
+                .as_deref(),
+            Some("Fixture fixture-24")
+        );
     }
 
     #[test]
-    fn manager_edits_every_typed_setting_and_unsets_one_override() {
-        let temp = tempfile::tempdir().unwrap();
-        let registry = temp.path().join("registry.toml");
-        let root = temp.path().join("installed");
-        std::fs::create_dir_all(&root).unwrap();
-        install_typed_fixture(temp.path(), &registry, &root);
+    fn every_setting_type_is_an_ordinary_row_and_its_default_can_return() {
+        let fixture = Fixture::new();
+        install_typed_fixture(fixture.base(), &fixture.registry, &fixture.root);
+        let mut app = fixture.app();
+        open_plugin(&mut app, "typed-tool");
+        let section = SettingsSection::PluginSettings;
+        assert_eq!(row(&app, "Verbose").unwrap().value, "Default (On)");
+        assert_eq!(row(&app, "Limit").unwrap().value, "Default (5)");
 
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.set_runtime_plugin_test_paths(registry.clone(), root.clone());
-        app.open_runtime_plugin_manager();
-        app.answer_dialog("plugin:typed-tool");
-        app.answer_dialog("configure-settings");
-        assert_eq!(app.dialog.title(), "Typed Tool settings");
+        choose(&mut app, section, "Verbose", "Off");
+        activate(&mut app, section, "Limit");
+        // Unchanged, there is no default to return to.
+        assert!(!app.dialog.answers(app.dialog.request_id(), UNSET));
+        assert_eq!(app.dialog.field_value(app.dialog.request_id()), Some("5"));
+        app.submit_dialog_field("7");
+        activate(&mut app, section, "Label");
+        app.submit_dialog_field("warm 🫚");
+        choose(&mut app, section, "Mode", "fast");
 
-        app.answer_dialog("setting:verbose");
-        app.answer_dialog("value:false");
-
-        app.answer_dialog("setting:limit");
-        let request = app.dialog.request_id();
-        assert!(app.dialog.replace_field_text(request, "7"));
-        app.apply_dialog_action(DialogAction::Answer {
-            request_id: request,
-            id: "save".into(),
-        });
-
-        app.answer_dialog("setting:label");
-        let request = app.dialog.request_id();
-        assert!(app.dialog.replace_field_text(request, "warm 🫚"));
-        app.apply_dialog_action(DialogAction::Answer {
-            request_id: request,
-            id: "save".into(),
-        });
-
-        app.answer_dialog("setting:mode");
-        app.answer_dialog("value:1");
-
-        let (_, statuses) =
-            crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
-        let status = &statuses[0];
+        let status = fixture.statuses().remove(0);
         assert_eq!(status.configured_setting_count, 4);
         assert_eq!(
             status.settings["verbose"],
@@ -2534,63 +2010,41 @@ program = "termeric-test-fixture-must-not-run"
             status.settings["mode"],
             PluginSettingValue::Text("fast".into())
         );
+        assert_eq!(row(&app, "Limit").unwrap().value, "7");
 
-        app.answer_dialog("setting:mode");
-        app.answer_dialog("unset");
-        let (_, statuses) =
-            crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
-        let status = &statuses[0];
-        assert_eq!(status.configured_setting_count, 3);
+        choose(&mut app, section, "Mode", "Default (safe)");
+        activate(&mut app, section, "Limit");
+        app.answer_dialog(UNSET);
+        let status = fixture.statuses().remove(0);
+        assert_eq!(status.configured_setting_count, 2);
         assert!(!status.configured_settings.contains_key("mode"));
-        assert_eq!(
-            status.settings["mode"],
-            PluginSettingValue::Text("safe".into())
-        );
+        assert!(!status.configured_settings.contains_key("limit"));
     }
 
     #[test]
-    fn invalid_and_stale_editor_submissions_leave_registry_unchanged() {
-        let temp = tempfile::tempdir().unwrap();
-        let registry = temp.path().join("registry.toml");
-        let root = temp.path().join("installed");
-        std::fs::create_dir_all(&root).unwrap();
-        let source = install_typed_fixture(temp.path(), &registry, &root);
+    fn a_refused_or_stale_setting_leaves_the_registry_unchanged() {
+        let fixture = Fixture::new();
+        let source = install_typed_fixture(fixture.base(), &fixture.registry, &fixture.root);
+        let mut app = fixture.app();
+        open_plugin(&mut app, "typed-tool");
+        let section = SettingsSection::PluginSettings;
+        activate(&mut app, section, "Limit");
+        let cancelled = app.dialog.request_id();
+        assert!(app.dialog.replace_field_text(cancelled, "9"));
+        app.answer_dialog(CANCEL);
+        assert_eq!(fixture.statuses()[0].configured_setting_count, 0);
 
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.set_runtime_plugin_test_paths(registry.clone(), root.clone());
-        app.open_runtime_plugin_manager();
-        app.answer_dialog("plugin:typed-tool");
-        app.answer_dialog("configure-settings");
-        app.answer_dialog("setting:limit");
-        let cancelled_request = app.dialog.request_id();
-        assert!(app.dialog.replace_field_text(cancelled_request, "9"));
-        app.apply_dialog_action(DialogAction::Answer {
-            request_id: cancelled_request,
-            id: CANCEL.into(),
-        });
-        let (_, statuses) =
-            crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
-        assert_eq!(statuses[0].configured_setting_count, 0);
-        assert_eq!(app.dialog.title(), "Typed Tool settings");
+        // Past its maximum: the prompt keeps the text and says why.
+        activate(&mut app, section, "Limit");
+        app.submit_dialog_field("999");
+        let field = app.dialog.field(app.dialog.request_id()).unwrap();
+        assert_eq!(field.value, "999");
+        assert!(field.error.is_some());
+        assert_eq!(fixture.statuses()[0].configured_setting_count, 0);
 
-        app.answer_dialog("setting:limit");
-        let request = app.dialog.request_id();
-        assert!(app.dialog.replace_field_text(request, "999"));
-        app.apply_dialog_action(DialogAction::Answer {
-            request_id: request,
-            id: "save".into(),
-        });
-        assert_eq!(app.dialog.kind(), crate::ui::dialog::DialogKind::Error);
-        let (_, statuses) =
-            crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
-        assert_eq!(statuses[0].configured_setting_count, 0);
-
-        app.open_runtime_plugin_manager();
-        app.answer_dialog("plugin:typed-tool");
-        app.answer_dialog("configure-settings");
-        app.answer_dialog("setting:limit");
-        let stale_request = app.dialog.request_id();
-        assert!(app.dialog.replace_field_text(stale_request, "8"));
+        // The schema changes while the prompt is open.
+        let stale = app.dialog.request_id();
+        assert!(app.dialog.replace_field_text(stale, "8"));
         std::fs::write(
             source.join(crate::plugin::runtime::MANIFEST_NAME),
             typed_fixture_manifest(20),
@@ -2600,31 +2054,26 @@ program = "termeric-test-fixture-must-not-run"
             PluginAdminCommand::Update {
                 id: "typed-tool".into(),
             },
-            &registry,
-            &root,
+            &fixture.registry,
+            &fixture.root,
         )
         .unwrap();
         app.apply_dialog_action(DialogAction::Answer {
-            request_id: stale_request,
-            id: "save".into(),
+            request_id: stale,
+            id: SAVE.into(),
         });
-        let (_, statuses) =
-            crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
-        assert_eq!(statuses[0].configured_setting_count, 0);
-        assert_eq!(app.dialog.title(), "Typed Tool settings");
+        assert_eq!(fixture.statuses()[0].configured_setting_count, 0);
+        assert!(!app.dialog.is_awaiting_current());
         assert!(
             app.toasts
                 .iter()
-                .any(|toast| toast.message.contains("changed after the editor opened"))
+                .any(|toast| toast.message.contains("Setting limit"))
         );
     }
 
     #[test]
-    fn every_setting_and_choice_value_is_listed() {
-        let temp = tempfile::tempdir().unwrap();
-        let registry = temp.path().join("registry.toml");
-        let root = temp.path().join("installed");
-        std::fs::create_dir_all(&root).unwrap();
+    fn every_setting_and_choice_value_is_offered() {
+        let fixture = Fixture::new();
         let settings = (0..32)
             .map(|index| {
                 format!(
@@ -2633,36 +2082,56 @@ program = "termeric-test-fixture-must-not-run"
             })
             .collect::<Vec<_>>()
             .join("\n");
-        install_generated_fixture(temp.path(), &registry, &root, "many-settings", &settings);
+        install_generated_fixture(
+            fixture.base(),
+            &fixture.registry,
+            &fixture.root,
+            "many-settings",
+            &settings,
+        );
         let choice_values = (0..32)
             .map(|index| format!("\"value-{index}\""))
             .collect::<Vec<_>>()
             .join(", ");
         install_generated_fixture(
-            temp.path(),
-            &registry,
-            &root,
+            fixture.base(),
+            &fixture.registry,
+            &fixture.root,
             "many-choices",
             &format!(
                 "[[settings]]\ntype = \"choice\"\nid = \"mode\"\nname = \"Mode\"\ndefault = \"value-0\"\nchoices = [{choice_values}]\n"
             ),
         );
-
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.set_runtime_plugin_test_paths(registry, root);
-        app.open_runtime_plugin_manager();
-        app.answer_dialog("plugin:many-settings");
-        app.answer_dialog("configure-settings");
-        assert_eq!(app.dialog.rows().len(), 32);
-
-        app.open_runtime_plugin_manager();
-        app.answer_dialog("plugin:many-choices");
-        app.answer_dialog("configure-settings");
-        app.answer_dialog("setting:mode");
-        assert_eq!(app.dialog.rows().len(), 32);
-        app.answer_dialog("value:31");
-        let request = app.dialog.request_id();
-        assert_eq!(app.dialog.title(), "Generated many-choices settings");
-        assert!(app.dialog.is_awaiting(request));
+        let mut app = fixture.app();
+        open_plugin(&mut app, "many-settings");
+        assert_eq!(
+            rows(&app)
+                .iter()
+                .filter(|entry| entry.section == SettingsSection::PluginSettings
+                    && !entry.is_header)
+                .count(),
+            32
+        );
+        app.settings_panel.leave_sub_page();
+        open_plugin(&mut app, "many-choices");
+        let SettingKind::Dropdown { options, .. } = row(&app, "Mode").unwrap().kind else {
+            panic!("a choice is a dropdown");
+        };
+        assert_eq!(options.len(), 33, "the default and every choice");
+        choose(
+            &mut app,
+            SettingsSection::PluginSettings,
+            "Mode",
+            "value-31",
+        );
+        let status = fixture
+            .statuses()
+            .into_iter()
+            .find(|status| status.id == "many-choices")
+            .unwrap();
+        assert_eq!(
+            status.settings["mode"],
+            PluginSettingValue::Text("value-31".into())
+        );
     }
 }

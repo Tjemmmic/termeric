@@ -145,6 +145,29 @@ impl App {
                 }
                 _ => {}
             },
+            SettingsSemanticTarget::Switch { section, label } => match request.action {
+                Action::Focus => {
+                    if self.settings_panel.accessibility_focus_setting(
+                        section,
+                        &label,
+                        &self.config,
+                        &self.shortcut_registry,
+                    ) {
+                        self.accessibility.focus_override = Some(request.target_node);
+                    }
+                }
+                Action::Click => {
+                    let action = self.settings_panel.accessibility_flip_switch(
+                        section,
+                        &label,
+                        &self.config,
+                        &self.shortcut_registry,
+                    );
+                    self.accessibility.focus_override = Some(request.target_node);
+                    self.apply_settings_action(action);
+                }
+                _ => {}
+            },
             SettingsSemanticTarget::Option {
                 section,
                 label,
@@ -310,6 +333,34 @@ impl App {
                     node.set_label(entry.label.as_ref());
                     node.add_action(Action::Click);
                     node.add_action(Action::Focus);
+                    node
+                }
+                SettingKind::SwitchedAction { on, .. } => {
+                    let switch_id =
+                        self.accessibility
+                            .settings
+                            .node(&SettingsSemanticTarget::Switch {
+                                section: entry.section,
+                                label: entry.label.to_string(),
+                            });
+                    let mut switch = Node::new(Role::Switch);
+                    switch.set_label(format!("Turn on {}", entry.label));
+                    switch.set_toggled(if *on {
+                        accesskit::Toggled::True
+                    } else {
+                        accesskit::Toggled::False
+                    });
+                    switch.set_bounds(bounds_rect(layout.row_switch(row)));
+                    switch.add_action(Action::Click);
+                    switch.add_action(Action::Focus);
+                    nodes.push((switch_id, switch));
+                    let mut node = Node::new(Role::Button);
+                    node.set_label(entry.label.as_ref());
+                    node.set_description(format!("{} action", entry.section.label()));
+                    node.set_value(entry.value.clone());
+                    node.add_action(Action::Click);
+                    node.add_action(Action::Focus);
+                    node.set_children([switch_id]);
                     node
                 }
                 SettingKind::ReadOnly => {

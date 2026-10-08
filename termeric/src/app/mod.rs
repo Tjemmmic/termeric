@@ -88,7 +88,7 @@ use self::control_actions::Requester;
 use self::file_drop::{ActiveFileUpload, FileUploadCompletion, PendingFileUpload};
 pub(crate) use self::live_domain_control::LiveDomainControl;
 use self::redraw_scheduler::{RedrawReason, RedrawScheduler};
-use self::runtime_plugins::PendingRuntimePluginManagement;
+use self::runtime_plugins::PendingPluginQuestion;
 use self::state::AppState;
 use self::tab_drag::{TabGrab, TabSlide};
 use crate::config::theme::Theme;
@@ -469,8 +469,8 @@ struct PendingUnicodePicker {
 /// A multi-step flow through dialogs. There is at most one, so starting a
 /// flow ends whichever ran before.
 enum DialogFlow {
-    /// Navigation and confirmation for installed third-party plugins.
-    RuntimePlugins(PendingRuntimePluginManagement),
+    /// A question about an installed third-party plugin, from Settings.
+    Plugin(PendingPluginQuestion),
     /// A font range to add, change, or delete, from Settings.
     FontRange(font_ranges::PendingFontRangeQuestion),
     /// An OpenType feature to add, change, or delete, from Settings.

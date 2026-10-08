@@ -297,6 +297,20 @@ impl Renderer {
                         dim,
                     );
                 }
+                SettingKind::SwitchedAction { on, .. } => {
+                    let switch = layout.row_switch(row_index);
+                    self.push_ui_label(
+                        &entry.value,
+                        layout.value_x,
+                        row.y,
+                        row.height,
+                        switch.x - layout.value_x - cell_width,
+                        size,
+                        dim,
+                    );
+                    self.draw_switch(switch, *on, anim);
+                    self.push_icon(Icon::ChevronRight, value_right - cell_width, center_y, dim);
+                }
                 // Drawn above, as the whole row.
                 SettingKind::Button { .. } => {}
                 SettingKind::ReadOnly => {

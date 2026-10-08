@@ -556,29 +556,11 @@ impl App {
                     .error(format!("Third-party plugin {id} failed: {error:#}"));
             }
         }
-        let summary = if let Some(error) = registry_error {
-            format!("Registry rejected: {error}")
-        } else if statuses.is_empty() {
-            "None installed (use `termeric plugin --help`)".into()
-        } else {
-            statuses
-                .iter()
-                .take(4)
-                .map(|status| {
-                    format!(
-                        "{}:{} req=[{}] grant=[{}] settings={}{}",
-                        status.id,
-                        if status.enabled { "on" } else { "off" },
-                        status.requested,
-                        status.granted,
-                        status.settings.len(),
-                        status.diagnostic.as_ref().map_or("", |_| " error")
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("; ")
-        };
-        self.settings_panel.set_runtime_plugin_summary(summary);
+        self.settings_panel
+            .set_runtime_plugins(crate::ui::settings::InstalledPlugins {
+                statuses,
+                error: registry_error,
+            });
         self.refresh_plugin_commands();
         self.refresh_launch_profile_commands();
         log::info!(
@@ -838,8 +820,8 @@ impl App {
                 self.open_agent_hook_setup(install);
                 return;
             }
-            SettingsAction::ManageRuntimePlugins => {
-                self.open_runtime_plugin_manager();
+            SettingsAction::Plugin(action) => {
+                self.apply_plugin_action(action);
                 return;
             }
             SettingsAction::OpenKeyboardShortcuts => {
