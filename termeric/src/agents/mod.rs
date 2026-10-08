@@ -185,16 +185,32 @@ impl AgentDefinition {
                 .ok_or_else(|| format!("{} cannot resume a conversation", self.name))?;
             args.extend(resume_args.iter().cloned());
         }
+        Ok(AgentLaunch {
+            program: self.program.clone(),
+            args,
+            env: self.env_with(profile),
+            profile: profile_name,
+        })
+    }
+
+    /// The environment the agent starts with when a launch names no
+    /// profile, which decides where it reads its settings: its own, with its
+    /// default profile's on top. A default profile it does not have, which
+    /// configuration validation rejects, adds nothing.
+    pub fn default_launch_env(&self) -> BTreeMap<String, String> {
+        self.env_with(
+            self.default_profile
+                .as_ref()
+                .and_then(|name| self.profiles.get(name)),
+        )
+    }
+
+    fn env_with(&self, profile: Option<&AgentProfile>) -> BTreeMap<String, String> {
         let mut env = self.env.clone();
         if let Some(profile) = profile {
             env.extend(profile.env.clone());
         }
-        Ok(AgentLaunch {
-            program: self.program.clone(),
-            args,
-            env,
-            profile: profile_name,
-        })
+        env
     }
 
     /// The installed executable, found the way a shell would find it.
@@ -297,6 +313,34 @@ mod tests {
 
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn the_default_launch_environment_adds_the_default_profile_to_the_agents_own() {
+        let mut agent = AgentCatalog::default().get("codex").unwrap().clone();
+        agent.env = BTreeMap::from([
+            ("CODEX_HOME".into(), "/agent".into()),
+            ("KEEP".into(), "1".into()),
+        ]);
+        agent.profiles.insert(
+            "work".into(),
+            AgentProfile {
+                env: BTreeMap::from([("CODEX_HOME".into(), "/work".into())]),
+                ..AgentProfile::default()
+            },
+        );
+        assert_eq!(agent.default_launch_env(), agent.env);
+        agent.default_profile = Some("work".into());
+        let env = agent.default_launch_env();
+        assert_eq!(env, agent.launch(None, false).unwrap().env);
+        assert_eq!(
+            (env["CODEX_HOME"].as_str(), env["KEEP"].as_str()),
+            ("/work", "1")
+        );
+        // One that validation would have rejected keeps the agent's own,
+        // where the agent view used to start with no environment at all.
+        agent.default_profile = Some("gone".into());
+        assert_eq!(agent.default_launch_env(), agent.env);
     }
 
     #[test]

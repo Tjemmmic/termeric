@@ -50,16 +50,6 @@ impl HookSetupSummary {
     }
 }
 
-/// The environment an agent is started with when no profile is named,
-/// which decides where it reads its settings.
-fn launch_env(
-    agent: &crate::agents::AgentDefinition,
-) -> std::collections::BTreeMap<String, String> {
-    agent
-        .launch(None, false)
-        .map_or_else(|_| agent.env.clone(), |launch| launch.env)
-}
-
 fn termeric_executable() -> Result<PathBuf, String> {
     std::env::current_exe()
         .and_then(|path| path.canonicalize())
@@ -78,7 +68,7 @@ impl App {
                     (
                         hooked,
                         agent.name.clone(),
-                        hooked.settings_path(&launch_env(agent)),
+                        hooked.settings_path(&agent.default_launch_env()),
                     )
                 })
             })
@@ -166,7 +156,7 @@ impl App {
                     Some(agent) => (
                         hooked,
                         agent.name.clone(),
-                        hooked.settings_path(&launch_env(agent)),
+                        hooked.settings_path(&agent.default_launch_env()),
                     ),
                     None => (
                         hooked,

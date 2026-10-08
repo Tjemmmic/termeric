@@ -200,14 +200,10 @@ impl App {
             .agents
             .get(agent.catalog_id())
             .expect("every agent the agent view drives is built into the catalog");
-        let env = definition
-            .launch(None, false)
-            .map(|launch| launch.env.into_iter().collect())
-            .unwrap_or_default();
         AgentProgram {
             program: definition.program.clone(),
             args: Vec::new(),
-            env,
+            env: definition.default_launch_env().into_iter().collect(),
         }
     }
 
