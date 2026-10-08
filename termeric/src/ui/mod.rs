@@ -13,6 +13,7 @@ pub mod commands;
 pub mod constants;
 pub mod context_picker;
 pub mod cursor_motion;
+pub mod dialog;
 pub mod diff_review;
 pub mod domain_picker;
 pub mod filter_field;
