@@ -62,11 +62,7 @@ pub(crate) fn bridge_command(
     config: &SerialProfileConfig,
 ) -> anyhow::Result<(String, Vec<String>)> {
     config.validate("launch")?;
-    let executable = std::env::current_exe().context("locate the Termeric executable")?;
-    let executable = executable
-        .to_str()
-        .context("Termeric executable path must be valid UTF-8")?
-        .to_string();
+    let executable = crate::paths::executable_text()?;
     let device = config
         .device
         .to_str()

@@ -53,9 +53,12 @@ impl HookSetupSummary {
 /// This Termeric's executable, as hooks and the supervisor's MCP server
 /// name it.
 pub(super) fn termeric_executable() -> Result<PathBuf, String> {
-    std::env::current_exe()
-        .and_then(|path| path.canonicalize())
-        .map_err(|error| format!("Could not locate the Termeric executable: {error}"))
+    crate::paths::executable().map_err(|error| {
+        format!(
+            "Could not locate the Termeric executable: {}",
+            error.root_cause()
+        )
+    })
 }
 
 impl App {

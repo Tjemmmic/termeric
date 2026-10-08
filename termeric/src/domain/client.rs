@@ -842,8 +842,7 @@ impl DomainClient {
         let DomainEndpoint::Local(_) = &self.endpoint else {
             anyhow::bail!("remote domain servers are started by the SSH stdio bridge");
         };
-        let executable = std::env::current_exe().context("locate Termeric executable")?;
-        let mut command = Command::new(executable);
+        let mut command = Command::new(crate::paths::executable()?);
         command
             .args(["domain", "server", "--foreground"])
             .stdin(Stdio::null())

@@ -53,11 +53,7 @@ impl App {
                 };
                 domain
             };
-            let executable = std::env::current_exe().context("locate Termeric relay executable")?;
-            let executable = executable
-                .to_str()
-                .context("Termeric relay executable path must be valid UTF-8")?
-                .to_string();
+            let executable = crate::paths::executable_text()?;
             let relay_command = target.authority.relay_command(executable);
             self.tabs
                 .as_mut()

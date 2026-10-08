@@ -92,7 +92,7 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `serial.rs` | Serial transport for serial terminal profiles |
 | `raw_terminal.rs` | Raw mode for the terminal the domain relay and the serial bridge run in; input that is not a terminal is left alone |
 | `test_support/` | Test builds only: shared fixtures (`sleeping_shell`, `poll_until`, …), the release benchmark suite (`benchmarks.rs`), and soaks (`soak.rs`) |
-| `paths.rs` | Configuration and data directories; test builds resolve them under a per-process temporary directory |
+| `paths.rs` | Configuration and data directories (test builds resolve them under a per-process temporary directory) and Termeric's own executable |
 | `safe_fs.rs` | Hardened reads (no symlinks, FIFOs, or unbounded reads) and atomic private-staging writes for Termeric's own files |
 | `line_reader.rs` | Reading newline-delimited input from other processes with bounded memory; callers decide what an oversized or unterminated line means |
 | `deadline_io.rs` | Frame reads and writes bounded by one deadline that trickled bytes cannot renew: the time left (`remaining`), a readiness poll (`readable`), `PollReader` for sockets and pipes (optionally idle without limit until input starts, and cancellable), and `SocketWriter` |

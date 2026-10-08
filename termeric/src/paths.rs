@@ -1,10 +1,30 @@
-//! Where Termeric keeps its configuration and data.
+//! Where Termeric keeps its configuration and data, and where its own
+//! executable is.
 //!
 //! Both directories are found from the home directory. Without one there
 //! is nowhere to keep Termeric's files, and nothing falls back to the
 //! current directory: what needs a directory is skipped or refused.
 
+use anyhow::Context;
 use std::path::PathBuf;
+
+/// This Termeric's own executable, with links resolved, for the commands it
+/// starts or names for others to start (the domain server and relay, the
+/// serial bridge, agent hooks, the supervisor's MCP server) and for telling
+/// one build from another.
+pub fn executable() -> anyhow::Result<PathBuf> {
+    std::env::current_exe()
+        .and_then(|path| path.canonicalize())
+        .context("locate the Termeric executable")
+}
+
+/// [`executable`] as UTF-8, for command lines kept as text.
+pub fn executable_text() -> anyhow::Result<String> {
+    executable()?
+        .into_os_string()
+        .into_string()
+        .map_err(|_| anyhow::anyhow!("the Termeric executable's path is not valid UTF-8"))
+}
 
 /// Why something that needs [`config_dir`] or [`data_dir`] cannot work.
 pub const NO_HOME_DIRECTORY: &str =
@@ -94,5 +114,19 @@ mod tests {
             assert_eq!(crate::app::state::AppState::state_path(), None);
         });
         assert!(super::config_dir().is_some());
+    }
+
+    #[test]
+    fn the_executable_is_this_process_with_links_resolved() {
+        let executable = super::executable().unwrap();
+        assert!(executable.is_absolute());
+        assert_eq!(
+            std::env::current_exe().unwrap().canonicalize().unwrap(),
+            executable
+        );
+        assert_eq!(
+            super::executable_text().unwrap(),
+            executable.to_str().unwrap()
+        );
     }
 }

@@ -96,7 +96,7 @@ pub fn build_identity() -> Option<String> {
     static IDENTITY: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     IDENTITY
         .get_or_init(|| {
-            let executable = std::env::current_exe().ok()?.canonicalize().ok()?;
+            let executable = crate::paths::executable().ok()?;
             let changed = std::fs::metadata(&executable)
                 .ok()?
                 .modified()
