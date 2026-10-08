@@ -73,7 +73,17 @@ impl App {
     pub(super) fn handle_dialog_key(&mut self, key: &Key, repeat: bool) {
         let action = self.dialog_key_action(key, repeat);
         self.apply_dialog_action(action);
+        self.end_composition_outside_dialog_field();
         self.request_redraw(RedrawReason::KeyboardInput);
+    }
+
+    /// Drop the input method's composition once the dialog's field no longer
+    /// holds the keyboard (focus moved to a button, the dialog went back or
+    /// closed), so it cannot reappear in the field later.
+    pub(super) fn end_composition_outside_dialog_field(&mut self) {
+        if !self.dialog.field_focused() {
+            self.ime.clear_preedit();
+        }
     }
 
     fn dialog_key_action(&mut self, key: &Key, repeat: bool) -> DialogAction {
@@ -81,7 +91,6 @@ impl App {
         let scroll = |by| DialogAction::Scroll { request_id, by };
         match key {
             Key::Named(NamedKey::Tab) => {
-                self.ime.clear_preedit();
                 self.dialog
                     .cycle_focus(request_id, self.modifiers.shift_key());
                 DialogAction::None
@@ -188,6 +197,7 @@ impl App {
             _ => DialogAction::None,
         };
         self.apply_dialog_action(action);
+        self.end_composition_outside_dialog_field();
     }
 
     pub(super) fn apply_dialog_action(&mut self, action: DialogAction) {
@@ -294,6 +304,26 @@ mod tests {
             "save",
             "Add",
         ))
+    }
+
+    /// A composition belongs to the field: it lasts while the field holds
+    /// the keyboard and ends when focus or the dialog leaves it.
+    #[test]
+    fn a_composition_ends_when_the_field_loses_the_keyboard() {
+        use winit::event::Ime;
+        let mut app = App::new_headless(Config::default()).unwrap();
+        show_field(&mut app, "");
+        app.handle_ime_event(Ime::Preedit("ka".into(), None));
+        app.handle_dialog_key(&Key::Named(NamedKey::ArrowLeft), false);
+        assert!(app.ime.preedit().is_some());
+        app.handle_dialog_key(&Key::Named(NamedKey::Tab), false);
+        assert!(!app.dialog.field_focused());
+        assert!(app.ime.preedit().is_none());
+
+        show_field(&mut app, "");
+        app.handle_ime_event(Ime::Preedit("ka".into(), None));
+        app.handle_dialog_key(&Key::Named(NamedKey::Escape), false);
+        assert!(app.ime.preedit().is_none());
     }
 
     #[test]
