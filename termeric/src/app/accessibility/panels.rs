@@ -563,34 +563,11 @@ impl App {
         }
     }
 
-    pub(super) fn shortcuts_accessibility_layout(
-        &self,
-        info: &crate::ui::shortcuts_panel::ShortcutsPanelInfo,
-    ) -> crate::ui::list_dialog::ListDialogLayout {
-        let UiMetrics {
-            width,
-            height,
-            cell_width,
-            cell_height,
-            ..
-        } = self.ui_metrics();
-        crate::ui::list_dialog::ListDialogLayout::calculate(
-            crate::ui::shortcuts_panel::SHORTCUTS_DIALOG,
-            width,
-            height,
-            cell_width,
-            cell_height,
-            info.animation,
-            info.entries.len(),
-        )
-    }
-
     pub(super) fn shortcuts_accessibility_snapshot(&mut self) -> ModalSnapshot {
-        let mut info = self.shortcuts_panel.build_info(&self.shortcut_registry);
-        let mut layout = self.shortcuts_accessibility_layout(&info);
-        self.shortcuts_panel.set_max_visible(layout.rows_that_fit);
-        info = self.shortcuts_panel.build_info(&self.shortcut_registry);
-        layout = self.shortcuts_accessibility_layout(&info);
+        let rows = self.list_dialog_rows(crate::ui::shortcuts_panel::SHORTCUTS_DIALOG);
+        self.shortcuts_panel.set_max_visible(rows);
+        let info = self.shortcuts_panel.build_info(&self.shortcut_registry);
+        let layout = self.shortcuts_panel_layout(&info);
 
         let mut nodes = Vec::with_capacity(info.entries.len() + 8);
 
@@ -1201,36 +1178,10 @@ impl App {
         }
     }
 
-    pub(super) fn workspace_accessibility_layout(
-        &self,
-        info: &crate::ui::workspace_panel::WorkspacePanelInfo,
-    ) -> crate::ui::workspace_panel::WorkspacePanelLayout {
-        let UiMetrics {
-            width,
-            height,
-            tab_bar_height: top,
-            cell_width,
-            cell_height,
-        } = self.ui_metrics();
-        crate::ui::workspace_panel::WorkspacePanelLayout::calculate(
-            width,
-            height,
-            top,
-            cell_width,
-            cell_height,
-            info.animation,
-            info.rename_text.is_some(),
-            info.workspaces,
-            info.entries.len(),
-        )
-    }
-
     pub(super) fn workspace_accessibility_snapshot(&mut self) -> ModalSnapshot {
-        let mut info = self.workspace_panel.build_info();
-        let mut layout = self.workspace_accessibility_layout(&info);
+        let layout = self.workspace_panel_layout();
         self.workspace_panel.set_max_visible(layout.rows_that_fit);
-        info = self.workspace_panel.build_info();
-        layout = self.workspace_accessibility_layout(&info);
+        let info = self.workspace_panel.build_info();
 
         let keys = info
             .entries

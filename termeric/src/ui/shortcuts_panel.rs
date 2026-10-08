@@ -468,28 +468,13 @@ impl ShortcutsPanel {
         self.filter.place_caret(cursor)
     }
 
-    /// Active filter geometry without rebuilding or cloning result rows.
-    pub fn input_viewport(
-        &self,
-        width: f32,
-        height: f32,
-        cell_width: f32,
-        cell_height: f32,
-    ) -> Option<TextInputViewport> {
+    /// The filter's viewport in `layout` while it takes text: the panel is
+    /// open and not recording a chord.
+    pub fn input_viewport(&self, layout: &ListDialogLayout) -> Option<TextInputViewport> {
         if !self.is_active() || self.recording {
             return None;
         }
-        // Result count changes panel height, never the filter rectangle.
-        ListDialogLayout::calculate(
-            SHORTCUTS_DIALOG,
-            width,
-            height,
-            cell_width,
-            cell_height,
-            self.animation.eased(),
-            0,
-        )
-        .input_viewport(self.filter.text(), self.filter.cursor())
+        layout.input_viewport(self.filter.text(), self.filter.cursor())
     }
 
     /// Enter recording mode for a stable action identity.

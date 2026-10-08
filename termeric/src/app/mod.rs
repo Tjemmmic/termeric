@@ -133,8 +133,7 @@ pub const APP_ID: &str = "org.termeric.Termeric";
 pub const QUICK_ACCESS_APP_ID: &str = "org.termeric.Termeric.QuickAccess";
 
 /// Window and cell sizes for laying out UI outside a frame. Before a
-/// renderer exists (headless tests) a nominal 800×600 window with 8×16
-/// cells and no tab bar stands in.
+/// renderer exists (headless tests) [`UiMetrics::HEADLESS`] stands in.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct UiMetrics {
     pub width: f32,
@@ -142,6 +141,17 @@ pub(super) struct UiMetrics {
     pub tab_bar_height: f32,
     pub cell_width: f32,
     pub cell_height: f32,
+}
+
+impl UiMetrics {
+    /// A nominal 800×600 window with 8×16 cells and no tab bar.
+    const HEADLESS: Self = Self {
+        width: 800.0,
+        height: 600.0,
+        tab_bar_height: 0.0,
+        cell_width: 8.0,
+        cell_height: 16.0,
+    };
 }
 
 /// The window a background task returns its result to: the window's control
@@ -762,6 +772,10 @@ pub struct App {
         Option<crate::ui::popup_menu::PopupMenu<crate::ui::workspace_menu::WorkspaceMenuAction>>,
     /// Workspace and closed-tab snapshot panel
     workspace_panel: crate::ui::workspace_panel::WorkspacePanel,
+    /// What [`App::ui_metrics`] reports without a renderer, so a headless
+    /// test can lay chrome out in another window.
+    #[cfg(test)]
+    headless_metrics: UiMetrics,
     /// Custom commands panel
     commands_panel: crate::ui::commands::panel::CommandsPanel,
     /// This window's agents and supervisor at a glance.
@@ -1109,6 +1123,8 @@ impl App {
             pending_unicode_picker: None,
             domain_picker: DomainPicker::new(),
             shortcuts_panel: ShortcutsPanel::new(),
+            #[cfg(test)]
+            headless_metrics: UiMetrics::HEADLESS,
             info_overlay: InfoOverlay::new(),
             toasts: crate::ui::toast::ToastManager::new(),
             diff_review: DiffReviewOverlay::new(),
@@ -1629,25 +1645,37 @@ impl App {
     }
 
     pub(super) fn ui_metrics(&self) -> UiMetrics {
-        self.renderer.as_ref().map_or(
-            UiMetrics {
-                width: 800.0,
-                height: 600.0,
-                tab_bar_height: 0.0,
-                cell_width: 8.0,
-                cell_height: 16.0,
-            },
-            |renderer| {
-                let (width, height) = renderer.window_size();
-                UiMetrics {
-                    width: width as f32,
-                    height: height as f32,
-                    tab_bar_height: renderer.tab_bar_height(),
-                    cell_width: renderer.cell_width(),
-                    cell_height: renderer.cell_height(),
-                }
-            },
+        let Some(renderer) = &self.renderer else {
+            #[cfg(test)]
+            return self.headless_metrics;
+            #[cfg(not(test))]
+            return UiMetrics::HEADLESS;
+        };
+        let (width, height) = renderer.window_size();
+        UiMetrics {
+            width: width as f32,
+            height: height as f32,
+            tab_bar_height: renderer.tab_bar_height(),
+            cell_width: renderer.cell_width(),
+            cell_height: renderer.cell_height(),
+        }
+    }
+
+    /// How many rows a list dialog of `shape` shows at most in this window,
+    /// which is what its list scrolls by. What it shows and its animation
+    /// never change it, so it is known before the dialog's info is built.
+    pub(super) fn list_dialog_rows(&self, shape: crate::ui::list_dialog::ListDialogShape) -> usize {
+        let metrics = self.ui_metrics();
+        crate::ui::list_dialog::ListDialogLayout::calculate(
+            shape,
+            metrics.width,
+            metrics.height,
+            metrics.cell_width,
+            metrics.cell_height,
+            1.0,
+            0,
         )
+        .rows_that_fit
     }
 
     /// Where the terminal area sits in the window. A headless window, like
@@ -1924,11 +1952,17 @@ impl App {
                 search_bar: chrome.search_bar.as_ref(),
                 ime_preedit: ime_preedit_info.as_ref(),
                 workspace_menu: chrome.workspace_menu.as_ref(),
-                workspace_panel: chrome.workspace_panel.as_ref(),
+                workspace_panel: chrome
+                    .workspace_panel
+                    .as_ref()
+                    .map(|(info, layout)| (info, layout)),
                 commands_panel: chrome.commands_panel.as_ref(),
                 agents_panel: chrome.agents_panel.as_ref(),
-                command_palette: chrome.palette.as_ref(),
-                shortcuts_panel: chrome.shortcuts.as_ref(),
+                command_palette: chrome.palette.as_ref().map(|(info, layout)| (info, layout)),
+                shortcuts_panel: chrome
+                    .shortcuts
+                    .as_ref()
+                    .map(|(info, layout)| (info, layout)),
                 harvest: harvest_render_info.as_ref(),
             },
         };

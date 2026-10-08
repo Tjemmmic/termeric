@@ -42,7 +42,7 @@ impl App {
             return;
         };
         let info = self.palette_owner(modal).build_info();
-        let layout = self.command_palette_accessibility_layout(&info);
+        let layout = self.palette_layout(&info);
         if !info
             .entries
             .iter()
@@ -69,40 +69,17 @@ impl App {
         }
     }
 
-    pub(super) fn command_palette_accessibility_layout(
-        &self,
-        info: &crate::ui::command_palette::PaletteInfo,
-    ) -> crate::ui::list_dialog::ListDialogLayout {
-        let UiMetrics {
-            width,
-            height,
-            cell_width,
-            cell_height,
-            ..
-        } = self.ui_metrics();
-        crate::ui::list_dialog::ListDialogLayout::calculate(
-            crate::ui::command_palette::PALETTE_DIALOG,
-            width,
-            height,
-            cell_width,
-            cell_height,
-            info.animation,
-            info.entries.len(),
-        )
-    }
-
     pub(super) fn palette_modal_accessibility_snapshot(
         &mut self,
         modal: PaletteModal,
     ) -> ModalSnapshot {
         let ids = palette_modal_node_ids(modal);
-        let mut info = self.palette_owner(modal).build_info();
-        let mut layout = self.command_palette_accessibility_layout(&info);
+        let rows = self.list_dialog_rows(crate::ui::command_palette::PALETTE_DIALOG);
         self.palette_owner_mut(modal)
             .palette_mut()
-            .set_max_visible(layout.rows_that_fit);
-        info = self.palette_owner(modal).build_info();
-        layout = self.command_palette_accessibility_layout(&info);
+            .set_max_visible(rows);
+        let info = self.palette_owner(modal).build_info();
+        let layout = self.palette_layout(&info);
         let words = self.palette_modal_wording(modal, &info);
         let editable = self.palette_owner(modal).query_editable();
 

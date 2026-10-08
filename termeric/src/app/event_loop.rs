@@ -684,7 +684,8 @@ impl App {
     /// A primary press at `pos` while the shortcuts panel is on top.
     fn press_shortcuts_panel(&mut self, pos: Option<(f64, f64)>) {
         if let Some(pos) = pos {
-            let layout = self.shortcuts_panel_layout();
+            let layout = self
+                .shortcuts_panel_layout(&self.shortcuts_panel.build_info(&self.shortcut_registry));
             let (mx, my) = (pos.0 as f32, pos.1 as f32);
             if !layout.contains(mx, my) {
                 self.shortcuts_panel.close();

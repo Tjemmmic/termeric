@@ -30,11 +30,23 @@ pub struct ChromeFrame<'a> {
     pub search_bar: Option<&'a SearchBarInfo>,
     pub ime_preedit: Option<&'a ImePreeditRenderInfo>,
     pub workspace_menu: Option<&'a PopupMenuInfo>,
-    pub workspace_panel: Option<&'a crate::ui::workspace_panel::WorkspacePanelInfo>,
+    /// The workspace panel with the geometry the app laid it out in, which
+    /// its hit tests, IME caret, and accessibility also use. The palette and
+    /// Shortcuts come with theirs the same way.
+    pub workspace_panel: Option<(
+        &'a crate::ui::workspace_panel::WorkspacePanelInfo,
+        &'a crate::ui::workspace_panel::WorkspacePanelLayout,
+    )>,
     pub commands_panel: Option<&'a crate::ui::commands::panel::CommandsPanelInfo>,
     pub agents_panel: Option<&'a crate::ui::agents_panel::AgentsPanelInfo>,
-    pub command_palette: Option<&'a PaletteInfo>,
-    pub shortcuts_panel: Option<&'a ShortcutsPanelInfo>,
+    pub command_palette: Option<(
+        &'a PaletteInfo,
+        &'a crate::ui::list_dialog::ListDialogLayout,
+    )>,
+    pub shortcuts_panel: Option<(
+        &'a ShortcutsPanelInfo,
+        &'a crate::ui::list_dialog::ListDialogLayout,
+    )>,
     pub harvest: Option<&'a HarvestRenderInfo>,
 }
 
@@ -475,10 +487,10 @@ impl Renderer {
                     }
                 }
                 ModalLayer::WorkspacePanel => {
-                    if let Some(sp) = workspace_panel
+                    if let Some((sp, layout)) = workspace_panel
                         && sp.animation > 0.001
                     {
-                        self.build_workspace_panel(sp, window_width, window_height);
+                        self.build_workspace_panel(sp, layout);
                     }
                 }
                 ModalLayer::Settings => {
@@ -494,19 +506,19 @@ impl Renderer {
                     }
                 }
                 ModalLayer::ShortcutsPanel => {
-                    if let Some(sp) = shortcuts_panel
+                    if let Some((sp, layout)) = shortcuts_panel
                         && sp.animation > 0.001
                     {
-                        self.build_shortcuts_panel(sp, window_width, window_height);
+                        self.build_shortcuts_panel(sp, layout, window_width, window_height);
                     }
                 }
                 // The palette draws whichever palette-style modal is open;
                 // at most one is.
                 ModalLayer::CommandPalette => {
-                    if let Some(palette) = command_palette
+                    if let Some((palette, layout)) = command_palette
                         && palette.animation > 0.001
                     {
-                        self.build_command_palette(palette, window_width, window_height);
+                        self.build_command_palette(palette, layout, window_width, window_height);
                     }
                 }
                 ModalLayer::UnicodePicker | ModalLayer::DomainPicker => {}

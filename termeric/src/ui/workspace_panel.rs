@@ -356,6 +356,75 @@ impl WorkspacePanelLayout {
         let row = ((y - self.list_start_y) / self.row_height) as usize;
         (row < self.visible_count).then_some(row)
     }
+
+    /// What a primary press at `(x, y)` on the panel showing `info` does.
+    pub fn hit_test(&self, x: f32, y: f32, info: &WorkspacePanelInfo) -> WorkspacePanelAction {
+        // A click beside or above the panel (the toolbar) dismisses it.
+        if x < self.panel.x || y < self.panel.y {
+            return WorkspacePanelAction::Close;
+        }
+
+        let control = self.control_at(x, y, info.snapshot_count);
+        if control == Some(WorkspacePanelControl::Close) {
+            return WorkspacePanelAction::Close;
+        }
+
+        if let Some(rename) = self.rename {
+            if rename.save_button.contains(x, y) {
+                return WorkspacePanelAction::SubmitRename;
+            }
+            if rename.cancel_button.contains(x, y) {
+                return WorkspacePanelAction::CancelRename;
+            }
+            if let Some(text) = &info.rename_text
+                && let Some(action) = self.rename_input_click(text, info.rename_cursor, x, y)
+            {
+                return action;
+            }
+            // The rename form owns input until it is saved or cancelled.
+            return WorkspacePanelAction::None;
+        }
+
+        match control {
+            Some(WorkspacePanelControl::Back) => return WorkspacePanelAction::ShowWorkspaces,
+            Some(WorkspacePanelControl::SnapshotsLink) => {
+                return WorkspacePanelAction::ShowSnapshots;
+            }
+            Some(WorkspacePanelControl::Close) | None => {}
+        }
+
+        let end = (info.scroll_offset + self.visible_count).min(info.entries.len());
+        for (visible_index, workspace) in info.entries
+            [info.scroll_offset.min(info.entries.len())..end]
+            .iter()
+            .enumerate()
+        {
+            let entry = self.entry(visible_index);
+            if !entry.row.contains(x, y) {
+                continue;
+            }
+
+            // Check if click is in the button row area
+            if entry.delete_button.contains(x, y) {
+                return WorkspacePanelAction::Delete(workspace.id.clone());
+            }
+            if entry
+                .rename_button
+                .is_some_and(|button| button.contains(x, y))
+            {
+                return WorkspacePanelAction::Rename(workspace.id.clone());
+            }
+            if entry.load_button.contains(x, y) {
+                return WorkspacePanelAction::Load(workspace.id.clone());
+            }
+
+            // Elsewhere on the row selects it; restoring replaces the open
+            // tabs, so it needs Open, Enter, or a double click.
+            return WorkspacePanelAction::Select(workspace.id.clone());
+        }
+
+        WorkspacePanelAction::None
+    }
 }
 
 /// Workspace panel state
@@ -467,17 +536,40 @@ impl WorkspacePanel {
         }
     }
 
-    /// Borrow just the rename state; positioning IME must not clone inventory.
-    pub fn rename_input_viewport(
+    /// The panel's geometry in a `width` × `height` window whose toolbar
+    /// ends at `top`, for what it shows now. It reads only the panel's
+    /// state, so positioning the IME never clones the inventory.
+    pub fn layout(
         &self,
         width: f32,
         height: f32,
         top: f32,
         cell_width: f32,
         cell_height: f32,
+    ) -> WorkspacePanelLayout {
+        WorkspacePanelLayout::calculate(
+            width,
+            height,
+            top,
+            cell_width,
+            cell_height,
+            self.animation_progress(),
+            self.is_renaming(),
+            self.workspaces,
+            self.entries.len(),
+        )
+    }
+
+    /// The rename field's viewport in `layout` while the open panel renames
+    /// a workspace.
+    pub fn rename_input_viewport(
+        &self,
+        layout: &WorkspacePanelLayout,
     ) -> Option<crate::ui::text_input_viewport::TextInputViewport> {
-        self.renaming_layout(width, height, top, cell_width, cell_height)?
-            .rename_input_viewport(self.rename_input.text(), self.rename_input.cursor())
+        if !self.is_open() || !self.is_renaming() {
+            return None;
+        }
+        layout.rename_input_viewport(self.rename_input.text(), self.rename_input.cursor())
     }
 
     /// Where a press at `(x, y)` lands in the rename field, as a caret
@@ -485,43 +577,16 @@ impl WorkspacePanel {
     pub fn rename_caret_at(
         &self,
         (x, y): (f32, f32),
-        width: f32,
-        height: f32,
-        top: f32,
-        cell_width: f32,
-        cell_height: f32,
+        layout: &WorkspacePanelLayout,
     ) -> Option<usize> {
-        let layout = self.renaming_layout(width, height, top, cell_width, cell_height)?;
+        if !self.is_open() || !self.is_renaming() {
+            return None;
+        }
         match layout.rename_input_click(self.rename_input.text(), self.rename_input.cursor(), x, y)
         {
             Some(WorkspacePanelAction::PlaceRenameCaret { cursor }) => Some(cursor),
             _ => None,
         }
-    }
-
-    /// The open panel's geometry while it renames a workspace.
-    fn renaming_layout(
-        &self,
-        width: f32,
-        height: f32,
-        top: f32,
-        cell_width: f32,
-        cell_height: f32,
-    ) -> Option<WorkspacePanelLayout> {
-        if !self.is_open() || !self.is_renaming() {
-            return None;
-        }
-        Some(WorkspacePanelLayout::calculate(
-            width,
-            height,
-            top,
-            cell_width,
-            cell_height,
-            self.animation_progress(),
-            true,
-            self.workspaces,
-            self.entries.len(),
-        ))
     }
 
     /// Update hover state from mouse position

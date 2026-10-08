@@ -68,7 +68,9 @@ impl App {
                 TextTarget::Palette(modal)
             }
             Some(ModalLayer::ShortcutsPanel) => {
-                let layout = self.shortcuts_panel_layout();
+                let layout = self.shortcuts_panel_layout(
+                    &self.shortcuts_panel.build_info(&self.shortcut_registry),
+                );
                 if !self.handle_shortcuts_filter_click(x, y, &layout) {
                     return true;
                 }
@@ -90,14 +92,10 @@ impl App {
                 TextTarget::SettingsFilter
             }
             Some(ModalLayer::WorkspacePanel) => {
-                let Some(cursor) = self.workspace_panel.rename_caret_at(
-                    (x, y),
-                    width,
-                    height,
-                    metrics.tab_bar_height,
-                    cell_width,
-                    cell_height,
-                ) else {
+                let Some(cursor) = self
+                    .workspace_panel
+                    .rename_caret_at((x, y), &self.workspace_panel_layout())
+                else {
                     return true;
                 };
                 self.apply_workspace_panel_action(
@@ -1055,16 +1053,8 @@ mod tests {
             app.clipboard = clipboard;
             field.open(&mut app);
             let target = app.text_target();
+            let viewport = app.field_ime_viewport(target).unwrap();
             let metrics = app.ui_metrics();
-            let viewport = app
-                .field_ime_viewport(
-                    target,
-                    metrics.width,
-                    metrics.height,
-                    metrics.cell_width,
-                    metrics.cell_height,
-                )
-                .unwrap();
             // Just inside the field's first character: the caret goes before it.
             let (x, y) = (
                 viewport.text_x + 1.0,

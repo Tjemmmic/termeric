@@ -404,8 +404,7 @@ impl App {
                             }
                             Some(ModalLayer::WorkspacePanel) => {
                                 let info = self.workspace_panel.build_info();
-                                let action = renderer
-                                    .workspace_panel_hit_test(px, py, &info, ui.width, ui.height);
+                                let action = self.workspace_panel_layout().hit_test(px, py, &info);
                                 let action = self.promote_workspace_double_click(action);
                                 self.apply_workspace_panel_action(action);
                                 self.request_redraw(RedrawReason::PointerInput);
@@ -907,19 +906,8 @@ impl App {
 
     /// Hover over the workspace manager at `(px, py)`: its rows and controls.
     fn hover_workspace_panel(&mut self, px: f32, py: f32) {
-        let ui = self.ui_metrics();
+        let layout = self.workspace_panel_layout();
         let info = self.workspace_panel.build_info();
-        let layout = crate::ui::workspace_panel::WorkspacePanelLayout::calculate(
-            ui.width,
-            ui.height,
-            ui.tab_bar_height,
-            ui.cell_width,
-            ui.cell_height,
-            info.animation,
-            info.rename_text.is_some(),
-            info.workspaces,
-            info.entries.len(),
-        );
         let control = layout.control_at(px, py, info.snapshot_count);
         let hovered = if px >= layout.panel.x && control.is_none() {
             layout

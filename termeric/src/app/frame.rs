@@ -8,21 +8,24 @@ use crate::renderer::{
 use crate::ui::agents_panel::AgentsPanelInfo;
 use crate::ui::command_palette::PaletteInfo;
 use crate::ui::commands::panel::CommandsPanelInfo;
+use crate::ui::list_dialog::ListDialogLayout;
 use crate::ui::search_bar::SearchBarInfo;
 use crate::ui::settings::SettingsPanelInfo;
 use crate::ui::shortcuts_panel::ShortcutsPanelInfo;
+use crate::ui::workspace_panel::{WorkspacePanelInfo, WorkspacePanelLayout};
 
 /// The chrome surfaces one frame draws, owned until the renderer borrows or
-/// takes them. `None` surfaces are closed.
+/// takes them. `None` surfaces are closed. A laid-out surface comes with the
+/// geometry its hit tests, IME caret, and accessibility also use.
 pub(super) struct ChromeInfo {
     pub(super) settings: Option<SettingsPanelInfo>,
     pub(super) search_bar: Option<SearchBarInfo>,
     pub(super) workspace_menu: Option<PopupMenuInfo>,
-    pub(super) workspace_panel: Option<crate::ui::workspace_panel::WorkspacePanelInfo>,
+    pub(super) workspace_panel: Option<(WorkspacePanelInfo, WorkspacePanelLayout)>,
     pub(super) commands_panel: Option<CommandsPanelInfo>,
     pub(super) agents_panel: Option<AgentsPanelInfo>,
-    pub(super) palette: Option<PaletteInfo>,
-    pub(super) shortcuts: Option<ShortcutsPanelInfo>,
+    pub(super) palette: Option<(PaletteInfo, ListDialogLayout)>,
+    pub(super) shortcuts: Option<(ShortcutsPanelInfo, ListDialogLayout)>,
     pub(super) info_overlay: Option<InfoOverlayInfo>,
     pub(super) toasts: Vec<crate::ui::toast::ToastInfo>,
     pub(super) diff_review: Option<DiffReviewInfo>,
@@ -48,7 +51,7 @@ impl App {
                 .then(|| self.search.build_info(self.search_cursor_pos));
         animating |= self.settings_panel.needs_redraw();
         animating |= self.workspace_panel.needs_redraw();
-        let workspace_panel = self.workspace_panel_frame_info(metrics);
+        let workspace_panel = self.workspace_panel_frame_info();
         animating |= self.commands_panel.needs_redraw() || self.agents_panel.needs_redraw();
         self.bell.update();
         animating |= self.bell.is_visual_active();
@@ -58,9 +61,9 @@ impl App {
         animating |= self.command_palette.update_animation();
         animating |= self.domain_picker.palette_mut().update_animation();
         animating |= self.unicode_picker.palette_mut().update_animation();
-        let palette = self.palette_frame_info(metrics);
+        let palette = self.palette_frame_info();
         animating |= self.shortcuts_panel.update_animation();
-        let shortcuts = self.shortcuts_frame_info(metrics);
+        let shortcuts = self.shortcuts_frame_info();
         let info_overlay = self.info_overlay_frame_info();
         animating |= self.info_overlay.update_animation();
         // Toast lifecycle: prune expired, then snapshot.
@@ -115,43 +118,20 @@ impl App {
         Some(info)
     }
 
-    fn workspace_panel_frame_info(
-        &mut self,
-        metrics: &UiMetrics,
-    ) -> Option<crate::ui::workspace_panel::WorkspacePanelInfo> {
+    fn workspace_panel_frame_info(&mut self) -> Option<(WorkspacePanelInfo, WorkspacePanelLayout)> {
         if self.workspace_panel.is_closed() {
             return None;
         }
-        let preview = self.workspace_panel.build_info();
-        let layout = crate::ui::workspace_panel::WorkspacePanelLayout::calculate(
-            metrics.width,
-            metrics.height,
-            metrics.tab_bar_height,
-            metrics.cell_width,
-            metrics.cell_height,
-            preview.animation,
-            preview.rename_text.is_some(),
-            preview.workspaces,
-            preview.entries.len(),
-        );
+        let layout = self.workspace_panel_layout();
         self.workspace_panel.set_max_visible(layout.rows_that_fit);
-        Some(self.workspace_panel.build_info())
+        Some((self.workspace_panel.build_info(), layout))
     }
 
     /// The palette-style modals share the palette's renderer and geometry;
     /// only the one that owns input is drawn.
-    fn palette_frame_info(&mut self, metrics: &UiMetrics) -> Option<PaletteInfo> {
-        let rows = crate::ui::list_dialog::ListDialogLayout::calculate(
-            crate::ui::command_palette::PALETTE_DIALOG,
-            metrics.width,
-            metrics.height,
-            metrics.cell_width,
-            metrics.cell_height,
-            1.0,
-            0,
-        )
-        .rows_that_fit;
-        palette_input::open_palette_owner(
+    fn palette_frame_info(&mut self) -> Option<(PaletteInfo, ListDialogLayout)> {
+        let rows = self.list_dialog_rows(crate::ui::command_palette::PALETTE_DIALOG);
+        let info = palette_input::open_palette_owner(
             &mut self.domain_picker,
             &mut self.unicode_picker,
             &mut self.command_palette,
@@ -159,24 +139,20 @@ impl App {
         .map(|owner| {
             owner.palette_mut().set_max_visible(rows);
             owner.build_info()
-        })
+        })?;
+        let layout = self.palette_layout(&info);
+        Some((info, layout))
     }
 
-    fn shortcuts_frame_info(&mut self, metrics: &UiMetrics) -> Option<ShortcutsPanelInfo> {
+    fn shortcuts_frame_info(&mut self) -> Option<(ShortcutsPanelInfo, ListDialogLayout)> {
         if !self.shortcuts_panel.is_visible() {
             return None;
         }
-        let layout = crate::ui::list_dialog::ListDialogLayout::calculate(
-            crate::ui::shortcuts_panel::SHORTCUTS_DIALOG,
-            metrics.width,
-            metrics.height,
-            metrics.cell_width,
-            metrics.cell_height,
-            1.0,
-            0,
-        );
-        self.shortcuts_panel.set_max_visible(layout.rows_that_fit);
-        Some(self.shortcuts_panel.build_info(&self.shortcut_registry))
+        let rows = self.list_dialog_rows(crate::ui::shortcuts_panel::SHORTCUTS_DIALOG);
+        self.shortcuts_panel.set_max_visible(rows);
+        let info = self.shortcuts_panel.build_info(&self.shortcut_registry);
+        let layout = self.shortcuts_panel_layout(&info);
+        Some((info, layout))
     }
 
     fn info_overlay_frame_info(&mut self) -> Option<InfoOverlayInfo> {

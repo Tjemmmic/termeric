@@ -1,16 +1,25 @@
 use super::*;
+use crate::app::palette_input::PaletteModal;
 
-/// Where `field` draws its caret, when it is where text goes.
+/// Where `field` draws its caret in a `width` × `height` window of
+/// `cell_width` × `cell_height` cells, when it is where text goes.
 fn ime_viewport_of(
-    app: &App,
+    app: &mut App,
     field: TextTarget,
     width: f32,
     height: f32,
     cell_width: f32,
     cell_height: f32,
 ) -> Option<crate::ui::text_input_viewport::TextInputViewport> {
+    app.headless_metrics = UiMetrics {
+        width,
+        height,
+        tab_bar_height: 0.0,
+        cell_width,
+        cell_height,
+    };
     (app.text_target() == field)
-        .then(|| app.field_ime_viewport(field, width, height, cell_width, cell_height))
+        .then(|| app.field_ime_viewport(field))
         .flatten()
 }
 
@@ -81,7 +90,7 @@ fn settings_ime_matches_scrolled_filter_and_refuses_dropdown_or_higher_owners() 
             info.entries.len(),
         );
         let view = ime_viewport_of(
-            &app,
+            &mut app,
             TextTarget::SettingsFilter,
             width,
             800.0,
@@ -97,7 +106,9 @@ fn settings_ime_matches_scrolled_filter_and_refuses_dropdown_or_higher_owners() 
         assert_ne!(app.text_target(), TextTarget::CommandsForm);
         assert_ne!(app.text_target(), TextTarget::Search);
     }
-    assert!(ime_viewport_of(&app, TextTarget::SettingsFilter, 40.0, 800.0, 8.0, 16.0).is_none());
+    assert!(
+        ime_viewport_of(&mut app, TextTarget::SettingsFilter, 40.0, 800.0, 8.0, 16.0).is_none()
+    );
     app.command_palette.open();
     assert_ne!(app.text_target(), TextTarget::SettingsFilter);
     app.command_palette.close();
@@ -116,7 +127,17 @@ fn settings_ime_matches_scrolled_filter_and_refuses_dropdown_or_higher_owners() 
     );
     assert!(app.settings_panel.is_dropdown_open());
     assert_eq!(app.text_target(), TextTarget::Blocked);
-    assert!(ime_viewport_of(&app, TextTarget::SettingsFilter, 800.0, 800.0, 8.0, 16.0).is_none());
+    assert!(
+        ime_viewport_of(
+            &mut app,
+            TextTarget::SettingsFilter,
+            800.0,
+            800.0,
+            8.0,
+            16.0
+        )
+        .is_none()
+    );
     app.handle_ime_event(Ime::Preedit("draft".into(), None));
     assert!(app.ime.preedit().is_none());
     app.settings_panel.close();
@@ -148,7 +169,7 @@ fn shortcut_ime_uses_scrolled_filter_geometry_and_recording_blocks_retained_sett
             info.entries.len(),
         );
         let view = ime_viewport_of(
-            &app,
+            &mut app,
             TextTarget::ShortcutsFilter,
             width,
             800.0,
@@ -165,9 +186,29 @@ fn shortcut_ime_uses_scrolled_filter_geometry_and_recording_blocks_retained_sett
         assert_ne!(app.text_target(), TextTarget::Search);
         assert_ne!(app.text_target(), TextTarget::CommandsForm);
     }
-    assert!(ime_viewport_of(&app, TextTarget::ShortcutsFilter, 40.0, 800.0, 8.0, 16.0).is_none());
+    assert!(
+        ime_viewport_of(
+            &mut app,
+            TextTarget::ShortcutsFilter,
+            40.0,
+            800.0,
+            8.0,
+            16.0
+        )
+        .is_none()
+    );
     app.command_palette.open();
-    assert!(ime_viewport_of(&app, TextTarget::ShortcutsFilter, 800.0, 800.0, 8.0, 16.0).is_none());
+    assert!(
+        ime_viewport_of(
+            &mut app,
+            TextTarget::ShortcutsFilter,
+            800.0,
+            800.0,
+            8.0,
+            16.0
+        )
+        .is_none()
+    );
     app.command_palette.close();
     app.shortcuts_panel
         .start_recording(crate::input::keybindings::BindableAction::Copy);
@@ -176,7 +217,17 @@ fn shortcut_ime_uses_scrolled_filter_geometry_and_recording_blocks_retained_sett
     app.handle_ime_event(Ime::Preedit("draft".into(), None));
     assert!(app.ime.preedit().is_none());
     app.shortcuts_panel.close();
-    assert!(ime_viewport_of(&app, TextTarget::ShortcutsFilter, 800.0, 800.0, 8.0, 16.0).is_none());
+    assert!(
+        ime_viewport_of(
+            &mut app,
+            TextTarget::ShortcutsFilter,
+            800.0,
+            800.0,
+            8.0,
+            16.0
+        )
+        .is_none()
+    );
 }
 
 #[test]
@@ -195,7 +246,7 @@ fn command_form_ime_follows_the_active_scrolled_field_and_respects_modal_priorit
         app.commands_panel.edit_mode = field.clone();
         for (width, cell) in [(800.0, 8.0), (1600.0, 16.0)] {
             let view = ime_viewport_of(
-                &app,
+                &mut app,
                 TextTarget::CommandsForm,
                 width,
                 800.0,
@@ -220,15 +271,15 @@ fn command_form_ime_follows_the_active_scrolled_field_and_respects_modal_priorit
             assert_ne!(app.text_target(), TextTarget::Search);
         }
     }
-    assert!(ime_viewport_of(&app, TextTarget::CommandsForm, 160.0, 800.0, 8.0, 16.0).is_none());
+    assert!(ime_viewport_of(&mut app, TextTarget::CommandsForm, 160.0, 800.0, 8.0, 16.0).is_none());
     app.command_palette.open();
     assert_ne!(app.text_target(), TextTarget::CommandsForm);
-    assert!(ime_viewport_of(&app, TextTarget::CommandsForm, 800.0, 800.0, 8.0, 16.0).is_none());
+    assert!(ime_viewport_of(&mut app, TextTarget::CommandsForm, 800.0, 800.0, 8.0, 16.0).is_none());
     app.command_palette.close();
     app.info_overlay.show("Notice", vec![]);
     assert_ne!(app.text_target(), TextTarget::CommandsForm);
     app.commands_panel.close();
-    assert!(ime_viewport_of(&app, TextTarget::CommandsForm, 800.0, 800.0, 8.0, 16.0).is_none());
+    assert!(ime_viewport_of(&mut app, TextTarget::CommandsForm, 800.0, 800.0, 8.0, 16.0).is_none());
 }
 
 #[test]
@@ -356,7 +407,7 @@ fn workspace_rename_ime_matches_paint_geometry_without_a_terminal() {
         let expected = layout.rename_input_viewport(&name, name.len()).unwrap();
         assert_eq!(
             ime_viewport_of(
-                &app,
+                &mut app,
                 TextTarget::WorkspaceRename,
                 width,
                 800.0,
@@ -367,20 +418,70 @@ fn workspace_rename_ime_matches_paint_geometry_without_a_terminal() {
         );
         assert!(expected.text_range.start > 0);
     }
-    assert!(ime_viewport_of(&app, TextTarget::WorkspaceRename, 40.0, 600.0, 10.0, 20.0).is_none());
+    assert!(
+        ime_viewport_of(
+            &mut app,
+            TextTarget::WorkspaceRename,
+            40.0,
+            600.0,
+            10.0,
+            20.0
+        )
+        .is_none()
+    );
     app.search.start();
     assert_ne!(app.text_target(), TextTarget::Search);
     app.command_palette.open();
-    assert!(ime_viewport_of(&app, TextTarget::WorkspaceRename, 800.0, 600.0, 10.0, 20.0).is_none());
+    assert!(
+        ime_viewport_of(
+            &mut app,
+            TextTarget::WorkspaceRename,
+            800.0,
+            600.0,
+            10.0,
+            20.0
+        )
+        .is_none()
+    );
     app.command_palette.close();
     app.domain_picker.open(&app.config.domains);
-    assert!(ime_viewport_of(&app, TextTarget::WorkspaceRename, 800.0, 600.0, 10.0, 20.0).is_none());
+    assert!(
+        ime_viewport_of(
+            &mut app,
+            TextTarget::WorkspaceRename,
+            800.0,
+            600.0,
+            10.0,
+            20.0
+        )
+        .is_none()
+    );
     app.close_domain_picker();
     app.settings_panel.toggle();
-    assert!(ime_viewport_of(&app, TextTarget::WorkspaceRename, 800.0, 600.0, 10.0, 20.0).is_none());
+    assert!(
+        ime_viewport_of(
+            &mut app,
+            TextTarget::WorkspaceRename,
+            800.0,
+            600.0,
+            10.0,
+            20.0
+        )
+        .is_none()
+    );
     app.settings_panel.toggle();
     app.workspace_panel.cancel_rename();
-    assert!(ime_viewport_of(&app, TextTarget::WorkspaceRename, 800.0, 600.0, 10.0, 20.0).is_none());
+    assert!(
+        ime_viewport_of(
+            &mut app,
+            TextTarget::WorkspaceRename,
+            800.0,
+            600.0,
+            10.0,
+            20.0
+        )
+        .is_none()
+    );
     assert!(app.active_terminal().is_none());
     assert_eq!(app.workspace_panel.entries()[0].display_name, "Roots");
 }
@@ -481,7 +582,7 @@ fn domain_picker_ime_geometry_uses_its_query_even_over_retained_panels() {
         .unwrap();
         assert_eq!(
             ime_viewport_of(
-                &app,
+                &mut app,
                 TextTarget::Palette(PaletteModal::Domains),
                 width,
                 900.0,
@@ -515,7 +616,7 @@ fn palette_ime_geometry_tracks_the_visible_query_without_a_terminal() {
             app.command_palette.accessibility_set_input(&query);
         }
         for (width, cell_width) in [(450.0, 8.0), (800.0, 10.0), (1400.0, 20.0)] {
-            let view = ime_viewport_of(&app, target, width, 900.0, cell_width, 24.0).unwrap();
+            let view = ime_viewport_of(&mut app, target, width, 900.0, cell_width, 24.0).unwrap();
             let info = if unicode {
                 app.unicode_picker.build_info()
             } else {
@@ -539,7 +640,7 @@ fn palette_ime_geometry_tracks_the_visible_query_without_a_terminal() {
         }
         app.command_palette.close();
         app.unicode_picker.close();
-        assert!(ime_viewport_of(&app, target, 800.0, 600.0, 10.0, 20.0).is_none());
+        assert!(ime_viewport_of(&mut app, target, 800.0, 600.0, 10.0, 20.0).is_none());
         app.unicode_picker.finish_search_for_test();
     }
 }

@@ -409,7 +409,7 @@ fn command_palette_is_one_modal_search_and_result_tree_with_shared_geometry() {
     app.command_palette.set_reduced_motion(true);
     app.command_palette.open();
     let info = app.command_palette.build_info();
-    let layout = app.command_palette_accessibility_layout(&info);
+    let layout = app.palette_layout(&info);
     let snapshot = app.accessibility_snapshot();
     let assert_rect_close = |actual: Option<Rect>, expected: Rect| {
         let actual = actual.unwrap();
@@ -2689,8 +2689,7 @@ fn workspace_manager_is_modal_bounded_and_uses_shared_action_geometry() {
     let mut app = App::new_headless(Config::default()).unwrap();
     app.workspace_panel
         .set_test_entries(test_workspace_entries(20), true);
-    let preview = app.workspace_panel.build_info();
-    let layout = app.workspace_accessibility_layout(&preview);
+    let layout = app.workspace_panel_layout();
     let snapshot = app.accessibility_snapshot();
     let node = |id| {
         &snapshot
@@ -2960,7 +2959,7 @@ fn shortcuts_editor_is_one_bounded_modal_tree_with_shared_geometry() {
     let mut app = App::new_headless(Config::default()).unwrap();
     app.shortcuts_panel.open();
     let preview = app.shortcuts_panel.build_info(&app.shortcut_registry);
-    let layout = app.shortcuts_accessibility_layout(&preview);
+    let layout = app.shortcuts_panel_layout(&preview);
     let snapshot = app.accessibility_snapshot();
     let node = |id| {
         &snapshot
@@ -3269,7 +3268,7 @@ fn domain_picker_is_one_bounded_modal_tree_with_stable_host_actions() {
     let mut app = App::new_headless(domain_picker_config(20)).unwrap();
     app.domain_picker.open(&app.config.domains);
     let preview = app.domain_picker.build_info();
-    let layout = app.command_palette_accessibility_layout(&preview);
+    let layout = app.palette_layout(&preview);
     let snapshot = app.accessibility_snapshot();
     let node = |id| {
         &snapshot
@@ -3384,7 +3383,7 @@ fn unicode_picker_is_one_bounded_modal_tree_with_stable_actions() {
     let mut app = App::new_headless(Config::default()).unwrap();
     app.unicode_picker.open();
     let preview = app.unicode_picker.build_info();
-    let layout = app.command_palette_accessibility_layout(&preview);
+    let layout = app.palette_layout(&preview);
     let snapshot = app.accessibility_snapshot();
     let node = |id| {
         &snapshot

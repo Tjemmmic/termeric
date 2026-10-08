@@ -3,7 +3,7 @@
 use super::*;
 use crate::input::keybindings::KeyChord;
 use crate::ui::list_dialog::ListDialogLayout;
-use crate::ui::shortcuts_panel::SHORTCUTS_DIALOG;
+use crate::ui::shortcuts_panel::{SHORTCUTS_DIALOG, ShortcutsPanelInfo};
 use crate::ui::text_input::TextInputEdit;
 use winit::keyboard::{Key, NamedKey};
 
@@ -58,11 +58,10 @@ impl App {
         }
     }
 
-    /// The geometry pointer presses on the Shortcuts panel are resolved
-    /// against.
-    pub(super) fn shortcuts_panel_layout(&self) -> ListDialogLayout {
+    /// The geometry the Shortcuts panel showing `info` is drawn with, and so
+    /// the one its pointer presses, IME caret, and accessibility use.
+    pub(super) fn shortcuts_panel_layout(&self, info: &ShortcutsPanelInfo) -> ListDialogLayout {
         let metrics = self.ui_metrics();
-        let info = self.shortcuts_panel.build_info(&self.shortcut_registry);
         ListDialogLayout::calculate(
             SHORTCUTS_DIALOG,
             metrics.width,

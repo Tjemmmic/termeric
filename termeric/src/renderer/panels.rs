@@ -1,5 +1,5 @@
 //! Slide-in side panels — Commands, Agents, and Workspaces — their shared
-//! frame and header buttons, and the Commands and workspace panel hit tests.
+//! frame and header buttons, and the Commands panel hit test.
 
 use super::Renderer;
 use super::draw::FieldTextColors;
@@ -28,26 +28,6 @@ impl Renderer {
             info.commands.len(),
         )
         .scrolled(info.scroll_offset)
-    }
-
-    /// The workspace panel's geometry, shared by its drawing and hit test.
-    fn workspace_panel_layout(
-        &self,
-        info: &crate::ui::workspace_panel::WorkspacePanelInfo,
-        window_width: f32,
-        window_height: f32,
-    ) -> crate::ui::workspace_panel::WorkspacePanelLayout {
-        crate::ui::workspace_panel::WorkspacePanelLayout::calculate(
-            window_width,
-            window_height,
-            self.tab_bar_height(),
-            self.cell_width(),
-            self.cell_height(),
-            info.animation,
-            info.rename_text.is_some(),
-            info.workspaces,
-            info.entries.len(),
-        )
     }
 
     pub(super) fn build_commands_panel(
@@ -581,11 +561,12 @@ impl Renderer {
         layout.row_action(x, y)
     }
 
+    /// Draw the workspace panel showing `info` in `layout`, the geometry the
+    /// app hit-tests and describes it with.
     pub(super) fn build_workspace_panel(
         &mut self,
         info: &crate::ui::workspace_panel::WorkspacePanelInfo,
-        window_width: f32,
-        window_height: f32,
+        layout: &crate::ui::workspace_panel::WorkspacePanelLayout,
     ) {
         use crate::ui::workspace_panel::WorkspacePanelControl;
 
@@ -594,7 +575,7 @@ impl Renderer {
             return;
         }
         let cell_height = self.cell_height();
-        let layout = self.workspace_panel_layout(info, window_width, window_height);
+        let layout = *layout;
         let panel = layout.panel;
         let padding_x = layout.padding_x;
         let size = self.ui_label_px();
@@ -849,85 +830,5 @@ impl Renderer {
             size,
             color,
         );
-    }
-
-    /// Hit-test the workspace panel for click handling
-    pub fn workspace_panel_hit_test(
-        &self,
-        x: f32,
-        y: f32,
-        info: &crate::ui::workspace_panel::WorkspacePanelInfo,
-        window_width: f32,
-        window_height: f32,
-    ) -> crate::ui::workspace_panel::WorkspacePanelAction {
-        use crate::ui::workspace_panel::{WorkspacePanelAction, WorkspacePanelControl};
-
-        let layout = self.workspace_panel_layout(info, window_width, window_height);
-
-        // A click beside or above the panel (the toolbar) dismisses it.
-        if x < layout.panel.x || y < layout.panel.y {
-            return WorkspacePanelAction::Close;
-        }
-
-        let control = layout.control_at(x, y, info.snapshot_count);
-        if control == Some(WorkspacePanelControl::Close) {
-            return WorkspacePanelAction::Close;
-        }
-
-        if let Some(rename) = layout.rename {
-            if rename.save_button.contains(x, y) {
-                return WorkspacePanelAction::SubmitRename;
-            }
-            if rename.cancel_button.contains(x, y) {
-                return WorkspacePanelAction::CancelRename;
-            }
-            if let Some(text) = &info.rename_text
-                && let Some(action) = layout.rename_input_click(text, info.rename_cursor, x, y)
-            {
-                return action;
-            }
-            // The rename form owns input until it is saved or cancelled.
-            return WorkspacePanelAction::None;
-        }
-
-        match control {
-            Some(WorkspacePanelControl::Back) => return WorkspacePanelAction::ShowWorkspaces,
-            Some(WorkspacePanelControl::SnapshotsLink) => {
-                return WorkspacePanelAction::ShowSnapshots;
-            }
-            Some(WorkspacePanelControl::Close) | None => {}
-        }
-
-        let end = (info.scroll_offset + layout.visible_count).min(info.entries.len());
-        for (visible_index, workspace) in info.entries
-            [info.scroll_offset.min(info.entries.len())..end]
-            .iter()
-            .enumerate()
-        {
-            let entry = layout.entry(visible_index);
-            if !entry.row.contains(x, y) {
-                continue;
-            }
-
-            // Check if click is in the button row area
-            if entry.delete_button.contains(x, y) {
-                return WorkspacePanelAction::Delete(workspace.id.clone());
-            }
-            if entry
-                .rename_button
-                .is_some_and(|button| button.contains(x, y))
-            {
-                return WorkspacePanelAction::Rename(workspace.id.clone());
-            }
-            if entry.load_button.contains(x, y) {
-                return WorkspacePanelAction::Load(workspace.id.clone());
-            }
-
-            // Elsewhere on the row selects it; restoring replaces the open
-            // tabs, so it needs Open, Enter, or a double click.
-            return WorkspacePanelAction::Select(workspace.id.clone());
-        }
-
-        WorkspacePanelAction::None
     }
 }

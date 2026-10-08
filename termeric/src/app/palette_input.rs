@@ -6,7 +6,7 @@
 use super::modal_layer::ModalLayer;
 use super::text_field_keys::{FieldKey, types_text};
 use super::*;
-use crate::ui::command_palette::{PALETTE_DIALOG, PaletteResult};
+use crate::ui::command_palette::{PALETTE_DIALOG, PaletteInfo, PaletteResult};
 use crate::ui::domain_picker::DomainPickerCommand;
 use crate::ui::list_dialog::ListDialogLayout;
 use crate::ui::unicode_picker::UnicodePickerSelection;
@@ -229,7 +229,7 @@ impl App {
         };
         self.ime.clear_preedit();
         let choice = if let Some(position) = self.last_cursor_pos {
-            let layout = self.palette_modal_layout(modal);
+            let layout = self.palette_layout(&self.palette_owner(modal).build_info());
             self.click_palette_modal(modal, position.0 as f32, position.1 as f32, &layout)
         } else {
             self.close_palette_modal(modal);
@@ -243,15 +243,15 @@ impl App {
     /// A middle press on the open palette-style modal's query puts the caret
     /// there; returns whether it landed on a query that may change.
     pub(super) fn place_palette_caret_at(&mut self, modal: PaletteModal, x: f32, y: f32) -> bool {
-        let layout = self.palette_modal_layout(modal);
+        let layout = self.palette_layout(&self.palette_owner(modal).build_info());
         let owner = self.palette_owner_mut(modal);
         owner.query_editable() && owner.palette_mut().place_caret_at(x, y, &layout)
     }
 
-    /// The geometry pointer presses on `modal` are resolved against.
-    fn palette_modal_layout(&self, modal: PaletteModal) -> ListDialogLayout {
+    /// The geometry a palette-style modal showing `info` is drawn with, and
+    /// so the one its pointer presses, IME caret, and accessibility use.
+    pub(super) fn palette_layout(&self, info: &PaletteInfo) -> ListDialogLayout {
         let metrics = self.ui_metrics();
-        let info = self.palette_owner(modal).build_info();
         ListDialogLayout::calculate(
             PALETTE_DIALOG,
             metrics.width,

@@ -2,10 +2,23 @@
 
 use super::text_field_keys::{FieldKey, types_text};
 use super::*;
-use crate::ui::workspace_panel::WorkspacePanelAction;
+use crate::ui::workspace_panel::{WorkspacePanelAction, WorkspacePanelLayout};
 use winit::keyboard::{Key, NamedKey};
 
 impl App {
+    /// The workspace manager's geometry: what it is drawn with, and so what
+    /// its pointer presses and hover, IME caret, and accessibility use.
+    pub(super) fn workspace_panel_layout(&self) -> WorkspacePanelLayout {
+        let metrics = self.ui_metrics();
+        self.workspace_panel.layout(
+            metrics.width,
+            metrics.height,
+            metrics.tab_bar_height,
+            metrics.cell_width,
+            metrics.cell_height,
+        )
+    }
+
     /// Keys for the workspace manager: renaming, the list, and dismissal.
     pub(super) fn handle_workspace_panel_key(&mut self, key: &Key) {
         use crate::ui::workspace_panel::WorkspacePanelKey;

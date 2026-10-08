@@ -3,7 +3,6 @@
 //! Preedit text is application-owned display state. It is never written to a
 //! PTY; only `Ime::Commit` reaches the currently focused text surface.
 
-use super::palette_input::PaletteModal;
 use super::text_target::TextTarget;
 use winit::event::Ime;
 
@@ -111,33 +110,34 @@ impl App {
     }
 
     /// The input viewport of `target` when it is a field of a palette,
-    /// dialog, or panel; `None` for any other target.
+    /// dialog, or panel, in the geometry it is drawn with; `None` for any
+    /// other target.
     pub(super) fn field_ime_viewport(
         &self,
         target: TextTarget,
-        width: f32,
-        height: f32,
-        cell_width: f32,
-        cell_height: f32,
     ) -> Option<crate::ui::text_input_viewport::TextInputViewport> {
+        let metrics = self.ui_metrics();
         match target {
             TextTarget::Palette(modal) => {
-                self.palette_ime_viewport(modal, width, height, cell_width, cell_height)
+                let info = self.palette_owner(modal).build_info();
+                self.palette_layout(&info)
+                    .input_viewport(&info.input, info.cursor)
             }
             TextTarget::ShortcutsFilter => {
+                let info = self.shortcuts_panel.build_info(&self.shortcut_registry);
                 self.shortcuts_panel
-                    .input_viewport(width, height, cell_width, cell_height)
+                    .input_viewport(&self.shortcuts_panel_layout(&info))
             }
-            TextTarget::SettingsFilter => {
-                self.settings_panel
-                    .input_viewport(width, height, cell_width, cell_height)
-            }
-            TextTarget::WorkspaceRename => {
-                self.workspace_ime_viewport(width, height, cell_width, cell_height)
-            }
-            TextTarget::CommandsForm => {
-                self.commands_ime_viewport(width, height, cell_width, cell_height)
-            }
+            TextTarget::SettingsFilter => self.settings_panel.input_viewport(
+                metrics.width,
+                metrics.height,
+                metrics.cell_width,
+                metrics.cell_height,
+            ),
+            TextTarget::WorkspaceRename => self
+                .workspace_panel
+                .rename_input_viewport(&self.workspace_panel_layout()),
+            TextTarget::CommandsForm => self.commands_ime_viewport(&metrics),
             TextTarget::InfoOverlayInput
             | TextTarget::TabRename
             | TextTarget::AgentView
@@ -147,62 +147,19 @@ impl App {
         }
     }
 
-    fn palette_ime_viewport(
-        &self,
-        modal: PaletteModal,
-        width: f32,
-        height: f32,
-        cell_width: f32,
-        cell_height: f32,
-    ) -> Option<crate::ui::text_input_viewport::TextInputViewport> {
-        let info = self.palette_owner(modal).build_info();
-        crate::ui::list_dialog::ListDialogLayout::calculate(
-            crate::ui::command_palette::PALETTE_DIALOG,
-            width,
-            height,
-            cell_width,
-            cell_height,
-            info.animation,
-            info.entries.len(),
-        )
-        .input_viewport(&info.input, info.cursor)
-    }
-
-    fn workspace_ime_viewport(
-        &self,
-        width: f32,
-        height: f32,
-        cell_width: f32,
-        cell_height: f32,
-    ) -> Option<crate::ui::text_input_viewport::TextInputViewport> {
-        let top = self
-            .renderer
-            .as_ref()
-            .map_or(0.0, crate::renderer::Renderer::tab_bar_height);
-        self.workspace_panel
-            .rename_input_viewport(width, height, top, cell_width, cell_height)
-    }
-
     fn commands_ime_viewport(
         &self,
-        width: f32,
-        height: f32,
-        cell_width: f32,
-        cell_height: f32,
+        metrics: &UiMetrics,
     ) -> Option<crate::ui::text_input_viewport::TextInputViewport> {
         // Only form state is needed here; do not clone the command inventory
         // a second time just to position the input method.
         let info = self.commands_panel.build_info(&[]);
-        let top = self
-            .renderer
-            .as_ref()
-            .map_or(0.0, crate::renderer::Renderer::tab_bar_height);
         crate::ui::commands::panel::CommandsPanelLayout::calculate(
-            width,
-            height,
-            top,
-            cell_width,
-            cell_height,
+            metrics.width,
+            metrics.height,
+            metrics.tab_bar_height,
+            metrics.cell_width,
+            metrics.cell_height,
             info.animation,
             true,
             info.commands.len(),
@@ -243,7 +200,7 @@ impl App {
                 (row.x + row.width - x).max(layout.char_scale),
             );
         }
-        let (width, height) = renderer.window_size();
+        let width = renderer.window_size().0;
         let (cell_width, cell_height) = renderer.cell_size();
         let view = match target {
             TextTarget::AgentView => {
@@ -262,13 +219,7 @@ impl App {
                 layout.input_viewport(&info, cell_width)?
             }
             TextTarget::Terminal => return self.terminal_ime_target(renderer),
-            field => self.field_ime_viewport(
-                field,
-                width as f32,
-                height as f32,
-                cell_width,
-                cell_height,
-            )?,
+            field => self.field_ime_viewport(field)?,
         };
         self.ime_target(
             [view.cursor_x, view.text_y, cell_width, cell_height],

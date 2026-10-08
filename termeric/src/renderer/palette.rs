@@ -3,7 +3,7 @@
 use super::Renderer;
 use super::draw::FieldTextColors;
 use crate::ui::color::scale_alpha;
-use crate::ui::command_palette::{PALETTE_DIALOG, PaletteInfo};
+use crate::ui::command_palette::PaletteInfo;
 use crate::ui::constants::{BUTTON_CORNER_RADIUS, MODAL_CORNER_RADIUS};
 use crate::ui::geometry::Bounds;
 use crate::ui::list_dialog::ListDialogLayout;
@@ -35,27 +35,19 @@ impl Renderer {
     pub(super) fn build_command_palette(
         &mut self,
         info: &PaletteInfo,
+        layout: &ListDialogLayout,
         window_width: f32,
         window_height: f32,
     ) {
         let anim = info.animation;
         let cell_width = self.cell_width();
-        let cell_height = self.cell_height();
         let fade = |color: [f32; 4], alpha: f32| scale_alpha(color, alpha * anim);
 
         let scrim = fade(self.ui.palette_scrim, 1.0);
         self.rect_pipeline
             .push_rect(0.0, 0.0, window_width, window_height, scrim);
 
-        let layout = ListDialogLayout::calculate(
-            PALETTE_DIALOG,
-            window_width,
-            window_height,
-            cell_width,
-            cell_height,
-            anim,
-            info.entries.len(),
-        );
+        let layout = *layout;
         let Bounds {
             x: panel_x,
             y: panel_y,
