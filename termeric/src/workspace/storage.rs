@@ -561,17 +561,13 @@ fn deduplicated_scrollback_name(directory: &Path, payload: &[u8]) -> Result<Stri
 }
 
 fn safe_scrollback_path(directory: &Path, relative: &str) -> Result<PathBuf> {
-    let path = Path::new(relative);
-    if path.components().count() != 2
-        || !path.starts_with("scrollback")
-        || path.extension().and_then(|extension| extension.to_str()) != Some("txt")
-    {
+    if !super::model::is_safe_scrollback_file(relative) {
         anyhow::bail!("unsafe workspace scrollback path {relative:?}");
     }
     let scrollback = directory.join("scrollback");
     ensure_real_directory(&scrollback, false, "workspace scrollback")?;
     // The read itself refuses a symlink or anything but a regular file.
-    Ok(directory.join(path))
+    Ok(directory.join(relative))
 }
 
 fn atomic_write(path: &Path, payload: &[u8], keep_backup: bool) -> Result<()> {

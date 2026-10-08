@@ -393,7 +393,9 @@ fn is_safe_identifier(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
-fn is_safe_scrollback_file(value: &str) -> bool {
+/// A pane's scrollback file is `scrollback/<name>.txt` inside its archive,
+/// so a hostile archive cannot name a file anywhere else.
+pub(super) fn is_safe_scrollback_file(value: &str) -> bool {
     let path = std::path::Path::new(value);
     path.components().count() == 2
         && path.starts_with("scrollback")
