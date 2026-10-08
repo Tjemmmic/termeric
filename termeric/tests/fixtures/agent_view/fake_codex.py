@@ -1,70 +1,29 @@
 #!/usr/bin/env python3
-"""A scripted stand-in for Codex's app server.
-
-It speaks the same protocol as `codex app-server` (JSON-RPC over stdio, one
-message per line, no `jsonrpc` field), so the agent view can be developed and
-tested without an account or any usage. What a turn does is chosen by words
-in the message:
-
-  edit      propose a patch and ask to apply it
-  run       ask to run a command
-  ask       ask a question
-  todo      update the plan
-  slow      stream slowly, so the turn can be stopped
-  fail      end the turn with an error
-  crash     exit with an error message
-  settings  answer with the mode and model the turn ran with
-  overrides answer with the `-c` configuration keys it was started with
-  (other)   answer with a short Markdown reply
-
-`thread/list` offers two earlier threads in any folder, `earlier-named` and
-`earlier-preview`, which can be continued. `/compact` and `/review` arrive as
-their own requests. `-c key=value`
-overrides may come before `app-server`. Setting FAKE_CODEX_SIGNED_OUT reports
-no account.
-"""
+"""Test double for Codex's app-server protocol; behavior is chosen by words
+in the prompt."""
 
 import json
 import os
-import select
 import sys
 import time
 import uuid
+
+# Run as `python3 path/to/script`: the shared module sits beside it, and no
+# bytecode is left in the source tree.
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fake_common import read_line, send
 
 DELAY = float(os.environ.get("FAKE_CODEX_DELAY", "0.02"))
 DEFAULT_MODEL = "gpt-fake-5"
 
 threads = {}
-overrides = {}
 pending_input = []
 state = {"thread": None, "turn": None, "interrupted": False, "notes": [], "next_id": 100}
 
 
-def send(message):
-    sys.stdout.write(json.dumps(message) + "\n")
-    sys.stdout.flush()
-
-
 def notify(method, params):
     send({"method": method, "params": params})
-
-
-_buffer = b""
-
-
-def read_line(block):
-    """One input line; "" when none is ready without blocking; None at EOF."""
-    global _buffer
-    while b"\n" not in _buffer:
-        if not block and not select.select([0], [], [], 0)[0]:
-            return ""
-        chunk = os.read(0, 65536)
-        if not chunk:
-            line, _buffer = _buffer, b""
-            return line.decode() if line else None
-        _buffer += chunk
-    line, _, _buffer = _buffer.partition(b"\n")
-    return line.decode()
 
 
 def read_message(block=True, fresh=False):
@@ -234,11 +193,6 @@ def run_turn(params):
     skills = [part["name"] for part in params["input"] if part["type"] == "skill"]
     words = text.lower()
 
-    if "crash" in words:
-        sys.stderr.write("Error: the fake Codex crashed on purpose\n")
-        sys.stderr.flush()
-        sys.exit(2)
-
     if "fail" in words:
         say("Trying that now.")
         finish("failed", {"message": "The fake Codex failed on purpose.",
@@ -250,11 +204,6 @@ def run_turn(params):
         if not say(" ".join(["This answer streams slowly so it can be stopped."] * 40)):
             finish("interrupted")
             return
-        finish()
-        return
-
-    if "overrides" in words:
-        say("overrides " + ", ".join(sorted(overrides)))
         finish()
         return
 
@@ -432,9 +381,8 @@ def handle(message):
 
 def main():
     args = sys.argv[1:]
+    # `-c key=value` configuration overrides may come first.
     while len(args) >= 2 and args[0] == "-c":
-        key, _, value = args[1].partition("=")
-        overrides[key] = value
         args = args[2:]
     if args != ["app-server"]:
         sys.stderr.write("usage: fake_codex.py [-c key=value]... app-server\n")

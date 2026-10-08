@@ -1,34 +1,21 @@
 #!/usr/bin/env python3
-"""A scripted stand-in for Claude Code's stream-json protocol.
-
-It speaks the same protocol as `claude -p --input-format stream-json
---output-format stream-json --permission-prompt-tool stdio`, so the agent view
-can be developed and tested without an account or any usage. What it does is
-chosen by words in each prompt:
-
-  edit      read a file, then ask to edit it (approval with a diff)
-  run       ask to run a command
-  ask       ask a multiple-choice question
-  plan      present a plan for approval
-  todo      update a to-do list
-  agent     run a sub-agent
-  slow      stream slowly, so the turn can be interrupted
-  fail      end the turn with an error
-  crash     exit with an error message
-  (other)   answer with a short Markdown reply
-
-Pass `--version` to print a version line.
-"""
+"""Test double for Claude Code's stream-json protocol; behavior is chosen by
+words in the prompt."""
 
 import json
 import os
-import select
 import sys
 import time
 import uuid
 
+# Run as `python3 path/to/script`: the shared module sits beside it, and no
+# bytecode is left in the source tree.
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fake_common import read_line, send
+
 VERSION = "2.1.999"
-SESSION = os.environ.get("FAKE_CLAUDE_SESSION", str(uuid.uuid4()))
+SESSION = str(uuid.uuid4())
 DELAY = float(os.environ.get("FAKE_CLAUDE_DELAY", "0.02"))
 
 mode = "default"
@@ -46,33 +33,6 @@ ALLOW_BYPASS = "--allow-dangerously-skip-permissions" in sys.argv
 
 pending_input = []
 interrupted = False
-
-
-def send(message):
-    sys.stdout.write(json.dumps(message) + "\n")
-    sys.stdout.flush()
-
-
-_buffer = b""
-
-
-def read_line(block):
-    """One input line; "" when none is ready without blocking; None at EOF.
-
-    Reads the descriptor directly: mixing a buffered reader with select()
-    would miss lines already sitting in the buffer.
-    """
-    global _buffer
-    while b"\n" not in _buffer:
-        if not block and not select.select([0], [], [], 0)[0]:
-            return ""
-        chunk = os.read(0, 65536)
-        if not chunk:
-            line, _buffer = _buffer, b""
-            return line.decode() if line else None
-        _buffer += chunk
-    line, _, _buffer = _buffer.partition(b"\n")
-    return line.decode()
 
 
 def read_message():
@@ -168,17 +128,17 @@ def stream_text(text, message_id):
     return True
 
 
-def tool_use(name, tool_input, parent=None):
+def tool_use(name, tool_input):
     tool_id = "toolu_" + uuid.uuid4().hex[:12]
-    send({"type": "assistant", "parent_tool_use_id": parent, "session_id": SESSION,
+    send({"type": "assistant", "parent_tool_use_id": None, "session_id": SESSION,
           "message": {"id": "msg_" + uuid.uuid4().hex[:8], "role": "assistant",
                       "content": [{"type": "tool_use", "id": tool_id, "name": name,
                                    "input": tool_input}]}})
     return tool_id
 
 
-def tool_result(tool_id, content, is_error=False, detail=None, parent=None):
-    message = {"type": "user", "parent_tool_use_id": parent, "session_id": SESSION,
+def tool_result(tool_id, content, is_error=False, detail=None):
+    message = {"type": "user", "parent_tool_use_id": None, "session_id": SESSION,
                "message": {"role": "user", "content": [
                    {"type": "tool_result", "tool_use_id": tool_id, "content": content,
                     "is_error": is_error}]}}
@@ -236,11 +196,6 @@ def turn(prompt):
         sys.stderr.write("Error: the fake agent crashed on purpose\n")
         sys.stderr.flush()
         sys.exit(2)
-
-    if "fail" in words:
-        stream_text("Trying that now.", message_id)
-        finish(started, success=False, error="The fake agent failed on purpose")
-        return
 
     if "slow" in words:
         text = " ".join(["This answer streams slowly so it can be stopped."] * 40)
@@ -321,30 +276,6 @@ def turn(prompt):
         finish(started)
         return
 
-    if "todo" in words:
-        todos = {"todos": [
-            {"content": "Read the code", "status": "completed", "activeForm": "Reading the code"},
-            {"content": "Write the fix", "status": "in_progress", "activeForm": "Writing the fix"},
-            {"content": "Run the tests", "status": "pending", "activeForm": "Running the tests"}]}
-        todo_id = tool_use("TodoWrite", todos)
-        tool_result(todo_id, "Todos have been modified successfully.")
-        stream_text("Tracking three steps.", message_id)
-        finish(started)
-        return
-
-    if "agent" in words:
-        task_id = tool_use("Agent", {"description": "Find callers", "prompt": "Find callers",
-                                     "subagent_type": "Explore"})
-        for name, tool_input in [("Grep", {"pattern": "refresh_focus"}),
-                                 ("Read", {"file_path": os.path.join(os.getcwd(), "src/focus.rs")})]:
-            child = tool_use(name, tool_input, parent=task_id)
-            time.sleep(DELAY * 5)
-            tool_result(child, "ok", parent=task_id)
-        tool_result(task_id, "Found 2 callers.")
-        stream_text("The sub-agent found two callers.", message_id)
-        finish(started)
-        return
-
     reply = ("Here is a short answer with **bold**, `code`, and a list:\n\n"
              "- one\n- two\n\n```rust\nfn main() {}\n```")
     if not stream_text(reply, message_id):
@@ -354,9 +285,6 @@ def turn(prompt):
 
 
 def main():
-    if "--version" in sys.argv:
-        print(f"{VERSION} (Claude Code)")
-        return
     while True:
         message = read_message()
         if message is None:

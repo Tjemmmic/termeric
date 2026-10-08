@@ -1,33 +1,17 @@
 #!/usr/bin/env python3
-"""A scripted stand-in for OpenCode's ACP server.
-
-It speaks the Agent Client Protocol as `opencode acp` does (JSON-RPC 2.0 over
-stdio, one message per line), so the agent view can be developed and tested
-without an account or any usage. What a turn does is chosen by words in the
-message:
-
-  edit      edit a file, asking first; allowed, it also tries to write the
-            file through the client, as OpenCode does
-  run       run a command, asking first
-  todo      update its to-do list
-  slow      stream slowly, so the turn can be stopped
-  signin    fail as a provider without credentials does
-  settings  answer with the mode, model, and effort the turn ran with
-  (other)   think, then answer with a short Markdown reply
-
-`session/list` offers two earlier sessions in any folder, `ses_earlier_one`
-and `ses_earlier_two`, which can be continued; any other id cannot. A session
-opens on `session/new`; `zai/glm-4.7` offers levels of effort, as OpenCode's
-models with variants do. FAKE_OPENCODE_MANY_MODELS lists some thirty models from
-three providers. The first argument must be `acp`, or `session delete
-<id>`, which appends the id to the file FAKE_OPENCODE_FORGOTTEN names.
-"""
+"""Test double for OpenCode's Agent Client Protocol; behavior is chosen by
+words in the prompt."""
 
 import json
 import os
-import select
 import sys
 import time
+
+# Run as `python3 path/to/script`: the shared module sits beside it, and no
+# bytecode is left in the source tree.
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fake_common import read_line, send as send_line
 
 DELAY = float(os.environ.get("FAKE_OPENCODE_DELAY", "0.02"))
 EARLIER = {
@@ -44,34 +28,17 @@ state = {
     "cancelled": False,
 }
 set_aside = []
-_buffer = b""
 
 
 def send(message):
     message["jsonrpc"] = "2.0"
-    sys.stdout.write(json.dumps(message) + "\n")
-    sys.stdout.flush()
+    send_line(message)
 
 
 def update(session_update, **fields):
     fields["sessionUpdate"] = session_update
     send({"method": "session/update",
           "params": {"sessionId": state["session"], "update": fields}})
-
-
-def read_line(block):
-    """One input line; "" when none is ready without blocking; None at EOF."""
-    global _buffer
-    while b"\n" not in _buffer:
-        if not block and not select.select([0], [], [], 0)[0]:
-            return ""
-        chunk = os.read(0, 65536)
-        if not chunk:
-            line, _buffer = _buffer, b""
-            return line.decode() if line else None
-        _buffer += chunk
-    line, _, _buffer = _buffer.partition(b"\n")
-    return line.decode()
 
 
 def read_message(block=True):
@@ -115,26 +82,10 @@ def ask(method, params):
 
 
 def models():
-    listed = [
+    return [
         {"value": "opencode/big-pickle", "name": "OpenCode Zen/Big Pickle"},
         {"value": "zai/glm-4.7", "name": "Z.AI/GLM-4.7"},
     ]
-    # As an account signed in to several providers lists them.
-    if os.environ.get("FAKE_OPENCODE_MANY_MODELS"):
-        for provider, names in [
-            ("github-copilot", ["Claude Fable 5", "Claude Opus 5", "Claude Opus 5.5",
-                                "Claude Sonnet 5", "Claude Haiku 4.5", "Gemini 3.8 Flash",
-                                "GPT-5 Mini", "GPT-5.3 Codex", "GPT-5.5", "Grok Code Fast"]),
-            ("openrouter", ["DeepSeek V4", "Qwen 3.5 Coder", "Kimi K3", "Llama 5 70B",
-                            "Mistral Large 3", "GLM-5.3", "MiniMax M3"]),
-            ("zai", ["GLM-5.2", "GLM-5.2 Highspeed", "GLM-5.3", "GLM-5.3 Flash"]),
-        ]:
-            label = {"github-copilot": "GitHub Copilot", "openrouter": "OpenRouter",
-                     "zai": "Z.AI"}[provider]
-            for name in names:
-                listed.append({"value": f"{provider}/{name.lower().replace(' ', '-')}",
-                               "name": f"{label}/{name}"})
-    return listed
 
 
 def options():
@@ -255,15 +206,6 @@ def run_turn(text):
                ]},
                content=[{"type": "content", "content": {"type": "text", "text": "2 todos"}}])
         say("Planned it.")
-        return "end_turn", None
-    if "slow" in words:
-        for _ in range(400):
-            if state["cancelled"]:
-                return "cancelled", None
-            update("agent_message_chunk", messageId="msg_slow",
-                   content={"type": "text", "text": "."})
-            time.sleep(0.02)
-            pause()
         return "end_turn", None
     update("agent_thought_chunk", messageId="msg_answer",
            content={"type": "text", "text": "The person said hello."})
