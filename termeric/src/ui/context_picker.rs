@@ -70,13 +70,6 @@ pub enum ContextPickerAction {
         request_id: u64,
         value: String,
     },
-    AppendFileInput {
-        request_id: u64,
-        character: char,
-    },
-    BackspaceFileInput {
-        request_id: u64,
-    },
     None,
 }
 
@@ -539,8 +532,44 @@ impl ContextPicker {
         }
     }
 
+    #[cfg(test)]
     pub fn focus(&self) -> ContextPickerFocus {
         self.focus
+    }
+
+    /// Whether the file field holds the keyboard: it is focused and the
+    /// picker still answers its request.
+    pub fn file_input_focused(&self) -> bool {
+        self.is_awaiting_current() && self.focus == ContextPickerFocus::FileInput
+    }
+
+    /// Insert typed, pasted, or composed text at the file field's caret,
+    /// whole or not at all. Returns whether it was accepted.
+    pub fn insert_file_text(&mut self, request_id: u64, text: &str) -> bool {
+        let inserted = self.editing_files(request_id) && self.file_input.insert(text);
+        if inserted {
+            self.status = None;
+        }
+        inserted
+    }
+
+    /// Apply a grapheme edit to the file field. True when the text or the
+    /// caret changed.
+    pub fn edit_file_input(&mut self, request_id: u64, edit: TextInputEdit) -> bool {
+        if !self.editing_files(request_id) {
+            return false;
+        }
+        let caret = self.file_input.cursor();
+        if self.file_input.edit_grapheme(edit) {
+            self.status = None;
+            return true;
+        }
+        self.file_input.cursor() != caret
+    }
+
+    /// Whether request `request_id` is awaited and its file editor is open.
+    fn editing_files(&self, request_id: u64) -> bool {
+        self.is_awaiting(request_id) && self.phase == ContextPickerPhase::FilePaths
     }
 
     /// The buttons this phase offers, left to right.
@@ -680,9 +709,7 @@ impl ContextPicker {
             | ContextPickerAction::Toggle { request_id, .. }
             | ContextPickerAction::Primary { request_id }
             | ContextPickerAction::EditFiles { request_id }
-            | ContextPickerAction::SetFileInput { request_id, .. }
-            | ContextPickerAction::AppendFileInput { request_id, .. }
-            | ContextPickerAction::BackspaceFileInput { request_id } => *request_id,
+            | ContextPickerAction::SetFileInput { request_id, .. } => *request_id,
             ContextPickerAction::None => return None,
         };
         if !self.is_awaiting(request_id) {
@@ -740,19 +767,6 @@ impl ContextPicker {
                 if self.file_input.replace(&value) {
                     self.status = None;
                 }
-            }
-            ContextPickerAction::AppendFileInput { character, .. }
-                if self.phase == ContextPickerPhase::FilePaths =>
-            {
-                if self.file_input.insert(character.encode_utf8(&mut [0; 4])) {
-                    self.status = None;
-                }
-            }
-            ContextPickerAction::BackspaceFileInput { .. }
-                if self.phase == ContextPickerPhase::FilePaths =>
-            {
-                self.file_input.edit_grapheme(TextInputEdit::Backspace);
-                self.status = None;
             }
             ContextPickerAction::Primary { .. } => match self.phase {
                 ContextPickerPhase::Sources => {}

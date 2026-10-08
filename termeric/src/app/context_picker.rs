@@ -1,7 +1,10 @@
 //! The context picker: choosing what to send an agent, gathering it off the
 //! event loop, and typing it into the agent's terminal.
 
+use super::text_field_keys::{FieldKey, types_text};
 use super::*;
+use crate::ui::context_picker::{ContextPickerAction, ContextPickerPhase};
+use winit::keyboard::{Key, NamedKey};
 
 impl App {
     /// The context picker's geometry, shared by drawing, pointer hits, and
@@ -23,12 +26,9 @@ impl App {
     /// the list or field and the buttons, Enter and Space press the focused
     /// button (from the list, Enter inserts and Space toggles the selected
     /// source), Escape cancels or goes back, the arrows and Page Up/Down
-    /// move through the sources, and the focused field takes typing.
-    pub(super) fn handle_context_picker_key(&mut self, key: &winit::keyboard::Key, repeat: bool) {
-        use crate::ui::context_picker::{
-            ContextPickerAction, ContextPickerFocus, ContextPickerPhase,
-        };
-        use winit::keyboard::{Key, NamedKey};
+    /// move through the sources, and the focused field edits and types like
+    /// every other field, Space included.
+    pub(super) fn handle_context_picker_key(&mut self, key: &Key, repeat: bool) {
         let request_id = self.context_picker.request_id();
         let phase = self.context_picker.phase();
         let page = self.context_picker.viewport_rows() as isize;
@@ -36,13 +36,19 @@ impl App {
         let action = match key {
             Key::Named(NamedKey::Escape) => ContextPickerAction::Cancel { request_id },
             Key::Named(NamedKey::Tab) => {
+                self.ime.clear_preedit();
                 self.context_picker
                     .cycle_focus(request_id, self.modifiers.shift_key());
                 ContextPickerAction::None
             }
             // A held key must not press something it did not mean to reach.
-            Key::Named(NamedKey::Enter | NamedKey::Space) if repeat => ContextPickerAction::None,
+            Key::Named(NamedKey::Enter) if repeat => ContextPickerAction::None,
             Key::Named(NamedKey::Enter) => self.context_picker.enter_action(request_id),
+            _ if self.context_picker.file_input_focused() => {
+                self.context_picker_field_key(key, request_id);
+                ContextPickerAction::None
+            }
+            Key::Named(NamedKey::Space) if repeat => ContextPickerAction::None,
             Key::Named(NamedKey::Space) => self.context_picker.space_action(request_id),
             Key::Named(named) if phase == ContextPickerPhase::Sources => match named {
                 NamedKey::ArrowUp => move_by(-1),
@@ -51,26 +57,33 @@ impl App {
                 NamedKey::PageDown => move_by(page),
                 _ => ContextPickerAction::None,
             },
-            _ if self.context_picker.focus() != ContextPickerFocus::FileInput => {
-                ContextPickerAction::None
-            }
-            Key::Named(NamedKey::Backspace) => {
-                ContextPickerAction::BackspaceFileInput { request_id }
-            }
-            Key::Character(text) => {
-                text.chars()
-                    .next()
-                    .map_or(ContextPickerAction::None, |character| {
-                        ContextPickerAction::AppendFileInput {
-                            request_id,
-                            character,
-                        }
-                    })
-            }
             _ => ContextPickerAction::None,
         };
         self.apply_context_picker_action(action);
         self.request_redraw(RedrawReason::KeyboardInput);
+    }
+
+    /// A key while the file field is focused: the shared editing keys, and
+    /// text (Space included) under the modifiers that type it. Under AltGr a
+    /// character key types, even where the layout reports Ctrl with it.
+    fn context_picker_field_key(&mut self, key: &Key, request_id: u64) {
+        let changed = match self.text_edit_for_key(key) {
+            Some(FieldKey::Edit(edit)) => self.context_picker.edit_file_input(request_id, edit),
+            Some(FieldKey::Consume) => false,
+            None if types_text(self.modifiers, self.alt_graph_active) => match key {
+                Key::Named(NamedKey::Space) => {
+                    self.context_picker.insert_file_text(request_id, " ")
+                }
+                Key::Character(text) => self
+                    .context_picker
+                    .insert_file_text(request_id, text.as_str()),
+                _ => false,
+            },
+            None => false,
+        };
+        if changed {
+            self.ime.clear_preedit();
+        }
     }
 
     /// A primary press on the context picker: a button or source row takes
@@ -110,16 +123,12 @@ impl App {
         );
     }
 
-    pub(super) fn apply_context_picker_action(
-        &mut self,
-        action: crate::ui::context_picker::ContextPickerAction,
-    ) {
+    pub(super) fn apply_context_picker_action(&mut self, action: ContextPickerAction) {
         let start = matches!(
             action,
-            crate::ui::context_picker::ContextPickerAction::Primary { request_id }
+            ContextPickerAction::Primary { request_id }
                 if self.context_picker.is_awaiting(request_id)
-                    && self.context_picker.phase()
-                        == crate::ui::context_picker::ContextPickerPhase::Sources
+                    && self.context_picker.phase() == ContextPickerPhase::Sources
         );
         let request_id = self.context_picker.request_id();
         self.context_picker.apply(action);
@@ -233,10 +242,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::context_picker::{
-        ContextPickerButton, ContextPickerFocus, ContextPickerPhase, ContextSourceId,
-    };
-    use winit::keyboard::{Key, NamedKey};
+    use crate::ui::context_picker::{ContextPickerButton, ContextPickerFocus, ContextSourceId};
 
     fn open_in(app: &mut App, directory: &std::path::Path) -> u64 {
         app.context_picker.set_reduced_motion(true);
@@ -270,6 +276,56 @@ mod tests {
         assert_eq!(app.context_picker.phase(), ContextPickerPhase::Sources);
         assert_eq!(app.context_picker.focus(), ContextPickerFocus::Sources);
         assert_eq!(app.context_picker.snapshot().sources, before);
+    }
+
+    fn type_text(app: &mut App, text: &str) {
+        for character in text.chars() {
+            let key = if character == ' ' {
+                Key::Named(NamedKey::Space)
+            } else {
+                Key::Character(character.to_string().into())
+            };
+            app.handle_context_picker_key(&key, false);
+        }
+    }
+
+    #[test]
+    fn the_file_field_types_spaces_and_edits_at_its_caret_like_every_field() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut app = App::new_headless(Config::default()).unwrap();
+        let request = open_in(&mut app, directory.path());
+        app.apply_context_picker_action(ContextPickerButton::ChooseFiles.action(request));
+        assert_eq!(app.context_picker.focus(), ContextPickerFocus::FileInput);
+
+        type_text(&mut app, "my notes.md");
+        app.handle_context_picker_key(&Key::Named(NamedKey::Space), true);
+        assert_eq!(
+            app.context_picker.snapshot().file_input,
+            "my notes.md ",
+            "a held Space types in a field"
+        );
+        press(&mut app, NamedKey::Backspace);
+        press(&mut app, NamedKey::Home);
+        type_text(&mut app, "docs/");
+        app.modifiers = ModifiersState::CONTROL;
+        press(&mut app, NamedKey::ArrowRight);
+        app.handle_context_picker_key(&Key::Character("a".into()), false);
+        app.handle_context_picker_key(&Key::Named(NamedKey::Space), false);
+        app.modifiers = ModifiersState::empty();
+        type_text(&mut app, "🌱");
+        assert_eq!(
+            app.context_picker.snapshot().file_input,
+            "docs/my🌱 notes.md",
+            "Ctrl moves by word and types nothing"
+        );
+        press(&mut app, NamedKey::Backspace);
+        press(&mut app, NamedKey::Delete);
+        assert_eq!(
+            app.context_picker.snapshot().file_input,
+            "docs/mynotes.md",
+            "Backspace and Delete remove whole graphemes"
+        );
+        assert_eq!(app.context_picker.phase(), ContextPickerPhase::FilePaths);
     }
 
     #[test]
