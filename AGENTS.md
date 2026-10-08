@@ -69,7 +69,8 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `ui/text_input.rs` | Shared single-line text input buffer with cursor management |
 | `ui/text_layout.rs`, `ui/text_area.rs` | Measured, wrapped UI text (`TextMeasure`) and the multi-line editor buffer |
 | `ui/constants.rs` | Shared UI constants (corner radii, border width, filter-field insets) |
-| `ui/request_scope.rs` | `RequestScope`, the request a modal card (info overlay, diff review, context picker) answers, so an action aimed at an earlier or dismissed showing does nothing |
+| `ui/dialog.rs` | `Dialog`, the one modal for messages, confirmations, and prompts (and, for now, the font and plugin managers' lists): a `DialogSpec` from a constructor (`message`, `error`, `confirm`, `prompt`, `list`) with Text, Value, and Error blocks, an optional field, list rows, and buttons with roles; its focus rules and body scroll; and `DialogLayout` (`ui/dialog/layout.rs`), the one geometry for drawing, hit tests, the IME caret, and accessibility. `app/dialog.rs` routes its keys, presses, and answers back to the flow that opened it (`App::dialog_flow`) |
+| `ui/request_scope.rs` | `RequestScope`, the request a modal card (a dialog, diff review, context picker) answers, so an action aimed at an earlier or dismissed showing does nothing |
 | `ui/list_dialog.rs`, `ui/side_panel.rs` | The layouts the filtered-list dialogs (command palette and its pickers, Keyboard Shortcuts) and the right-edge side panels (workspaces, Commands, Agents) share |
 | `ui/filter_field.rs`, `ui/focus_step.rs`, `ui/text.rs` | Filter-field text placement, keyboard focus steps through a panel's controls, and shared wording (`plural`) |
 | `ui/geometry.rs`, `ui/color.rs`, `ui/icon.rs` | `Bounds`, the one rectangle type (half-open `contains`) for layout, hit tests, drawing, and accessibility; color alpha/mix/brightness helpers; the icon set drawn from `renderer/icons.rs` |
@@ -133,7 +134,7 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `headless_tests.rs`, `image_crop_smoke.rs`, `benchmark.rs`, `visual_baseline.json` | GPU smokes run by `gpu_render_smoke`, the visual baseline they compare against, and the headless renderer benchmark (test builds only) |
 | `shaders/` | WGSL for the rectangle, text, and image pipelines (the background image draws through the image pipeline) |
 | `types.rs` | `*Info` structs, click/action enums, `PaneRenderData`, and `PanePlacement`, which places panes and their scrollbars (`PaneScrollbar`) in the window (re-exported via `pub use types::*`) |
-| `draw.rs` | Shared card, shadow, scrollbar, button, and focus-ring drawing for dialogs and menus |
+| `draw.rs` | Shared card, shadow, scrollbar, focus-ring, and push-button drawing (`draw_button`, by `ButtonRole`) for dialogs and menus |
 | `rect.rs`, `buffer.rs` | Rounded-rectangle pipeline and capacity-managed GPU upload buffers |
 | `text.rs`, `ui_text.rs` | Terminal glyph queue and text pipeline; chrome text in the desktop UI face |
 | `style.rs` | Resolved SGR cell style, decoration geometry, visibility, and color/face ordering |
@@ -150,7 +151,8 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `shortcuts_render.rs` | Shortcuts panel |
 | `panels.rs` | Commands, Agents, and workspace panels, their shared frame, and the Commands/workspace panel hit tests |
 | `popup_menu.rs` | Anchored popup menu (used by the Workspaces menu) |
-| `overlays.rs` | Info overlay, diff review, context picker, guardrail confirmation |
+| `dialog.rs` | `build_dialog`: a dialog on the shared modal frame, its body clipped to its scrolled viewport |
+| `overlays.rs` | Diff review, context picker, guardrail confirmation |
 | `toasts.rs` | Toast cards |
 | `git.rs` | Git completion dropdown |
 | `harvest.rs` | Harvest indicators, cellar, sprout menu |
@@ -187,7 +189,7 @@ When adding a component that blocks input, trace its whole lifecycle — open, i
 
 ### Modal Layers
 
-`ModalLayer::INPUT_PRIORITY` (`ui/modal.rs`) is the one stacking order: guardrail → info overlay → diff review → context picker → Harvest sprout menu → Harvest cellar → domain picker → Unicode picker → command palette → shortcuts panel → Settings → Workspaces menu → workspace panel → Commands panel → Agents panel. Only `App::top_modal_layer()` owns input: keys, clicks, wheel, hover, IME, paste, and accessibility actions and snapshots all gate on it, and the renderer draws the layers in the reverse order, so the surface in front is the one that answers. A consumer with nothing to do for the top layer swallows the input rather than passing it beneath.
+`ModalLayer::INPUT_PRIORITY` (`ui/modal.rs`) is the one stacking order: guardrail → dialog → diff review → context picker → Harvest sprout menu → Harvest cellar → domain picker → Unicode picker → command palette → shortcuts panel → Settings → Workspaces menu → workspace panel → Commands panel → Agents panel. Only `App::top_modal_layer()` owns input: keys, clicks, wheel, hover, IME, paste, and accessibility actions and snapshots all gate on it, and the renderer draws the layers in the reverse order, so the surface in front is the one that answers. A consumer with nothing to do for the top layer swallows the input rather than passing it beneath.
 
 ### Mouse Click Dispatch Priority
 
@@ -338,6 +340,7 @@ The terminal content comes first; the chrome around it stays quiet.
 - **Tab bar:** compact and "quiet native". The strip uses the theme's `tab_inactive` color; the active tab is a slightly raised surface with a 2px `tab_active` accent line (a left bar in the vertical rail); inactive titles are dimmed; × appears on the active or hovered tab, and background activity shows as a small dot in its place. Never fill a whole tab with a saturated color.
 - **Settings:** one centered dialog with a sidebar of pages and one search across every page. Values sit in one column with steppers, dropdown chevrons, or a trailing chevron for actions. The footer only says whether changes are saved (with a Save button when they aren't); no key-hint strips.
 - **Dialogs and menus:** start from the shared pieces — `build_modal_frame` (`renderer/palette.rs`) for centered dialogs, `build_side_panel_frame` (`renderer/panels.rs`) for side panels, and `build_popup_menu` (`renderer/popup_menu.rs`) for anchored menus; a menu with its own rows, such as the Settings dropdown, still sits on the shared `push_menu_surface`.
+- **Messages, confirmations, and prompts** are a `Dialog` (`ui/dialog.rs`) built from its constructors, never drawn by hand. Write them plainly: the question is the heading, in sentence case ("Delete workspace?"); the consequence is the body; paths, commands, and versions go in a Value block; each button names its verb ("Delete", not "OK"). Buttons sit right-aligned with roles: Cancel (Escape answers it), Neutral, Suggested (the accent), and Destructive (the error color). Focus starts on the field, else on Cancel beside a destructive action, else on the suggested action, so a stray Enter never destroys anything; a consent a program asks for (file transfers) starts on Deny. No letter-key shortcuts and no key-hint strips. Every push button is `draw_button` with a `ButtonRole`; side-panel inline buttons stay `build_panel_button`.
 - **Icons:** use the vector icons (`ui::icon::Icon`, drawn with `push_icon`/`draw_icon` from `renderer/icons.rs`) rather than text glyphs such as ◀ ▶ ×.
 - **Hover and feedback:** a gentle background tint, not a color change. Prefer status text and toasts over modal dialogs.
 
@@ -347,8 +350,8 @@ Draw rounded rectangles with `RectPipeline::push_rounded_rect`; a radius of half
 
 | Radius | Used for |
 |---|---|
-| 12px (`CARD_CORNER_RADIUS`) | Cards: toasts, the info overlay, the guardrail confirmation, Harvest panels |
-| 10px (`MODAL_CORNER_RADIUS`) | The shared modal frame (Settings, command palette) |
+| 12px (`CARD_CORNER_RADIUS`) | Cards: toasts, the guardrail confirmation, diff review, the context picker, Harvest panels |
+| 10px (`MODAL_CORNER_RADIUS`) | The shared modal frame (Settings, the command palette, dialogs) |
 | 8px (`MENU_CORNER_RADIUS`) | Popup menus, dropdowns, the find box, the Git completion list |
 | 6px (`BUTTON_CORNER_RADIUS`) | Buttons, tabs, highlighted list rows (Settings sidebar, menus, the palette) |
 | 2px | Block cursor |
