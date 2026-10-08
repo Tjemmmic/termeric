@@ -1,12 +1,15 @@
 //! Broadcast input: arming a target set of panes, then writing keys, pastes,
 //! and bytes to every target.
 
+use super::agents::PersonInput;
 use super::*;
+
+/// How long an armed broadcast waits for confirmation; changing the targets
+/// starts it again.
+const ARM_WINDOW: Duration = Duration::from_secs(10);
 
 impl App {
     pub(super) fn toggle_broadcast(&mut self) {
-        const ARM_WINDOW: Duration = Duration::from_secs(10);
-
         if matches!(self.broadcast, BroadcastState::Active { .. }) {
             self.broadcast = BroadcastState::Inactive;
             self.toasts.success("Broadcast input cancelled");
@@ -36,9 +39,10 @@ impl App {
                 self.ime.clear_preedit();
                 self.input_line_buffer.clear();
                 self.dismiss_git_completion_popup();
-                self.toasts.warning(
-                    "Broadcast armed for 10 seconds: click panes or focus one and press Space to change targets; press Enter or invoke Toggle Broadcast Input again to confirm",
-                );
+                self.toasts.warning(format!(
+                    "Broadcast armed for {} seconds: click panes or focus one and press Space to change targets; press Enter or invoke Toggle Broadcast Input again to confirm",
+                    ARM_WINDOW.as_secs()
+                ));
                 BroadcastState::Armed {
                     tab_id,
                     expires: Instant::now() + ARM_WINDOW,
@@ -73,8 +77,10 @@ impl App {
             }
             BroadcastState::Active { .. } => unreachable!("active state returned above"),
             BroadcastState::Armed { .. } => {
-                self.toasts
-                    .warning("Broadcast confirmation expired; armed again for 10 seconds");
+                self.toasts.warning(format!(
+                    "Broadcast confirmation expired; armed again for {} seconds",
+                    ARM_WINDOW.as_secs()
+                ));
                 BroadcastState::Armed {
                     tab_id,
                     expires: Instant::now() + ARM_WINDOW,
@@ -85,8 +91,6 @@ impl App {
     }
 
     pub(super) fn toggle_armed_broadcast_target(&mut self, target: PaneId) -> bool {
-        const ARM_WINDOW: Duration = Duration::from_secs(10);
-
         let BroadcastState::Armed {
             tab_id,
             expires,
@@ -220,12 +224,7 @@ impl App {
     }
 
     /// Broadcast input is the person's typing in every pane it reached.
-    fn note_broadcast_input(
-        &mut self,
-        tab_id: usize,
-        panes: &[PaneId],
-        input: super::agents::PersonInput,
-    ) {
+    fn note_broadcast_input(&mut self, tab_id: usize, panes: &[PaneId], input: PersonInput) {
         for pane_id in panes {
             self.note_person_input(
                 crate::tabs::TerminalIdentity {
@@ -350,103 +349,49 @@ impl App {
     }
 
     pub(super) fn write_broadcast_bytes(&mut self, data: &[u8]) -> bool {
-        let Some((tab_id, targets)) = self.broadcast_targets() else {
-            if matches!(self.broadcast, BroadcastState::Active { .. }) {
-                self.broadcast = BroadcastState::Inactive;
-                self.toasts
-                    .warning("Broadcast cancelled because the active tab changed");
-            }
-            return false;
-        };
-        let Some(tab) = self.tabs.as_mut().and_then(TabManager::active_tab_mut) else {
-            return false;
-        };
-        debug_assert_eq!(tab.id, tab_id);
-        let Some(manager) = tab.split_panes_mut() else {
-            self.broadcast = BroadcastState::Inactive;
-            return false;
-        };
-        let mut remaining = targets;
-        let mut failed = 0;
-        remaining.retain(|id| {
-            let written = manager.write_to(*id, data).is_ok();
-            failed += usize::from(!written);
-            written
-        });
-        self.note_broadcast_input(tab_id, &remaining, super::agents::PersonInput::of(data));
-        self.finish_broadcast_writes(tab_id, remaining, failed);
-        true
+        self.broadcast_write(|_| Some(data.to_vec()), PersonInput::of)
     }
 
     pub(super) fn write_broadcast_key(&mut self, event: &winit::event::KeyEvent) -> bool {
-        let Some((tab_id, targets)) = self.broadcast_targets() else {
-            if matches!(self.broadcast, BroadcastState::Active { .. }) {
-                self.broadcast = BroadcastState::Inactive;
-                self.toasts
-                    .warning("Broadcast cancelled because the active tab changed");
-            }
-            return false;
-        };
-        let Some(manager) = self
-            .tabs
-            .as_ref()
-            .and_then(TabManager::active_tab)
-            .filter(|tab| tab.id == tab_id)
-            .and_then(|tab| tab.split_panes())
-        else {
-            self.broadcast = BroadcastState::Inactive;
-            return true;
-        };
-        let existing = targets
-            .iter()
-            .filter(|id| manager.get_pane(**id).is_some())
-            .count();
-        if existing < 2 {
-            self.broadcast = BroadcastState::Inactive;
-            self.toasts
-                .warning("Broadcast cancelled because fewer than two targets remain");
-            return true;
-        }
-        let encoded: Vec<_> = targets
-            .iter()
-            .filter_map(|id| {
-                let terminal = &manager.get_pane(*id)?.terminal;
+        let (modifiers, alt_graph_active) = (self.modifiers, self.alt_graph_active);
+        self.broadcast_write(
+            |terminal| {
                 crate::input::key_to_bytes_for_terminal(
                     event,
-                    self.modifiers,
-                    self.alt_graph_active,
+                    modifiers,
+                    alt_graph_active,
                     terminal,
                 )
-                .map(|bytes| (*id, bytes))
-            })
-            .collect();
-        let Some(manager) = self
-            .tabs
-            .as_mut()
-            .and_then(TabManager::active_tab_mut)
-            .and_then(|tab| tab.split_panes_mut())
-        else {
-            self.broadcast = BroadcastState::Inactive;
-            return true;
-        };
-        let mut remaining = targets;
-        let mut failed = 0;
-        let mut input = super::agents::PersonInput::Navigation;
-        for (id, bytes) in encoded {
-            if manager.write_to(id, &bytes).is_err() {
-                remaining.retain(|target| *target != id);
-                failed += 1;
-            } else {
-                // One key, encoded per pane; any pane's reading will do.
-                input = super::agents::PersonInput::of(&bytes);
-            }
-        }
-        self.note_broadcast_input(tab_id, &remaining, input);
-        self.finish_broadcast_writes(tab_id, remaining, failed);
-        true
+            },
+            PersonInput::of,
+        )
     }
 
     pub(super) fn write_broadcast_paste(&mut self, text: &str) -> bool {
+        let handled = self.broadcast_write(
+            |terminal| Some(crate::input::encode_paste(terminal.mode(), text)),
+            |_| PersonInput::Answer,
+        );
+        if handled {
+            self.input_line_buffer.clear();
+        }
+        handled
+    }
+
+    /// Write one input to every broadcast target. `encode` gives the bytes
+    /// for a target's terminal, which can differ by its modes (or nothing,
+    /// for a key that types nothing there), and `input` what written bytes
+    /// say to an agent. Returns false when no broadcast is active in the
+    /// active tab, so the input goes to the focused terminal instead.
+    ///
+    /// With fewer than two writable targets left the broadcast is cancelled
+    /// before anything is written: broadcast input never lands in just one
+    /// pane. A target that is gone or refuses the write is dropped.
+    fn broadcast_write(
+        &mut self,
+        encode: impl Fn(&termeric_core::Terminal) -> Option<Vec<u8>>,
+        input: impl Fn(&[u8]) -> PersonInput,
+    ) -> bool {
         let Some((tab_id, targets)) = self.broadcast_targets() else {
             if matches!(self.broadcast, BroadcastState::Active { .. }) {
                 self.broadcast = BroadcastState::Inactive;
@@ -455,48 +400,47 @@ impl App {
             }
             return false;
         };
-        let framed: Vec<_> = self
-            .tabs
-            .as_ref()
-            .and_then(TabManager::active_tab)
-            .filter(|tab| tab.id == tab_id)
-            .and_then(|tab| tab.split_panes())
-            .map(|manager| {
-                targets
-                    .iter()
-                    .filter_map(|id| {
-                        let mode = manager.get_pane(*id)?.terminal.mode();
-                        Some((*id, crate::input::encode_paste(mode, text)))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        if framed.len() < 2 {
-            self.broadcast = BroadcastState::Inactive;
-            self.toasts
-                .warning("Broadcast cancelled because fewer than two targets remain");
-            return true;
-        }
+        // `broadcast_targets` found the broadcast's tab active.
         let Some(manager) = self
             .tabs
             .as_mut()
             .and_then(TabManager::active_tab_mut)
-            .and_then(|tab| tab.split_panes_mut())
+            .and_then(crate::tabs::Tab::split_panes_mut)
+            .filter(|manager| {
+                let writable = targets
+                    .iter()
+                    .filter(|id| manager.get_pane(**id).is_some_and(|pane| !pane.read_only))
+                    .count();
+                writable >= 2
+            })
         else {
             self.broadcast = BroadcastState::Inactive;
+            self.toasts
+                .warning("Broadcast cancelled because fewer than two targets remain");
             return true;
         };
-        let mut remaining = targets;
+        let mut remaining = Vec::with_capacity(targets.len());
         let mut failed = 0;
-        for (id, bytes) in framed {
-            if manager.write_to(id, &bytes).is_err() {
-                remaining.retain(|target| *target != id);
+        let mut written_input = PersonInput::Navigation;
+        for id in targets {
+            let Some(pane) = manager.get_pane(id) else {
+                failed += 1;
+                continue;
+            };
+            let Some(bytes) = encode(&pane.terminal) else {
+                remaining.push(id);
+                continue;
+            };
+            if manager.write_to(id, &bytes).is_ok() {
+                // One input, encoded per pane; any pane's reading will do.
+                written_input = input(&bytes);
+                remaining.push(id);
+            } else {
                 failed += 1;
             }
         }
-        self.note_broadcast_input(tab_id, &remaining, super::agents::PersonInput::Answer);
+        self.note_broadcast_input(tab_id, &remaining, written_input);
         self.finish_broadcast_writes(tab_id, remaining, failed);
-        self.input_line_buffer.clear();
         true
     }
 }
@@ -730,5 +674,52 @@ mod tests {
         app.alt_graph_active = false;
         app.handle_broadcast_arming_press(&Key::Named(NamedKey::Space));
         assert_eq!(armed_targets(&app), Some(1));
+    }
+
+    #[test]
+    fn broadcast_with_one_writable_target_left_cancels_before_writing_anything() {
+        let probe = crate::config::ShellConfig {
+            program: Some("/bin/sh".into()),
+            args: vec!["-c".into(), crate::test_support::FIRST_BYTE_PROBE.into()],
+            env: Default::default(),
+        };
+        for path in ["bytes", "paste"] {
+            let mut app =
+                App::new_headless_running(crate::test_support::FIRST_BYTE_PROBE, "broadcast-floor");
+            let tab_id = app.tabs.as_ref().unwrap().active_tab_id().unwrap();
+            let panes = app
+                .tabs
+                .as_mut()
+                .unwrap()
+                .active_tab_mut()
+                .unwrap()
+                .panes_for_test(probe.clone(), 400.0, 160.0, 10.0, 20.0);
+            let writable = panes.focused_id();
+            let locked = panes.split(SplitDirection::Vertical).unwrap();
+            let identity = |pane_id| crate::tabs::TerminalIdentity { tab_id, pane_id };
+            for pane in [writable, locked] {
+                app.wait_for_terminal_text(identity(pane), "READY");
+            }
+            app.broadcast = BroadcastState::Active {
+                tab_id,
+                targets: vec![writable, locked],
+            };
+            // The pane turns read-only between frames, before reconciling.
+            app.active_panes_mut()
+                .get_pane_mut(locked)
+                .unwrap()
+                .read_only = true;
+
+            let handled = if path == "bytes" {
+                app.write_broadcast_bytes(b"x")
+            } else {
+                app.write_broadcast_paste("x")
+            };
+            assert!(handled, "{path}: broadcast input must not fall through");
+            assert!(matches!(app.broadcast, BroadcastState::Inactive), "{path}");
+            // The writable pane's first byte is this one, not the broadcast's.
+            app.active_panes_mut().write_to(writable, b"Z").unwrap();
+            app.wait_for_terminal_text(identity(writable), "5a");
+        }
     }
 }
