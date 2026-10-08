@@ -30,8 +30,8 @@ pub(crate) struct UiPalette {
     pub(crate) menu_text: [f32; 4],
     pub(crate) menu_text_dim: [f32; 4],
     /// Status hues from the terminal's own palette (yellow, red, green,
-    /// cyan), for agent badges, tab activity, toasts, diffs, warnings, and
-    /// pane outlines.
+    /// cyan), for agent badges, tab activity, toasts, diffs, warnings, pane
+    /// outlines, the find box's error, and destructive buttons.
     pub(crate) warning: [f32; 4],
     pub(crate) error: [f32; 4],
     pub(crate) success: [f32; 4],
@@ -43,7 +43,6 @@ pub(crate) struct UiPalette {
     // Search colors
     pub(crate) search_match: [f32; 4],
     pub(crate) search_match_current: [f32; 4],
-    pub(crate) search_error: [f32; 4],
     // URL/hyperlink color
     pub(crate) url: [f32; 4],
     // Command palette colors
@@ -104,10 +103,9 @@ impl UiPalette {
             tab_text_inactive,
             // Warm scrim derived from theme background
             scrim: with_alpha(scale_rgb(bg.to_f32_array(), 0.3), 0.30),
-            // Search highlights and the find box's error color
+            // Search highlights
             search_match: theme.ui.search_match.with_alpha(0.35).to_f32_array(),
             search_match_current: theme.ui.search_match.with_alpha(0.65).to_f32_array(),
-            search_error: theme.ansi_color(1).to_f32_array(), // red
             // URL/hyperlink color from theme
             url: theme.ui.url.to_f32_array(),
             // Command palette. Its scrim is plain black at low alpha, like
@@ -150,9 +148,6 @@ impl UiPalette {
         self.menu_text_dim = self.menu_text;
         self.menu_border = self.menu_text;
         self.tab_border = high_contrast_text(self.tab_bar_bg);
-
-        // Errors draw on menu surfaces (find box, manager buttons).
-        self.search_error = self.menu_text;
 
         self.palette_bg[3] = 1.0;
         self.palette_input_bg[3] = 1.0;
@@ -483,7 +478,6 @@ mod ui_palette_accessibility_tests {
                 (palette.menu_text, palette.menu_bg),
                 (palette.menu_text, palette.menu_highlight),
                 (palette.menu_text_dim, palette.menu_bg),
-                (palette.search_error, palette.menu_bg),
                 (palette.palette_text, palette.menu_bg),
                 (palette.palette_text, palette.menu_highlight),
                 (palette.palette_text, palette.palette_bg),

@@ -30,7 +30,7 @@ impl Renderer {
         let text = self.ui.menu_text;
         let dim = self.ui.menu_text_dim;
         let accent = self.ui.palette_accent;
-        let error_color = self.ui.search_error;
+        let error_color = self.ui.error;
         let bar = layout.bar;
 
         // ── Floating surface with a hairline border, flat over the panes ──

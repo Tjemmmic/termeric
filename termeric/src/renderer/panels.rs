@@ -237,9 +237,9 @@ impl Renderer {
             if active {
                 let hovered = info.hovered == Some(CommandControl::Delete(index));
                 let danger = if hovered {
-                    self.ui.search_error
+                    self.ui.error
                 } else {
-                    with_alpha(self.ui.search_error, 0.85)
+                    with_alpha(self.ui.error, 0.85)
                 };
                 self.build_panel_button(delete, "Delete", false, hovered, danger, 1.0);
             }
@@ -764,7 +764,7 @@ impl Renderer {
                 if let Some(rename) = entry.rename_button {
                     self.build_panel_button(rename, "Rename", false, false, text, 1.0);
                 }
-                let danger = with_alpha(self.ui.search_error, 0.95);
+                let danger = with_alpha(self.ui.error, 0.95);
                 self.build_panel_button(entry.delete_button, "Delete", false, false, danger, 1.0);
             }
         }
