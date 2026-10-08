@@ -54,7 +54,10 @@ impl Drop for JobEnd {
         // Closed first, so a worker that ended without a result reads as one.
         self.sender = None;
         if let Some((proxy, window)) = self.wake.take() {
-            let _ = proxy.send_event(AppEvent::AgentChangesReady { window });
+            let _ = proxy.send_event(AppEvent::WindowResult {
+                window,
+                result: WindowResult::AgentChangesReady,
+            });
         }
     }
 }

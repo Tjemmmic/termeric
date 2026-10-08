@@ -167,87 +167,82 @@ pub(crate) enum AppEvent {
         control: LiveDomainControl,
         result: std::result::Result<crate::domain::model::DomainSnapshot, String>,
     },
-    LiveDomainTopology {
-        window: WindowKey,
-        domain_id: String,
-        result: std::result::Result<crate::domain::DomainTopologyEvent, String>,
-    },
-    DomainPickerLoaded {
-        window: WindowKey,
-        generation: u64,
-        result: std::result::Result<Vec<crate::domain::model::DomainSummary>, String>,
-    },
     DomainPickerPrepared {
         window: WindowKey,
         generation: u64,
         result: std::result::Result<crate::domain::model::DomainSnapshot, String>,
     },
-    ContextGathered {
+    /// A result a background task returns to one window and nothing else.
+    WindowResult {
         window: WindowKey,
+        result: WindowResult,
+    },
+    StructuredPluginCompleted(crate::plugin::structured::StructuredHandlerCompletion),
+    AccessKit(accesskit_winit::Event),
+    SystemAccessibilityChanged(system_accessibility::SystemAccessibilityPreferences),
+    SystemAccessibilityUnavailable(String),
+}
+
+/// What a background task hands back to the window that started it.
+#[derive(Debug)]
+pub(crate) enum WindowResult {
+    RendererDeviceLost {
+        generation: u64,
+        failure: crate::renderer::RendererDeviceFailure,
+    },
+    BackgroundImageLoaded {
+        generation: u64,
+        path: PathBuf,
+        result: std::result::Result<crate::renderer::DecodedBackgroundImage, String>,
+    },
+    LiveDomainTopology {
+        domain_id: String,
+        result: std::result::Result<crate::domain::DomainTopologyEvent, String>,
+    },
+    DomainPickerLoaded {
+        generation: u64,
+        result: std::result::Result<Vec<crate::domain::model::DomainSummary>, String>,
+    },
+    ContextGathered {
         request_id: u64,
         result: std::result::Result<String, String>,
     },
     /// An agent change job's worker ended; its result waits in the job.
-    AgentChangesReady {
-        window: WindowKey,
-    },
+    AgentChangesReady,
     FileUploadCompleted {
-        window: WindowKey,
         request_id: u64,
         result: std::result::Result<FileUploadCompletion, String>,
     },
     FileUploadProgress {
-        window: WindowKey,
         request_id: u64,
         bytes_sent: u64,
         total_bytes: u64,
     },
     KittyFileTransferCompleted {
-        window: WindowKey,
         token: u64,
         result: kitty_file_transfer::WorkerCompletion,
     },
     KittyFileUploadCompleted {
-        window: WindowKey,
         token: u64,
         result: kitty_file_transfer::UploadWorkerCompletion,
     },
-    StructuredPluginCompleted(crate::plugin::structured::StructuredHandlerCompletion),
-    AccessKit(accesskit_winit::Event),
-    RendererDeviceLost {
-        window: WindowKey,
-        generation: u64,
-        failure: crate::renderer::RendererDeviceFailure,
-    },
-    BackgroundImageLoaded {
-        window: WindowKey,
-        generation: u64,
-        path: PathBuf,
-        result: std::result::Result<crate::renderer::DecodedBackgroundImage, String>,
-    },
-    SystemAccessibilityChanged(system_accessibility::SystemAccessibilityPreferences),
-    SystemAccessibilityUnavailable(String),
 }
 
-impl AppEvent {
-    /// For a result a background task returns to one window and nothing
-    /// else: that window, and why it is redrawn.
-    fn window_target(&self) -> Option<(WindowKey, RedrawReason)> {
-        Some(match self {
-            Self::RendererDeviceLost { window, .. } => (*window, RedrawReason::SurfaceRecovery),
-            Self::BackgroundImageLoaded { window, .. }
-            | Self::LiveDomainTopology { window, .. }
-            | Self::DomainPickerLoaded { window, .. }
-            | Self::ContextGathered { window, .. }
-            | Self::AgentChangesReady { window }
-            | Self::FileUploadCompleted { window, .. }
-            | Self::FileUploadProgress { window, .. }
-            | Self::KittyFileTransferCompleted { window, .. }
-            | Self::KittyFileUploadCompleted { window, .. } => {
-                (*window, RedrawReason::BackgroundTask)
-            }
-            _ => return None,
-        })
+impl WindowResult {
+    /// Why the window this result reaches is redrawn.
+    fn redraw_reason(&self) -> RedrawReason {
+        match self {
+            Self::RendererDeviceLost { .. } => RedrawReason::SurfaceRecovery,
+            Self::BackgroundImageLoaded { .. }
+            | Self::LiveDomainTopology { .. }
+            | Self::DomainPickerLoaded { .. }
+            | Self::ContextGathered { .. }
+            | Self::AgentChangesReady
+            | Self::FileUploadCompleted { .. }
+            | Self::FileUploadProgress { .. }
+            | Self::KittyFileTransferCompleted { .. }
+            | Self::KittyFileUploadCompleted { .. } => RedrawReason::BackgroundTask,
+        }
     }
 }
 
@@ -259,49 +254,45 @@ impl App {
         WindowKey(self.control_window_id)
     }
 
-    /// Apply a result `AppEvent::window_target` routed to this window.
-    fn handle_window_event_result(&mut self, event: AppEvent) {
-        match event {
-            AppEvent::RendererDeviceLost {
+    /// Apply a background task's result to this window, the one it named.
+    fn handle_window_result(&mut self, result: WindowResult) {
+        match result {
+            WindowResult::RendererDeviceLost {
                 generation,
                 failure,
-                ..
             } => self.handle_renderer_device_lost(generation, failure),
-            AppEvent::BackgroundImageLoaded {
+            WindowResult::BackgroundImageLoaded {
                 generation,
                 path,
                 result,
-                ..
             } => self.handle_background_image_loaded(generation, path, result),
-            AppEvent::LiveDomainTopology {
-                domain_id, result, ..
-            } => self.handle_live_domain_topology(domain_id, result),
-            AppEvent::DomainPickerLoaded {
-                generation, result, ..
-            } => self.handle_domain_picker_loaded(generation, result),
-            AppEvent::ContextGathered {
-                request_id, result, ..
-            } => self.handle_context_gathered(request_id, result),
-            AppEvent::AgentChangesReady { .. } => {
+            WindowResult::LiveDomainTopology { domain_id, result } => {
+                self.handle_live_domain_topology(domain_id, result)
+            }
+            WindowResult::DomainPickerLoaded { generation, result } => {
+                self.handle_domain_picker_loaded(generation, result)
+            }
+            WindowResult::ContextGathered { request_id, result } => {
+                self.handle_context_gathered(request_id, result)
+            }
+            WindowResult::AgentChangesReady => {
                 // The redraw that routed it here shows whatever changed.
                 self.poll_agent_change_job();
             }
-            AppEvent::FileUploadCompleted {
-                request_id, result, ..
-            } => self.handle_file_upload_completed(request_id, result),
-            AppEvent::FileUploadProgress {
+            WindowResult::FileUploadCompleted { request_id, result } => {
+                self.handle_file_upload_completed(request_id, result)
+            }
+            WindowResult::FileUploadProgress {
                 request_id,
                 bytes_sent,
                 total_bytes,
-                ..
             } => self.handle_file_upload_progress(request_id, bytes_sent, total_bytes),
-            AppEvent::KittyFileTransferCompleted { token, result, .. } => {
+            WindowResult::KittyFileTransferCompleted { token, result } => {
                 self.handle_kitty_file_transfer_completed(token, result)
             }
-            AppEvent::KittyFileUploadCompleted { token, result, .. } => {
+            WindowResult::KittyFileUploadCompleted { token, result } => {
                 self.handle_kitty_file_upload_completed(token, result)
             }
-            _ => unreachable!("not a single-window result: {event:?}"),
         }
     }
 }
@@ -1755,10 +1746,12 @@ impl App {
         let generation = self.renderer_generation;
         let failure_callback = EVENT_LOOP_PROXY.get().cloned().map(|proxy| {
             Arc::new(move |failure| {
-                let _ = proxy.send_event(AppEvent::RendererDeviceLost {
+                let _ = proxy.send_event(AppEvent::WindowResult {
                     window: window_key,
-                    generation,
-                    failure,
+                    result: WindowResult::RendererDeviceLost {
+                        generation,
+                        failure,
+                    },
                 });
             }) as crate::renderer::RendererFailureCallback
         });

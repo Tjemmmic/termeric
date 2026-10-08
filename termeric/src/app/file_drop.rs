@@ -358,11 +358,13 @@ impl App {
                         {
                             announced_total = true;
                             last_reported = bytes_sent;
-                            let _ = progress_proxy.send_event(AppEvent::FileUploadProgress {
+                            let _ = progress_proxy.send_event(AppEvent::WindowResult {
                                 window: window_key,
-                                request_id,
-                                bytes_sent,
-                                total_bytes,
+                                result: WindowResult::FileUploadProgress {
+                                    request_id,
+                                    bytes_sent,
+                                    total_bytes,
+                                },
                             });
                         }
                     };
@@ -416,10 +418,9 @@ impl App {
                     }))
                 })()
                 .map_err(|error| format!("{error:#}"));
-                let _ = proxy.send_event(AppEvent::FileUploadCompleted {
+                let _ = proxy.send_event(AppEvent::WindowResult {
                     window: window_key,
-                    request_id,
-                    result,
+                    result: WindowResult::FileUploadCompleted { request_id, result },
                 });
             });
         if let Err(error) = spawn {

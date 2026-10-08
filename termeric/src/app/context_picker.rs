@@ -155,10 +155,9 @@ impl App {
             .name("termeric-context-gather".into())
             .spawn(move || {
                 let result = crate::agents::context::gather_context(request);
-                let _ = proxy.send_event(super::AppEvent::ContextGathered {
+                let _ = proxy.send_event(super::AppEvent::WindowResult {
                     window: window_key,
-                    request_id,
-                    result,
+                    result: super::WindowResult::ContextGathered { request_id, result },
                 });
             });
         if let Err(error) = spawn {

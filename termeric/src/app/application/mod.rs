@@ -2,7 +2,8 @@
 
 use super::{
     AGENT_VIEW_WAKE_PENDING, App, AppEvent, PTY_WAKE_PENDING, PendingPluginWindowClose, Requester,
-    TRANSCRIPT_WAKE_PENDING, WindowKey, clear_wake_pending, redraw_scheduler::RedrawReason,
+    TRANSCRIPT_WAKE_PENDING, WindowKey, WindowResult, clear_wake_pending,
+    redraw_scheduler::RedrawReason,
 };
 use crate::cli::{LaunchPlan, WindowLaunch};
 use crate::config::Config;
@@ -551,15 +552,15 @@ impl Application {
         self.windows.get_mut(&native_id)
     }
 
-    /// Hand a result `AppEvent::window_target` names to its window, or drop
-    /// it if that window has closed.
-    fn deliver_window_result(&mut self, key: WindowKey, reason: RedrawReason, event: AppEvent) {
+    /// Hand a background result to the window `key` names, or drop it if
+    /// that window has closed.
+    fn deliver_window_result(&mut self, key: WindowKey, result: WindowResult) {
         let Some(window) = self.keyed_window_mut(key) else {
             log::debug!("Discarding a background result for closed window {key:?}");
             return;
         };
-        window.redraw_scheduler.request(reason);
-        window.handle_window_event_result(event);
+        window.redraw_scheduler.request(result.redraw_reason());
+        window.handle_window_result(result);
     }
 
     /// The daemon's answer to a live-domain control reaches the window that
@@ -818,12 +819,12 @@ impl ApplicationHandler<AppEvent> for Application {
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: AppEvent) {
-        if let Some((window, reason)) = event.window_target() {
-            self.deliver_window_result(window, reason, event);
-            self.remove_closed_windows(event_loop);
-            return;
-        }
         let process_pty = match event {
+            AppEvent::WindowResult { window, result } => {
+                self.deliver_window_result(window, result);
+                self.remove_closed_windows(event_loop);
+                return;
+            }
             // AccessKit names its window by native ID. Each window's adapter
             // ends with the window, so it only speaks for the window that
             // holds that ID.
@@ -923,18 +924,6 @@ impl ApplicationHandler<AppEvent> for Application {
                 true
             }
             AppEvent::Git => false,
-            AppEvent::RendererDeviceLost { .. }
-            | AppEvent::BackgroundImageLoaded { .. }
-            | AppEvent::LiveDomainTopology { .. }
-            | AppEvent::DomainPickerLoaded { .. }
-            | AppEvent::ContextGathered { .. }
-            | AppEvent::AgentChangesReady { .. }
-            | AppEvent::FileUploadCompleted { .. }
-            | AppEvent::FileUploadProgress { .. }
-            | AppEvent::KittyFileTransferCompleted { .. }
-            | AppEvent::KittyFileUploadCompleted { .. } => {
-                unreachable!("routed by AppEvent::window_target")
-            }
         };
         for window in self.windows.values_mut() {
             if process_pty && window.process_pty_events() {

@@ -181,11 +181,13 @@ impl App {
             .name("termeric-background-image".into())
             .spawn(move || {
                 let result = crate::renderer::load_background_image(&resolved_path);
-                let _ = proxy.send_event(AppEvent::BackgroundImageLoaded {
+                let _ = proxy.send_event(AppEvent::WindowResult {
                     window: window_key,
-                    generation,
-                    path: resolved_path,
-                    result,
+                    result: WindowResult::BackgroundImageLoaded {
+                        generation,
+                        path: resolved_path,
+                        result,
+                    },
                 });
             });
         if let Err(error) = spawn {

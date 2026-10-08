@@ -153,10 +153,12 @@ impl App {
                             failure_reported = false;
                             retry_delay = std::time::Duration::from_millis(250);
                             window_open = proxy
-                                .send_event(AppEvent::LiveDomainTopology {
+                                .send_event(AppEvent::WindowResult {
                                     window: window_key,
-                                    domain_id: domain_id.clone(),
-                                    result: Ok(event),
+                                    result: WindowResult::LiveDomainTopology {
+                                        domain_id: domain_id.clone(),
+                                        result: Ok(event),
+                                    },
                                 })
                                 .is_ok();
                             window_open && !domain_closed
@@ -169,10 +171,12 @@ impl App {
                         && !failure_reported
                     {
                         failure_reported = proxy
-                            .send_event(AppEvent::LiveDomainTopology {
+                            .send_event(AppEvent::WindowResult {
                                 window: window_key,
-                                domain_id: domain_id.clone(),
-                                result: Err(format!("{error:#}")),
+                                result: WindowResult::LiveDomainTopology {
+                                    domain_id: domain_id.clone(),
+                                    result: Err(format!("{error:#}")),
+                                },
                             })
                             .is_ok();
                         if !failure_reported {

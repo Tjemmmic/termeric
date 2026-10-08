@@ -3,7 +3,7 @@
 //! file holds the App side (consent, routing, progress); the workers and the
 //! download transaction live in `download` and `upload`.
 
-use super::{App, AppEvent, EVENT_LOOP_PROXY};
+use super::{App, AppEvent, EVENT_LOOP_PROXY, WindowResult};
 use crate::tabs::{TerminalEventOrigin, TerminalIdentity};
 use crate::ui::info_overlay::push_key_choice;
 use std::collections::HashMap;
@@ -1414,10 +1414,9 @@ fn start_upload_worker(
                 cancellation,
                 |result| {
                     proxy
-                        .send_event(AppEvent::KittyFileUploadCompleted {
+                        .send_event(AppEvent::WindowResult {
                             window: window_key,
-                            token,
-                            result,
+                            result: WindowResult::KittyFileUploadCompleted { token, result },
                         })
                         .is_ok()
                 },
@@ -1447,10 +1446,9 @@ fn start_worker(
                 WORKER_IDLE_TIMEOUT,
                 |result| {
                     proxy
-                        .send_event(AppEvent::KittyFileTransferCompleted {
+                        .send_event(AppEvent::WindowResult {
                             window: window_key,
-                            token,
-                            result,
+                            result: WindowResult::KittyFileTransferCompleted { token, result },
                         })
                         .is_ok()
                 },

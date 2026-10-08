@@ -1,6 +1,6 @@
 //! Asynchronous orchestration for the in-app live-domain picker.
 
-use super::{App, AppEvent, EVENT_LOOP_PROXY, RedrawReason};
+use super::{App, AppEvent, EVENT_LOOP_PROXY, RedrawReason, WindowResult};
 use crate::domain::protocol::{Request, Response};
 use crate::ui::domain_picker::{DomainPickerCommand, DomainPickerPrepared};
 
@@ -116,10 +116,9 @@ impl App {
                         _ => anyhow::bail!("domain server returned an invalid list response"),
                     })
                     .map_err(|error| format!("{error:#}"));
-                let _ = proxy.send_event(AppEvent::DomainPickerLoaded {
+                let _ = proxy.send_event(AppEvent::WindowResult {
                     window: window_key,
-                    generation,
-                    result,
+                    result: WindowResult::DomainPickerLoaded { generation, result },
                 });
             });
         if let Err(error) = spawn {

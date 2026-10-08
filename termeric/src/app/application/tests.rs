@@ -4926,65 +4926,6 @@ fn window_that_took_a_closed_ones_native_id() -> (Application, WindowId) {
     (application, native)
 }
 
-fn deliver(application: &mut Application, event: AppEvent) {
-    let (window, reason) = event.window_target().expect("a single-window result");
-    application.deliver_window_result(window, reason, event);
-}
-
-#[test]
-fn background_results_name_their_window_by_key() {
-    let window = WindowKey(8);
-    let results = [
-        AppEvent::RendererDeviceLost {
-            window,
-            generation: 0,
-            failure: crate::renderer::RendererDeviceFailure {
-                reason: wgpu::DeviceLostReason::Unknown,
-                message: String::new(),
-            },
-        },
-        AppEvent::BackgroundImageLoaded {
-            window,
-            generation: 0,
-            path: "/background.png".into(),
-            result: Err(String::new()),
-        },
-        AppEvent::LiveDomainTopology {
-            window,
-            domain_id: String::new(),
-            result: Err(String::new()),
-        },
-        AppEvent::DomainPickerLoaded {
-            window,
-            generation: 0,
-            result: Err(String::new()),
-        },
-        AppEvent::ContextGathered {
-            window,
-            request_id: 0,
-            result: Err(String::new()),
-        },
-        AppEvent::FileUploadCompleted {
-            window,
-            request_id: 0,
-            result: Err(String::new()),
-        },
-        AppEvent::FileUploadProgress {
-            window,
-            request_id: 0,
-            bytes_sent: 0,
-            total_bytes: 0,
-        },
-    ];
-    for result in results {
-        assert_eq!(
-            result.window_target().map(|(key, _)| key),
-            Some(window),
-            "{result:?}"
-        );
-    }
-}
-
 #[test]
 fn a_background_result_never_reaches_a_window_that_took_a_closed_ones_native_id() {
     let (mut application, native) = window_that_took_a_closed_ones_native_id();
@@ -4993,8 +4934,7 @@ fn a_background_result_never_reaches_a_window_that_took_a_closed_ones_native_id(
     // Each window counts its image loads from the same start, so window 7's
     // result matches window 8's own load in all but the window.
     let generation = window.background_image_generation;
-    let loaded = |window| AppEvent::BackgroundImageLoaded {
-        window,
+    let loaded = || WindowResult::BackgroundImageLoaded {
         generation,
         path: "/nonexistent/background.png".into(),
         result: Err("unreadable image".into()),
@@ -5006,11 +4946,11 @@ fn a_background_result_never_reaches_a_window_that_took_a_closed_ones_native_id(
             .any(|toast| toast.message.contains("unreadable image"))
     };
 
-    deliver(&mut application, loaded(WindowKey(7)));
+    application.deliver_window_result(WindowKey(7), loaded());
     assert!(application.windows[&native].background_image_loading);
     assert!(!warned(&application));
 
-    deliver(&mut application, loaded(WindowKey(8)));
+    application.deliver_window_result(WindowKey(8), loaded());
     assert!(!application.windows[&native].background_image_loading);
     assert!(warned(&application), "window 8's own result reaches it");
 }
