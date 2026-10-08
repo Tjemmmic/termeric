@@ -794,6 +794,34 @@ mod tests {
     }
 
     #[test]
+    fn an_archive_missing_a_field_does_not_load() {
+        // Every field is written on save, so a missing one means the archive
+        // came from another format; it is refused rather than filled in.
+        for (table, field) in [
+            (None, "automatic"),
+            (None, "closed_tab"),
+            (None, "config"),
+            (Some("tabs"), "pinned"),
+            (Some("tabs"), "primary_pane"),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let mut workspace = sample_workspace();
+            save_workspace_to_dir(&mut workspace, temp.path()).unwrap();
+            assert!(load_workspace_from_dir(temp.path()).is_ok());
+            let path = temp.path().join("workspace.toml");
+            let mut encoded: toml::Value =
+                toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            let record = match table {
+                None => encoded.as_table_mut().unwrap(),
+                Some(table) => encoded[table][0].as_table_mut().unwrap(),
+            };
+            assert!(record.remove(field).is_some(), "{field} was not saved");
+            fs::write(&path, toml::to_string_pretty(&encoded).unwrap()).unwrap();
+            assert!(load_workspace_from_dir(temp.path()).is_err(), "{field}");
+        }
+    }
+
+    #[test]
     fn hostile_scrollback_paths_never_read_outside_the_archive() {
         let temp = tempfile::tempdir().unwrap();
         let archive = temp.path().join("archive");

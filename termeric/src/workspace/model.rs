@@ -25,16 +25,13 @@ pub struct WorkspaceSnapshot {
     pub created_at: String,
     pub updated_at: String,
     pub active_tab: usize,
-    #[serde(default)]
     pub config: WorkspaceConfigReference,
     /// Saved automatically when a window closed, not by the person. Only the
     /// archives the startup state still names are kept; saving or renaming
     /// one makes it the person's.
-    #[serde(default)]
     pub automatic: bool,
     /// A tab kept when it closed, listed under tab snapshots rather than
     /// with workspaces, and reopened as one tab in the current window.
-    #[serde(default)]
     pub closed_tab: bool,
     pub tabs: Vec<WorkspaceTabSnapshot>,
 }
@@ -91,7 +88,6 @@ impl WorkspaceSnapshot {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
 pub struct WorkspaceConfigReference {
     pub theme: Option<String>,
     pub shell_program: Option<String>,
@@ -101,12 +97,9 @@ pub struct WorkspaceConfigReference {
 pub struct WorkspaceTabSnapshot {
     pub id: u32,
     pub title: String,
-    #[serde(default)]
     pub user_title: Option<String>,
-    #[serde(default)]
     pub pinned: bool,
     /// Pane that is relaunched first and adopts the tab's initial live PTY.
-    #[serde(default)]
     pub primary_pane: u32,
     pub focused_pane: u32,
     pub layout: WorkspacePaneLayout,
@@ -188,7 +181,6 @@ pub enum WorkspaceLaunch {
     },
     Plugin {
         plugin_id: String,
-        #[serde(default)]
         profile: Option<String>,
     },
 }
@@ -325,15 +317,10 @@ pub struct WorkspacePaneSnapshot {
     /// Exact relaunch identity for this pane; the primary pane's is the
     /// tab's.
     pub launch: WorkspaceLaunch,
-    #[serde(default)]
     pub title: Option<String>,
-    #[serde(default)]
     pub working_directory: Option<String>,
-    #[serde(default)]
     pub last_command: Option<String>,
-    #[serde(default)]
     pub scrollback_file: Option<String>,
-    #[serde(default)]
     pub scrollback_truncated: bool,
     #[serde(skip)]
     pub scrollback_lines: Vec<String>,
