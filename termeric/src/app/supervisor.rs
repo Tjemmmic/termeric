@@ -6,11 +6,10 @@
 //! Termeric tells it things as messages of that conversation, and a message
 //! it wants to send in Assist mode waits there as a card for the person.
 
-use super::agents::AgentTarget;
 use super::*;
 use crate::agent_view::session::{AgentProgram, AgentSession, SessionId, StartOptions};
 use crate::agents::supervisor::{self, SendLimits, SupervisorMode};
-use crate::agents::{AgentActivity, AgentStatus};
+use crate::agents::{AgentActivity, AgentStatus, AgentTarget};
 use crate::tabs::TerminalIdentity;
 use anyhow::Context as _;
 use std::collections::VecDeque;

@@ -6,7 +6,9 @@
 //! palette never lists a copy of each command per agent.
 
 use super::*;
-use crate::agents::{AgentActivity, AgentDefinition, AgentReport, AgentSession, AgentStatus};
+use crate::agents::{
+    AgentActivity, AgentDefinition, AgentReport, AgentSession, AgentStatus, AgentTarget,
+};
 use crate::tabs::TerminalIdentity;
 use crate::ui::command_palette::palette::{
     AgentPlacement, CommandSource, PickKind, RegisteredCommand,
@@ -791,14 +793,6 @@ fn attention_notification(
         focus_on_activation: true,
         ..termeric_core::NotificationRequest::default()
     }
-}
-
-/// An agent terminal to send text to, as it was when chosen.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct AgentTarget {
-    pub identity: TerminalIdentity,
-    pub agent_id: String,
-    pub agent_name: String,
 }
 
 impl App {

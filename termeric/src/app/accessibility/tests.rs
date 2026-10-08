@@ -4057,13 +4057,13 @@ fn diff_review_dismiss_revokes_actions_during_its_exit_animation() {
 fn show_context_fixture(app: &mut App, tab_id: usize, cwd: Option<String>) -> u64 {
     app.context_picker.open(
         cwd,
-        crate::ui::context_picker::ContextTarget {
-            agent_id: "fixture-agent".into(),
-            agent_name: "Fixture Agent".into(),
-            terminal: crate::tabs::TerminalIdentity {
+        crate::agents::AgentTarget {
+            identity: crate::tabs::TerminalIdentity {
                 tab_id,
                 pane_id: crate::panes::PaneId(0),
             },
+            agent_id: "fixture-agent".into(),
+            agent_name: "Fixture Agent".into(),
         },
     )
 }

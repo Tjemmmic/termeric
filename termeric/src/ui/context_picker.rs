@@ -7,11 +7,11 @@ use super::animation::OverlayAnimation;
 use super::constants::CONTENT_CHAR_SCALE;
 use super::request_scope::RequestScope;
 use super::text_input::{TextInput, TextInputEdit, TextLimit};
+use crate::agents::AgentTarget;
 use crate::agents::context::{
     ContextGatherRequest, MAX_CONTEXT_FILES, MAX_CONTEXT_PATH_CHARS, MAX_CONTEXT_SOURCE_CHARS,
     is_git_repo, validate_specific_files,
 };
-use crate::tabs::TerminalIdentity;
 use crate::ui::geometry::Bounds;
 
 pub const MAX_CONTEXT_SOURCES: usize = 6;
@@ -34,13 +34,6 @@ pub struct ContextSource {
     pub label: String,
     pub selected: bool,
     pub available: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ContextTarget {
-    pub agent_id: String,
-    pub agent_name: String,
-    pub terminal: TerminalIdentity,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,7 +84,7 @@ pub enum ContextPickerAction {
 pub enum ContextPickerCompletion {
     Ignored,
     Failed,
-    Ready { target: ContextTarget, text: String },
+    Ready { target: AgentTarget, text: String },
 }
 
 #[derive(Debug, Clone)]
@@ -279,7 +272,7 @@ pub struct ContextPicker {
     scroll_offset: usize,
     viewport_rows: usize,
     cwd: Option<PathBuf>,
-    target: Option<ContextTarget>,
+    target: Option<AgentTarget>,
     phase: ContextPickerPhase,
     file_input: TextInput,
     specific_files: Vec<PathBuf>,
@@ -306,11 +299,11 @@ impl ContextPicker {
     }
 
     /// The agent terminal the open picker gathers context for.
-    pub fn target(&self) -> Option<&ContextTarget> {
+    pub fn target(&self) -> Option<&AgentTarget> {
         self.target.as_ref()
     }
 
-    pub fn open(&mut self, cwd: Option<String>, target: ContextTarget) -> u64 {
+    pub fn open(&mut self, cwd: Option<String>, target: AgentTarget) -> u64 {
         let request_id = self.request.begin();
         self.cwd = cwd.map(PathBuf::from);
         let in_git = is_git_repo(self.cwd.as_deref());
@@ -670,14 +663,14 @@ fn source(id: ContextSourceId, label: &str, selected: bool, available: bool) -> 
 mod tests {
     use super::*;
 
-    fn target(tab_id: usize) -> ContextTarget {
-        ContextTarget {
-            agent_id: "fixture-agent".into(),
-            agent_name: "Fixture Agent".into(),
-            terminal: TerminalIdentity {
+    fn target(tab_id: usize) -> AgentTarget {
+        AgentTarget {
+            identity: crate::tabs::TerminalIdentity {
                 tab_id,
                 pane_id: crate::panes::PaneId(0),
             },
+            agent_id: "fixture-agent".into(),
+            agent_name: "Fixture Agent".into(),
         }
     }
 

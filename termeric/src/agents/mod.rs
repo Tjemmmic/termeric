@@ -25,6 +25,14 @@ pub use config::AgentConfig;
 pub use session::AgentSession;
 pub use status::{AgentActivity, AgentBadge, AgentReport, AgentStatus};
 
+/// An agent terminal to send text to, as it was when chosen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentTarget {
+    pub identity: crate::tabs::TerminalIdentity,
+    pub agent_id: String,
+    pub agent_name: String,
+}
+
 /// A named launch variant: extra arguments and environment for one agent.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentProfile {

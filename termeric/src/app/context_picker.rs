@@ -99,10 +99,10 @@ impl App {
         let cwd = tab.pane_working_directory(terminal.pane_id);
         self.context_picker.open(
             cwd,
-            crate::ui::context_picker::ContextTarget {
+            crate::agents::AgentTarget {
+                identity: terminal,
                 agent_id: agent.id.clone(),
                 agent_name: agent.name.clone(),
-                terminal,
             },
         );
     }
@@ -129,7 +129,7 @@ impl App {
         let terminal_output = self
             .context_picker
             .target()
-            .and_then(|target| self.context_source_output(target.terminal));
+            .and_then(|target| self.context_source_output(target.identity));
         let Some(request) = self
             .context_picker
             .begin_gather(request_id, terminal_output)
@@ -179,7 +179,8 @@ impl App {
             ContextPickerCompletion::Ignored => return,
             ContextPickerCompletion::Failed => {}
             ContextPickerCompletion::Ready { target, text } => {
-                self.inject_context_to_target(&target, &text);
+                // It says itself whether the text arrived.
+                self.send_to_agent(target, &text);
             }
         }
         self.request_redraw(RedrawReason::WindowEvent);
@@ -224,21 +225,5 @@ impl App {
                     && not_an_agent(t, t.focused_terminal_identity().pane_id)
             })
             .and_then(|(_, tab)| tab.focused_terminal().map(tail))
-    }
-
-    /// Paste gathered context into the agent that asked for it.
-    fn inject_context_to_target(
-        &mut self,
-        target: &crate::ui::context_picker::ContextTarget,
-        text: &str,
-    ) -> bool {
-        self.send_to_agent(
-            super::agents::AgentTarget {
-                identity: target.terminal,
-                agent_id: target.agent_id.clone(),
-                agent_name: target.agent_name.clone(),
-            },
-            text,
-        )
     }
 }

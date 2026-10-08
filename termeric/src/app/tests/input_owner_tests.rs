@@ -406,7 +406,7 @@ fn plugin_context_command_never_targets_a_focused_shell_sibling() {
     };
     let tab_id = app.tabs.as_ref().unwrap().active_tab().unwrap().id;
     assert!(app.send_to_agent(
-        super::agents::AgentTarget {
+        crate::agents::AgentTarget {
             identity: crate::tabs::TerminalIdentity {
                 tab_id,
                 pane_id: PaneId(0),

@@ -152,13 +152,13 @@ fn completed_context_never_falls_back_to_a_replacement_plugin_tab() {
     app.tabs = Some(tabs);
     let request = app.context_picker.open(
         None,
-        crate::ui::context_picker::ContextTarget {
-            agent_id: "fixture-plugin".into(),
-            agent_name: "Fixture".into(),
-            terminal: crate::tabs::TerminalIdentity {
+        crate::agents::AgentTarget {
+            identity: crate::tabs::TerminalIdentity {
                 tab_id: original_id,
                 pane_id: PaneId(0),
             },
+            agent_id: "fixture-plugin".into(),
+            agent_name: "Fixture".into(),
         },
     );
     app.context_picker
@@ -224,7 +224,7 @@ fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
     });
     let mut app = App::new_headless(Config::default().with_agent_features()).unwrap();
     app.tabs = Some(tabs);
-    let target = super::agents::AgentTarget {
+    let target = crate::agents::AgentTarget {
         identity: crate::tabs::TerminalIdentity { tab_id, pane_id },
         agent_id: "codex".into(),
         agent_name: "Codex".into(),
@@ -1043,7 +1043,7 @@ fn a_read_only_agent_refuses_context_with_its_own_reason() {
     assert!(tab.toggle_focused_pane_read_only());
     let mut app = App::new_headless(Config::default().with_agent_features()).unwrap();
     app.tabs = Some(tabs);
-    let target = super::agents::AgentTarget {
+    let target = crate::agents::AgentTarget {
         identity: crate::tabs::TerminalIdentity { tab_id, pane_id },
         agent_id: "codex".into(),
         agent_name: "Codex".into(),
@@ -1055,7 +1055,7 @@ fn a_read_only_agent_refuses_context_with_its_own_reason() {
     }
 
     let sent = app.send_to_agent(
-        super::agents::AgentTarget {
+        crate::agents::AgentTarget {
             identity: crate::tabs::TerminalIdentity { tab_id, pane_id },
             agent_id: "codex".into(),
             agent_name: "Codex".into(),
