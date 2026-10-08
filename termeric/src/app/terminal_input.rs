@@ -372,11 +372,9 @@ mod tests {
             let mut app = raw_command_app(expected.len());
             let _repository = seed_git_completion_cache(&mut app);
             if keybinding {
-                assert!(
-                    app.handle_key_action(crate::input::keybindings::KeyAction::RunCommand {
-                        command: command.into()
-                    })
-                );
+                app.handle_key_action(crate::input::keybindings::KeyAction::RunCommand {
+                    command: command.into(),
+                });
             } else {
                 app.run_custom_command(command);
             }

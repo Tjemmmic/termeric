@@ -57,8 +57,6 @@ pub enum Action {
     PreviousFailedCommand,
     /// Jump to the nearest later command that exited non-zero
     NextFailedCommand,
-    /// Execute a plugin command by its ID
-    PluginCommand(String),
     /// Toggle command palette
     ToggleCommandPalette,
     /// Split pane vertically

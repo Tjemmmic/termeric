@@ -3035,25 +3035,12 @@ impl App {
             .update((target_col as f32, target_row as f32), now, snap)
     }
 
-    /// Handle a plugin/custom keybinding action (SendText, RunCommand, PluginCommand).
-    /// Returns true if the action was handled.
-    fn handle_key_action(&mut self, key_action: KeyAction) -> bool {
-        // Try to convert to internal Action first (PluginCommand)
-        if let Some(action) = key_action.to_action() {
-            self.handle_action(action);
-            return true;
-        }
-
+    /// Run a plugin or custom keybinding's action, which takes its key.
+    fn handle_key_action(&mut self, key_action: KeyAction) {
         match key_action {
-            KeyAction::SendText { text } => {
-                self.write_to_pty(text.as_bytes());
-                true
-            }
-            KeyAction::RunCommand { command } => {
-                self.run_custom_command(&command);
-                true
-            }
-            _ => false,
+            KeyAction::SendText { text } => self.write_to_pty(text.as_bytes()),
+            KeyAction::RunCommand { command } => self.run_custom_command(&command),
+            KeyAction::PluginCommand { command_id } => self.execute_plugin_command(&command_id),
         }
     }
 
@@ -3244,9 +3231,6 @@ impl App {
             Action::ToggleAgentView => self.toggle_agent_view(),
             Action::PreviousFailedCommand | Action::NextFailedCommand => {
                 self.jump_to_failed_command(matches!(action, Action::PreviousFailedCommand));
-            }
-            Action::PluginCommand(command_id) => {
-                self.execute_plugin_command(&command_id);
             }
             Action::ToggleCommandPalette => {
                 if self.command_palette.is_active() {

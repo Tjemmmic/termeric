@@ -532,10 +532,11 @@ impl App {
         if self.run_app_shortcut(key) {
             return true;
         }
-        if let Some(key_action) = self.keybinding_manager.check(key, self.modifiers).cloned() {
-            return self.handle_key_action(key_action);
-        }
-        false
+        let Some(key_action) = self.keybinding_manager.check(key, self.modifiers).cloned() else {
+            return false;
+        };
+        self.handle_key_action(key_action);
+        true
     }
 
     /// Runs the built-in application shortcut bound to a pressed key.

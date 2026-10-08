@@ -741,17 +741,6 @@ pub enum KeyAction {
     PluginCommand { command_id: String },
 }
 
-impl KeyAction {
-    pub fn to_action(&self) -> Option<Action> {
-        match self {
-            KeyAction::PluginCommand { command_id } => {
-                Some(Action::PluginCommand(command_id.clone()))
-            }
-            _ => None,
-        }
-    }
-}
-
 /// Manager for plugin/custom keybindings (SendText, RunCommand, PluginCommand).
 #[derive(Debug, Default)]
 pub struct KeyBindingManager {
