@@ -304,7 +304,7 @@ impl Renderer {
                         layout.value_x,
                         row.y,
                         row.height,
-                        switch.x - layout.value_x - cell_width,
+                        (switch.x - layout.value_x - cell_width).max(0.0),
                         size,
                         dim,
                     );
