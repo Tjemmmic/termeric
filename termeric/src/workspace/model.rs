@@ -388,6 +388,41 @@ pub(super) fn is_safe_scrollback_file(value: &str) -> bool {
 }
 
 #[cfg(test)]
+impl WorkspacePaneSnapshot {
+    /// Pane `id` relaunching the shell, with nothing else recorded; tests
+    /// fill in the rest with struct update syntax.
+    pub(crate) fn shell_for_test(id: u32) -> Self {
+        Self {
+            id,
+            launch: WorkspaceLaunch::Shell,
+            title: None,
+            working_directory: None,
+            last_command: None,
+            scrollback_file: None,
+            scrollback_truncated: false,
+            scrollback_lines: Vec::new(),
+        }
+    }
+}
+
+#[cfg(test)]
+impl WorkspaceTabSnapshot {
+    /// Tab `id`, titled `title`, whose only pane is `pane`.
+    pub(crate) fn single_pane_for_test(id: u32, title: &str, pane: WorkspacePaneSnapshot) -> Self {
+        Self {
+            id,
+            title: title.into(),
+            user_title: None,
+            pinned: false,
+            primary_pane: pane.id,
+            focused_pane: pane.id,
+            layout: WorkspacePaneLayout::Pane { pane: pane.id },
+            panes: vec![pane],
+        }
+    }
+}
+
+#[cfg(test)]
 pub(crate) mod tests {
     use super::*;
 

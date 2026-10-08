@@ -100,16 +100,7 @@ mod tests {
                         },
                     ),
                     panes: (0..panes)
-                        .map(|pane| crate::workspace::WorkspacePaneSnapshot {
-                            id: pane,
-                            launch: crate::workspace::WorkspaceLaunch::Shell,
-                            title: None,
-                            working_directory: None,
-                            last_command: None,
-                            scrollback_file: None,
-                            scrollback_truncated: false,
-                            scrollback_lines: Vec::new(),
-                        })
+                        .map(crate::workspace::WorkspacePaneSnapshot::shell_for_test)
                         .collect(),
                 }],
             );

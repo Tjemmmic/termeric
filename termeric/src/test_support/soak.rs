@@ -129,25 +129,17 @@ fn scheduled_resource_soak_scenario() {
         let mut closed_tab = crate::workspace::WorkspaceSnapshot::new(
             "workspace-resource-soak".into(),
             format!("soak {iteration}"),
-            vec![crate::workspace::WorkspaceTabSnapshot {
-                id: 0,
-                title: "soak".into(),
-                user_title: None,
-                pinned: false,
-                primary_pane: 0,
-                focused_pane: 0,
-                layout: crate::workspace::WorkspacePaneLayout::Pane { pane: 0 },
-                panes: vec![crate::workspace::WorkspacePaneSnapshot {
-                    id: 0,
-                    launch: crate::workspace::WorkspaceLaunch::Shell,
-                    title: None,
-                    working_directory: Some("/tmp".into()),
-                    last_command: None,
-                    scrollback_file: None,
-                    scrollback_truncated: false,
-                    scrollback_lines: crate::workspace::restorable_scrollback(terminal.grid()),
-                }],
-            }],
+            vec![
+                crate::workspace::WorkspaceTabSnapshot::single_pane_for_test(
+                    0,
+                    "soak",
+                    crate::workspace::WorkspacePaneSnapshot {
+                        working_directory: Some("/tmp".into()),
+                        scrollback_lines: crate::workspace::restorable_scrollback(terminal.grid()),
+                        ..crate::workspace::WorkspacePaneSnapshot::shell_for_test(0)
+                    },
+                ),
+            ],
         );
         closed_tab.closed_tab = true;
         crate::workspace::save_workspace_to_dir(&mut closed_tab, &closed_tab_dir).unwrap();

@@ -126,27 +126,16 @@ fn workspace_restore_partially_recovers_missing_cwd_profile_and_cli() {
     crate::workspace::set_test_workspaces_base_dir(Some(temp.path().join("workspaces")));
     AppState::set_test_state_path(Some(temp.path().join("state/state.json")));
 
-    let pane = |id, cwd: Option<&str>, launch| crate::workspace::WorkspacePaneSnapshot {
-        id,
-        launch,
-        title: None,
-        working_directory: cwd.map(String::from),
-        last_command: None,
-        scrollback_file: None,
-        scrollback_truncated: false,
-        scrollback_lines: Vec::new(),
-    };
-    let tab = |id, title: &str, launch: crate::workspace::WorkspaceLaunch, cwd| {
-        crate::workspace::WorkspaceTabSnapshot {
+    let tab = |id, title: &str, launch, cwd: Option<&str>| {
+        crate::workspace::WorkspaceTabSnapshot::single_pane_for_test(
             id,
-            title: title.into(),
-            user_title: None,
-            pinned: false,
-            primary_pane: 0,
-            focused_pane: 0,
-            layout: crate::workspace::WorkspacePaneLayout::Pane { pane: 0 },
-            panes: vec![pane(0, cwd, launch)],
-        }
+            title,
+            crate::workspace::WorkspacePaneSnapshot {
+                launch,
+                working_directory: cwd.map(String::from),
+                ..crate::workspace::WorkspacePaneSnapshot::shell_for_test(0)
+            },
+        )
     };
     let mut archive = crate::workspace::WorkspaceSnapshot::new(
         "workspace-degraded".into(),
@@ -648,25 +637,10 @@ fn mixed_shell_and_profile_panes_restore_each_saved_launch() {
             second: Box::new(crate::workspace::WorkspacePaneLayout::Pane { pane: 7 }),
         },
         panes: vec![
+            crate::workspace::WorkspacePaneSnapshot::shell_for_test(0),
             crate::workspace::WorkspacePaneSnapshot {
-                id: 0,
-                launch: crate::workspace::WorkspaceLaunch::Shell,
-                title: None,
-                working_directory: None,
-                last_command: None,
-                scrollback_file: None,
-                scrollback_truncated: false,
-                scrollback_lines: Vec::new(),
-            },
-            crate::workspace::WorkspacePaneSnapshot {
-                id: 7,
                 launch: crate::workspace::WorkspaceLaunch::Profile { name: "dev".into() },
-                title: None,
-                working_directory: None,
-                last_command: None,
-                scrollback_file: None,
-                scrollback_truncated: false,
-                scrollback_lines: Vec::new(),
+                ..crate::workspace::WorkspacePaneSnapshot::shell_for_test(7)
             },
         ],
     };

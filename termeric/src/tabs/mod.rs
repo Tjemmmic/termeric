@@ -2245,25 +2245,14 @@ mod tests {
 
     #[test]
     fn a_missing_primary_directory_warning_names_the_primary_pane() {
-        let snapshot = crate::workspace::WorkspaceTabSnapshot {
-            id: 4,
-            title: "moved".into(),
-            user_title: None,
-            pinned: false,
-            primary_pane: 3,
-            focused_pane: 3,
-            layout: crate::workspace::WorkspacePaneLayout::Pane { pane: 3 },
-            panes: vec![crate::workspace::WorkspacePaneSnapshot {
-                id: 3,
-                launch: crate::workspace::WorkspaceLaunch::Shell,
-                title: None,
+        let snapshot = crate::workspace::WorkspaceTabSnapshot::single_pane_for_test(
+            4,
+            "moved",
+            crate::workspace::WorkspacePaneSnapshot {
                 working_directory: Some("/definitely/missing/termeric-cwd".into()),
-                last_command: None,
-                scrollback_file: None,
-                scrollback_truncated: false,
-                scrollback_lines: Vec::new(),
-            }],
-        };
+                ..crate::workspace::WorkspacePaneSnapshot::shell_for_test(3)
+            },
+        );
         let mut manager = TabManager::for_test(crate::test_support::sleeping_shell());
         let (_, warnings) = manager
             .new_shell_tab_from_workspace(&snapshot, &HashMap::new())
