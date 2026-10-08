@@ -178,6 +178,25 @@ pub struct GitCompletionInfo {
     pub selected_index: Option<usize>,
 }
 
+/// One frame of the open dialog: what it shows, its shared geometry, and
+/// where focus, the scroll, and the pointer are.
+#[derive(Debug, Clone)]
+pub struct DialogInfo {
+    pub layout: crate::ui::dialog::DialogLayout,
+    pub body: Vec<crate::ui::dialog::DialogBlock>,
+    pub field: Option<crate::ui::dialog::DialogFieldView>,
+    pub rows: Vec<crate::ui::dialog::DialogRow>,
+    pub buttons: Vec<crate::ui::dialog::DialogButton>,
+    pub focus: Option<crate::ui::dialog::DialogFocus>,
+    /// The body's scroll offset in physical pixels.
+    pub scroll: f32,
+    pub awaiting: bool,
+    pub animation: f32,
+    /// The pointer, for hover.
+    pub mouse_pos: Option<(f32, f32)>,
+    pub mouse_pressed: bool,
+}
+
 /// Bounded information/error/choice overlay data for rendering.
 #[derive(Debug, Clone)]
 pub struct InfoOverlayInfo {

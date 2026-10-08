@@ -4,10 +4,26 @@
 use super::Renderer;
 use super::text::TextClip;
 use crate::ui::agents_panel::AgentRowState;
-use crate::ui::color::{scale_alpha, with_alpha};
+use crate::ui::color::{mix, scale_alpha, with_alpha};
 use crate::ui::constants::*;
+use crate::ui::dialog::ButtonRole;
 use crate::ui::geometry::Bounds;
 use crate::ui::text_input_viewport::TextInputViewport;
+
+/// The room a button's label keeps from its edges, in logical pixels.
+const BUTTON_LABEL_INSET: f32 = 8.0;
+/// How far outside a button its focus ring sits, in logical pixels: the
+/// ring's stroke and a pixel of the surface behind it.
+const FOCUS_RING_GAP: f32 = 3.0;
+
+/// How a push button is showing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct ButtonState {
+    pub(super) hovered: bool,
+    pub(super) pressed: bool,
+    pub(super) focused: bool,
+    pub(super) disabled: bool,
+}
 
 /// The colors of a field's text and of its placeholder.
 #[derive(Clone, Copy)]
@@ -315,73 +331,73 @@ impl Renderer {
         }
     }
 
-    /// A dialog button in the accent color, its label centred in the UI
-    /// face. `primary` raises the surface; hover and press tint it further.
+    /// The one push button of dialogs, cards, and Settings: its role's
+    /// surface with the label centred in the UI face. Hover and press tint
+    /// the surface toward the label; keyboard focus draws the focus ring
+    /// just outside it, where it reads against filled buttons too.
     pub(super) fn draw_button(
         &mut self,
         button: Bounds,
         label: &str,
-        primary: bool,
-        hovered: bool,
-        pressed: bool,
+        role: ButtonRole,
+        state: ButtonState,
         anim: f32,
     ) {
-        let base_alpha = if primary { 0.12 } else { 0.05 };
-        let background_alpha = if pressed {
-            base_alpha + 0.18
-        } else if hovered {
-            base_alpha + 0.10
+        let colors = self.ui.button(role);
+        let tint = if state.disabled {
+            0.0
+        } else if state.pressed {
+            0.16
+        } else if state.hovered {
+            0.08
         } else {
-            base_alpha
+            0.0
         };
-        // A press sinks the button by a pixel on every side.
-        let button = if pressed {
-            button.inset(self.px(1.0), self.px(1.0))
-        } else {
-            button
-        };
-        let accent = self.ui.palette_accent;
+        let opacity = if state.disabled { 0.45 } else { 1.0 } * anim;
+        let fill = mix(colors.fill, with_alpha(colors.text, colors.fill[3]), tint);
         let radius = self.px(BUTTON_CORNER_RADIUS);
         self.rect_pipeline.push_rounded_rect(
             button.x,
             button.y,
             button.width,
             button.height,
-            with_alpha(accent, background_alpha * anim),
+            scale_alpha(fill, opacity),
             radius,
         );
-        let border_alpha = if hovered { 0.65 } else { 0.35 };
-        self.rect_pipeline.push_rounded_outline(
-            button.x,
-            button.y,
-            button.width,
-            button.height,
-            with_alpha(accent, border_alpha * anim),
-            radius,
-            self.px(BORDER_WIDTH),
-        );
-        if hovered && !pressed {
-            let glow = self.px(2.0);
-            self.rect_pipeline.push_rounded_rect(
-                button.x - glow,
-                button.y - glow,
-                button.width + glow * 2.0,
-                button.height + glow * 2.0,
-                with_alpha(accent, 0.06 * anim),
-                radius + glow,
+        if let Some(border) = colors.border {
+            self.rect_pipeline.push_rounded_outline(
+                button.x,
+                button.y,
+                button.width,
+                button.height,
+                scale_alpha(border, opacity),
+                radius,
+                self.px(BORDER_WIDTH),
             );
         }
-        let text_alpha = if hovered { 1.0 } else { 0.8 };
-        let size = self.ui_label_px();
+        let inset = self.px(BUTTON_LABEL_INSET);
         self.push_ui_label_centered(
             label,
             button.center()[0],
             button.y,
             button.height,
-            button.width,
-            size,
-            with_alpha(accent, text_alpha * anim),
+            (button.width - inset * 2.0).max(0.0),
+            self.ui_label_px(),
+            scale_alpha(colors.text, opacity),
         );
+        if state.focused && !state.disabled {
+            let gap = self.px(FOCUS_RING_GAP);
+            self.draw_focus_ring(
+                Bounds::new(
+                    button.x - gap,
+                    button.y - gap,
+                    button.width + gap * 2.0,
+                    button.height + gap * 2.0,
+                ),
+                with_alpha(self.ui.focus_ring, anim),
+                BUTTON_CORNER_RADIUS + FOCUS_RING_GAP,
+            );
+        }
     }
 
     /// The keyboard focus ring every chrome control shows: two logical

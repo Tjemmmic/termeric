@@ -49,6 +49,32 @@ impl Renderer {
         width
     }
 
+    /// [`Renderer::push_ui_label`] clipped to `clip`, for a label in a
+    /// scrolled region that may sit partly outside it.
+    pub(super) fn push_ui_label_clipped(
+        &mut self,
+        text: &str,
+        x: f32,
+        top: f32,
+        height: f32,
+        max_width: f32,
+        size_px: f32,
+        color: [f32; 4],
+        clip: TextClip,
+    ) -> f32 {
+        let (fitted, width) = self.fit_ui_label(text, max_width, size_px);
+        if fitted.is_empty() {
+            return 0.0;
+        }
+        let baseline = self
+            .glyph_cache
+            .ui_font_metrics(size_px)
+            .centered_baseline(top, height);
+        self.text_pipeline
+            .push_ui_text(&fitted, x.round(), baseline, size_px, color, Some(clip));
+        width
+    }
+
     /// `text` as [`Renderer::push_ui_label`] draws it in `max_width`, and the
     /// width it takes, so a caret after a label lands where the label ends.
     pub(super) fn fit_ui_label<'a>(

@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::ui::color::high_contrast_text_on;
+use crate::ui::dialog::ButtonRole;
 
 #[derive(Clone)]
 pub(crate) struct UiPalette {
@@ -54,6 +55,10 @@ pub(crate) struct UiPalette {
     pub(crate) palette_text_dim: [f32; 4],
     pub(crate) palette_match_highlight: [f32; 4],
     pub(crate) palette_border: [f32; 4],
+    /// Dialog body text: a step dimmer than headings, still readable.
+    pub(crate) dialog_text: [f32; 4],
+    /// The inset surface under a dialog's literal values and text field.
+    pub(crate) inset_bg: [f32; 4],
     /// The keyboard focus ring around chrome controls, on the tab bar,
     /// menus, panels, and cards alike.
     pub(crate) focus_ring: [f32; 4],
@@ -118,6 +123,8 @@ impl UiPalette {
             palette_text_dim: with_alpha(fg.to_f32_array(), 0.50),
             palette_match_highlight: cursor.to_f32_array(),
             palette_border: with_alpha(tab_border.to_f32_array(), 0.5),
+            dialog_text: with_alpha(fg.to_f32_array(), 0.82),
+            inset_bg: chrome(0.07),
             focus_ring: cursor.to_f32_array(),
         };
         if high_contrast {
@@ -152,13 +159,19 @@ impl UiPalette {
         self.palette_bg[3] = 1.0;
         self.palette_input_bg[3] = 1.0;
         self.palette_input_bg = self.palette_bg;
+        self.inset_bg[3] = 1.0;
         // Palette text reads on cards and query fields (palette_bg) and, in
-        // the shared modal frame, on the frame (menu_bg) and its selected row
-        // (menu_highlight).
-        let palette_text =
-            high_contrast_text_on(&[self.palette_bg, self.menu_bg, self.menu_highlight]);
+        // the shared modal frame, on the frame (menu_bg), its selected row
+        // (menu_highlight), and a dialog's inset values and field (inset_bg).
+        let palette_text = high_contrast_text_on(&[
+            self.palette_bg,
+            self.menu_bg,
+            self.menu_highlight,
+            self.inset_bg,
+        ]);
         self.palette_text = palette_text;
         self.palette_text_dim = palette_text;
+        self.dialog_text = palette_text;
         self.palette_border = palette_text;
         self.palette_accent = palette_text;
         // Matched characters keep their own color only while it stays
@@ -205,6 +218,40 @@ impl UiPalette {
             &mut self.info,
         ] {
             *status = readable_on(*status, &surfaces);
+        }
+    }
+}
+
+/// A push button's surface, label, and edge for its role.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct ButtonColors {
+    pub(super) fill: [f32; 4],
+    pub(super) text: [f32; 4],
+    pub(super) border: Option<[f32; 4]>,
+}
+
+impl UiPalette {
+    /// Neutral buttons (Cancel among them) are a raised chrome surface with
+    /// a hairline edge; Suggested and Destructive fill with the accent and
+    /// the error color, labelled in whichever of black or white reads on
+    /// the fill.
+    pub(super) fn button(&self, role: ButtonRole) -> ButtonColors {
+        let filled = |fill: [f32; 4]| {
+            let fill = with_alpha(fill, 1.0);
+            ButtonColors {
+                fill,
+                text: high_contrast_text(fill),
+                border: None,
+            }
+        };
+        match role {
+            ButtonRole::Cancel | ButtonRole::Neutral => ButtonColors {
+                fill: self.menu_highlight,
+                text: self.palette_text,
+                border: Some(self.menu_border),
+            },
+            ButtonRole::Suggested => filled(self.palette_accent),
+            ButtonRole::Destructive => filled(self.error),
         }
     }
 }
@@ -484,6 +531,9 @@ mod ui_palette_accessibility_tests {
                 (palette.palette_text, palette.palette_input_bg),
                 (palette.palette_text_dim, palette.palette_bg),
                 (palette.palette_text_dim, palette.palette_input_bg),
+                // Dialog body text and the values and field it insets.
+                (palette.dialog_text, palette.menu_bg),
+                (palette.palette_text, palette.inset_bg),
                 // Command palette matches, on plain and selected rows.
                 (palette.palette_match_highlight, palette.menu_bg),
                 (palette.palette_match_highlight, palette.menu_highlight),
@@ -503,6 +553,29 @@ mod ui_palette_accessibility_tests {
                     "{theme_name} contrast was {}",
                     contrast_ratio(foreground, background)
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn every_button_label_reads_on_its_fill() {
+        for theme_name in Theme::list_available() {
+            let theme = Theme::load_builtin(theme_name).unwrap();
+            for high_contrast in [false, true] {
+                let palette = UiPalette::from_theme_with_contrast(&theme, high_contrast);
+                let mut roles = vec![ButtonRole::Suggested, ButtonRole::Destructive];
+                // Neutral labels are the theme's own text color, raised to
+                // black or white only in high contrast.
+                if high_contrast {
+                    roles.extend([ButtonRole::Cancel, ButtonRole::Neutral]);
+                }
+                for role in roles {
+                    let colors = palette.button(role);
+                    assert!(
+                        contrast_ratio(colors.text, colors.fill) >= 4.5,
+                        "{theme_name} {role:?} ({high_contrast})"
+                    );
+                }
             }
         }
     }

@@ -2,9 +2,10 @@
 //! footer with Save.
 
 use super::Renderer;
-use super::draw::FieldTextColors;
+use super::draw::{ButtonState, FieldTextColors};
 use crate::ui::color::scale_alpha;
 use crate::ui::constants::*;
+use crate::ui::dialog::ButtonRole;
 use crate::ui::geometry::Bounds;
 use crate::ui::icon::Icon;
 use crate::ui::settings::{
@@ -334,12 +335,14 @@ impl Renderer {
                 dim
             },
         );
-        self.build_panel_button(
+        self.draw_button(
             layout.save_button,
             "Save",
-            true,
-            info.hovered_control == Some(SettingsControl::Save),
-            text,
+            ButtonRole::Suggested,
+            ButtonState {
+                hovered: info.hovered_control == Some(SettingsControl::Save),
+                ..ButtonState::default()
+            },
             anim,
         );
     }

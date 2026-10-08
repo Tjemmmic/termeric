@@ -6,10 +6,12 @@
 //! guarded command) keeps the monospace grid it is laid out and hit-tested in.
 
 use super::Renderer;
+use super::draw::ButtonState;
 use super::icons::draw_icon;
 use super::types::*;
 use crate::ui::color::{mix, scale_alpha, with_alpha};
 use crate::ui::constants::*;
+use crate::ui::dialog::ButtonRole;
 use crate::ui::geometry::Bounds;
 use crate::ui::icon::Icon;
 
@@ -207,17 +209,23 @@ impl Renderer {
         self.draw_button(
             layout.copy_button,
             copy_label,
-            false,
-            copy_hovered,
-            copy_hovered && info.mouse_pressed,
+            ButtonRole::Neutral,
+            ButtonState {
+                hovered: copy_hovered,
+                pressed: copy_hovered && info.mouse_pressed,
+                ..ButtonState::default()
+            },
             anim,
         );
         self.draw_button(
             layout.continue_button,
             continue_label,
-            true,
-            continue_hovered,
-            continue_hovered && info.mouse_pressed,
+            ButtonRole::Suggested,
+            ButtonState {
+                hovered: continue_hovered,
+                pressed: continue_hovered && info.mouse_pressed,
+                ..ButtonState::default()
+            },
             anim,
         );
 
@@ -392,26 +400,35 @@ impl Renderer {
             self.draw_button(
                 button,
                 label,
-                false,
-                hovered,
-                hovered && info.mouse_pressed,
+                ButtonRole::Neutral,
+                ButtonState {
+                    hovered,
+                    pressed: hovered && info.mouse_pressed,
+                    ..ButtonState::default()
+                },
                 anim,
             );
         }
         self.draw_button(
             layout.copy_button,
             "Copy",
-            false,
-            copy_hovered,
-            copy_hovered && info.mouse_pressed,
+            ButtonRole::Neutral,
+            ButtonState {
+                hovered: copy_hovered,
+                pressed: copy_hovered && info.mouse_pressed,
+                ..ButtonState::default()
+            },
             anim,
         );
         self.draw_button(
             layout.done_button,
             "Done",
-            true,
-            done_hovered,
-            done_hovered && info.mouse_pressed,
+            ButtonRole::Suggested,
+            ButtonState {
+                hovered: done_hovered,
+                pressed: done_hovered && info.mouse_pressed,
+                ..ButtonState::default()
+            },
             anim,
         );
 
@@ -634,18 +651,25 @@ impl Renderer {
         self.draw_button(
             layout.cancel_button,
             snapshot.cancel_label(),
-            false,
-            cancel_hovered,
-            cancel_hovered && info.mouse_pressed,
+            ButtonRole::Cancel,
+            ButtonState {
+                hovered: cancel_hovered,
+                pressed: cancel_hovered && info.mouse_pressed,
+                ..ButtonState::default()
+            },
             anim,
         );
         self.draw_button(
             layout.primary_button,
             snapshot.primary_label(),
-            true,
-            primary_hovered,
-            primary_hovered && info.mouse_pressed,
-            if primary_enabled { anim } else { anim * 0.4 },
+            ButtonRole::Suggested,
+            ButtonState {
+                hovered: primary_hovered,
+                pressed: primary_hovered && info.mouse_pressed,
+                focused: false,
+                disabled: !primary_enabled,
+            },
+            anim,
         );
 
         let hint = snapshot.status.as_deref().unwrap_or(match snapshot.phase {
@@ -782,7 +806,13 @@ impl Renderer {
             with_alpha(self.ui.palette_text_dim, 0.5 * anim),
         );
 
-        self.draw_button(layout.cancel_button, "Cancel", true, false, false, anim);
+        self.draw_button(
+            layout.cancel_button,
+            "Cancel",
+            ButtonRole::Cancel,
+            ButtonState::default(),
+            anim,
+        );
         self.draw_button(
             layout.confirm_button,
             if info.is_critical {
@@ -790,9 +820,8 @@ impl Renderer {
             } else {
                 "Confirm"
             },
-            false,
-            false,
-            false,
+            ButtonRole::Destructive,
+            ButtonState::default(),
             anim,
         );
     }

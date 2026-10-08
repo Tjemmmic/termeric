@@ -24,6 +24,7 @@ mod buffer;
 mod colors;
 mod cursor;
 mod device;
+mod dialog;
 mod drag_picture;
 pub(crate) mod draw;
 mod frame;
