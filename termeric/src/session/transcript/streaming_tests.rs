@@ -1,4 +1,5 @@
 use super::*;
+use std::fs;
 
 fn entries(recorder: &mut TranscriptRecorder) -> Vec<TranscriptEntry> {
     recorder.finish(Duration::from_secs(2)).unwrap();

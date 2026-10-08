@@ -80,53 +80,11 @@ fn runtime_parent_is_safe(path: &Path, uid: u32) -> bool {
         })
 }
 
+/// Make the runtime directory at `path` private with
+/// [`crate::safe_fs::ensure_private_directory`]; its errors name it.
 pub(crate) fn ensure_private_directory(path: &Path) -> anyhow::Result<()> {
-    let directory = match open_directory(path) {
-        Ok(directory) => directory,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            fs::create_dir_all(path)
-                .with_context(|| format!("create runtime directory {}", path.display()))?;
-            open_directory(path).with_context(|| {
-                format!("open newly created runtime directory {}", path.display())
-            })?
-        }
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("open runtime directory {}", path.display()));
-        }
-    };
-    validate_directory(&directory, path)?;
-    directory
-        .set_permissions(fs::Permissions::from_mode(0o700))
-        .with_context(|| format!("secure runtime directory {}", path.display()))?;
-    validate_directory(&directory, path)?;
-    if directory.metadata()?.permissions().mode() & 0o777 != 0o700 {
-        anyhow::bail!(
-            "runtime directory {} could not be secured to mode 0700",
-            path.display()
-        );
-    }
-    Ok(())
-}
-
-fn open_directory(path: &Path) -> std::io::Result<fs::File> {
-    OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(path)
-}
-
-fn validate_directory(directory: &fs::File, path: &Path) -> anyhow::Result<()> {
-    let metadata = directory
-        .metadata()
-        .with_context(|| format!("inspect runtime directory {}", path.display()))?;
-    if !metadata.file_type().is_dir() || metadata.uid() != effective_uid() {
-        anyhow::bail!(
-            "runtime directory {} is not a user-owned directory",
-            path.display()
-        );
-    }
-    Ok(())
+    crate::safe_fs::ensure_private_directory(path)
+        .with_context(|| format!("secure runtime directory {}", path.display()))
 }
 
 fn load_or_create_token(path: &Path) -> anyhow::Result<String> {

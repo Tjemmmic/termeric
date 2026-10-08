@@ -1,11 +1,12 @@
 //! Hardened access to Termeric's own files: reads never follow a symlink,
 //! block on a FIFO, or read past a limit, writes replace a file atomically
-//! through a private staging file beside it, and publishing a staged entry
-//! never replaces another.
+//! through a private staging file beside it, publishing a staged entry
+//! never replaces another, and private directories are never reached
+//! through a symlink.
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, BufWriter, Read, Write};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
 /// How [`atomic_replace`]'s staging files are named: this prefix and a
@@ -150,6 +151,54 @@ pub(crate) fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
 /// it survive a crash.
 pub(crate) fn sync_directory(directory: &Path) -> io::Result<()> {
     fs::File::open(directory)?.sync_all()
+}
+
+/// Make `path` a directory only this user can use (mode 0700): create it,
+/// after any missing parents, or tighten an existing one. A symbolic link,
+/// anything but a directory, or a directory another user owns is refused
+/// and left as it was.
+pub(crate) fn ensure_private_directory(path: &Path) -> io::Result<()> {
+    let directory = match open_directory(path) {
+        Ok(directory) => directory,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            match fs::DirBuilder::new().mode(0o700).create(path) {
+                // One created by someone else meanwhile is checked like any
+                // existing directory.
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error),
+            }
+            open_directory(path)?
+        }
+        Err(error) => return Err(error),
+    };
+    // Checked and changed through the descriptor, so a directory swapped in
+    // after the open is never the one changed.
+    let metadata = directory.metadata()?;
+    if !metadata.is_dir() || metadata.uid() != crate::local_socket::effective_uid() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{} is not a directory this user owns", path.display()),
+        ));
+    }
+    directory.set_permissions(fs::Permissions::from_mode(0o700))?;
+    if directory.metadata()?.permissions().mode() & 0o777 != 0o700 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{} could not be made private (mode 0700)", path.display()),
+        ));
+    }
+    Ok(())
+}
+
+fn open_directory(path: &Path) -> io::Result<fs::File> {
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
 }
 
 #[cfg(test)]
@@ -339,6 +388,43 @@ mod tests {
         assert!(!rescued, "the read waited for a FIFO writer");
         assert!(result.unwrap_err().to_string().contains("regular file"));
         assert!(path.exists());
+    }
+
+    #[test]
+    fn private_directories_are_created_or_tightened_but_never_reached_through_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let mode = |path: &Path| fs::symlink_metadata(path).unwrap().permissions().mode() & 0o777;
+
+        let created = dir.path().join("parent").join("private");
+        ensure_private_directory(&created).unwrap();
+        assert_eq!(mode(&created), 0o700);
+        ensure_private_directory(&created).unwrap();
+        assert_eq!(mode(&created), 0o700);
+
+        let open = dir.path().join("open");
+        fs::create_dir(&open).unwrap();
+        fs::set_permissions(&open, fs::Permissions::from_mode(0o755)).unwrap();
+        ensure_private_directory(&open).unwrap();
+        assert_eq!(mode(&open), 0o700);
+
+        let target = dir.path().join("target");
+        fs::create_dir(&target).unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(ensure_private_directory(&link).is_err());
+        assert_eq!(mode(&target), 0o755);
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+
+        let file = dir.path().join("file");
+        fs::write(&file, "kept").unwrap();
+        assert!(ensure_private_directory(&file).is_err());
+        assert_eq!(fs::read_to_string(&file).unwrap(), "kept");
     }
 
     #[test]

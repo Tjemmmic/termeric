@@ -17,7 +17,7 @@ mod streaming_tests;
 mod utf8;
 
 use serde::{Deserialize, Serialize};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
@@ -267,7 +267,7 @@ impl TranscriptRecorder {
         let directory = dir.to_path_buf();
         let file_path = path.clone();
         let factory: SinkFactory = Box::new(move || {
-            fs::create_dir_all(&directory)?;
+            crate::safe_fs::ensure_private_directory(&directory)?;
             Ok(Box::new(FileSink(create_transcript_file(&file_path)?)))
         });
         Self::with_factory(
@@ -828,6 +828,7 @@ fn publish_writer_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::io::Read;
     use std::sync::Mutex;
 
@@ -1021,6 +1022,38 @@ mod tests {
         assert!(create_transcript_file(&link).is_err());
         assert!(create_transcript_file(&target).is_err());
         assert_eq!(fs::read_to_string(&target).unwrap(), "untouched");
+    }
+
+    #[test]
+    fn the_transcript_directory_is_private_and_never_reached_through_a_link() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let mode = |path: &Path| fs::symlink_metadata(path).unwrap().permissions().mode() & 0o777;
+        let transcripts = dir.path().join("sessions").join("transcripts");
+        let mut recorder =
+            TranscriptRecorder::new(&transcripts, None, None, "Local", "fixture").unwrap();
+        finish_and_read(&mut recorder);
+        assert_eq!(mode(&transcripts), 0o700);
+
+        fs::set_permissions(&transcripts, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut recorder =
+            TranscriptRecorder::new(&transcripts, None, None, "Local", "fixture").unwrap();
+        finish_and_read(&mut recorder);
+        assert_eq!(
+            mode(&transcripts),
+            0o700,
+            "an existing directory is tightened"
+        );
+
+        let target = dir.path().join("elsewhere");
+        fs::create_dir(&target).unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).unwrap();
+        let link = dir.path().join("linked");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let mut recorder = TranscriptRecorder::new(&link, None, None, "Local", "fixture").unwrap();
+        assert!(recorder.finish(Duration::from_secs(2)).is_err());
+        assert_eq!(fs::read_dir(&target).unwrap().count(), 0);
+        assert_eq!(mode(&target), 0o755);
     }
 
     #[test]
