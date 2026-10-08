@@ -1139,7 +1139,6 @@ impl SettingsPanel {
                 label: "Range Overrides",
                 value: match config.font.range_overrides.len() {
                     0 => "Manage · none configured".into(),
-                    1 => "Manage · 1 configured".into(),
                     count => format!("Manage · {count} configured"),
                 },
                 kind: SettingKind::Action {
@@ -1151,7 +1150,6 @@ impl SettingsPanel {
                 label: "OpenType Features",
                 value: match config.font.features.len() {
                     0 => "Manage · none configured".into(),
-                    1 => "Manage · 1 configured".into(),
                     count => format!("Manage · {count} configured"),
                 },
                 kind: SettingKind::Action {
@@ -1518,7 +1516,6 @@ impl SettingsPanel {
                     label: "Keyboard Shortcuts",
                     value: match customized {
                         0 => "Defaults".to_string(),
-                        1 => "1 changed".to_string(),
                         count => format!("{count} changed"),
                     },
                     kind: SettingKind::Action {

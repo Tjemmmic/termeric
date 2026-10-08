@@ -45,15 +45,13 @@ impl SessionListing {
 /// One listed archive. A workspace counts its tabs and panes; a closed tab,
 /// already named for its directory and command, counts only extra panes.
 fn entry(archive: crate::workspace::WorkspaceListEntry, workspace: bool, now: u64) -> SessionEntry {
-    let plural = |count: usize| if count == 1 { "" } else { "s" };
+    use crate::ui::text::plural;
     let subtitle = archive.warning.unwrap_or_else(|| {
         if workspace {
             format!(
-                "{} tab{} · {} pane{}",
-                archive.tab_count,
-                plural(archive.tab_count),
-                archive.pane_count,
-                plural(archive.pane_count),
+                "{} · {}",
+                plural(archive.tab_count, "tab", "tabs"),
+                plural(archive.pane_count, "pane", "panes"),
             )
         } else if archive.pane_count > 1 {
             format!("{} panes", archive.pane_count)

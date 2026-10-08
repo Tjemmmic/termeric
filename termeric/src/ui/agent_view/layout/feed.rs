@@ -16,7 +16,8 @@ use crate::ui::text_layout::{TextSize, TextSpan, UiFace};
 
 use super::super::ConversationView;
 use super::super::scene::{ExpandKey, HitRole, Prim, SpanPaint, Target, TextNode};
-use super::{Builder, ButtonKind, Region, RegionNode, merge, plural};
+use super::{Builder, ButtonKind, Region, RegionNode, merge};
+use crate::ui::text::plural;
 
 /// Diff lines shown before the rest is summarized.
 const MAX_DIFF_LINES: usize = 200;

@@ -10,10 +10,10 @@ use crate::agent_view::present;
 use crate::agent_view::session::{AgentSession, QuestionAnswer};
 use crate::agent_view::transcript::{Attachment, DecidedBy, Item};
 use crate::ui::agent_view::commands;
-use crate::ui::agent_view::layout::plural;
 use crate::ui::agent_view::scene::{HitRole, MenuAction, MenuKind, Target};
 use crate::ui::agent_view::{ComposerIntent, Focus, OpenMenu, Screen};
 use crate::ui::geometry::Bounds;
+use crate::ui::text::plural;
 use crate::ui::text_input::{TextInput, TextInputEdit};
 use crate::ui::text_layout::TextMeasure;
 

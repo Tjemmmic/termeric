@@ -3,6 +3,7 @@
 use super::*;
 use crate::tabs::TabType;
 use crate::ui::info_overlay::push_keyless_choice;
+use crate::ui::text::plural;
 use crate::workspace::{
     WorkspaceConfigReference, WorkspaceLaunch, WorkspaceRestoreOutcome, WorkspaceSnapshot,
     WorkspaceTabSnapshot,
@@ -219,19 +220,14 @@ impl App {
                 }
                 if outcome.warnings.is_empty() {
                     self.toasts.success(format!(
-                        "Restored workspace ({0} {1})",
-                        outcome.restored_tabs,
-                        if outcome.restored_tabs == 1 {
-                            "tab"
-                        } else {
-                            "tabs"
-                        }
+                        "Restored workspace ({})",
+                        plural(outcome.restored_tabs, "tab", "tabs")
                     ));
                 } else {
                     self.toasts.warning(format!(
-                        "Restored {} tab(s); {} item(s) need attention",
-                        outcome.restored_tabs,
-                        outcome.warnings.len()
+                        "Restored {}; {} attention",
+                        plural(outcome.restored_tabs, "tab", "tabs"),
+                        plural(outcome.warnings.len(), "item needs", "items need")
                     ));
                 }
                 true
@@ -532,7 +528,7 @@ impl App {
             return;
         }
         let name = confirmation_name(id);
-        let tabs = tab_count(tabs);
+        let tabs = plural(tabs, "tab", "tabs");
         let close = format!("Close {tabs} and open {name}");
         let mut lines = vec![
             format!("Open {name} in this window?"),
@@ -659,11 +655,4 @@ fn confirmation_name(id: &str) -> String {
         "\u{201c}{}\u{201d}",
         crate::safe_text::truncate_with_ellipsis(&name, CONFIRMATION_NAME_CHARS)
     )
-}
-
-fn tab_count(count: usize) -> String {
-    match count {
-        1 => "1 tab".into(),
-        count => format!("{count} tabs"),
-    }
 }

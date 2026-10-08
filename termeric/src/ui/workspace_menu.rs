@@ -1,6 +1,7 @@
 //! The toolbar Workspaces menu: recent workspaces, then save and manage.
 
 use crate::ui::popup_menu::{MenuItem, MenuRow};
+use crate::ui::text::plural;
 use crate::workspace::WorkspaceListEntry;
 
 /// Recent workspaces listed before the actions; the manager shows the rest.
@@ -40,7 +41,7 @@ pub fn workspace_menu_rows(
                 } else if live_domain {
                     LIVE_DOMAIN_DETAIL.into()
                 } else {
-                    tab_count(workspace.tab_count)
+                    plural(workspace.tab_count, "tab", "tabs")
                 }),
                 checked: current == Some(workspace.id.as_str()),
                 enabled: readable && !live_domain,
@@ -66,13 +67,6 @@ pub fn workspace_menu_rows(
         }));
     }
     rows
-}
-
-fn tab_count(count: usize) -> String {
-    match count {
-        1 => "1 tab".into(),
-        count => format!("{count} tabs"),
-    }
 }
 
 #[cfg(test)]

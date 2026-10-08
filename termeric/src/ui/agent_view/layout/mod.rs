@@ -1012,13 +1012,6 @@ fn merge(region: &mut Region, other: Region) {
 
 // ── Header and banner ────────────────────────────────────────────────────
 
-// ── Composer ─────────────────────────────────────────────────────────────
-
-/// `count` with the singular or plural noun, as in "1 file" or "3 files".
-pub(crate) fn plural(count: usize, one: &str, many: &str) -> String {
-    format!("{count} {}", if count == 1 { one } else { many })
-}
-
 // ── Menus ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

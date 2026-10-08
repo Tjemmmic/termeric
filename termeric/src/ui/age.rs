@@ -22,19 +22,16 @@ pub fn prose_age(then: u64, now: u64) -> String {
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
     let elapsed = now.saturating_sub(then);
-    let plural = |count: u64, unit: &str| {
-        if count == 1 {
-            format!("1 {unit} ago")
-        } else {
-            format!("{count} {unit}s ago")
-        }
+    // Each arm's count is under a week of seconds, so it fits any usize.
+    let ago = |count: u64, one: &str, many: &str| {
+        format!("{} ago", super::text::plural(count as usize, one, many))
     };
     match elapsed {
         0..60 => "Just now".into(),
-        60..3_600 => plural(elapsed / 60, "minute"),
-        3_600..86_400 => plural(elapsed / 3_600, "hour"),
+        60..3_600 => ago(elapsed / 60, "minute", "minutes"),
+        3_600..86_400 => ago(elapsed / 3_600, "hour", "hours"),
         86_400..172_800 => "Yesterday".into(),
-        172_800..604_800 => plural(elapsed / 86_400, "day"),
+        172_800..604_800 => ago(elapsed / 86_400, "day", "days"),
         _ => {
             let (year, month, day) = crate::session::civil_from_days((then / 86_400) as i64);
             let (current_year, _, _) = crate::session::civil_from_days((now / 86_400) as i64);

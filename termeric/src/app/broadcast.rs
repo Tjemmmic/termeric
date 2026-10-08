@@ -3,6 +3,7 @@
 
 use super::agents::PersonInput;
 use super::*;
+use crate::ui::text::plural;
 
 /// How long an armed broadcast waits for confirmation; changing the targets
 /// starts it again.
@@ -128,9 +129,8 @@ impl App {
         }
         targets.sort_by_key(|id| id.0);
         self.toasts.info(format!(
-            "Broadcast armed: {} target{} selected",
-            targets.len(),
-            if targets.len() == 1 { "" } else { "s" }
+            "Broadcast armed: {} selected",
+            plural(targets.len(), "target", "targets")
         ));
         self.broadcast = BroadcastState::Armed {
             tab_id,
@@ -255,8 +255,8 @@ impl App {
             };
             if failed > 0 {
                 self.toasts.warning(format!(
-                    "Broadcast dropped {failed} unavailable target{}",
-                    if failed == 1 { "" } else { "s" }
+                    "Broadcast dropped {}",
+                    plural(failed, "unavailable target", "unavailable targets")
                 ));
             }
         }

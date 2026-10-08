@@ -27,6 +27,7 @@ pub mod search_bar;
 pub mod session_panel;
 pub mod settings;
 pub mod shortcuts_panel;
+pub mod text;
 pub mod text_area;
 pub mod text_card;
 pub mod text_input;

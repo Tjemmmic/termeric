@@ -2,6 +2,7 @@
 //! controls around it.
 
 use super::*;
+use crate::ui::text::plural;
 
 /// Fewest and most text lines the composer shows before scrolling.
 pub(super) const COMPOSER_MIN_LINES: f32 = 2.0;
