@@ -488,35 +488,37 @@ impl Application {
     }
 
     fn control_inventory(&self) -> crate::control::protocol::ProcessInventory {
-        let mut truncated = self.window_order.len() > crate::control::protocol::MAX_WINDOWS;
-        let mut budget = inventory::ControlInventoryBudget::default();
-        let mut windows = Vec::with_capacity(
-            self.window_order
-                .len()
-                .min(crate::control::protocol::MAX_WINDOWS),
+        let (windows, incomplete) = self.inventory_windows();
+        let mut inventory = inventory::process_inventory(
+            &windows,
+            crate::control::protocol::MAX_WINDOWS,
+            inventory::ControlInventoryBudget::default(),
         );
-        for native_id in self
+        inventory.truncated |= incomplete;
+        inventory
+    }
+
+    /// Every window with its control ID, in creation order, and whether an
+    /// open window had to be left out for lacking one.
+    fn inventory_windows(&self) -> (Vec<(u64, &App)>, bool) {
+        let mut incomplete = false;
+        let windows = self
             .window_order
             .iter()
-            .take(crate::control::protocol::MAX_WINDOWS)
-        {
-            let Some(window) = self.windows.get(native_id) else {
-                truncated = true;
-                continue;
-            };
-            let Some(control_id) = self.control_window_ids.get(native_id) else {
-                truncated = true;
-                continue;
-            };
-            let inventory = window.control_inventory(*control_id, &mut budget);
-            truncated |= inventory.truncated;
-            windows.push(inventory);
-        }
-        crate::control::protocol::ProcessInventory {
-            process_id: std::process::id(),
-            windows,
-            truncated,
-        }
+            .filter_map(|native_id| {
+                let window = self.windows.get(native_id);
+                match (window, self.control_window_ids.get(native_id)) {
+                    (Some(window), Some(control_id)) => Some((*control_id, window)),
+                    // Closing windows are left out of every inventory.
+                    (Some(window), None) if window.should_exit => None,
+                    _ => {
+                        incomplete = true;
+                        None
+                    }
+                }
+            })
+            .collect();
+        (windows, incomplete)
     }
 
     /// The window a request names by control ID `window_id`, unless it is
@@ -615,34 +617,6 @@ impl Application {
         if self.windows.is_empty() && self.pending.is_empty() {
             event_loop.exit();
         }
-    }
-}
-
-pub(super) fn build_plugin_process_inventory(
-    windows: &[(u64, &App)],
-) -> crate::control::protocol::ProcessInventory {
-    let live_window_count = windows
-        .iter()
-        .filter(|(_, window)| !window.should_exit)
-        .count();
-    let mut truncated = live_window_count > inventory::PLUGIN_PROCESS_MAX_WINDOWS;
-    let mut budget = inventory::plugin_process_inventory_budget();
-    let mut inventories =
-        Vec::with_capacity(live_window_count.min(inventory::PLUGIN_PROCESS_MAX_WINDOWS));
-    for (control_id, window) in windows
-        .iter()
-        .filter(|(_, window)| !window.should_exit)
-        .take(inventory::PLUGIN_PROCESS_MAX_WINDOWS)
-    {
-        let inventory = window.control_inventory(*control_id, &mut budget);
-        truncated |= inventory.truncated;
-        inventories.push(inventory);
-    }
-    truncated |= inventories.len() < live_window_count.min(inventory::PLUGIN_PROCESS_MAX_WINDOWS);
-    crate::control::protocol::ProcessInventory {
-        process_id: std::process::id(),
-        windows: inventories,
-        truncated,
     }
 }
 

@@ -1542,6 +1542,35 @@ fn explicit_multi_window_plan_disables_implicit_restore_for_every_window() {
 }
 
 #[test]
+fn control_and_plugin_inventories_both_leave_out_a_closing_window() {
+    let mut application =
+        Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
+    for control_id in [1, 2, 3] {
+        let native = WindowId::from(40 + control_id);
+        let mut window = App::new_headless(Config::default()).unwrap();
+        window.control_window_id = control_id;
+        application.windows.insert(native, window);
+        application.window_order.push(native);
+        application.control_window_ids.insert(native, control_id);
+    }
+    // Requests naming a closing window are refused, so no inventory lists it.
+    application
+        .windows
+        .get_mut(&WindowId::from(42_u64))
+        .unwrap()
+        .should_exit = true;
+    assert!(application.live_control_window(2).is_err());
+    for inventory in [
+        application.control_inventory(),
+        application.plugin_process_inventory(),
+    ] {
+        let ids: Vec<_> = inventory.windows.iter().map(|window| window.id).collect();
+        assert_eq!(ids, [1, 3]);
+        assert!(!inventory.truncated);
+    }
+}
+
+#[test]
 fn plugin_workspace_query_inventory_is_ordered_bounded_and_excludes_closing_windows() {
     let plan = LaunchPlan {
         windows: vec![WindowLaunch::default(); inventory::PLUGIN_PROCESS_MAX_WINDOWS + 2],
@@ -1556,12 +1585,12 @@ fn plugin_workspace_query_inventory_is_ordered_bounded_and_excludes_closing_wind
         .map(|(index, window)| (100 + index as u64, window))
         .collect();
 
-    let one_window = build_plugin_process_inventory(&windows[..1]);
+    let one_window = inventory::plugin_inventory(&windows[..1]);
     assert_eq!(one_window.windows.len(), 1);
     assert_eq!(one_window.windows[0].id, 100);
     assert!(!one_window.truncated);
 
-    let two_live_windows = build_plugin_process_inventory(&windows[..3]);
+    let two_live_windows = inventory::plugin_inventory(&windows[..3]);
     assert_eq!(two_live_windows.windows.len(), 2);
     assert_eq!(two_live_windows.windows[0].id, 100);
     assert_eq!(two_live_windows.windows[1].id, 102);
@@ -1575,7 +1604,7 @@ fn plugin_workspace_query_inventory_is_ordered_bounded_and_excludes_closing_wind
         .enumerate()
         .map(|(index, window)| (100 + index as u64, window))
         .collect();
-    let inventory = build_plugin_process_inventory(&windows);
+    let inventory = inventory::plugin_inventory(&windows);
     assert_eq!(inventory.process_id, std::process::id());
     assert_eq!(
         inventory.windows.len(),

@@ -243,7 +243,7 @@ fn structured_workspace_query_is_current_window_bounded_and_control_safe() {
     app.current_workspace_id = Some("workspace\u{7}fixture".into());
     // At window scope the inventory holds only the plugin's own window.
     let inventory =
-        super::application::build_plugin_process_inventory(&[(app.control_window_id, &app)]);
+        super::application::inventory::plugin_inventory(&[(app.control_window_id, &app)]);
     let encoded = super::plugin_actions::plugin_workspace_query_event(
         "query-fixture",
         app.control_window_id,

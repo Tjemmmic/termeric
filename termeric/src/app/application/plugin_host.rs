@@ -46,23 +46,9 @@ impl Application {
     }
 
     pub(super) fn plugin_process_inventory(&self) -> crate::control::protocol::ProcessInventory {
-        let windows: Vec<_> = self
-            .window_order
-            .iter()
-            .filter_map(|native_id| {
-                let window = self.windows.get(native_id)?;
-                let control_id = *self.control_window_ids.get(native_id)?;
-                Some((control_id, window))
-            })
-            .collect();
-        let mut inventory = build_plugin_process_inventory(&windows);
-        // A live window without a control ID is missing from the list.
-        inventory.truncated |= self.window_order.iter().any(|native_id| {
-            self.windows
-                .get(native_id)
-                .is_some_and(|window| !window.should_exit)
-                && !self.control_window_ids.contains_key(native_id)
-        });
+        let (windows, incomplete) = self.inventory_windows();
+        let mut inventory = inventory::plugin_inventory(&windows);
+        inventory.truncated |= incomplete;
         inventory
     }
 
@@ -111,7 +97,7 @@ impl Application {
                             .windows
                             .get(&origin.native_id)
                             .ok_or_else(|| "originating window is gone".to_string())?;
-                        build_plugin_process_inventory(&[(origin.window_id, origin_window)])
+                        inventory::plugin_inventory(&[(origin.window_id, origin_window)])
                     }
                 };
                 let event = crate::app::plugin_actions::plugin_workspace_query_event(

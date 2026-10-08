@@ -3,8 +3,10 @@
 //! the protocol's limits.
 
 use super::super::App;
+use crate::control::protocol::ProcessInventory;
 use crate::tabs::TabManager;
 
+/// What an inventory may still list, shared across its windows.
 pub(in crate::app) struct ControlInventoryBudget {
     tabs: usize,
     panes: usize,
@@ -12,18 +14,22 @@ pub(in crate::app) struct ControlInventoryBudget {
     metadata_bytes: usize,
 }
 
+/// A plugin's workspace query lists less than a control client may, so its
+/// answer fits in one handler event.
 pub(in crate::app) const PLUGIN_PROCESS_MAX_WINDOWS: usize = 8;
 const PLUGIN_PROCESS_MAX_TABS: usize = 16;
 const PLUGIN_PROCESS_MAX_PANES: usize = 32;
 const PLUGIN_PROCESS_MAX_DIVIDERS: usize = 31;
 const PLUGIN_PROCESS_MAX_METADATA_BYTES: usize = 2 * 1024;
 
-pub(super) fn plugin_process_inventory_budget() -> ControlInventoryBudget {
-    ControlInventoryBudget {
-        tabs: PLUGIN_PROCESS_MAX_TABS,
-        panes: PLUGIN_PROCESS_MAX_PANES,
-        dividers: PLUGIN_PROCESS_MAX_DIVIDERS,
-        metadata_bytes: PLUGIN_PROCESS_MAX_METADATA_BYTES,
+impl ControlInventoryBudget {
+    fn for_plugins() -> Self {
+        Self {
+            tabs: PLUGIN_PROCESS_MAX_TABS,
+            panes: PLUGIN_PROCESS_MAX_PANES,
+            dividers: PLUGIN_PROCESS_MAX_DIVIDERS,
+            metadata_bytes: PLUGIN_PROCESS_MAX_METADATA_BYTES,
+        }
     }
 }
 
@@ -36,6 +42,45 @@ impl Default for ControlInventoryBudget {
             metadata_bytes: crate::control::protocol::MAX_METADATA_BYTES,
         }
     }
+}
+
+/// The inventory of `windows` (each with its control ID, in creation
+/// order): the first `window_limit` of them, within `budget`.
+///
+/// Closing windows are left out. Every request that names a window, from a
+/// control client or a plugin, refuses one that is closing
+/// (`Application::live_window`), so listing it would offer an ID nothing
+/// accepts; and it is gone once the current event is handled.
+pub(super) fn process_inventory(
+    windows: &[(u64, &App)],
+    window_limit: usize,
+    mut budget: ControlInventoryBudget,
+) -> ProcessInventory {
+    let live: Vec<_> = windows
+        .iter()
+        .filter(|(_, window)| !window.should_exit)
+        .collect();
+    let mut truncated = live.len() > window_limit;
+    let mut inventories = Vec::with_capacity(live.len().min(window_limit));
+    for (control_id, window) in live.into_iter().take(window_limit) {
+        let inventory = window.control_inventory(*control_id, &mut budget);
+        truncated |= inventory.truncated;
+        inventories.push(inventory);
+    }
+    ProcessInventory {
+        process_id: std::process::id(),
+        windows: inventories,
+        truncated,
+    }
+}
+
+/// The inventory a plugin's workspace query answers with.
+pub(in crate::app) fn plugin_inventory(windows: &[(u64, &App)]) -> ProcessInventory {
+    process_inventory(
+        windows,
+        PLUGIN_PROCESS_MAX_WINDOWS,
+        ControlInventoryBudget::for_plugins(),
+    )
 }
 
 impl App {
