@@ -10,6 +10,8 @@ pub const MAX_ATTACHMENTS_PER_PANE: usize = 8;
 pub const MAX_TOPOLOGY_SUBSCRIBERS_PER_DOMAIN: usize = 8;
 pub const MAX_PANE_SCROLLBACK_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_TEXT_RESPONSE_BYTES: usize = 1024 * 1024;
+/// The most bytes in a domain ID or an application identity (`--app-id`).
+pub const MAX_ID_BYTES: usize = 128;
 /// The most characters in a domain, tab, or pane name.
 pub const MAX_DOMAIN_NAME_CHARS: usize = 128;
 /// The most columns, and the most rows, a domain terminal may have.
@@ -161,12 +163,14 @@ impl Default for SpawnSpec {
 
 pub fn validate_id(label: &str, value: &str) -> anyhow::Result<()> {
     if value.is_empty()
-        || value.len() > 128
+        || value.len() > MAX_ID_BYTES
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
     {
-        anyhow::bail!("invalid {label} {value:?}");
+        anyhow::bail!(
+            "{label} {value:?} must be 1 to {MAX_ID_BYTES} ASCII letters, digits, '-', '_' or '.'"
+        );
     }
     Ok(())
 }
@@ -326,6 +330,8 @@ mod tests {
     fn identifier_and_name_boundaries_are_explicit() {
         assert!(validate_id("domain", "domain-1.ok").is_ok());
         assert!(validate_id("domain", "bad/id").is_err());
+        assert!(validate_id("domain", &"a".repeat(MAX_ID_BYTES)).is_ok());
+        assert!(validate_id("domain", &"a".repeat(MAX_ID_BYTES + 1)).is_err());
         assert!(validate_name("domain", "Daily λ").is_ok());
         assert!(validate_name("domain", "two\nlines").is_err());
     }
