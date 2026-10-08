@@ -5,13 +5,6 @@
 //! etc.) and asks the person to confirm before it is delivered. Input a person
 //! types, pastes, completes, or broadcasts is never intercepted.
 
-/// Get the current username
-fn whoami() -> String {
-    std::env::var("USER")
-        .or_else(|_| std::env::var("LOGNAME"))
-        .unwrap_or_else(|_| "unknown".to_string())
-}
-
 /// A matched destructive command
 #[derive(Debug, Clone)]
 pub struct GuardrailMatch {
@@ -21,10 +14,6 @@ pub struct GuardrailMatch {
     pub reason: String,
     /// Severity level
     pub severity: Severity,
-    /// Where this will execute (e.g., "Local", "SSH: dev01", "docker: devbox")
-    pub target: String,
-    /// As which user (e.g., "root", "deploy")
-    pub user: String,
 }
 
 /// Threat severity
@@ -51,8 +40,8 @@ pub(crate) struct GuardedWrite {
 }
 
 impl GuardedWrite {
-    /// Capture identity, never the current single/split ownership mode. A tab
-    /// route alone can alias a different survivor by the time consent arrives.
+    /// Captures the exact pane identity; a tab route alone can alias a
+    /// different pane by the time consent arrives.
     pub(crate) fn for_pane(tab_id: usize, pane_id: crate::panes::PaneId, data: Vec<u8>) -> Self {
         Self {
             tab_id,
@@ -236,8 +225,6 @@ pub fn check_command(input: &str) -> Option<GuardrailMatch> {
                     command: trimmed.to_string(),
                     reason: reason.to_string(),
                     severity,
-                    target: "Local".to_string(),
-                    user: whoami(),
                 });
             }
         }
@@ -252,6 +239,8 @@ pub struct GuardrailOverlay {
     animation: crate::ui::animation::OverlayAnimation,
     /// The matched command that triggered the guardrail
     pub matched: Option<GuardrailMatch>,
+    /// The terminal the guarded input is for, as the request named it.
+    pub target: String,
     pending: Option<PendingGuardedInput>,
     request_id: u64,
 }
@@ -261,19 +250,27 @@ impl GuardrailOverlay {
         Self {
             animation: crate::ui::animation::OverlayAnimation::with_duration(0.25),
             matched: None,
+            target: String::new(),
             pending: None,
             request_id: 0,
         }
     }
 
-    /// Show the guardrail confirmation for a matched command
-    pub fn show(&mut self, matched: GuardrailMatch, writes: Vec<GuardedWrite>) -> u64 {
+    /// Show the guardrail confirmation for a matched command bound for
+    /// `target`, the terminal the request named.
+    pub fn show(
+        &mut self,
+        matched: GuardrailMatch,
+        target: String,
+        writes: Vec<GuardedWrite>,
+    ) -> u64 {
         assert!(
             !writes.is_empty(),
             "a guarded request must own at least one terminal write"
         );
         self.request_id = self.request_id.wrapping_add(1).max(1);
         self.matched = Some(matched);
+        self.target = target;
         self.pending = Some(PendingGuardedInput {
             request_id: self.request_id,
             writes,
@@ -358,8 +355,6 @@ mod tests {
             command: "fixture command; never execute".into(),
             reason: "Hermetic guardrail fixture".into(),
             severity: Severity::Critical,
-            target: "Fixture terminal".into(),
-            user: "tester".into(),
         }
     }
 
@@ -482,7 +477,11 @@ mod tests {
     #[test]
     fn dismiss_revokes_pending_bytes_before_the_exit_animation_finishes() {
         let mut overlay = GuardrailOverlay::new();
-        let request = overlay.show(fixture_match(), vec![fixture_write(b"fixture-enter")]);
+        let request = overlay.show(
+            fixture_match(),
+            "Fixture terminal".into(),
+            vec![fixture_write(b"fixture-enter")],
+        );
         assert!(overlay.dismiss(request));
         assert!(
             overlay.is_active(),
@@ -495,9 +494,17 @@ mod tests {
     #[test]
     fn stale_request_cannot_confirm_a_newer_guarded_input() {
         let mut overlay = GuardrailOverlay::new();
-        let stale = overlay.show(fixture_match(), vec![fixture_write(b"first")]);
+        let stale = overlay.show(
+            fixture_match(),
+            "Fixture terminal".into(),
+            vec![fixture_write(b"first")],
+        );
         assert!(overlay.dismiss(stale));
-        let current = overlay.show(fixture_match(), vec![fixture_write(b"second")]);
+        let current = overlay.show(
+            fixture_match(),
+            "Fixture terminal".into(),
+            vec![fixture_write(b"second")],
+        );
         assert_ne!(stale, current);
         assert_eq!(overlay.confirm(stale), None);
         assert!(overlay.is_awaiting(current));
@@ -508,7 +515,11 @@ mod tests {
     fn confirmation_returns_the_exact_origin_once_without_writing_anywhere() {
         let mut overlay = GuardrailOverlay::new();
         let write = fixture_write(b"fixture-enter");
-        let request = overlay.show(fixture_match(), vec![write.clone()]);
+        let request = overlay.show(
+            fixture_match(),
+            "Fixture terminal".into(),
+            vec![write.clone()],
+        );
         assert_eq!(overlay.confirm(request), Some(vec![write]));
         assert_eq!(overlay.confirm(request), None);
     }
@@ -520,7 +531,7 @@ mod tests {
             GuardedWrite::for_pane(9, crate::panes::PaneId(2), b"first-encoding".to_vec()),
             GuardedWrite::for_pane(9, crate::panes::PaneId(7), b"second-encoding".to_vec()),
         ];
-        let request = overlay.show(fixture_match(), writes.clone());
+        let request = overlay.show(fixture_match(), "Fixture terminal".into(), writes.clone());
         assert_eq!(overlay.confirm(request), Some(writes));
     }
 }

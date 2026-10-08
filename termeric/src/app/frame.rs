@@ -274,8 +274,7 @@ impl App {
             reason: m.reason.clone(),
             is_critical: m.severity == crate::terminal::guardrails::Severity::Critical,
             animation: self.guardrail.animation(),
-            target: m.target.clone(),
-            user: m.user.clone(),
+            target: self.guardrail.target.clone(),
             layout: self.guardrail_layout(),
         })
     }

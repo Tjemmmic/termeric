@@ -4290,9 +4290,8 @@ fn show_guardrail_fixture(app: &mut App) -> u64 {
             command: "fixture command; never execute".into(),
             reason: "Hermetic destructive-command warning".into(),
             severity: crate::terminal::guardrails::Severity::Critical,
-            target: "Missing fixture terminal".into(),
-            user: "tester".into(),
         },
+        "Missing fixture terminal".into(),
         vec![crate::terminal::guardrails::GuardedWrite::for_pane(
             usize::MAX,
             crate::panes::PaneId(0),

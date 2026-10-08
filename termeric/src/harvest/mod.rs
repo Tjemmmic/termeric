@@ -18,7 +18,7 @@ pub use sprouts::{SproutAvailability, SproutMenu, SproutMenuLayout};
 use termeric_core::CommandRegion;
 use termeric_core::shell::PromptTracker;
 
-/// Stable tab-local identity, independent of single/split ownership mode.
+/// A terminal's stable identity: its tab and its tab-local pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HarvestSource {
     pub tab_id: usize,

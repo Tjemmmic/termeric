@@ -71,9 +71,8 @@ impl App {
                     crate::safe_text::truncate_with_ellipsis(&matched.command, 1024),
                     crate::safe_text::truncate_with_ellipsis(&matched.reason, 512),
                     format!(
-                        "Where: {}; As: {}",
-                        crate::safe_text::truncate_with_ellipsis(&matched.target, 256),
-                        crate::safe_text::truncate_with_ellipsis(&matched.user, 128)
+                        "Where: {}",
+                        crate::safe_text::truncate_with_ellipsis(&self.guardrail.target, 256)
                     ),
                     matched.severity == crate::terminal::guardrails::Severity::Critical,
                 )

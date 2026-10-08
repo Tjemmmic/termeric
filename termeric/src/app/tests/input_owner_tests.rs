@@ -177,6 +177,7 @@ fn closed_guarded_destination_rejects_the_whole_batch_before_any_user_write() {
     let (mut app, _directory, entry, captures) = harvest_rerun_capture_fixture();
     let request_id = app.guardrail.show(
         crate::terminal::guardrails::check_command("rm -rf /synthetic").unwrap(),
+        "GUI tab 0, pane 1".into(),
         vec![
             crate::terminal::guardrails::GuardedWrite::for_pane(
                 entry.source.tab_id,

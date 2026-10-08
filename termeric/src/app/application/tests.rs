@@ -2675,7 +2675,7 @@ fn plugin_terminal_input_is_exact_guarded_policy_gated_and_non_activating() {
     let target = application.windows.get_mut(&native_id).unwrap();
     assert!(target.guardrail.is_awaiting(confirmation_id));
     assert_eq!(
-        target.guardrail.matched.as_ref().unwrap().target,
+        target.guardrail.target,
         format!("GUI window 7, tab {target_tab}, pane 0")
     );
     assert_eq!(

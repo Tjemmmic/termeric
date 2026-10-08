@@ -229,10 +229,8 @@ pub struct GuardrailInfo {
     pub reason: String,
     pub is_critical: bool,
     pub animation: f32,
-    /// Where the command will run (e.g., "Local", "SSH: dev01")
+    /// The terminal the command is for, e.g. "GUI tab 3, pane 1".
     pub target: String,
-    /// As which user (e.g., "root", "deploy")
-    pub user: String,
     pub layout: crate::ui::guardrail::GuardrailLayout,
 }
 

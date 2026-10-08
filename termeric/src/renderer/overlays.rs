@@ -741,7 +741,7 @@ impl Renderer {
 
         let context_y = reason_y + layout.reason_height;
         self.push_ui_label(
-            &format!("Where: {} · As: {}", info.target, info.user),
+            &format!("Where: {}", info.target),
             card.x + padding,
             context_y,
             cell_height,

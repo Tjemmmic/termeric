@@ -960,9 +960,8 @@ mod wheel_tests {
                 command: "rm -rf /".into(),
                 reason: "fixture".into(),
                 severity: crate::terminal::guardrails::Severity::Critical,
-                target: "Local".into(),
-                user: "tester".into(),
             },
+            "GUI tab 1, pane 0".into(),
             vec![crate::terminal::guardrails::GuardedWrite::for_pane(
                 1,
                 crate::panes::PaneId(0),

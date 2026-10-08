@@ -543,8 +543,8 @@ impl App {
         let input_bytes = u32::try_from(input_bytes).expect("bounded control input fits u32");
         let wire_bytes = u32::try_from(wire.len()).expect("bounded control wire input fits u32");
 
-        if guarded && let Some(mut matched) = crate::terminal::guardrails::check_command(text) {
-            matched.target = if requester.names_target_window() {
+        if guarded && let Some(matched) = crate::terminal::guardrails::check_command(text) {
+            let target = if requester.names_target_window() {
                 format!(
                     "GUI window {}, tab {tab_id}, pane {pane_id}",
                     self.control_window_id
@@ -554,6 +554,7 @@ impl App {
             };
             let confirmation_id = self.guardrail.show(
                 matched,
+                target,
                 vec![crate::terminal::guardrails::GuardedWrite::for_pane(
                     tab_id,
                     PaneId(pane_id),
