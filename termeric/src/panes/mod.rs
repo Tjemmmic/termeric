@@ -171,18 +171,10 @@ impl Pane {
         terminal.set_pixel_geometry(geometry.pixel_width.into(), geometry.pixel_height.into());
         policy.apply(&mut terminal, true);
         let launch = if plugin {
-            ShellLaunch {
-                program: shell.program.clone(),
-                args: shell.args.clone(),
-                env: shell
-                    .env
-                    .iter()
-                    .map(|(key, value)| (key.clone(), value.clone()))
-                    .collect(),
-                integration: ShellIntegrationSupport::Unavailable(
-                    "Plugin launches do not install local shell hooks".into(),
-                ),
-            }
+            ShellLaunch::without_integration(
+                shell,
+                "Plugin launches do not install local shell hooks",
+            )
         } else {
             prepare_shell_launch(shell)
         };

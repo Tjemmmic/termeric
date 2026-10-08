@@ -118,7 +118,7 @@ pub fn prepare_shell_launch(shell: &ShellConfig) -> ShellLaunch {
     // The integration files live in the configuration directory; without
     // one the shell starts as configured, with nothing written anywhere.
     let Some(base) = crate::paths::config_dir().map(|dir| dir.join("shell-integration")) else {
-        return plain_shell_launch(
+        return ShellLaunch::without_integration(
             shell,
             format!(
                 "Shell integration is unavailable: {}",
@@ -130,31 +130,37 @@ pub fn prepare_shell_launch(shell: &ShellConfig) -> ShellLaunch {
         Ok(launch) => launch,
         Err(error) => {
             log::warn!("Shell integration could not be prepared: {error:#}");
-            plain_shell_launch(shell, format!("Shell integration setup failed: {error:#}"))
+            ShellLaunch::without_integration(
+                shell,
+                format!("Shell integration setup failed: {error:#}"),
+            )
         }
     }
 }
 
-/// The configured shell launched as it is, with integration unavailable
-/// for `reason`.
-fn plain_shell_launch(shell: &ShellConfig, reason: String) -> ShellLaunch {
-    ShellLaunch {
-        program: shell
-            .program
-            .clone()
-            .or_else(|| std::env::var("SHELL").ok()),
-        args: shell.args.clone(),
-        env: shell
-            .env
-            .iter()
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect(),
-        integration: ShellIntegrationSupport::Unavailable(reason),
+impl ShellLaunch {
+    /// `shell` launched as it is, with integration unavailable for
+    /// `reason`. Without a program it runs `$SHELL`, so the shell's name is
+    /// known for integration.
+    pub fn without_integration(shell: &ShellConfig, reason: impl Into<String>) -> Self {
+        Self {
+            program: shell
+                .program
+                .clone()
+                .or_else(|| std::env::var("SHELL").ok()),
+            args: shell.args.clone(),
+            env: shell
+                .env
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+            integration: ShellIntegrationSupport::Unavailable(reason.into()),
+        }
     }
 }
 
 fn prepare_shell_launch_in(shell: &ShellConfig, base: &Path) -> Result<ShellLaunch> {
-    let mut launch = plain_shell_launch(
+    let mut launch = ShellLaunch::without_integration(
         shell,
         format!("Shell integration is unavailable; configure {SUPPORTED_SHELLS}"),
     );
