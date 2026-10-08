@@ -778,10 +778,7 @@ impl ContextPicker {
             ContextPickerAction::Move { delta, .. }
                 if self.phase == ContextPickerPhase::Sources =>
             {
-                self.selected_index = self
-                    .selected_index
-                    .saturating_add_signed(delta)
-                    .min(self.sources.len().saturating_sub(1));
+                self.selected_index = moved_selection(&self.sources, self.selected_index, delta);
                 self.reveal_selection();
                 // The arrows move the list's selection, so the list takes
                 // focus with them.
@@ -989,6 +986,27 @@ fn initial_selection(sources: &[ContextSource]) -> (usize, ContextPickerFocus) {
         Some(index) => (index, ContextPickerFocus::Sources),
         None => (0, ContextPickerFocus::Button(ContextPickerButton::Cancel)),
     }
+}
+
+/// Where moving the selection `delta` rows from `current` lands: the row
+/// that far, or the nearest source that can be chosen past it, else the
+/// nearest one short of it; the selection stays put when there is none that
+/// way. A source that cannot be chosen is never selected by the arrows.
+fn moved_selection(sources: &[ContextSource], current: usize, delta: isize) -> usize {
+    let last = sources.len().saturating_sub(1);
+    let target = current.saturating_add_signed(delta).min(last);
+    let available = |index: &usize| sources[*index].available;
+    if delta >= 0 {
+        (target..=last)
+            .find(available)
+            .or_else(|| (current + 1..target).rev().find(available))
+    } else {
+        (0..=target)
+            .rev()
+            .find(available)
+            .or_else(|| (target + 1..current).find(available))
+    }
+    .unwrap_or(current)
 }
 
 fn source(id: ContextSourceId, label: &str, selected: bool, available: bool) -> ContextSource {
@@ -1505,5 +1523,28 @@ mod tests {
             ContextPickerCompletion::Ignored
         );
         assert!(picker.is_awaiting(second));
+    }
+
+    #[test]
+    fn the_arrows_skip_sources_that_cannot_be_chosen() {
+        let sources: Vec<_> = [true, false, false, true, false]
+            .into_iter()
+            .enumerate()
+            .map(|(index, available)| {
+                source(
+                    ContextSourceId::TerminalOutput,
+                    &index.to_string(),
+                    false,
+                    available,
+                )
+            })
+            .collect();
+        assert_eq!(moved_selection(&sources, 0, 1), 3);
+        assert_eq!(moved_selection(&sources, 3, -1), 0);
+        assert_eq!(moved_selection(&sources, 3, 1), 3);
+        assert_eq!(moved_selection(&sources, 0, -1), 0);
+        // A page past the end lands on the last source that can be chosen.
+        assert_eq!(moved_selection(&sources, 0, 10), 3);
+        assert_eq!(moved_selection(&sources, 3, -10), 0);
     }
 }
