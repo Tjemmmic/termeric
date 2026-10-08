@@ -7,73 +7,13 @@ mod url;
 #[path = "../src/terminal/row_text.rs"]
 mod row_text;
 
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
+mod common;
+
+use common::allocations::measure;
 use std::hint::black_box;
 
-struct CountingAllocator;
-
-thread_local! {
-    static COUNTS: Cell<Option<(usize, usize)>> = const { Cell::new(None) };
-}
-
-fn allocated(bytes: usize) {
-    let _ = COUNTS.try_with(|counts| {
-        if let Some((calls, total)) = counts.get() {
-            counts.set(Some((calls + 1, total + bytes)));
-        }
-    });
-}
-
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        // SAFETY: Forward the caller's allocation contract unchanged.
-        let pointer = unsafe { System.alloc(layout) };
-        if !pointer.is_null() {
-            allocated(layout.size());
-        }
-        pointer
-    }
-
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        // SAFETY: Forward the caller's allocation contract unchanged.
-        let pointer = unsafe { System.alloc_zeroed(layout) };
-        if !pointer.is_null() {
-            allocated(layout.size());
-        }
-        pointer
-    }
-
-    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-        // SAFETY: Forward the original pointer, layout, and requested size.
-        let replacement = unsafe { System.realloc(pointer, layout, size) };
-        if !replacement.is_null() {
-            allocated(size);
-        }
-        replacement
-    }
-
-    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-        // SAFETY: Forward the caller's original allocation pair unchanged.
-        unsafe { System.dealloc(pointer, layout) };
-    }
-}
-
 #[global_allocator]
-static ALLOCATOR: CountingAllocator = CountingAllocator;
-
-fn measure(f: impl FnOnce()) -> (usize, usize) {
-    struct Stop;
-    impl Drop for Stop {
-        fn drop(&mut self) {
-            COUNTS.set(None);
-        }
-    }
-    COUNTS.set(Some((0, 0)));
-    let _stop = Stop;
-    f();
-    COUNTS.get().unwrap()
-}
+static ALLOCATOR: common::allocations::CountingAllocator = common::allocations::CountingAllocator;
 
 #[test]
 fn mixed_case_scheme_scanning_does_not_allocate_a_normalized_line() {

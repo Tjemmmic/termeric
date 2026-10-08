@@ -1,4 +1,6 @@
-//! What the integration tests share for speaking Termeric's local protocols.
+//! What the integration tests share: speaking Termeric's local protocols,
+//! and counting allocations (`allocations`).
+//!
 //! The crate is binary-only, so tests cannot import its protocol types; they
 //! spell the wire format out by hand, which also pins it. Both protocols
 //! frame each message as a 4-byte big-endian length followed by that many
@@ -6,6 +8,8 @@
 
 // Each test binary compiles this module and uses only part of it.
 #![allow(dead_code)]
+
+pub mod allocations;
 
 use serde_json::Value;
 use std::fs;
