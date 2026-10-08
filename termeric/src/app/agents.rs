@@ -14,6 +14,8 @@ use crate::ui::command_palette::palette::{
     AgentPlacement, CommandSource, PickKind, RegisteredCommand,
 };
 
+const AGENT_TERMINAL_CLOSED: &str = "That agent's terminal has closed";
+
 /// How often terminals are re-examined for a foreground agent.
 pub(super) const AGENT_SCAN_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -375,8 +377,17 @@ impl App {
                 pane_id: crate::panes::PaneId(pane.parse().ok()?),
             })
         });
-        if !identity.is_some_and(|identity| self.activate_notification_origin(identity)) {
-            self.toasts.warning("That agent's terminal has closed");
+        match identity {
+            Some(identity) => self.show_agent_terminal(identity),
+            None => self.toasts.info(AGENT_TERMINAL_CLOSED),
+        }
+    }
+
+    /// Show the terminal of an agent the person picked, or say it has
+    /// closed since it was listed.
+    pub(super) fn show_agent_terminal(&mut self, identity: TerminalIdentity) {
+        if !self.activate_notification_origin(identity) {
+            self.toasts.info(AGENT_TERMINAL_CLOSED);
         }
     }
 

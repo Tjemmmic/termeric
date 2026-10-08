@@ -350,6 +350,15 @@ impl App {
         true
     }
 
+    /// Take over from the supervisor, or hand back to it after taking over.
+    pub(super) fn toggle_supervisor_hold(&mut self) {
+        if self.supervisor_held() {
+            self.hand_back_to_supervisor();
+        } else if self.supervisor_running() {
+            self.take_over_from_supervisor();
+        }
+    }
+
     /// Stop the supervisor from sending until the person hands back.
     pub(super) fn take_over_from_supervisor(&mut self) {
         let Some(supervisor) = &mut self.supervisor else {

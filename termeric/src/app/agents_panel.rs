@@ -182,9 +182,7 @@ impl App {
                 match self.agents_panel.shown_agent(index) {
                     Some(AgentOrigin::Terminal(identity)) => {
                         self.agents_panel.close();
-                        if !self.activate_notification_origin(identity) {
-                            self.toasts.info("That agent's terminal has closed");
-                        }
+                        self.show_agent_terminal(identity);
                     }
                     Some(AgentOrigin::AgentView(id)) => {
                         self.agents_panel.close();
@@ -197,13 +195,7 @@ impl App {
                     None => {}
                 }
             }
-            AgentsPanelAction::ToggleSupervisor => {
-                if self.supervisor_held() {
-                    self.hand_back_to_supervisor();
-                } else if self.supervisor_running() {
-                    self.take_over_from_supervisor();
-                }
-            }
+            AgentsPanelAction::ToggleSupervisor => self.toggle_supervisor_hold(),
         }
         self.clear_agents_accessibility_focus();
     }

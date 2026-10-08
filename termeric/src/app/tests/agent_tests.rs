@@ -681,6 +681,10 @@ fn agent_list_puts_waiting_agents_first_and_answers_come_from_reports_or_logs() 
     );
     app.focus_agent_terminal("99:0");
     assert_eq!(latest_toast(&app), Some("That agent's terminal has closed"));
+    assert_eq!(
+        app.toasts.iter().last().map(|toast| toast.severity),
+        Some(crate::ui::toast::ToastSeverity::Info)
+    );
 
     // Without an answer, copying is not offered.
     assert!(

@@ -217,18 +217,8 @@ impl App {
                     .unwrap_or_else(|| "Earlier conversation".to_owned());
                 self.start_agent_session(Some(super::agent_view::Resume { agent, id, title }));
             }
-            Target::OpenTerminalAgent(identity) => {
-                if !self.activate_notification_origin(identity) {
-                    self.toasts.info("That agent's terminal has closed");
-                }
-            }
-            Target::ToggleSupervisor => {
-                if self.supervisor_held() {
-                    self.hand_back_to_supervisor();
-                } else if self.supervisor_running() {
-                    self.take_over_from_supervisor();
-                }
-            }
+            Target::OpenTerminalAgent(identity) => self.show_agent_terminal(identity),
+            Target::ToggleSupervisor => self.toggle_supervisor_hold(),
             Target::ChooseAgent(agent) => {
                 // The session started ahead for the other agent ends on the
                 // next frame, and one for this agent starts.
