@@ -238,9 +238,7 @@ impl App {
             return;
         };
 
-        if command.quiet != 0
-            || command.bypass_present
-            || command.transmission_type != KittyFileTransmissionType::Simple
+        if unsupported_transfer_mode(&command).is_some()
             || !matches!(
                 command.action,
                 KittyFileTransferAction::File
@@ -297,12 +295,8 @@ impl App {
             .size
             .and_then(|size| usize::try_from(size).ok())
             .filter(|size| (1..=MAX_KITTY_UPLOAD_PATHS).contains(size));
-        let unsupported = if command.quiet != 0 {
-            Some("quiet transfer modes are not supported".to_string())
-        } else if command.bypass_present {
-            Some("confirmation bypass credentials are not supported".to_string())
-        } else if command.transmission_type != KittyFileTransmissionType::Simple {
-            Some("rsync transfer mode is not supported".to_string())
+        let unsupported = if let Some(reason) = unsupported_transfer_mode(&command) {
+            Some(reason.to_string())
         } else if expected_paths.is_none() {
             Some(format!(
                 "receive must declare between 1 and {MAX_KITTY_UPLOAD_PATHS} paths"
@@ -457,12 +451,8 @@ impl App {
             origin,
             id: command.id.clone(),
         };
-        let unsupported = if command.quiet != 0 {
-            Some("quiet transfer modes are not supported")
-        } else if command.bypass_present {
-            Some("confirmation bypass credentials are not supported")
-        } else if command.transmission_type != KittyFileTransmissionType::Simple {
-            Some("rsync transfer mode is not supported")
+        let unsupported = if let Some(reason) = unsupported_transfer_mode(&command) {
+            Some(reason)
         } else if command.compression != termeric_core::KittyFileTransferCompression::None
             || command.file_type != KittyFileTransferType::Regular
             || command.mtime_ns.is_some()
@@ -1221,13 +1211,26 @@ fn format_transfer_bytes(bytes: u64, verb: &str) -> String {
     }
 }
 
+/// Why `command` asks for a transfer mode Termeric refuses in either
+/// direction, if it does: every transfer is confirmed, reports each step,
+/// and moves whole files.
+fn unsupported_transfer_mode(command: &KittyFileTransferCommand) -> Option<&'static str> {
+    if command.quiet != 0 {
+        Some("quiet transfer modes are not supported")
+    } else if command.bypass_present {
+        Some("confirmation bypass credentials are not supported")
+    } else if command.transmission_type != KittyFileTransmissionType::Simple {
+        Some("rsync transfer mode is not supported")
+    } else {
+        None
+    }
+}
+
 /// Whether `command` names one host file for an upload, the only form a
 /// receive session accepts both while collecting paths and after consent.
 fn is_upload_path_request(command: &KittyFileTransferCommand) -> bool {
     command.action == KittyFileTransferAction::File
-        && command.quiet == 0
-        && !command.bypass_present
-        && command.transmission_type == KittyFileTransmissionType::Simple
+        && unsupported_transfer_mode(command).is_none()
         && command.compression == termeric_core::KittyFileTransferCompression::None
         && command.file_type == KittyFileTransferType::Regular
         && !command.file_id.is_empty()
