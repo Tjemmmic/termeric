@@ -5,6 +5,9 @@ use super::*;
 use crate::renderer::{PanePlacement, SearchBarClick};
 use crate::ui::geometry::Bounds;
 
+/// How long a hovered tab bar control takes to fade in.
+const TAB_BAR_HOVER_FADE_SECONDS: f32 = 0.1;
+
 impl DividerDrag {
     fn owns_tab(&self, tab: &crate::tabs::Tab) -> bool {
         tab.id == self.tab_id
@@ -991,6 +994,18 @@ impl App {
             self.extend_native_selection(grid_pos);
             self.request_redraw(RedrawReason::PointerInput);
         }
+    }
+
+    /// Fade-in of the hovered tab bar control, from 0 to 1. It restarts
+    /// whenever the hovered control changes and ends at once when hover ends.
+    pub(super) fn tab_bar_hover_progress(&self) -> f32 {
+        if self.tab_bar_hover.is_none() {
+            return 0.0;
+        }
+        if self.reduced_motion_enabled() {
+            return 1.0;
+        }
+        (self.tab_bar_hover_since.elapsed().as_secs_f32() / TAB_BAR_HOVER_FADE_SECONDS).min(1.0)
     }
 
     /// Handle scroll wheel. The wheel goes to the pane under the pointer,

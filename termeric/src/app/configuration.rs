@@ -3,7 +3,6 @@
 use super::*;
 use crate::input::keybindings::{BindableAction, KeyChord};
 
-const TAB_BAR_HOVER_FADE_SECONDS: f32 = 0.1;
 const CONFIG_RESET_CHOICE: &str = "config-reset";
 const CONFIG_KEEP_CHOICE: &str = "config-keep";
 const SHORTCUT_REASSIGN_CHOICE: &str = "shortcut-reassign";
@@ -683,18 +682,6 @@ impl App {
             .resolve(self.system_accessibility.reduce_motion)
     }
 
-    /// Fade-in of the hovered tab bar control, from 0 to 1. It restarts
-    /// whenever the hovered control changes and ends at once when hover ends.
-    pub(super) fn tab_bar_hover_progress(&self) -> f32 {
-        if self.tab_bar_hover.is_none() {
-            return 0.0;
-        }
-        if self.reduced_motion_enabled() {
-            return 1.0;
-        }
-        (self.tab_bar_hover_since.elapsed().as_secs_f32() / TAB_BAR_HOVER_FADE_SECONDS).min(1.0)
-    }
-
     pub(super) fn high_contrast_enabled(&self) -> bool {
         self.config
             .accessibility
@@ -891,159 +878,6 @@ impl App {
             Err(error) => self
                 .toasts
                 .error(format!("Setting could not be applied: {error}")),
-        }
-    }
-
-    /// Apply one custom-command panel action through a single path shared by
-    /// pointer, keyboard, and accessibility input.
-    pub(super) fn apply_commands_panel_action(
-        &mut self,
-        action: crate::ui::commands::panel::CommandsPanelAction,
-    ) {
-        use crate::ui::commands::panel::CommandsPanelAction;
-
-        if !matches!(action, CommandsPanelAction::None) {
-            self.clear_commands_accessibility_focus();
-            // Focus, dismissal, and form replacement retire composition at
-            // the old caret for pointer and accessibility actions as well.
-            self.ime.clear_preedit();
-        }
-        match action {
-            CommandsPanelAction::Run(index) => {
-                if let Some(command) = self
-                    .config
-                    .commands
-                    .get(index)
-                    .map(|command| command.command.clone())
-                {
-                    self.commands_panel.close();
-                    self.run_custom_command(&command);
-                }
-            }
-            CommandsPanelAction::Delete(index) => {
-                if index >= self.config.commands.len() {
-                    return;
-                }
-                let name = self.config.commands.remove(index).name;
-                self.retire_commands_accessibility_rows();
-                // Every input route must agree on the safe post-delete target.
-                // A duplicate can otherwise inherit the deleted row's identity.
-                // An open form keeps its draft and caret instead of browse focus.
-                let layout = self.commands_panel_layout();
-                self.commands_panel.focus_browse_control(
-                    crate::ui::commands::navigation::CommandControl::New,
-                    &self.config.commands,
-                    layout,
-                );
-                log::info!("Deleted custom command '{}'", name);
-                match self.save_config() {
-                    Ok(message) => {
-                        log::info!("{}", message);
-                        self.toasts.success(format!("Deleted command '{}'", name));
-                    }
-                    Err(error) => {
-                        log::error!("Deleted '{name}' but save failed: {error:#}");
-                        self.toasts.error(format!("Save failed: {error:#}"));
-                    }
-                }
-            }
-            CommandsPanelAction::StartAdd => self.commands_panel.start_add(),
-            CommandsPanelAction::Submit => {
-                if let Some(command) = self.commands_panel.try_submit() {
-                    let name = command.name.clone();
-                    self.config.commands.push(command);
-                    match self.save_config() {
-                        Ok(message) => {
-                            log::info!("{}", message);
-                            self.toasts.success(format!("Saved command '{}'", name));
-                        }
-                        Err(error) => {
-                            log::error!("Failed to save custom command: {error:#}");
-                            self.toasts.error(format!("Save failed: {error:#}"));
-                        }
-                    }
-                } else {
-                    self.toasts.warning("Both name and command are required");
-                }
-            }
-            CommandsPanelAction::ClickName => self.commands_panel.focus_name(),
-            CommandsPanelAction::ClickCommand => self.commands_panel.focus_command(),
-            CommandsPanelAction::PlaceCaret { field, cursor } => {
-                self.commands_panel.place_form_caret(field, cursor);
-            }
-            CommandsPanelAction::CancelEdit => self.commands_panel.cancel_edit(),
-            CommandsPanelAction::Close => self.commands_panel.close(),
-            CommandsPanelAction::None => {}
-        }
-    }
-
-    /// Apply one workspace/session panel action through the same path for
-    /// pointer, keyboard, and accessibility input.
-    pub(super) fn apply_session_panel_action(
-        &mut self,
-        action: crate::ui::session_panel::SessionPanelAction,
-    ) {
-        use crate::ui::session_panel::SessionPanelAction;
-
-        let workspace_mode = self.session_panel.is_workspace_mode();
-        match action {
-            SessionPanelAction::Load(id) => {
-                if workspace_mode {
-                    self.request_open_workspace(&id);
-                } else {
-                    self.restore_closed_tab(&id);
-                }
-                self.session_panel.close();
-            }
-            SessionPanelAction::Delete(id) => self.confirm_workspace_delete(&id, !workspace_mode),
-            SessionPanelAction::Rename(id) => {
-                self.ime.clear_preedit();
-                self.session_panel.begin_rename(&id);
-            }
-            SessionPanelAction::SubmitRename => {
-                self.ime.clear_preedit();
-                if let Some((id, name)) = self.session_panel.take_rename() {
-                    match crate::workspace::rename_workspace(&id, &name) {
-                        Ok(()) => {
-                            self.session_panel.refresh(
-                                crate::session::listing::SessionListing::load(
-                                    self.session_panel.is_workspace_mode(),
-                                ),
-                            );
-                            self.toasts.success("Workspace renamed");
-                        }
-                        Err(error) => self.toasts.error(format!("Rename failed: {error:#}")),
-                    }
-                }
-            }
-            SessionPanelAction::CancelRename => {
-                self.ime.clear_preedit();
-                self.session_panel.cancel_rename();
-            }
-            SessionPanelAction::PlaceRenameCaret { cursor } => {
-                if self.session_panel.place_rename_caret(cursor) {
-                    self.ime.clear_preedit();
-                    self.request_redraw(RedrawReason::PointerInput);
-                }
-            }
-            SessionPanelAction::Close => {
-                self.ime.clear_preedit();
-                self.session_panel.close();
-            }
-            SessionPanelAction::Select(id) => {
-                self.session_panel.select_id(&id);
-            }
-            SessionPanelAction::ShowSnapshots => {
-                self.ime.clear_preedit();
-                self.session_panel
-                    .open(crate::session::listing::SessionListing::closed_tabs());
-            }
-            SessionPanelAction::ShowWorkspaces => {
-                self.ime.clear_preedit();
-                self.session_panel
-                    .open(crate::session::listing::SessionListing::workspaces());
-            }
-            SessionPanelAction::None => {}
         }
     }
 

@@ -127,6 +127,84 @@ impl App {
 
         true
     }
+
+    /// Apply one custom-command panel action through a single path shared by
+    /// pointer, keyboard, and accessibility input.
+    pub(super) fn apply_commands_panel_action(&mut self, action: CommandsPanelAction) {
+        if !matches!(action, CommandsPanelAction::None) {
+            self.clear_commands_accessibility_focus();
+            // Focus, dismissal, and form replacement retire composition at
+            // the old caret for pointer and accessibility actions as well.
+            self.ime.clear_preedit();
+        }
+        match action {
+            CommandsPanelAction::Run(index) => {
+                if let Some(command) = self
+                    .config
+                    .commands
+                    .get(index)
+                    .map(|command| command.command.clone())
+                {
+                    self.commands_panel.close();
+                    self.run_custom_command(&command);
+                }
+            }
+            CommandsPanelAction::Delete(index) => {
+                if index >= self.config.commands.len() {
+                    return;
+                }
+                let name = self.config.commands.remove(index).name;
+                self.retire_commands_accessibility_rows();
+                // Every input route must agree on the safe post-delete target.
+                // A duplicate can otherwise inherit the deleted row's identity.
+                // An open form keeps its draft and caret instead of browse focus.
+                let layout = self.commands_panel_layout();
+                self.commands_panel.focus_browse_control(
+                    crate::ui::commands::navigation::CommandControl::New,
+                    &self.config.commands,
+                    layout,
+                );
+                log::info!("Deleted custom command '{}'", name);
+                match self.save_config() {
+                    Ok(message) => {
+                        log::info!("{}", message);
+                        self.toasts.success(format!("Deleted command '{}'", name));
+                    }
+                    Err(error) => {
+                        log::error!("Deleted '{name}' but save failed: {error:#}");
+                        self.toasts.error(format!("Save failed: {error:#}"));
+                    }
+                }
+            }
+            CommandsPanelAction::StartAdd => self.commands_panel.start_add(),
+            CommandsPanelAction::Submit => {
+                if let Some(command) = self.commands_panel.try_submit() {
+                    let name = command.name.clone();
+                    self.config.commands.push(command);
+                    match self.save_config() {
+                        Ok(message) => {
+                            log::info!("{}", message);
+                            self.toasts.success(format!("Saved command '{}'", name));
+                        }
+                        Err(error) => {
+                            log::error!("Failed to save custom command: {error:#}");
+                            self.toasts.error(format!("Save failed: {error:#}"));
+                        }
+                    }
+                } else {
+                    self.toasts.warning("Both name and command are required");
+                }
+            }
+            CommandsPanelAction::ClickName => self.commands_panel.focus_name(),
+            CommandsPanelAction::ClickCommand => self.commands_panel.focus_command(),
+            CommandsPanelAction::PlaceCaret { field, cursor } => {
+                self.commands_panel.place_form_caret(field, cursor);
+            }
+            CommandsPanelAction::CancelEdit => self.commands_panel.cancel_edit(),
+            CommandsPanelAction::Close => self.commands_panel.close(),
+            CommandsPanelAction::None => {}
+        }
+    }
 }
 
 #[cfg(test)]

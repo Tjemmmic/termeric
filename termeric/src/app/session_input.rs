@@ -65,6 +65,71 @@ impl App {
 
         true
     }
+
+    /// Apply one workspace/session panel action through the same path for
+    /// pointer, keyboard, and accessibility input.
+    pub(super) fn apply_session_panel_action(&mut self, action: SessionPanelAction) {
+        let workspace_mode = self.session_panel.is_workspace_mode();
+        match action {
+            SessionPanelAction::Load(id) => {
+                if workspace_mode {
+                    self.request_open_workspace(&id);
+                } else {
+                    self.restore_closed_tab(&id);
+                }
+                self.session_panel.close();
+            }
+            SessionPanelAction::Delete(id) => self.confirm_workspace_delete(&id, !workspace_mode),
+            SessionPanelAction::Rename(id) => {
+                self.ime.clear_preedit();
+                self.session_panel.begin_rename(&id);
+            }
+            SessionPanelAction::SubmitRename => {
+                self.ime.clear_preedit();
+                if let Some((id, name)) = self.session_panel.take_rename() {
+                    match crate::workspace::rename_workspace(&id, &name) {
+                        Ok(()) => {
+                            self.session_panel.refresh(
+                                crate::session::listing::SessionListing::load(
+                                    self.session_panel.is_workspace_mode(),
+                                ),
+                            );
+                            self.toasts.success("Workspace renamed");
+                        }
+                        Err(error) => self.toasts.error(format!("Rename failed: {error:#}")),
+                    }
+                }
+            }
+            SessionPanelAction::CancelRename => {
+                self.ime.clear_preedit();
+                self.session_panel.cancel_rename();
+            }
+            SessionPanelAction::PlaceRenameCaret { cursor } => {
+                if self.session_panel.place_rename_caret(cursor) {
+                    self.ime.clear_preedit();
+                    self.request_redraw(RedrawReason::PointerInput);
+                }
+            }
+            SessionPanelAction::Close => {
+                self.ime.clear_preedit();
+                self.session_panel.close();
+            }
+            SessionPanelAction::Select(id) => {
+                self.session_panel.select_id(&id);
+            }
+            SessionPanelAction::ShowSnapshots => {
+                self.ime.clear_preedit();
+                self.session_panel
+                    .open(crate::session::listing::SessionListing::closed_tabs());
+            }
+            SessionPanelAction::ShowWorkspaces => {
+                self.ime.clear_preedit();
+                self.session_panel
+                    .open(crate::session::listing::SessionListing::workspaces());
+            }
+            SessionPanelAction::None => {}
+        }
+    }
 }
 
 #[cfg(test)]
