@@ -128,7 +128,8 @@ fn save_workspace_to_dir_with_backup(
             let filename = deduplicated_scrollback_name(&scrollback_dir, &payload)?;
             let path = scrollback_dir.join(&filename);
             if fs::symlink_metadata(&path).is_err() {
-                atomic_write(&path, &payload, false)?;
+                crate::safe_fs::atomic_replace(&path, |file| file.write_all(&payload))
+                    .with_context(|| format!("write {}", path.display()))?;
             }
             pane.scrollback_file = Some(format!("scrollback/{filename}"));
             pane.scrollback_truncated = truncated;
@@ -150,11 +151,7 @@ fn save_workspace_to_dir_with_backup(
             metadata.len()
         );
     }
-    atomic_write(
-        &dir.join("workspace.toml"),
-        metadata.as_bytes(),
-        replace_backup,
-    )?;
+    write_metadata(dir, &metadata, replace_backup)?;
     cleanup_unreferenced_scrollback(workspace, &scrollback_dir)?;
 
     Ok(WorkspaceSaveReport {
@@ -570,15 +567,15 @@ fn safe_scrollback_path(directory: &Path, relative: &str) -> Result<PathBuf> {
     Ok(directory.join(relative))
 }
 
-fn atomic_write(path: &Path, payload: &[u8], keep_backup: bool) -> Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("atomic write target has no parent"))?;
-    ensure_real_directory(parent, true, "atomic-write parent")?;
-    if keep_backup {
-        match crate::safe_fs::read_text(path, MAX_WORKSPACE_METADATA_BYTES) {
+/// Replace the archive's `workspace.toml` in `dir`, a directory the caller
+/// has already checked. With `replace_backup`, the metadata it replaces
+/// becomes `workspace.toml.bak` first, so loading can fall back to it.
+fn write_metadata(dir: &Path, metadata: &str, replace_backup: bool) -> Result<()> {
+    let path = dir.join("workspace.toml");
+    if replace_backup {
+        match crate::safe_fs::read_text(&path, MAX_WORKSPACE_METADATA_BYTES) {
             Ok(previous) => {
-                crate::safe_fs::atomic_replace(&path.with_extension("toml.bak"), |file| {
+                crate::safe_fs::atomic_replace(&dir.join("workspace.toml.bak"), |file| {
                     file.write_all(previous.as_bytes())
                 })
                 .with_context(|| format!("keep a backup of {}", path.display()))?
@@ -590,7 +587,7 @@ fn atomic_write(path: &Path, payload: &[u8], keep_backup: bool) -> Result<()> {
             }
         }
     }
-    crate::safe_fs::atomic_replace(path, |file| file.write_all(payload))
+    crate::safe_fs::atomic_replace(&path, |file| file.write_all(metadata.as_bytes()))
         .with_context(|| format!("write {}", path.display()))
 }
 
