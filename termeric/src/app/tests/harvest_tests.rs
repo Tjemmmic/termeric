@@ -25,7 +25,8 @@ fn diff_review_done_marks_only_its_original_tab_and_exact_diff() {
             "+new".into(),
             "finished".into(),
         ] {
-            tab.focused_integration_mut()
+            tab.focused_pane_mut()
+                .map(|pane| &mut pane.integration)
                 .unwrap()
                 .diff_detector
                 .feed_line(&line);
@@ -37,7 +38,8 @@ fn diff_review_done_marks_only_its_original_tab_and_exact_diff() {
         .next()
         .unwrap()
         .1
-        .focused_integration()
+        .focused_pane()
+        .map(|pane| &pane.integration)
         .unwrap()
         .diff_detector
         .latest_unreviewed()

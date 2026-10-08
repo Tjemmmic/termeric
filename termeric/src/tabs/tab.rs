@@ -4,8 +4,6 @@
 use crate::config::ShellConfig;
 use crate::panes::{Pane, PaneId, PaneManager, PanePoll};
 use crate::session::terminal_state::TerminalIntegration;
-#[cfg(test)]
-use crate::session::transcript::TranscriptRecorder;
 use crate::terminal::geometry::TerminalArea;
 use crate::terminal::policy::TerminalPolicy;
 use crate::terminal::shell_integration::ShellIntegrationSupport;
@@ -644,16 +642,6 @@ impl Tab {
             .pty_rx = receiver;
     }
 
-    #[cfg(test)]
-    pub(crate) fn lone_child_id(&self) -> Option<u32> {
-        self.panes.lone_pane()?.pty.child_id()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn lone_pty_size(&self) -> Option<termeric_core::pty::PtySize> {
-        self.panes.lone_pane()?.pty.size().ok()
-    }
-
     pub(crate) fn pane_integration(&self, id: PaneId) -> Option<&TerminalIntegration> {
         self.pane(id).map(|pane| &pane.integration)
     }
@@ -664,16 +652,6 @@ impl Tab {
 
     pub(crate) fn pane_integration_mut(&mut self, id: PaneId) -> Option<&mut TerminalIntegration> {
         self.pane_mut(id).map(|pane| &mut pane.integration)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn focused_integration(&self) -> Option<&TerminalIntegration> {
-        self.pane_integration(self.focused_terminal_identity().pane_id)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn focused_integration_mut(&mut self) -> Option<&mut TerminalIntegration> {
-        self.pane_integration_mut(self.focused_terminal_identity().pane_id)
     }
 
     /// Re-identify the coding agent in each of this tab's terminals from its
@@ -835,17 +813,6 @@ impl Tab {
         self.agent_view.title.as_deref().unwrap_or(&self.title)
     }
 
-    #[cfg(test)]
-    pub(crate) fn lone_pty(&self) -> Option<&PtyHandle> {
-        self.panes.lone_pane().map(|pane| &pane.pty)
-    }
-
-    /// The identity `pane_id`'s processes inherited.
-    #[cfg(test)]
-    pub(crate) fn pane_terminal_id(&self, pane_id: PaneId) -> Option<&str> {
-        self.pane(pane_id)?.pty.terminal_id()
-    }
-
     /// The process `pane_id`'s terminal started, such as its shell.
     pub(crate) fn pane_child_process(&self, pane_id: PaneId) -> Option<u32> {
         self.pane(pane_id)?.pty.child_id()
@@ -874,19 +841,6 @@ impl Tab {
             .filter_map(|id| self.pane_integration(id))
             .map(|state| state.diff_detector.unreviewed_count())
             .sum()
-    }
-
-    /// Attach a recorder to the focused owner only.
-    #[cfg(test)]
-    pub fn start_transcript(&mut self, recorder: TranscriptRecorder) {
-        if let Some(state) = self.focused_integration_mut() {
-            state.start_transcript(recorder);
-        }
-    }
-
-    #[cfg(test)]
-    pub fn stop_transcript(&mut self) -> Option<TranscriptRecorder> {
-        self.focused_integration_mut()?.stop_transcript()
     }
 
     pub fn drain_user_notices(&mut self) -> Vec<String> {

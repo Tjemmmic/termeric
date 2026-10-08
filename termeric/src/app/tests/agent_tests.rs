@@ -455,7 +455,9 @@ fn hook_reports_track_an_agent_started_from_a_shell_until_it_exits() {
         .unwrap()
         .active_tab()
         .unwrap()
-        .lone_pty()
+        .panes
+        .lone_pane()
+        .map(|pane| &pane.pty)
         .unwrap()
         .terminal_id()
         .unwrap()
@@ -473,7 +475,7 @@ fn hook_reports_track_an_agent_started_from_a_shell_until_it_exits() {
     let deadline = Instant::now() + Duration::from_secs(5);
     let foreground = loop {
         let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
-        let pty = tab.lone_pty().unwrap();
+        let pty = tab.panes.lone_pane().map(|pane| &pane.pty).unwrap();
         let group = pty.foreground_process_group();
         if let Some(group) =
             group.filter(|group| Some(*group) != pty.child_id().map(|pid| pid as i32))
@@ -511,7 +513,8 @@ fn hook_reports_track_an_agent_started_from_a_shell_until_it_exits() {
             .unwrap()
             .tab_by_id(tab_id)
             .unwrap()
-            .focused_integration()
+            .focused_pane()
+            .map(|pane| &pane.integration)
             .unwrap()
             .agent_status
             .is_none()
@@ -531,7 +534,8 @@ fn hook_reports_track_an_agent_started_from_a_shell_until_it_exits() {
             .unwrap()
             .tab_by_id(tab_id)
             .unwrap()
-            .focused_integration()
+            .focused_pane()
+            .map(|pane| &pane.integration)
             .map(|session| (session.agent.clone(), session.agent_status.clone()))
             .unwrap()
     };
@@ -1341,7 +1345,12 @@ done
                 app.tabs
                     .as_ref()
                     .and_then(TabManager::active_tab)
-                    .is_some_and(|tab| tab.focused_integration().unwrap().transcript.is_some()),
+                    .is_some_and(|tab| tab
+                        .focused_pane()
+                        .map(|pane| &pane.integration)
+                        .unwrap()
+                        .transcript
+                        .is_some()),
                 "{agent_id} transcript did not start"
             );
             app.run_agent_command("agent.export");
@@ -1532,7 +1541,8 @@ done
         .unwrap()
         .tab_by_id(worker.tab_id)
         .unwrap()
-        .pane_terminal_id(worker.pane_id)
+        .pane(worker.pane_id)
+        .and_then(|pane| pane.pty.terminal_id())
         .unwrap()
         .to_owned();
     assert_eq!(

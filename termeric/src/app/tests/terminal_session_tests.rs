@@ -13,9 +13,12 @@ fn transcript_utf8_carry_follows_owner_through_split_collapse_and_sibling_close(
         let tabs = app.tabs.as_mut().unwrap();
         let tab = tabs.active_tab_mut().unwrap();
         tab.replace_lone_test_output(receiver);
-        tab.start_transcript(
-            TranscriptRecorder::new(directory.path(), None, None, "Local", "owner").unwrap(),
-        );
+        tab.focused_pane_mut()
+            .unwrap()
+            .integration
+            .start_transcript(
+                TranscriptRecorder::new(directory.path(), None, None, "Local", "owner").unwrap(),
+            );
         sender
             .send(PtyEvent::Output(b"before \xf0\x9f".to_vec()))
             .unwrap();
@@ -88,7 +91,14 @@ fn transcript_utf8_carry_follows_owner_through_split_collapse_and_sibling_close(
     let origin = tabs.origin_for_pane(entry.source.tab_id, owner).unwrap();
     tabs.write_user_to_origin(origin, b"\xa2 collapsed")
         .unwrap();
-    let mut recorder = tabs.active_tab_mut().unwrap().stop_transcript().unwrap();
+    let mut recorder = tabs
+        .active_tab_mut()
+        .unwrap()
+        .focused_pane_mut()
+        .unwrap()
+        .integration
+        .stop_transcript()
+        .unwrap();
     recorder.finish(Duration::from_secs(2)).unwrap();
     assert_eq!(
         read(recorder.path(), EntryKind::Output),
@@ -316,6 +326,9 @@ fn split_transcript_records_only_its_original_terminal() {
         .unwrap()
         .active_tab_mut()
         .unwrap()
+        .focused_pane_mut()
+        .unwrap()
+        .integration
         .start_transcript(recorder);
     let sibling = split_harvest_capture_owner(&mut app, directory.path());
     let mut senders = Vec::new();
@@ -355,6 +368,9 @@ fn split_transcript_records_only_its_original_terminal() {
         .unwrap()
         .active_tab_mut()
         .unwrap()
+        .focused_pane_mut()
+        .unwrap()
+        .integration
         .stop_transcript()
         .unwrap();
     recorder.finish(Duration::from_secs(2)).unwrap();
@@ -436,13 +452,19 @@ fn transcript_controls_and_close_keep_independent_owner_state() {
         .unwrap();
     let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
     assert!(tab.panes.pane_count() == 1);
-    let state = tab.focused_integration().unwrap();
+    let state = tab.focused_pane().map(|pane| &pane.integration).unwrap();
     assert_eq!(state.agent.as_ref().unwrap().agent_id, "claude-code");
     assert_eq!(state.transcript.as_ref().unwrap().path(), paths[1]);
     let survivor = tab.focused_terminal_identity();
     app.toggle_terminal_transcript(survivor);
     let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
-    assert!(tab.focused_integration().unwrap().transcript.is_none());
+    assert!(
+        tab.focused_pane()
+            .map(|pane| &pane.integration)
+            .unwrap()
+            .transcript
+            .is_none()
+    );
     for (index, expected, absent) in [
         (0, "ZERO_INPUT", "TWO_INPUT"),
         (1, "TWO_INPUT", "ZERO_INPUT"),

@@ -423,7 +423,11 @@ fn splitting_and_closing_back_to_one_pane_keep_the_first_terminal_without_orphan
         8 * 1024 * 1024,
     )
     .unwrap();
-    let original_pid = tab.lone_child_id().unwrap();
+    let original_pid = tab
+        .panes
+        .lone_pane()
+        .and_then(|pane| pane.pty.child_id())
+        .unwrap();
     let original_cwd = std::fs::read_link(format!("/proc/{original_pid}/cwd")).unwrap();
 
     let before_deadline = Instant::now() + Duration::from_secs(2);
@@ -447,7 +451,6 @@ fn splitting_and_closing_back_to_one_pane_keep_the_first_terminal_without_orphan
     for cycle in 0..3 {
         let panes = &mut tab.panes;
         assert_eq!(panes.pane_count(), 1);
-        assert_eq!(panes.spawned_shell_count(), cycle as usize);
         assert_eq!(
             panes.get_pane(PaneId(0)).unwrap().pty.child_id(),
             Some(original_pid)
@@ -469,8 +472,8 @@ fn splitting_and_closing_back_to_one_pane_keep_the_first_terminal_without_orphan
             crate::panes::DividerTarget::Local(u64::from(cycle + 1)),
             "retired divider IDs must not be reused"
         );
-        assert_eq!(panes.spawned_shell_count(), cycle as usize + 1);
         let added_pid = panes.get_pane(added).unwrap().pty.child_id().unwrap();
+        assert_ne!(added_pid, original_pid);
         assert_eq!(
             std::fs::read_link(format!("/proc/{added_pid}/cwd")).unwrap(),
             original_cwd
@@ -493,7 +496,10 @@ fn splitting_and_closing_back_to_one_pane_keep_the_first_terminal_without_orphan
 
         assert!(panes.close_focused());
         assert_eq!(panes.pane_count(), 1);
-        assert_eq!(tab.lone_child_id(), Some(original_pid));
+        assert_eq!(
+            tab.panes.lone_pane().and_then(|pane| pane.pty.child_id()),
+            Some(original_pid)
+        );
         assert!(
             tab.focused_terminal()
                 .unwrap()
@@ -602,7 +608,10 @@ fn collapsed_tab_rejects_retired_pane_and_divider_requests_after_resplit() {
     );
     let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
     assert!(tab.panes.pane_count() == 1);
-    assert_eq!(tab.lone_child_id(), original_pid);
+    assert_eq!(
+        tab.panes.lone_pane().and_then(|pane| pane.pty.child_id()),
+        original_pid
+    );
     let shell = ShellConfig {
         program: Some("/bin/sh".into()),
         args: vec![
@@ -738,7 +747,7 @@ fn pane_allocation_history_survives_failed_split_and_exhaustion() {
     ] {
         let (mut app, _directory, _, _) = harvest_rerun_capture_fixture_in(false);
         let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
-        let original_pid = tab.lone_child_id();
+        let original_pid = tab.panes.lone_pane().and_then(|pane| pane.pty.child_id());
         let mut shell = ShellConfig {
             program: Some("/definitely/missing/termeric-shell".into()),
             args: vec!["-c".into(), "sleep 5".into()],
@@ -754,7 +763,7 @@ fn pane_allocation_history_survives_failed_split_and_exhaustion() {
                 )
                 .is_err()
         );
-        assert_eq!(panes.spawned_shell_count(), 0);
+        assert_eq!(panes.pane_count(), 1);
         shell.program = Some("/bin/sh".into());
         panes.adopt_primary_shell(shell);
         let spawned = next_pane == u32::MAX - 1;
@@ -772,7 +781,10 @@ fn pane_allocation_history_survives_failed_split_and_exhaustion() {
             );
             assert!(panes.close(last));
         }
-        assert_eq!(tab.lone_child_id(), original_pid);
+        assert_eq!(
+            tab.panes.lone_pane().and_then(|pane| pane.pty.child_id()),
+            original_pid
+        );
         let panes = &mut tab.panes;
         assert!(
             panes
@@ -784,7 +796,6 @@ fn pane_allocation_history_survives_failed_split_and_exhaustion() {
                 .to_string()
                 .contains(expected_error)
         );
-        assert_eq!(panes.spawned_shell_count(), usize::from(spawned));
         assert_eq!(panes.pane_count(), 1);
     }
 }

@@ -3050,14 +3050,24 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            manager.active_tab().unwrap().lone_pty_size(),
+            manager
+                .active_tab()
+                .unwrap()
+                .panes
+                .lone_pane()
+                .and_then(|pane| pane.pty.size().ok()),
             Some(initial.pty_size())
         );
 
         let pixel_only = TerminalGeometry::from_cells(80, 24, 10.0, 20.0);
         manager.resize(TerminalArea::new(pixel_only, 10.0, 20.0));
         assert_eq!(
-            manager.active_tab().unwrap().lone_pty_size(),
+            manager
+                .active_tab()
+                .unwrap()
+                .panes
+                .lone_pane()
+                .and_then(|pane| pane.pty.size().ok()),
             Some(pixel_only.pty_size())
         );
         assert_eq!(
@@ -3085,7 +3095,10 @@ mod tests {
         let scaled = TerminalGeometry::from_cells(8, 2, 1.0, 1.0);
         manager.resize(TerminalArea::new(scaled, 1.0, 1.0));
         let tab = manager.active_tab().unwrap();
-        assert_eq!(tab.lone_pty_size(), Some(scaled.pty_size()));
+        assert_eq!(
+            tab.panes.lone_pane().and_then(|pane| pane.pty.size().ok()),
+            Some(scaled.pty_size())
+        );
         crate::test_support::assert_pixel_geometry_retention_probe(tab.focused_terminal().unwrap());
     }
 

@@ -31,7 +31,8 @@ fn focused_integration(app: &App) -> &crate::session::terminal_state::TerminalIn
         .unwrap()
         .active_tab()
         .unwrap()
-        .focused_integration()
+        .focused_pane()
+        .map(|pane| &pane.integration)
         .unwrap()
 }
 
@@ -140,7 +141,10 @@ fn terminals_keep_no_agent_while_agent_features_are_off() {
     let mut app = app_with_shell(Config::default());
     // What a pane arriving from a window with agent features on carries.
     let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
-    let state = tab.focused_integration_mut().unwrap();
+    let state = tab
+        .focused_pane_mut()
+        .map(|pane| &mut pane.integration)
+        .unwrap();
     state.set_agent(Some(crate::agents::AgentSession {
         agent_id: "codex".into(),
         launched: false,
@@ -193,7 +197,9 @@ fn hook_reports_are_refused_while_agent_features_are_off() {
         .unwrap()
         .active_tab()
         .unwrap()
-        .lone_pty()
+        .panes
+        .lone_pane()
+        .map(|pane| &pane.pty)
         .unwrap()
         .terminal_id()
         .unwrap()

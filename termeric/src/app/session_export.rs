@@ -179,6 +179,9 @@ mod tests {
             .unwrap()
             .active_tab_mut()
             .unwrap()
+            .focused_pane_mut()
+            .unwrap()
+            .integration
             .start_transcript(recorder);
         app.export_terminal_session(focused(&app));
         assert!(app.session_export.is_some());
@@ -229,6 +232,9 @@ mod tests {
             .unwrap()
             .active_tab_mut()
             .unwrap()
+            .focused_pane_mut()
+            .unwrap()
+            .integration
             .start_transcript(recorder);
         app.export_terminal_session(focused(&app));
         assert!(app.session_export.is_none());

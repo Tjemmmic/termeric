@@ -1542,6 +1542,13 @@ mod tests {
             app.pending_live_domain_controls.remove(&pending);
         }
 
+        let relays_before: std::collections::HashSet<_> = app
+            .tabs
+            .as_ref()
+            .unwrap()
+            .iter()
+            .flat_map(|(_, tab)| tab.panes.iter_panes().map(|pane| pane.pty.child_id()))
+            .collect();
         let mut revision_five = revision_four.clone();
         let moved = revision_five.tabs[0]
             .panes
@@ -1585,9 +1592,10 @@ mod tests {
         assert_eq!(destination.live_domain_tab_route().unwrap().1, 10);
         let destination_panes = &destination.panes;
         assert_eq!(destination_panes.pane_count(), 2);
-        assert_eq!(
-            destination_panes.spawned_shell_count(),
-            0,
+        assert!(
+            destination_panes
+                .iter_panes()
+                .all(|pane| relays_before.contains(&pane.pty.child_id())),
             "the existing relay must move instead of being respawned"
         );
         let destination_routes: std::collections::HashSet<_> = destination

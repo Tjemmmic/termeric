@@ -13,7 +13,6 @@ pub(crate) const MAX_FORWARDED_TERMINAL_EVENTS_PER_POLL: usize = 1_024;
 #[derive(Debug, Default)]
 pub(crate) struct TerminalEventDrain {
     pub(crate) saw_event: bool,
-    pub(crate) protocol_replies: usize,
     pub(crate) dropped_app_events: usize,
     pub(crate) reply_error: Option<io::Error>,
 }
@@ -36,7 +35,6 @@ pub(crate) fn drain_terminal_events(
         result.saw_event = true;
         match event {
             TerminalEvent::PtyWrite(data) => {
-                result.protocol_replies += 1;
                 if result.reply_error.is_none() {
                     if let Err(error) = reply(&data) {
                         result.reply_error = Some(error);
@@ -70,7 +68,6 @@ mod tests {
         assert_eq!(replies, b"\x1b[1;1R");
         assert_eq!(forwarded.len(), 1);
         assert!(matches!(forwarded[0], TerminalEvent::Bell));
-        assert_eq!(result.protocol_replies, 1);
         assert_eq!(result.dropped_app_events, 1);
         assert!(terminal.drain_events().is_empty());
     }

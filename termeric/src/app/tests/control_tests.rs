@@ -522,7 +522,10 @@ fn plugin_pane_movement_preserves_pty_and_returns_exact_destination_state() {
     let mut tabs = TabManager::for_test(shell.clone());
     let source_tab_id = tabs.new_tab().unwrap();
     let source = tabs.tab_mut_by_id(source_tab_id).unwrap();
-    let moved_child = source.lone_child_id();
+    let moved_child = source
+        .panes
+        .lone_pane()
+        .and_then(|pane| pane.pty.child_id());
     let source_panes = source.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
     let surviving_source_pane = source_panes
         .split(

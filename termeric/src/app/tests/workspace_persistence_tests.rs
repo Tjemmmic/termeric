@@ -499,7 +499,7 @@ fn only_a_program_besides_an_idle_shell_counts_as_running() {
     let tab = tabs.active_tab_mut().unwrap();
     assert!(
         crate::test_support::poll_until(Duration::from_secs(5), || {
-            let pty = tab.lone_pty().unwrap();
+            let pty = tab.panes.lone_pane().map(|pane| &pane.pty).unwrap();
             pty.foreground_process_group().is_some()
         }),
         "the shell never took its terminal"

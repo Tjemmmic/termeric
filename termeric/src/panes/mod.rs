@@ -552,8 +552,6 @@ pub struct PaneManager {
     next_id: u32,
     /// The tab's terminal area, which the tree divides.
     area: TerminalArea,
-    /// Shells spawned by this manager (the tab's first terminal is excluded).
-    spawned_shells: usize,
 }
 
 impl PaneManager {
@@ -578,7 +576,6 @@ impl PaneManager {
             policy,
             next_id: id.0.saturating_add(1),
             area,
-            spawned_shells: 0,
         }
     }
 
@@ -605,14 +602,12 @@ impl PaneManager {
             scrollback_bytes,
             None,
         )?;
-        let mut manager = Self::new(
+        Ok(Self::new(
             pane,
             shell,
             TerminalPolicy::with_scrollback(scrollback_lines, scrollback_bytes),
             TerminalArea::from_available_pixels(total_width, total_height, cell_width, cell_height),
-        );
-        manager.spawned_shells = 1;
-        Ok(manager)
+        ))
     }
 
     /// Continue the tab's ID allocation history from `next_pane` and
@@ -730,7 +725,6 @@ impl PaneManager {
             pane.last_command.clone_from(&pane_snapshot.last_command);
             replay_workspace_scrollback(&mut pane.terminal, &pane_snapshot.scrollback_lines);
             self.panes.insert(id, pane);
-            self.spawned_shells += 1;
         }
         self.recalculate_sizes();
         Ok(warnings)
@@ -798,7 +792,6 @@ impl PaneManager {
                 Some(remote.title.clone()),
             )?;
             self.panes.insert(local_id, pane);
-            self.spawned_shells += 1;
         }
         self.recalculate_sizes();
         Ok(())
@@ -871,7 +864,6 @@ impl PaneManager {
             .context("live domain focus references a missing pane")?;
 
         self.panes.retain(|local, _| planned_locals.contains(local));
-        self.spawned_shells += additions.len();
         self.panes.extend(additions);
         *pane_ids = planned_ids;
         self.next_id = next_id;
@@ -1095,7 +1087,6 @@ impl PaneManager {
             }
         };
         pane.launch = identity;
-        self.spawned_shells += 1;
         self.panes.insert(new_id, pane);
 
         // Split the tree
@@ -1648,11 +1639,6 @@ impl PaneManager {
             .get_mut(&id)
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "pane no longer exists"))?
             .write(data)
-    }
-
-    #[cfg(test)]
-    pub fn spawned_shell_count(&self) -> usize {
-        self.spawned_shells
     }
 
     /// Settle a tree that has come down to one pane: it is the tab's primary
@@ -2348,8 +2334,6 @@ mod tests {
     fn generated_detach_attach_moves_preserve_processes_and_valid_focus() {
         let mut source = property_manager(7);
         let mut destination = property_manager(1);
-        let source_spawned = source.spawned_shell_count();
-        let destination_spawned = destination.spawned_shell_count();
         let all_children: BTreeSet<_> = source
             .pane_ids()
             .into_iter()
@@ -2423,9 +2407,8 @@ mod tests {
                     .and_then(|pane| pane.pty.child_id())
             }))
             .collect();
+        // Moves relaunch nothing: the processes are exactly the original ones.
         assert_eq!(remaining_children, all_children);
-        assert_eq!(source.spawned_shell_count(), source_spawned);
-        assert_eq!(destination.spawned_shell_count(), destination_spawned);
     }
 
     #[test]

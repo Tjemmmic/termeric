@@ -3524,7 +3524,6 @@ fn cross_window_transfer_preserves_live_owner_and_retargets_destination_geometry
     let pane = destination_manager.get_pane(attached).unwrap();
     assert_eq!(destination_manager.pane_count(), 2);
     assert_eq!(destination_manager.focused_id(), attached);
-    assert_eq!(destination_manager.spawned_shell_count(), 0);
     assert_eq!(pane.pty.child_id(), moved_child);
     assert_eq!(pane.title.as_deref(), Some("moved-owner"));
     assert_eq!(pane.geometry.cols, 48);
