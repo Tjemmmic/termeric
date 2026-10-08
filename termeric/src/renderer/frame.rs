@@ -40,7 +40,10 @@ pub struct ChromeFrame<'a> {
         &'a crate::ui::workspace_panel::WorkspacePanelInfo,
         &'a crate::ui::workspace_panel::WorkspacePanelLayout,
     )>,
-    pub commands_panel: Option<&'a crate::ui::commands::panel::CommandsPanelInfo>,
+    pub commands_panel: Option<(
+        &'a crate::ui::commands::panel::CommandsPanelInfo,
+        &'a crate::ui::commands::panel::CommandsPanelLayout,
+    )>,
     pub agents_panel: Option<&'a crate::ui::agents_panel::AgentsPanelInfo>,
     pub command_palette: Option<(
         &'a PaletteInfo,
@@ -478,10 +481,10 @@ impl Renderer {
                     }
                 }
                 ModalLayer::CommandsPanel => {
-                    if let Some(cp) = commands_panel
+                    if let Some((cp, layout)) = commands_panel
                         && cp.animation > 0.001
                     {
-                        self.build_commands_panel(cp, window_width, window_height);
+                        self.build_commands_panel(cp, layout);
                     }
                 }
                 ModalLayer::WorkspaceMenu => {

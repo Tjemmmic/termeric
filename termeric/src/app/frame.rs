@@ -7,7 +7,7 @@ use crate::renderer::{
 };
 use crate::ui::agents_panel::AgentsPanelInfo;
 use crate::ui::command_palette::PaletteInfo;
-use crate::ui::commands::panel::CommandsPanelInfo;
+use crate::ui::commands::panel::{CommandsPanelInfo, CommandsPanelLayout};
 use crate::ui::list_dialog::ListDialogLayout;
 use crate::ui::search_bar::SearchBarInfo;
 use crate::ui::settings::{SettingsModalLayout, SettingsPanelInfo};
@@ -22,7 +22,7 @@ pub(super) struct ChromeInfo {
     pub(super) search_bar: Option<SearchBarInfo>,
     pub(super) workspace_menu: Option<PopupMenuInfo>,
     pub(super) workspace_panel: Option<(WorkspacePanelInfo, WorkspacePanelLayout)>,
-    pub(super) commands_panel: Option<CommandsPanelInfo>,
+    pub(super) commands_panel: Option<(CommandsPanelInfo, CommandsPanelLayout)>,
     pub(super) agents_panel: Option<AgentsPanelInfo>,
     pub(super) palette: Option<(PaletteInfo, ListDialogLayout)>,
     pub(super) shortcuts: Option<(ShortcutsPanelInfo, ListDialogLayout)>,
@@ -52,8 +52,12 @@ impl App {
         self.bell.update();
         animating |= self.bell.is_visual_active();
         animating |= self.update_harvest_animations(reduced_motion);
-        let commands_panel = (!self.commands_panel.is_closed())
-            .then(|| self.commands_panel.build_info(&self.config.commands));
+        let commands_panel = (!self.commands_panel.is_closed()).then(|| {
+            (
+                self.commands_panel.build_info(&self.config.commands),
+                self.commands_panel_layout(),
+            )
+        });
         animating |= self.command_palette.update_animation();
         animating |= self.domain_picker.palette_mut().update_animation();
         animating |= self.unicode_picker.palette_mut().update_animation();

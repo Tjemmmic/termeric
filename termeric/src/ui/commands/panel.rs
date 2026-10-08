@@ -78,7 +78,6 @@ pub struct CommandsPanel {
 pub struct CommandsPanelInfo {
     /// Animation progress (0.0 = hidden, 1.0 = fully visible)
     pub animation: f32,
-    pub scroll_offset: usize,
     pub browse_focus: Option<CommandControl>,
     /// List of commands to display
     pub commands: Vec<CustomCommand>,
@@ -293,6 +292,32 @@ impl CommandsPanelLayout {
                 .min(command_count),
             command_count,
         }
+    }
+
+    /// What a primary press at `(x, y)` on the panel showing `info` does.
+    pub fn hit_test(&self, x: f32, y: f32, info: &CommandsPanelInfo) -> CommandsPanelAction {
+        // A click beside or above the panel (the toolbar) dismisses it.
+        if x < self.panel.x || y < self.panel.y {
+            return CommandsPanelAction::Close;
+        }
+        if self.close_button.contains(x, y) {
+            return CommandsPanelAction::Close;
+        }
+        if self.new_button.contains(x, y) {
+            return CommandsPanelAction::StartAdd;
+        }
+        if let Some(form) = self.form {
+            if let Some(action) = self.input_click(info, x, y) {
+                return action;
+            }
+            if form.save_button.contains(x, y) {
+                return CommandsPanelAction::Submit;
+            }
+            if form.cancel_button.contains(x, y) {
+                return CommandsPanelAction::CancelEdit;
+            }
+        }
+        self.row_action(x, y)
     }
 
     /// Whole rows only: no clipped command may expose an invisible Run/Delete target.
@@ -719,7 +744,6 @@ impl CommandsPanel {
     pub fn build_info(&self, commands: &[CustomCommand]) -> CommandsPanelInfo {
         CommandsPanelInfo {
             animation: self.animation_progress(),
-            scroll_offset: self.scroll_offset,
             browse_focus: self
                 .navigation
                 .visible
@@ -957,6 +981,67 @@ mod tests {
             Some(CommandControl::Run(2))
         );
         assert_eq!(layout.control_at(layout.panel.x + 20.0, 10.0), None);
+    }
+
+    #[test]
+    fn presses_resolve_against_the_shared_layout() {
+        let centre = |rect: Bounds| (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
+        let mut panel = CommandsPanel::new();
+        panel.set_reduced_motion(true);
+        panel.toggle();
+        let commands: Vec<_> = (0..3)
+            .map(|index| CustomCommand {
+                name: format!("Command {index}"),
+                command: "inert".into(),
+                alias: None,
+            })
+            .collect();
+        let press = |panel: &CommandsPanel, (x, y): (f32, f32)| {
+            let layout = panel.layout(1000.0, 800.0, 34.0, 10.0, 20.0, commands.len());
+            layout.hit_test(x, y, &panel.build_info(&commands))
+        };
+        let browse = panel.layout(1000.0, 800.0, 34.0, 10.0, 20.0, commands.len());
+        assert!(matches!(
+            press(&panel, (browse.panel.x - 1.0, 400.0)),
+            CommandsPanelAction::Close
+        ));
+        assert!(matches!(
+            press(&panel, (browse.panel.x + 20.0, 10.0)),
+            CommandsPanelAction::Close
+        ));
+        assert!(matches!(
+            press(&panel, centre(browse.close_button)),
+            CommandsPanelAction::Close
+        ));
+        assert!(matches!(
+            press(&panel, centre(browse.new_button)),
+            CommandsPanelAction::StartAdd
+        ));
+        assert!(matches!(
+            press(&panel, centre(browse.command_delete(2))),
+            CommandsPanelAction::Delete(2)
+        ));
+        let row = browse.command_row(1);
+        assert!(matches!(
+            press(&panel, (row.x + 20.0, row.y + row.height / 2.0)),
+            CommandsPanelAction::Run(1)
+        ));
+
+        panel.start_add();
+        let editing = panel.layout(1000.0, 800.0, 34.0, 10.0, 20.0, commands.len());
+        let form = editing.form.expect("the form is laid out while adding");
+        assert!(matches!(
+            press(&panel, centre(form.save_button)),
+            CommandsPanelAction::Submit
+        ));
+        assert!(matches!(
+            press(&panel, centre(form.cancel_button)),
+            CommandsPanelAction::CancelEdit
+        ));
+        assert!(matches!(
+            press(&panel, centre(form.command_input)),
+            CommandsPanelAction::PlaceCaret { .. }
+        ));
     }
 
     #[test]

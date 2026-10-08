@@ -149,7 +149,7 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `palette.rs` | Command palette and the shared modal frame (`build_modal_frame`) |
 | `settings_render.rs` | Settings dialog and its dropdown overlay |
 | `shortcuts_render.rs` | Shortcuts panel |
-| `panels.rs` | Commands, Agents, and workspace panels, their shared frame, and the Commands/workspace panel hit tests |
+| `panels.rs` | Commands, Agents, and workspace panels and their shared frame |
 | `popup_menu.rs` | Anchored popup menu (used by the Workspaces menu) |
 | `dialog.rs` | `build_dialog`: a dialog on the shared modal frame, its body clipped to its scrolled viewport |
 | `overlays.rs` | Diff review, context picker, guardrail confirmation |
@@ -246,7 +246,7 @@ Mouse, focus, alternate-scroll, and paste reports snapshot mode from the termina
 
 - Child modules access the parent's private fields via `&mut self` on `impl Renderer` blocks
 - Types in `types.rs` are re-exported via `pub use types::*` in mod.rs; a type defined in another sub-module needs its own `pub use` there (e.g. `PopupMenuInfo`)
-- A hit test must use the same geometry as the `build_*` function that drew the element: the tab bar shares one geometry source (`TabChrome`), the side panels and the find box each compute one `*Layout` that their builder and hit test both use (`commands_panel_layout`, `workspace_panel_layout`, `SearchBarLayout::calculate`)
+- A hit test must use the same geometry as the `build_*` function that drew the element: the tab bar shares one geometry source (`TabChrome`), and the find box computes one `SearchBarLayout`. Settings, the palette-style dialogs, Shortcuts, and the workspace and Commands panels are laid out once by an `App` method (`settings_layout`, `palette_layout`, `shortcuts_panel_layout`, `workspace_panel_layout`, `commands_panel_layout`); the frame hands that layout to the renderer beside the surface's info, and the app hit-tests, hovers, places the IME caret, and builds accessibility from the same one
 - Terminal panes are placed by `PanePlacement::pane_bounds` for drawing, the Git completion anchor, pointer-to-cell mapping, the IME caret, and accessibility. It is the one place a tab's only pane differs from split panes: it fills the terminal area inside the padding on every side (its grid starts one padding below the tab bar) and shows its grid's own cells, while split panes sit at their layout rectangles from the area's top edge. `PanePlacement::pane_cells` is how many cells each shows, and `PanePlacement::pane_scrollbar` where its scrollbar is drawn and hit
 
 ### Animation Timing

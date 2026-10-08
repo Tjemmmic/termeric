@@ -1964,7 +1964,10 @@ impl App {
                     .workspace_panel
                     .as_ref()
                     .map(|(info, layout)| (info, layout)),
-                commands_panel: chrome.commands_panel.as_ref(),
+                commands_panel: chrome
+                    .commands_panel
+                    .as_ref()
+                    .map(|(info, layout)| (info, layout)),
                 agents_panel: chrome.agents_panel.as_ref(),
                 command_palette: chrome.palette.as_ref().map(|(info, layout)| (info, layout)),
                 shortcuts_panel: chrome

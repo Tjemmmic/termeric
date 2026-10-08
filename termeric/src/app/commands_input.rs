@@ -6,6 +6,8 @@ use crate::ui::commands::panel::CommandsPanelAction;
 use winit::keyboard::{Key, NamedKey};
 
 impl App {
+    /// The Commands panel's geometry: what it is drawn with, and so what its
+    /// pointer presses and hover, IME caret, and accessibility use.
     pub(super) fn commands_panel_layout(&self) -> crate::ui::commands::panel::CommandsPanelLayout {
         let UiMetrics {
             width,

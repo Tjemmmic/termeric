@@ -409,8 +409,7 @@ impl App {
                             }
                             Some(ModalLayer::CommandsPanel) => {
                                 let info = self.commands_panel.build_info(&self.config.commands);
-                                let action = renderer
-                                    .commands_panel_hit_test(px, py, &info, ui.width, ui.height);
+                                let action = self.commands_panel_layout().hit_test(px, py, &info);
                                 self.apply_commands_panel_action(action);
                                 self.request_redraw(RedrawReason::PointerInput);
                                 return;

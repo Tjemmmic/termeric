@@ -1,5 +1,5 @@
 //! Slide-in side panels — Commands, Agents, and Workspaces — their shared
-//! frame and header buttons, and the Commands panel hit test.
+//! frame and header buttons.
 
 use super::Renderer;
 use super::draw::FieldTextColors;
@@ -9,32 +9,12 @@ use crate::ui::geometry::Bounds;
 use crate::ui::icon::Icon;
 
 impl Renderer {
-    /// The Commands panel's geometry, shared by its drawing and hit test.
-    fn commands_panel_layout(
-        &self,
-        info: &crate::ui::commands::panel::CommandsPanelInfo,
-        window_width: f32,
-        window_height: f32,
-    ) -> crate::ui::commands::panel::CommandsPanelLayout {
-        use crate::ui::commands::panel::{CommandsPanelLayout, EditMode};
-        CommandsPanelLayout::calculate(
-            window_width,
-            window_height,
-            self.tab_bar_height(),
-            self.cell_width(),
-            self.cell_height(),
-            info.animation,
-            info.edit_mode != EditMode::Browse,
-            info.commands.len(),
-        )
-        .scrolled(info.scroll_offset)
-    }
-
+    /// Draw the Commands panel showing `info` in `layout`, the geometry the
+    /// app hit-tests and describes it with.
     pub(super) fn build_commands_panel(
         &mut self,
         info: &crate::ui::commands::panel::CommandsPanelInfo,
-        window_width: f32,
-        window_height: f32,
+        layout: &crate::ui::commands::panel::CommandsPanelLayout,
     ) {
         use crate::ui::commands::navigation::CommandControl;
         use crate::ui::commands::panel::{COMMAND_PLACEHOLDER, EditMode, NAME_PLACEHOLDER};
@@ -43,8 +23,7 @@ impl Renderer {
         if anim <= 0.0 {
             return;
         }
-        let cell_height = self.cell_height();
-        let layout = self.commands_panel_layout(info, window_width, window_height);
+        let cell_height = layout.cell_height;
         let panel = layout.panel;
         let padding = layout.padding;
         let size = self.ui_label_px();
@@ -510,55 +489,6 @@ impl Renderer {
             self.ui.menu_text_dim
         };
         self.push_icon(icon, x + width / 2.0, y + height / 2.0, color);
-    }
-
-    /// Hit-test the custom commands panel
-    pub fn commands_panel_hit_test(
-        &self,
-        x: f32,
-        y: f32,
-        info: &crate::ui::commands::panel::CommandsPanelInfo,
-        window_width: f32,
-        window_height: f32,
-    ) -> crate::ui::commands::panel::CommandsPanelAction {
-        use crate::ui::commands::panel::CommandsPanelAction;
-
-        let layout = self.commands_panel_layout(info, window_width, window_height);
-
-        // A click beside or above the panel (the toolbar) dismisses it.
-        if x < layout.panel.x || y < layout.panel.y {
-            return CommandsPanelAction::Close;
-        }
-
-        // Close (x) button
-        if layout.close_button.contains(x, y) {
-            return CommandsPanelAction::Close;
-        }
-
-        // "+ New Command" button
-        if layout.new_button.contains(x, y) {
-            return CommandsPanelAction::StartAdd;
-        }
-
-        // Hit-test form fields if editing
-        if let Some(form) = layout.form {
-            if let Some(action) = layout.input_click(info, x, y) {
-                return action;
-            }
-
-            // Save button
-            if form.save_button.contains(x, y) {
-                return CommandsPanelAction::Submit;
-            }
-
-            // Cancel button
-            if form.cancel_button.contains(x, y) {
-                return CommandsPanelAction::CancelEdit;
-            }
-        }
-
-        // Command rows
-        layout.row_action(x, y)
     }
 
     /// Draw the workspace panel showing `info` in `layout`, the geometry the

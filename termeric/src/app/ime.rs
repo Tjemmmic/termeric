@@ -116,7 +116,6 @@ impl App {
         &self,
         target: TextTarget,
     ) -> Option<crate::ui::text_input_viewport::TextInputViewport> {
-        let metrics = self.ui_metrics();
         match target {
             TextTarget::Palette(modal) => {
                 let info = self.palette_owner(modal).build_info();
@@ -134,7 +133,7 @@ impl App {
             TextTarget::WorkspaceRename => self
                 .workspace_panel
                 .rename_input_viewport(&self.workspace_panel_layout()),
-            TextTarget::CommandsForm => self.commands_ime_viewport(&metrics),
+            TextTarget::CommandsForm => self.commands_ime_viewport(),
             TextTarget::DialogField
             | TextTarget::TabRename
             | TextTarget::AgentView
@@ -144,24 +143,12 @@ impl App {
         }
     }
 
-    fn commands_ime_viewport(
-        &self,
-        metrics: &UiMetrics,
-    ) -> Option<crate::ui::text_input_viewport::TextInputViewport> {
-        // Only form state is needed here; do not clone the command inventory
-        // a second time just to position the input method.
+    fn commands_ime_viewport(&self) -> Option<crate::ui::text_input_viewport::TextInputViewport> {
+        // The field's viewport reads only form state; do not clone the
+        // command inventory a second time just to position the input method.
         let info = self.commands_panel.build_info(&[]);
-        crate::ui::commands::panel::CommandsPanelLayout::calculate(
-            metrics.width,
-            metrics.height,
-            metrics.tab_bar_height,
-            metrics.cell_width,
-            metrics.cell_height,
-            info.animation,
-            true,
-            info.commands.len(),
-        )
-        .input_viewport(&info, info.edit_mode.clone())
+        self.commands_panel_layout()
+            .input_viewport(&info, info.edit_mode.clone())
     }
 
     /// Keep the native candidate window and preedit decoration on the focused
