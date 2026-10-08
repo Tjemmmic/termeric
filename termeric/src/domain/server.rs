@@ -1826,11 +1826,12 @@ fn publish_output(state: &SharedState, domain_id: &str, pane_id: u32, data: &[u8
     }
 }
 
+/// A title a pane's program set, cut to what a pane name may hold.
 fn sanitize_runtime_title(title: &str) -> String {
     let title: String = title
         .chars()
         .filter(|character| !crate::safe_text::is_unsafe_display_char(*character))
-        .take(128)
+        .take(MAX_DOMAIN_NAME_CHARS)
         .collect();
     if title.is_empty() {
         "terminal".into()
