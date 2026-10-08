@@ -242,80 +242,76 @@ impl App {
         self.request_redraw(RedrawReason::Action);
     }
 
+    /// The session a menu setting applies to, and whether it goes to the
+    /// new-session form too: the conversation shown takes it alone;
+    /// otherwise the form does, with the session started ahead for the
+    /// form's agent, which follows the form.
+    fn agent_setting_target(&mut self) -> (Option<&mut AgentSession>, bool) {
+        let form_agent = self.agent_view.state.new_session.agent;
+        let conversation = self.agent_view.state.screen == Screen::Conversation;
+        match self.agent_view.active_session_mut() {
+            Some(session) if conversation => (Some(session), false),
+            session => (
+                session.filter(|session| session.is_blank() && session.agent() == form_agent),
+                true,
+            ),
+        }
+    }
+
+    /// Applies a menu setting where [`Self::agent_setting_target`] says.
+    fn set_agent_setting(
+        &mut self,
+        on_session: impl FnOnce(&mut AgentSession),
+        on_form: impl FnOnce(&mut crate::ui::agent_view::NewSessionForm),
+    ) {
+        let (session, form) = self.agent_setting_target();
+        if let Some(session) = session {
+            on_session(session);
+        }
+        if form {
+            on_form(&mut self.agent_view.state.new_session);
+        }
+    }
+
     fn apply_agent_view_menu(&mut self, action: MenuAction) {
-        let screen = self.agent_view.state.screen;
         match action {
             MenuAction::SetMode(mode) => {
+                // The form takes a mode that skips every check only after
+                // the opt-in.
                 let allow_unrestricted = self.config.agent_view.allow_bypass_permissions;
                 let form_agent = self.agent_view.state.new_session.agent;
-                match (screen, self.agent_view.active_session_mut()) {
-                    (Screen::Conversation, Some(session)) => session.set_mode(&mode),
-                    (_, session) => {
-                        // Only a session started ahead for the chosen agent
-                        // follows the form.
-                        let session = session
-                            .filter(|session| session.is_blank() && session.agent() == form_agent);
-                        let modes = session
-                            .as_ref()
-                            .map_or_else(|| form_agent.modes(), |session| session.modes());
-                        let unrestricted = modes
-                            .iter()
-                            .any(|choice| choice.id == mode && choice.unrestricted);
-                        if unrestricted && !allow_unrestricted {
-                            return;
-                        }
-                        if let Some(session) = session {
-                            session.set_mode(&mode);
-                        }
-                        self.agent_view.state.new_session.mode = Some(mode);
+                if let (session, true) = self.agent_setting_target() {
+                    let modes =
+                        session.map_or_else(|| form_agent.modes(), |session| session.modes());
+                    let unrestricted = modes
+                        .iter()
+                        .any(|choice| choice.id == mode && choice.unrestricted);
+                    if unrestricted && !allow_unrestricted {
+                        return;
                     }
                 }
+                self.set_agent_setting(
+                    |session| session.set_mode(&mode),
+                    |form| form.mode = Some(mode.clone()),
+                );
             }
-            MenuAction::SetModel(model) => {
-                let form_agent = self.agent_view.state.new_session.agent;
-                match (screen, self.agent_view.active_session_mut()) {
-                    (Screen::Conversation, Some(session)) => session.set_model(&model),
-                    (_, session) => {
-                        if let Some(session) = session
-                            .filter(|session| session.is_blank() && session.agent() == form_agent)
-                        {
-                            session.set_model(&model);
-                        }
-                        self.agent_view.state.new_session.model = Some(model);
-                    }
-                }
-            }
-            MenuAction::SetEffort(effort) => {
-                let form_agent = self.agent_view.state.new_session.agent;
-                match (screen, self.agent_view.active_session_mut()) {
-                    (Screen::Conversation, Some(session)) => session.set_effort(&effort),
-                    (_, session) => {
-                        if let Some(session) = session
-                            .filter(|session| session.is_blank() && session.agent() == form_agent)
-                        {
-                            session.set_effort(&effort);
-                        }
-                        self.agent_view.state.new_session.effort = Some(effort);
-                    }
-                }
-            }
+            MenuAction::SetModel(model) => self.set_agent_setting(
+                |session| session.set_model(&model),
+                |form| form.model = Some(model.clone()),
+            ),
+            MenuAction::SetEffort(effort) => self.set_agent_setting(
+                |session| session.set_effort(&effort),
+                |form| form.effort = Some(effort.clone()),
+            ),
             MenuAction::SetAutoApprove(approve) => {
                 // Like a mode that skips every check, only after the opt-in.
                 if approve && !self.config.agent_view.allow_bypass_permissions {
                     return;
                 }
-                let form_agent = self.agent_view.state.new_session.agent;
-                match (screen, self.agent_view.active_session_mut()) {
-                    (Screen::Conversation, Some(session)) => session.set_auto_approve(approve),
-                    (_, session) => {
-                        if let Some(session) = session
-                            .filter(|session| session.is_blank() && session.agent() == form_agent)
-                        {
-                            session.set_auto_approve(approve);
-                        }
-                        self.agent_view.state.new_session.auto_approve = approve;
-                    }
-                }
+                self.set_agent_setting(
+                    |session| session.set_auto_approve(approve),
+                    |form| form.auto_approve = approve,
+                );
             }
             MenuAction::SetFolder(path) => self.agent_view.state.new_session.cwd = Some(path),
             MenuAction::EndSession => {
@@ -1543,6 +1539,40 @@ fn menu_kind_of(action: &MenuAction) -> MenuKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn menu_settings_reach_the_form_and_its_unrestricted_modes_need_the_opt_in() {
+        use crate::agent_view::agent::AgentKind;
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.agent_view.state.screen = Screen::NewSession;
+        app.agent_view
+            .state
+            .new_session
+            .choose_agent(AgentKind::ClaudeCode);
+
+        app.apply_agent_view_menu(MenuAction::SetModel("opus".into()));
+        app.apply_agent_view_menu(MenuAction::SetEffort("high".into()));
+        app.apply_agent_view_menu(MenuAction::SetMode("plan".into()));
+        app.apply_agent_view_menu(MenuAction::SetMode("bypassPermissions".into()));
+        app.apply_agent_view_menu(MenuAction::SetAutoApprove(true));
+        let form = &app.agent_view.state.new_session;
+        assert_eq!(
+            (
+                form.model.as_deref(),
+                form.effort.as_deref(),
+                form.mode.as_deref(),
+                form.auto_approve
+            ),
+            (Some("opus"), Some("high"), Some("plan"), false)
+        );
+
+        app.config.agent_view.allow_bypass_permissions = true;
+        app.apply_agent_view_menu(MenuAction::SetMode("bypassPermissions".into()));
+        app.apply_agent_view_menu(MenuAction::SetAutoApprove(true));
+        let form = &app.agent_view.state.new_session;
+        assert_eq!(form.mode.as_deref(), Some("bypassPermissions"));
+        assert!(form.auto_approve);
+    }
 
     #[test]
     fn the_composer_types_by_the_shared_rule_and_keeps_its_ctrl_chords() {
