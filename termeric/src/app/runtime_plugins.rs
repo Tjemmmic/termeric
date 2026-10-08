@@ -9,6 +9,75 @@ use crate::plugin::runtime::{
 };
 use crate::ui::info_overlay::{InfoOverlayChoice, OverlayPage, push_key_choice};
 
+#[derive(Debug, Clone)]
+pub(super) struct PendingRuntimePluginManagement {
+    request_id: u64,
+    view: RuntimePluginManagerView,
+}
+
+#[derive(Debug, Clone)]
+enum RuntimePluginManagerView {
+    List {
+        page: usize,
+    },
+    InstallPath {
+        page: usize,
+    },
+    ReviewInstall {
+        page: usize,
+        preview: crate::plugin::runtime::PluginInstallPreview,
+        grants: crate::plugin::permission::PluginPermissions,
+    },
+    ReviewUpdate {
+        page: usize,
+        preview: Box<crate::plugin::runtime::PluginUpdatePreview>,
+        grants: crate::plugin::permission::PluginPermissions,
+    },
+    ReviewPermissions {
+        page: usize,
+        preview: Box<crate::plugin::runtime::PluginGrantsPreview>,
+        grants: crate::plugin::permission::PluginPermissions,
+    },
+    Detail {
+        plugin_id: String,
+        page: usize,
+    },
+    DefaultProfile {
+        plugin_id: String,
+        page: usize,
+        profile_page: usize,
+    },
+    Settings {
+        plugin_id: String,
+        page: usize,
+        settings_page: usize,
+    },
+    Setting {
+        plugin_id: String,
+        page: usize,
+        settings_page: usize,
+        value_page: usize,
+        setting: crate::plugin::runtime::DeclarativeSetting,
+    },
+    EditSetting {
+        plugin_id: String,
+        page: usize,
+        settings_page: usize,
+        setting: crate::plugin::runtime::DeclarativeSetting,
+    },
+    Confirm {
+        plugin_id: String,
+        page: usize,
+        operation: RuntimePluginOperation,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimePluginOperation {
+    ResetSettings,
+    Remove,
+}
+
 /// Plugins, settings, setting values, and profiles shown per page.
 const PLUGIN_PAGE_SIZE: usize = 24;
 /// Install and update reviews list every permission on one page beside at
@@ -27,6 +96,15 @@ const PLUGIN_PROFILE_SHORTCUTS: [char; PLUGIN_PAGE_SIZE] = [
 ];
 
 impl App {
+    pub(super) fn pending_runtime_plugin_management(
+        &self,
+    ) -> Option<&PendingRuntimePluginManagement> {
+        match &self.overlay_flow {
+            Some(OverlayFlow::RuntimePlugins(pending)) => Some(pending),
+            _ => None,
+        }
+    }
+
     pub(super) fn discover_runtime_plugins_for_app(
         &self,
     ) -> Result<(

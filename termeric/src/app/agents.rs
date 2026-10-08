@@ -818,7 +818,7 @@ impl App {
                 agent_name: terminal.name,
             })
             .collect();
-        super::select_agent_target(focused, &open)
+        select_agent_target(focused, &open)
     }
 
     /// Paste `text` into the agent at `target`, provided that terminal still
@@ -1193,9 +1193,41 @@ pub(super) fn agent_pick_items(
     items
 }
 
+/// The agent terminal to send to: the focused one, else the only one open.
+fn select_agent_target(
+    focused: Option<AgentTarget>,
+    open: &[AgentTarget],
+) -> std::result::Result<AgentTarget, String> {
+    if let Some(focused) = focused {
+        return Ok(focused);
+    }
+    match open {
+        [only] => Ok(only.clone()),
+        [] => Err("Start an agent before using Explain".into()),
+        _ => Err("Several agents are running; focus the one to ask first".into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_target_prefers_focus_then_the_only_open_agent() {
+        let target = |tab_id| AgentTarget {
+            identity: TerminalIdentity {
+                tab_id,
+                pane_id: crate::panes::PaneId(0),
+            },
+            agent_id: "codex".into(),
+            agent_name: "Codex".into(),
+        };
+        let open = [target(1), target(2)];
+        assert_eq!(select_agent_target(Some(target(2)), &open), Ok(target(2)));
+        assert_eq!(select_agent_target(None, &[target(7)]), Ok(target(7)));
+        assert!(select_agent_target(None, &open).is_err());
+        assert!(select_agent_target(None, &[]).is_err());
+    }
 
     #[test]
     fn attention_notifications_say_what_the_agent_wants() {

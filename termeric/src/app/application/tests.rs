@@ -1544,7 +1544,7 @@ fn explicit_multi_window_plan_disables_implicit_restore_for_every_window() {
 #[test]
 fn plugin_workspace_query_inventory_is_ordered_bounded_and_excludes_closing_windows() {
     let plan = LaunchPlan {
-        windows: vec![WindowLaunch::default(); super::super::PLUGIN_PROCESS_MAX_WINDOWS + 2],
+        windows: vec![WindowLaunch::default(); inventory::PLUGIN_PROCESS_MAX_WINDOWS + 2],
         ..LaunchPlan::default()
     };
     let mut application = Application::from_config(Config::default(), None, plan).unwrap();
@@ -1579,7 +1579,7 @@ fn plugin_workspace_query_inventory_is_ordered_bounded_and_excludes_closing_wind
     assert_eq!(inventory.process_id, std::process::id());
     assert_eq!(
         inventory.windows.len(),
-        super::super::PLUGIN_PROCESS_MAX_WINDOWS
+        inventory::PLUGIN_PROCESS_MAX_WINDOWS
     );
     assert_eq!(inventory.windows[0].id, 100);
     assert_eq!(inventory.windows[1].id, 102);

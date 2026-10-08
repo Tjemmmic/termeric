@@ -5,6 +5,49 @@ use super::*;
 use crate::ui::info_overlay::push_key_choice;
 use anyhow::Context as _;
 
+#[derive(Debug, Clone)]
+pub(super) struct PendingFileUpload {
+    pub(super) request_id: u64,
+    pub(super) source: PathBuf,
+    pub(super) authority: crate::domain::DomainAuthority,
+    pub(super) domain_id: String,
+    pub(super) pane_id: u32,
+    pub(super) name: String,
+    pub(super) source_kind: FileUploadSourceKind,
+    pub(super) source_identity: (u64, u64),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum FileUploadSourceKind {
+    File { bytes: u64 },
+    Directory,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FileUploadOutcome {
+    pub(super) path: String,
+    pub(super) bytes: u64,
+    pub(super) entries: Option<u32>,
+    pub(super) insertion_error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum FileUploadCompletion {
+    Uploaded(FileUploadOutcome),
+    Cancelled { bytes_received: u64 },
+}
+
+#[derive(Debug)]
+pub(super) struct ActiveFileUpload {
+    pub(super) request_id: u64,
+    pub(super) name: String,
+    pub(super) bytes_sent: u64,
+    pub(super) total_bytes: Option<u64>,
+    pub(super) cancellation: Arc<AtomicBool>,
+    pub(super) cancel_requested: bool,
+    pub(super) progress_toast_id: u64,
+}
+
 const MAX_DROPPED_PATH_BYTES: usize = 4_096;
 const FILE_UPLOAD_PROGRESS_EVENT_BYTES: u64 = 1024 * 1024;
 const UPLOAD_CHOICE: &str = "file-upload-confirm";

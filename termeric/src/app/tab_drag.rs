@@ -8,6 +8,28 @@ use std::time::Duration;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{CursorIcon, CustomCursor, CustomCursorSource};
 
+/// Where the pointer holds a dragged tab, as positions along the tab bar
+/// (x for the top bar, y for the side rail).
+#[derive(Debug, Clone, Copy)]
+pub(super) struct TabGrab {
+    pressed_at: f32,
+    /// From the tab's leading edge to the pointer.
+    offset: f32,
+    pointer: f32,
+    /// The pointer moved far enough for a drag rather than a click.
+    moving: bool,
+}
+
+/// A tab sliding into its slot after the dragged tab passed it, or the
+/// dragged tab after its release.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct TabSlide {
+    tab_id: usize,
+    /// Its distance from the slot when the slide began.
+    from: f32,
+    started: Instant,
+}
+
 const INITIAL_DWELL: Duration = Duration::from_millis(400);
 const REPEAT_DWELL: Duration = Duration::from_millis(200);
 /// How far the pointer moves, in logical pixels, before a press on a tab

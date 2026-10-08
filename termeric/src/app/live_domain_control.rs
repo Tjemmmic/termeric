@@ -6,6 +6,199 @@ use super::control_actions::{control_pane, control_running_pane, control_tab_id}
 use super::redraw_scheduler::RedrawReason;
 use super::*;
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum LiveDomainControl {
+    SpawnTab {
+        domain_id: String,
+        spawn: crate::domain::model::SpawnSpec,
+    },
+    SplitPane {
+        domain_id: String,
+        remote_pane_id: u32,
+        direction: crate::panes::SplitDirection,
+        spawn: crate::domain::model::SpawnSpec,
+    },
+    ResizeSplit {
+        domain_id: String,
+        remote_split_id: u32,
+        ratio_millis: u16,
+    },
+    RenameTab {
+        domain_id: String,
+        remote_tab_id: u32,
+        title: Option<String>,
+    },
+    SetTabPinned {
+        domain_id: String,
+        remote_tab_id: u32,
+        pinned: bool,
+    },
+    MoveTab {
+        domain_id: String,
+        remote_tab_id: u32,
+        index: u16,
+    },
+    SwapPaneNext {
+        domain_id: String,
+        remote_pane_id: u32,
+    },
+    BalanceTab {
+        domain_id: String,
+        remote_tab_id: u32,
+    },
+    ApplyPaneLayout {
+        domain_id: String,
+        remote_tab_id: u32,
+        preset: crate::panes::PaneLayoutPreset,
+    },
+    MovePane {
+        domain_id: String,
+        remote_pane_id: u32,
+        source_tab_id: u32,
+        destination_tab_id: u32,
+        target_pane_id: u32,
+        direction: crate::panes::SplitDirection,
+    },
+    ClosePane {
+        domain_id: String,
+        remote_pane_id: u32,
+        local_tab_id: usize,
+    },
+    CloseTab {
+        domain_id: String,
+        remote_tab_id: u32,
+        local_tab_id: usize,
+    },
+}
+
+impl LiveDomainControl {
+    pub(super) fn domain_id(&self) -> &str {
+        match self {
+            Self::SpawnTab { domain_id, .. }
+            | Self::SplitPane { domain_id, .. }
+            | Self::ResizeSplit { domain_id, .. }
+            | Self::RenameTab { domain_id, .. }
+            | Self::SetTabPinned { domain_id, .. }
+            | Self::MoveTab { domain_id, .. }
+            | Self::SwapPaneNext { domain_id, .. }
+            | Self::BalanceTab { domain_id, .. }
+            | Self::ApplyPaneLayout { domain_id, .. }
+            | Self::MovePane { domain_id, .. }
+            | Self::ClosePane { domain_id, .. }
+            | Self::CloseTab { domain_id, .. } => domain_id,
+        }
+    }
+
+    pub(super) fn request(&self) -> crate::domain::protocol::Request {
+        match self {
+            Self::SpawnTab { domain_id, spawn } => crate::domain::protocol::Request::SpawnTab {
+                domain: domain_id.clone(),
+                spawn: spawn.clone(),
+            },
+            Self::SplitPane {
+                domain_id,
+                remote_pane_id,
+                direction,
+                spawn,
+            } => crate::domain::protocol::Request::SplitPane {
+                domain: domain_id.clone(),
+                pane: *remote_pane_id,
+                direction: *direction,
+                spawn: spawn.clone(),
+            },
+            Self::ResizeSplit {
+                domain_id,
+                remote_split_id,
+                ratio_millis,
+            } => crate::domain::protocol::Request::ResizeSplit {
+                domain: domain_id.clone(),
+                split: *remote_split_id,
+                ratio_millis: *ratio_millis,
+            },
+            Self::RenameTab {
+                domain_id,
+                remote_tab_id,
+                title,
+            } => crate::domain::protocol::Request::RenameTab {
+                domain: domain_id.clone(),
+                tab: *remote_tab_id,
+                title: title.clone(),
+            },
+            Self::SetTabPinned {
+                domain_id,
+                remote_tab_id,
+                pinned,
+            } => crate::domain::protocol::Request::SetTabPinned {
+                domain: domain_id.clone(),
+                tab: *remote_tab_id,
+                pinned: *pinned,
+            },
+            Self::MoveTab {
+                domain_id,
+                remote_tab_id,
+                index,
+            } => crate::domain::protocol::Request::MoveTab {
+                domain: domain_id.clone(),
+                tab: *remote_tab_id,
+                index: *index,
+            },
+            Self::SwapPaneNext {
+                domain_id,
+                remote_pane_id,
+            } => crate::domain::protocol::Request::SwapPaneNext {
+                domain: domain_id.clone(),
+                pane: *remote_pane_id,
+            },
+            Self::BalanceTab {
+                domain_id,
+                remote_tab_id,
+            } => crate::domain::protocol::Request::BalanceTab {
+                domain: domain_id.clone(),
+                tab: *remote_tab_id,
+            },
+            Self::ApplyPaneLayout {
+                domain_id,
+                remote_tab_id,
+                preset,
+            } => crate::domain::protocol::Request::ApplyPaneLayout {
+                domain: domain_id.clone(),
+                tab: *remote_tab_id,
+                preset: *preset,
+            },
+            Self::MovePane {
+                domain_id,
+                remote_pane_id,
+                source_tab_id: _,
+                destination_tab_id,
+                target_pane_id,
+                direction,
+            } => crate::domain::protocol::Request::MovePane {
+                domain: domain_id.clone(),
+                pane: *remote_pane_id,
+                tab: *destination_tab_id,
+                target: Some(*target_pane_id),
+                direction: *direction,
+            },
+            Self::ClosePane {
+                domain_id,
+                remote_pane_id,
+                ..
+            } => crate::domain::protocol::Request::ClosePane {
+                domain: domain_id.clone(),
+                pane: *remote_pane_id,
+            },
+            Self::CloseTab {
+                domain_id,
+                remote_tab_id,
+                ..
+            } => crate::domain::protocol::Request::CloseTab {
+                domain: domain_id.clone(),
+                tab: *remote_tab_id,
+            },
+        }
+    }
+}
+
 /// What a completed live-domain change reports to the person.
 fn live_domain_control_message(control: &LiveDomainControl) -> String {
     match control {

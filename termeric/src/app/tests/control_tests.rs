@@ -241,7 +241,10 @@ fn divider_resizes_report_ratios_reach_the_inventory_and_refuse_live_domain_tabs
     );
     assert_eq!(failed_resize["event"]["changed"], serde_json::Value::Null);
     assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(second));
-    let inventory = app.control_inventory(7, &mut ControlInventoryBudget::default());
+    let inventory = app.control_inventory(
+        7,
+        &mut crate::app::application::inventory::ControlInventoryBudget::default(),
+    );
     let divider = inventory
         .tabs
         .iter()

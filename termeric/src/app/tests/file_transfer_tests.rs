@@ -1,6 +1,7 @@
 //! Dropped files, live-domain uploads, and Kitty file-transfer consent.
 
 use super::*;
+use crate::app::file_drop::{FileUploadOutcome, FileUploadSourceKind};
 
 #[test]
 fn local_file_drop_is_quoted_and_refuses_unsafe_terminal_routes() {

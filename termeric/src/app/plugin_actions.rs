@@ -454,7 +454,8 @@ fn plugin_result_envelope(
 /// Add a bounded, control-safe error to a failed result event.
 fn insert_result_error(event: &mut serde_json::Value, error: &str) {
     let mut budget = MAX_RESULT_ERROR_BYTES;
-    let (error, error_truncated) = super::control_metadata(error, &mut budget);
+    let (error, error_truncated) =
+        super::application::inventory::control_metadata(error, &mut budget);
     event["error"] = error.into();
     event["error_truncated"] = error_truncated.into();
 }

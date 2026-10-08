@@ -20,6 +20,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::window::WindowId;
 
 mod control;
+pub(super) mod inventory;
 mod live_domain;
 mod plugin_host;
 mod transfer;
@@ -488,7 +489,7 @@ impl Application {
 
     fn control_inventory(&self) -> crate::control::protocol::ProcessInventory {
         let mut truncated = self.window_order.len() > crate::control::protocol::MAX_WINDOWS;
-        let mut budget = super::ControlInventoryBudget::default();
+        let mut budget = inventory::ControlInventoryBudget::default();
         let mut windows = Vec::with_capacity(
             self.window_order
                 .len()
@@ -624,20 +625,20 @@ pub(super) fn build_plugin_process_inventory(
         .iter()
         .filter(|(_, window)| !window.should_exit)
         .count();
-    let mut truncated = live_window_count > super::PLUGIN_PROCESS_MAX_WINDOWS;
-    let mut budget = super::plugin_process_inventory_budget();
+    let mut truncated = live_window_count > inventory::PLUGIN_PROCESS_MAX_WINDOWS;
+    let mut budget = inventory::plugin_process_inventory_budget();
     let mut inventories =
-        Vec::with_capacity(live_window_count.min(super::PLUGIN_PROCESS_MAX_WINDOWS));
+        Vec::with_capacity(live_window_count.min(inventory::PLUGIN_PROCESS_MAX_WINDOWS));
     for (control_id, window) in windows
         .iter()
         .filter(|(_, window)| !window.should_exit)
-        .take(super::PLUGIN_PROCESS_MAX_WINDOWS)
+        .take(inventory::PLUGIN_PROCESS_MAX_WINDOWS)
     {
         let inventory = window.control_inventory(*control_id, &mut budget);
         truncated |= inventory.truncated;
         inventories.push(inventory);
     }
-    truncated |= inventories.len() < live_window_count.min(super::PLUGIN_PROCESS_MAX_WINDOWS);
+    truncated |= inventories.len() < live_window_count.min(inventory::PLUGIN_PROCESS_MAX_WINDOWS);
     crate::control::protocol::ProcessInventory {
         process_id: std::process::id(),
         windows: inventories,

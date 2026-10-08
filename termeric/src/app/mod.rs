@@ -85,8 +85,12 @@ use winit::{
 use termeric_core::TerminalEvent;
 
 use self::control_actions::Requester;
+use self::file_drop::{ActiveFileUpload, FileUploadCompletion, PendingFileUpload};
+pub(crate) use self::live_domain_control::LiveDomainControl;
 use self::redraw_scheduler::{RedrawReason, RedrawScheduler};
+use self::runtime_plugins::PendingRuntimePluginManagement;
 use self::state::AppState;
+use self::tab_drag::{TabGrab, TabSlide};
 use crate::config::theme::Theme;
 use crate::config::{Config, SplashMode};
 use crate::harvest::HarvestMode;
@@ -297,430 +301,9 @@ impl App {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) enum LiveDomainControl {
-    SpawnTab {
-        domain_id: String,
-        spawn: crate::domain::model::SpawnSpec,
-    },
-    SplitPane {
-        domain_id: String,
-        remote_pane_id: u32,
-        direction: crate::panes::SplitDirection,
-        spawn: crate::domain::model::SpawnSpec,
-    },
-    ResizeSplit {
-        domain_id: String,
-        remote_split_id: u32,
-        ratio_millis: u16,
-    },
-    RenameTab {
-        domain_id: String,
-        remote_tab_id: u32,
-        title: Option<String>,
-    },
-    SetTabPinned {
-        domain_id: String,
-        remote_tab_id: u32,
-        pinned: bool,
-    },
-    MoveTab {
-        domain_id: String,
-        remote_tab_id: u32,
-        index: u16,
-    },
-    SwapPaneNext {
-        domain_id: String,
-        remote_pane_id: u32,
-    },
-    BalanceTab {
-        domain_id: String,
-        remote_tab_id: u32,
-    },
-    ApplyPaneLayout {
-        domain_id: String,
-        remote_tab_id: u32,
-        preset: crate::panes::PaneLayoutPreset,
-    },
-    MovePane {
-        domain_id: String,
-        remote_pane_id: u32,
-        source_tab_id: u32,
-        destination_tab_id: u32,
-        target_pane_id: u32,
-        direction: crate::panes::SplitDirection,
-    },
-    ClosePane {
-        domain_id: String,
-        remote_pane_id: u32,
-        local_tab_id: usize,
-    },
-    CloseTab {
-        domain_id: String,
-        remote_tab_id: u32,
-        local_tab_id: usize,
-    },
-}
-
-impl LiveDomainControl {
-    fn domain_id(&self) -> &str {
-        match self {
-            Self::SpawnTab { domain_id, .. }
-            | Self::SplitPane { domain_id, .. }
-            | Self::ResizeSplit { domain_id, .. }
-            | Self::RenameTab { domain_id, .. }
-            | Self::SetTabPinned { domain_id, .. }
-            | Self::MoveTab { domain_id, .. }
-            | Self::SwapPaneNext { domain_id, .. }
-            | Self::BalanceTab { domain_id, .. }
-            | Self::ApplyPaneLayout { domain_id, .. }
-            | Self::MovePane { domain_id, .. }
-            | Self::ClosePane { domain_id, .. }
-            | Self::CloseTab { domain_id, .. } => domain_id,
-        }
-    }
-
-    fn request(&self) -> crate::domain::protocol::Request {
-        match self {
-            Self::SpawnTab { domain_id, spawn } => crate::domain::protocol::Request::SpawnTab {
-                domain: domain_id.clone(),
-                spawn: spawn.clone(),
-            },
-            Self::SplitPane {
-                domain_id,
-                remote_pane_id,
-                direction,
-                spawn,
-            } => crate::domain::protocol::Request::SplitPane {
-                domain: domain_id.clone(),
-                pane: *remote_pane_id,
-                direction: *direction,
-                spawn: spawn.clone(),
-            },
-            Self::ResizeSplit {
-                domain_id,
-                remote_split_id,
-                ratio_millis,
-            } => crate::domain::protocol::Request::ResizeSplit {
-                domain: domain_id.clone(),
-                split: *remote_split_id,
-                ratio_millis: *ratio_millis,
-            },
-            Self::RenameTab {
-                domain_id,
-                remote_tab_id,
-                title,
-            } => crate::domain::protocol::Request::RenameTab {
-                domain: domain_id.clone(),
-                tab: *remote_tab_id,
-                title: title.clone(),
-            },
-            Self::SetTabPinned {
-                domain_id,
-                remote_tab_id,
-                pinned,
-            } => crate::domain::protocol::Request::SetTabPinned {
-                domain: domain_id.clone(),
-                tab: *remote_tab_id,
-                pinned: *pinned,
-            },
-            Self::MoveTab {
-                domain_id,
-                remote_tab_id,
-                index,
-            } => crate::domain::protocol::Request::MoveTab {
-                domain: domain_id.clone(),
-                tab: *remote_tab_id,
-                index: *index,
-            },
-            Self::SwapPaneNext {
-                domain_id,
-                remote_pane_id,
-            } => crate::domain::protocol::Request::SwapPaneNext {
-                domain: domain_id.clone(),
-                pane: *remote_pane_id,
-            },
-            Self::BalanceTab {
-                domain_id,
-                remote_tab_id,
-            } => crate::domain::protocol::Request::BalanceTab {
-                domain: domain_id.clone(),
-                tab: *remote_tab_id,
-            },
-            Self::ApplyPaneLayout {
-                domain_id,
-                remote_tab_id,
-                preset,
-            } => crate::domain::protocol::Request::ApplyPaneLayout {
-                domain: domain_id.clone(),
-                tab: *remote_tab_id,
-                preset: *preset,
-            },
-            Self::MovePane {
-                domain_id,
-                remote_pane_id,
-                source_tab_id: _,
-                destination_tab_id,
-                target_pane_id,
-                direction,
-            } => crate::domain::protocol::Request::MovePane {
-                domain: domain_id.clone(),
-                pane: *remote_pane_id,
-                tab: *destination_tab_id,
-                target: Some(*target_pane_id),
-                direction: *direction,
-            },
-            Self::ClosePane {
-                domain_id,
-                remote_pane_id,
-                ..
-            } => crate::domain::protocol::Request::ClosePane {
-                domain: domain_id.clone(),
-                pane: *remote_pane_id,
-            },
-            Self::CloseTab {
-                domain_id,
-                remote_tab_id,
-                ..
-            } => crate::domain::protocol::Request::CloseTab {
-                domain: domain_id.clone(),
-                tab: *remote_tab_id,
-            },
-        }
-    }
-}
-
 impl From<accesskit_winit::Event> for AppEvent {
     fn from(event: accesskit_winit::Event) -> Self {
         Self::AccessKit(event)
-    }
-}
-
-pub(super) struct ControlInventoryBudget {
-    tabs: usize,
-    panes: usize,
-    dividers: usize,
-    metadata_bytes: usize,
-}
-
-const PLUGIN_PROCESS_MAX_WINDOWS: usize = 8;
-const PLUGIN_PROCESS_MAX_TABS: usize = 16;
-const PLUGIN_PROCESS_MAX_PANES: usize = 32;
-const PLUGIN_PROCESS_MAX_DIVIDERS: usize = 31;
-const PLUGIN_PROCESS_MAX_METADATA_BYTES: usize = 2 * 1024;
-
-fn plugin_process_inventory_budget() -> ControlInventoryBudget {
-    ControlInventoryBudget {
-        tabs: PLUGIN_PROCESS_MAX_TABS,
-        panes: PLUGIN_PROCESS_MAX_PANES,
-        dividers: PLUGIN_PROCESS_MAX_DIVIDERS,
-        metadata_bytes: PLUGIN_PROCESS_MAX_METADATA_BYTES,
-    }
-}
-
-impl Default for ControlInventoryBudget {
-    fn default() -> Self {
-        Self {
-            tabs: crate::control::protocol::MAX_TOTAL_TABS,
-            panes: crate::control::protocol::MAX_TOTAL_PANES,
-            dividers: crate::control::protocol::MAX_TOTAL_DIVIDERS,
-            metadata_bytes: crate::control::protocol::MAX_METADATA_BYTES,
-        }
-    }
-}
-
-impl App {
-    fn control_inventory(
-        &self,
-        id: u64,
-        budget: &mut ControlInventoryBudget,
-    ) -> crate::control::protocol::WindowInventory {
-        use crate::control::protocol::WindowInventory;
-
-        let (pixel_width, pixel_height) = self
-            .renderer
-            .as_ref()
-            .map(crate::renderer::Renderer::window_size)
-            .unwrap_or((self.config.window.width, self.config.window.height));
-
-        let (tabs, mut truncated) = match self.tabs.as_ref() {
-            Some(tabs) => self.control_tab_inventory(tabs, budget),
-            None => (Vec::new(), false),
-        };
-        let (workspace_id, workspace_truncated) =
-            self.current_workspace_id
-                .as_deref()
-                .map_or((None, false), |workspace| {
-                    let (workspace, was_truncated) =
-                        control_metadata(workspace, &mut budget.metadata_bytes);
-                    (Some(workspace), was_truncated)
-                });
-        truncated |= workspace_truncated;
-        WindowInventory {
-            id,
-            focused: self.window_focused,
-            visible: if self.launch.quick_access {
-                self.quick_access_visible
-            } else {
-                self.window
-                    .as_ref()
-                    .and_then(|window| window.is_visible())
-                    .unwrap_or(self.window.is_some())
-            },
-            quick_access: self.launch.quick_access,
-            workspace_id,
-            pixel_width,
-            pixel_height,
-            tabs,
-            truncated,
-        }
-    }
-
-    /// The window's tabs as control inventory, and whether any were left out
-    /// for the budget.
-    fn control_tab_inventory(
-        &self,
-        tabs: &TabManager,
-        budget: &mut ControlInventoryBudget,
-    ) -> (Vec<crate::control::protocol::TabInventory>, bool) {
-        use crate::control::protocol::{
-            DividerInventory, DividerKind, MAX_DIVIDERS_PER_TAB, MAX_PANES_PER_TAB,
-            MAX_TABS_PER_WINDOW, PaneInventory, TabInventory, TabKind,
-        };
-
-        let active = tabs.active_tab_id();
-        let all_tabs = tabs.all_tabs();
-        let tab_limit = MAX_TABS_PER_WINDOW.min(budget.tabs);
-        let truncated = all_tabs.len() > tab_limit;
-        budget.tabs -= all_tabs.len().min(tab_limit);
-        let tabs = all_tabs
-            .iter()
-            .take(tab_limit)
-            .map(|tab| {
-                let mut tab_truncated = false;
-                let manager = &tab.panes;
-                let focused = manager.focused_id();
-                let all = manager.iter_panes();
-                let pane_limit = MAX_PANES_PER_TAB.min(budget.panes);
-                tab_truncated |= all.len() > pane_limit;
-                budget.panes -= all.len().min(pane_limit);
-                let mut panes = all
-                    .into_iter()
-                    .take(pane_limit)
-                    .map(|pane| PaneInventory {
-                        id: pane.id.0,
-                        // A tab's only pane has no title of its own.
-                        title: pane.title.as_deref().map(|title| {
-                            let (title, title_truncated) =
-                                control_metadata(title, &mut budget.metadata_bytes);
-                            tab_truncated |= title_truncated;
-                            title
-                        }),
-                        focused: pane.id == focused,
-                        closed: pane.closed,
-                        cols: pane.terminal.cols().min(u16::MAX as usize) as u16,
-                        rows: pane.terminal.rows().min(u16::MAX as usize) as u16,
-                    })
-                    .collect::<Vec<_>>();
-                panes.sort_by_key(|pane| pane.id);
-                let all = manager.get_dividers();
-                let divider_limit = MAX_DIVIDERS_PER_TAB
-                    .min(budget.dividers)
-                    .min(panes.len().saturating_sub(1));
-                tab_truncated |= all.len() > divider_limit;
-                budget.dividers -= all.len().min(divider_limit);
-                let mut dividers = all
-                    .into_iter()
-                    .take(divider_limit)
-                    .map(|divider| {
-                        let (id, kind) = match divider.target {
-                            crate::panes::DividerTarget::Local(id) => (id, DividerKind::Local),
-                            crate::panes::DividerTarget::Domain(id) => {
-                                (u64::from(id), DividerKind::LiveDomain)
-                            }
-                        };
-                        DividerInventory {
-                            id,
-                            kind,
-                            direction: if divider.vertical {
-                                crate::panes::SplitDirection::Vertical
-                            } else {
-                                crate::panes::SplitDirection::Horizontal
-                            },
-                            ratio_millis: divider.ratio_millis,
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                dividers.sort_by_key(|divider| divider.id);
-                let domain_id = tab.live_domain_tab_route().map(|(domain, _)| {
-                    let (domain, domain_truncated) =
-                        control_metadata(domain, &mut budget.metadata_bytes);
-                    tab_truncated |= domain_truncated;
-                    domain
-                });
-                let kind = if domain_id.is_some() {
-                    TabKind::LiveDomain
-                } else {
-                    match &tab.tab_type {
-                        crate::tabs::TabType::Shell => TabKind::Shell,
-                        crate::tabs::TabType::Profile { .. }
-                        | crate::tabs::TabType::Serial { .. } => TabKind::Profile,
-                        crate::tabs::TabType::Plugin { .. } => TabKind::Plugin,
-                    }
-                };
-                let (title, title_truncated) =
-                    control_metadata(&tab.title, &mut budget.metadata_bytes);
-                tab_truncated |= title_truncated;
-                TabInventory {
-                    id: tab.id as u64,
-                    title,
-                    kind,
-                    active: active == Some(tab.id),
-                    pinned: tab.pinned,
-                    activity: tab.has_activity,
-                    closed: tab.closed || tab.closing_at.is_some(),
-                    domain_id,
-                    panes,
-                    dividers,
-                    truncated: tab_truncated,
-                }
-            })
-            .collect();
-        (tabs, truncated)
-    }
-}
-
-fn control_metadata(value: &str, remaining: &mut usize) -> (String, bool) {
-    const MAX_FIELD_BYTES: usize = 1_024;
-    let limit = (*remaining).min(MAX_FIELD_BYTES);
-    let mut output = String::with_capacity(value.len().min(limit));
-    let mut truncated = false;
-    for character in value.chars() {
-        if crate::safe_text::is_unsafe_display_char(character) {
-            truncated = true;
-            continue;
-        }
-        if output.len() + character.len_utf8() > limit {
-            truncated = true;
-            break;
-        }
-        output.push(character);
-    }
-    *remaining -= output.len();
-    (output, truncated)
-}
-
-#[cfg(test)]
-mod control_inventory_tests {
-    use super::control_metadata;
-
-    #[test]
-    fn metadata_removes_controls_without_splitting_utf8_or_exceeding_budget() {
-        let mut remaining = 5;
-        let (output, truncated) = control_metadata("a\u{1b}界bc", &mut remaining);
-        assert_eq!(output, "a界b");
-        assert_eq!(remaining, 0);
-        assert!(truncated);
     }
 }
 
@@ -840,28 +423,6 @@ struct TabDrag {
     grab: Option<TabGrab>,
 }
 
-/// Where the pointer holds a dragged tab, as positions along the tab bar
-/// (x for the top bar, y for the side rail).
-#[derive(Debug, Clone, Copy)]
-struct TabGrab {
-    pressed_at: f32,
-    /// From the tab's leading edge to the pointer.
-    offset: f32,
-    pointer: f32,
-    /// The pointer moved far enough for a drag rather than a click.
-    moving: bool,
-}
-
-/// A tab sliding into its slot after the dragged tab passed it, or the
-/// dragged tab after its release.
-#[derive(Debug, Clone, Copy)]
-struct TabSlide {
-    tab_id: usize,
-    /// Its distance from the slot when the slide began.
-    from: f32,
-    started: Instant,
-}
-
 #[derive(Debug, Clone)]
 struct LiveDomainTabDrag {
     domain_id: String,
@@ -936,12 +497,6 @@ enum OverlayFlow {
     AgentRevert(agent_changes::PendingRevert),
 }
 
-#[derive(Debug, Clone)]
-struct PendingRuntimePluginManagement {
-    request_id: u64,
-    view: RuntimePluginManagerView,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PendingPluginWindowClose {
     plugin_id: String,
@@ -955,112 +510,6 @@ impl PendingPluginWindowClose {
             && self.plugin_generation == completion.plugin_generation
             && self.result_request_id == completion.request_id
     }
-}
-
-#[derive(Debug, Clone)]
-enum RuntimePluginManagerView {
-    List {
-        page: usize,
-    },
-    InstallPath {
-        page: usize,
-    },
-    ReviewInstall {
-        page: usize,
-        preview: crate::plugin::runtime::PluginInstallPreview,
-        grants: crate::plugin::permission::PluginPermissions,
-    },
-    ReviewUpdate {
-        page: usize,
-        preview: Box<crate::plugin::runtime::PluginUpdatePreview>,
-        grants: crate::plugin::permission::PluginPermissions,
-    },
-    ReviewPermissions {
-        page: usize,
-        preview: Box<crate::plugin::runtime::PluginGrantsPreview>,
-        grants: crate::plugin::permission::PluginPermissions,
-    },
-    Detail {
-        plugin_id: String,
-        page: usize,
-    },
-    DefaultProfile {
-        plugin_id: String,
-        page: usize,
-        profile_page: usize,
-    },
-    Settings {
-        plugin_id: String,
-        page: usize,
-        settings_page: usize,
-    },
-    Setting {
-        plugin_id: String,
-        page: usize,
-        settings_page: usize,
-        value_page: usize,
-        setting: crate::plugin::runtime::DeclarativeSetting,
-    },
-    EditSetting {
-        plugin_id: String,
-        page: usize,
-        settings_page: usize,
-        setting: crate::plugin::runtime::DeclarativeSetting,
-    },
-    Confirm {
-        plugin_id: String,
-        page: usize,
-        operation: RuntimePluginOperation,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuntimePluginOperation {
-    ResetSettings,
-    Remove,
-}
-
-#[derive(Debug, Clone)]
-struct PendingFileUpload {
-    request_id: u64,
-    source: PathBuf,
-    authority: crate::domain::DomainAuthority,
-    domain_id: String,
-    pane_id: u32,
-    name: String,
-    source_kind: FileUploadSourceKind,
-    source_identity: (u64, u64),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FileUploadSourceKind {
-    File { bytes: u64 },
-    Directory,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct FileUploadOutcome {
-    path: String,
-    bytes: u64,
-    entries: Option<u32>,
-    insertion_error: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) enum FileUploadCompletion {
-    Uploaded(FileUploadOutcome),
-    Cancelled { bytes_received: u64 },
-}
-
-#[derive(Debug)]
-struct ActiveFileUpload {
-    request_id: u64,
-    name: String,
-    bytes_sent: u64,
-    total_bytes: Option<u64>,
-    cancellation: Arc<AtomicBool>,
-    cancel_requested: bool,
-    progress_toast_id: u64,
 }
 
 /// Main application state
@@ -2155,13 +1604,6 @@ impl App {
             tabs.resize_active(area);
         }
         self.finish_copy_mode_reflow();
-    }
-
-    fn pending_runtime_plugin_management(&self) -> Option<&PendingRuntimePluginManagement> {
-        match &self.overlay_flow {
-            Some(OverlayFlow::RuntimePlugins(pending)) => Some(pending),
-            _ => None,
-        }
     }
 
     fn pending_font_range_management(
@@ -4000,21 +3442,6 @@ fn next_blink_boundary(start: Instant, now: Instant, half_period: Duration) -> I
     start + half_period.mul_f64((completed + 1) as f64)
 }
 
-/// The agent terminal to send to: the focused one, else the only one open.
-fn select_agent_target(
-    focused: Option<crate::agents::AgentTarget>,
-    open: &[crate::agents::AgentTarget],
-) -> std::result::Result<crate::agents::AgentTarget, String> {
-    if let Some(focused) = focused {
-        return Ok(focused);
-    }
-    match open {
-        [only] => Ok(only.clone()),
-        [] => Err("Start an agent before using Explain".into()),
-        _ => Err("Several agents are running; focus the one to ask first".into()),
-    }
-}
-
 fn command_keystrokes(command: &str) -> [Vec<u8>; 3] {
     [
         b"\x15".to_vec(),
@@ -4050,7 +3477,7 @@ mod helper_tests {
     use super::{
         FOCUS_DIM_AMOUNT, FOCUS_DIM_DURATION, blink_phase_visible, command_keystrokes,
         cursor_opacity_at, cursor_state_requires_blink, focus_dim_after, next_blink_boundary,
-        resolve_cursor_presentation, select_agent_target,
+        resolve_cursor_presentation,
     };
     use std::time::{Duration, Instant};
 
@@ -4202,23 +3629,6 @@ mod helper_tests {
             next_blink_boundary(start, start + Duration::from_millis(251), half),
             start + Duration::from_millis(500)
         );
-    }
-
-    #[test]
-    fn agent_target_prefers_focus_then_the_only_open_agent() {
-        let target = |tab_id| crate::agents::AgentTarget {
-            identity: crate::tabs::TerminalIdentity {
-                tab_id,
-                pane_id: crate::panes::PaneId(0),
-            },
-            agent_id: "codex".into(),
-            agent_name: "Codex".into(),
-        };
-        let open = [target(1), target(2)];
-        assert_eq!(select_agent_target(Some(target(2)), &open), Ok(target(2)));
-        assert_eq!(select_agent_target(None, &[target(7)]), Ok(target(7)));
-        assert!(select_agent_target(None, &open).is_err());
-        assert!(select_agent_target(None, &[]).is_err());
     }
 
     #[test]
