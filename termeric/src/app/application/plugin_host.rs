@@ -315,7 +315,7 @@ impl Application {
             .tab_by_id(tab_id)
             .ok_or_else(|| format!("GUI tab {tab_id} does not exist in the source window"))?;
         if tab.closed || tab.is_closing() {
-            return Err(format!("GUI tab {tab_id} is closing"));
+            return Err(format!("GUI tab {tab_id} is already closing"));
         }
         let non_closing_tabs = tabs
             .all_tabs()

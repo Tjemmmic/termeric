@@ -216,7 +216,7 @@ impl App {
             return Err("Target window has no active tab".into());
         };
         if tab.closed || tab.closing_at.is_some() {
-            return Err(format!("GUI tab {} is closing", tab.id));
+            return Err(format!("GUI tab {} is already closing", tab.id));
         }
         let Some((domain_id, _)) = tab.live_domain_tab_route() else {
             return Ok(None);
@@ -399,7 +399,7 @@ impl App {
             .find(|(_, tab)| tab.id == tab_id)
             .ok_or_else(|| format!("GUI tab {tab_id} does not exist in the source window"))?;
         if source.closed || source.closing_at.is_some() {
-            return Err(format!("GUI tab {tab_id} is closing"));
+            return Err(format!("GUI tab {tab_id} is already closing"));
         }
         let Some((domain_id, remote_tab_id)) = source.live_domain_tab_route() else {
             return Ok(None);
@@ -486,12 +486,10 @@ impl App {
             format!("GUI tab {destination_tab_id} does not exist in the destination window")
         })?;
         if source.closed || source.closing_at.is_some() {
-            return Err(format!("GUI source tab {source_tab_id} is closing"));
+            return Err(format!("GUI tab {source_tab_id} is already closing"));
         }
         if destination.closed || destination.closing_at.is_some() {
-            return Err(format!(
-                "GUI destination tab {destination_tab_id} is closing"
-            ));
+            return Err(format!("GUI tab {destination_tab_id} is already closing"));
         }
         let (source_live, destination_live) = (&source.live_domain, &destination.live_domain);
         let (Some(source_live), Some(destination_live)) = (source_live, destination_live) else {

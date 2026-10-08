@@ -347,18 +347,8 @@ impl App {
         pane_id: u32,
         direction: SplitDirection,
     ) -> std::result::Result<u32, String> {
-        let tab_id = usize::try_from(tab_id)
-            .map_err(|_| "Target tab ID does not fit this platform".to_string())?;
-        let tabs = self
-            .tabs
-            .as_mut()
-            .ok_or_else(|| "Target window has no initialized tab manager".to_string())?;
-        let tab = tabs
-            .tab_mut_by_id(tab_id)
-            .ok_or_else(|| format!("GUI tab {tab_id} does not exist in the target window"))?;
-        if tab.closed || tab.closing_at.is_some() {
-            return Err(format!("GUI tab {tab_id} is closing"));
-        }
+        let cwd_mode = self.config.panes.cwd;
+        let tab = self.control_tab_mut(tab_id)?;
         if tab.live_domain_tab_route().is_some() {
             return Err("Control-created panes are not yet supported for live-domain tabs".into());
         }
@@ -367,23 +357,9 @@ impl App {
         }
 
         let direction_name = direction.name();
-        let target = PaneId(pane_id);
+        let target = super::control_actions::control_running_pane(tab, pane_id)?.id;
         let manager = &mut tab.panes;
-        if let Some(sole) = manager.lone_pane()
-            && sole.id != target
-        {
-            return Err(format!(
-                "GUI pane {pane_id} does not exist in unsplit tab {tab_id}; its sole pane ID is {}",
-                sole.id.0
-            ));
-        }
-        let pane = manager
-            .get_pane(target)
-            .ok_or_else(|| format!("GUI pane {pane_id} does not exist in tab {tab_id}"))?;
-        if pane.closed {
-            return Err(format!("GUI pane {pane_id} in tab {tab_id} is closed"));
-        }
-        manager.set_cwd_mode(self.config.panes.cwd);
+        manager.set_cwd_mode(cwd_mode);
         let new_id = manager.split_target(target, direction).map_err(|error| {
             format!("Could not split pane {pane_id} {direction_name}: {error:#}")
         })?;

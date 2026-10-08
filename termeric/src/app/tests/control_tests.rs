@@ -317,6 +317,11 @@ fn control_requests_refuse_a_closing_tab_and_an_exited_pane_alike() {
             .unwrap_err(),
         exited
     );
+    assert_eq!(
+        app.create_control_pane(first as u64, 0, SplitDirection::Vertical)
+            .unwrap_err(),
+        exited
+    );
     // An exited pane keeps its text, so reading it still works.
     assert!(app.read_control_text(first as u64, 0, 0, 64).is_ok());
     split_pane_mut(&mut app, first, PaneId(0)).closed = false;
@@ -351,6 +356,25 @@ fn control_requests_refuse_a_closing_tab_and_an_exited_pane_alike() {
     assert_eq!(
         app.send_text_for(Requester::Control, first as u64, 1, "x", false, false)
             .unwrap_err(),
+        closing
+    );
+    assert_eq!(
+        app.create_control_pane(first as u64, 1, SplitDirection::Vertical)
+            .unwrap_err(),
+        closing
+    );
+    // Moving a tab or pane to another window says the same.
+    let tabs = app.tabs.as_ref().unwrap();
+    assert_eq!(
+        tabs.validate_window_tab_transfer_source_by_id(first)
+            .unwrap_err()
+            .to_string(),
+        closing
+    );
+    assert_eq!(
+        tabs.validate_pane_transfer_source_by_id(first, PaneId(1))
+            .unwrap_err()
+            .to_string(),
         closing
     );
 }

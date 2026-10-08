@@ -745,7 +745,7 @@ impl TabManager {
             .with_context(|| format!("GUI tab {tab_id} does not exist in the source window"))?;
         let tab = &self.tabs[source];
         if tab.is_closing() || tab.closed {
-            anyhow::bail!("GUI tab {tab_id} is closing");
+            anyhow::bail!("GUI tab {tab_id} is already closing");
         }
         if tab.live_domain.is_some() {
             anyhow::bail!(
@@ -818,7 +818,7 @@ impl TabManager {
             .find(|tab| tab.id == tab_id)
             .with_context(|| format!("GUI tab {tab_id} does not exist in the source window"))?;
         if tab.is_closing() || tab.closed {
-            anyhow::bail!("GUI tab {tab_id} is closing");
+            anyhow::bail!("GUI tab {tab_id} is already closing");
         }
         if tab.live_domain.is_some() {
             anyhow::bail!(
@@ -986,7 +986,7 @@ impl TabManager {
             .find(|tab| tab.id == tab_id)
             .with_context(|| format!("GUI tab {tab_id} does not exist in the source window"))?;
         if tab.is_closing() || tab.closed {
-            anyhow::bail!("GUI tab {tab_id} is closing");
+            anyhow::bail!("GUI tab {tab_id} is already closing");
         }
         if tab.live_domain.is_some() {
             anyhow::bail!(
@@ -1022,22 +1022,13 @@ impl TabManager {
                 format!("GUI tab {tab_id} does not exist in the destination window")
             })?;
         if tab.is_closing() || tab.closed {
-            anyhow::bail!("GUI tab {tab_id} is closing");
+            anyhow::bail!("GUI tab {tab_id} is already closing");
         }
         if tab.live_domain.is_some() {
             anyhow::bail!("A local pane cannot be attached to a live-domain tab");
         }
         if !tab.allows_pane_splits() {
             anyhow::bail!("A pane cannot be attached to a serial terminal tab");
-        }
-        if let Some(sole) = tab.panes.lone_pane()
-            && sole.id != target
-        {
-            anyhow::bail!(
-                "GUI pane {} does not exist in unsplit tab {tab_id}; its sole pane ID is {}",
-                target.0,
-                sole.id.0
-            );
         }
         tab.panes.validate_attach_target(target)
     }
