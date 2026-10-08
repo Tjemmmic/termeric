@@ -117,12 +117,7 @@ fn create_token(path: &Path) -> anyhow::Result<String> {
     let token = termeric_core::hex::encode(&random[..32]);
     let nonce = termeric_core::hex::encode(&random[32..]);
     let temporary = token_temporary_path(path, std::process::id(), &nonce);
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .mode(0o600)
-        .open(&temporary)
+    let mut file = crate::safe_fs::create_private(&temporary)
         .with_context(|| format!("create temporary Termeric token {}", temporary.display()))?;
     file.write_all(token.as_bytes())?;
     file.sync_all()?;
@@ -466,12 +461,7 @@ mod tests {
         let paths =
             SocketPaths::in_private_directory(temp.path().join("runtime"), "fixture").unwrap();
 
-        let oversized = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&paths.token)
-            .unwrap();
+        let oversized = crate::safe_fs::create_private(&paths.token).unwrap();
         oversized.set_len(1024 * 1024 * 1024).unwrap();
         drop(oversized);
         assert!(paths.read_token().is_err());

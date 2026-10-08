@@ -2,7 +2,7 @@
 //! and render that copy as Markdown, or write captured scrollback. The work
 //! runs off the UI thread, and completion never targets a tab.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -10,6 +10,7 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::Duration;
 
 use super::transcript::PendingTranscriptFlush;
+use crate::safe_fs::create_private;
 
 pub(crate) const MAX_SCROLLBACK_BYTES: usize = 32 * 1024 * 1024;
 /// How long the transcript writer may take to flush what it holds.
@@ -188,15 +189,6 @@ fn is_staging_name(name: &std::ffi::OsStr) -> bool {
         .is_some_and(|suffix| {
             !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric())
         })
-}
-
-fn create_private(path: &Path) -> io::Result<File> {
-    use std::os::unix::fs::OpenOptionsExt;
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)
 }
 
 /// Copy the first `bytes` of the transcript at `source`: what the writer had

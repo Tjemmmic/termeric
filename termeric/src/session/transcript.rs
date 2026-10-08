@@ -17,9 +17,8 @@ mod streaming_tests;
 mod utf8;
 
 use serde::{Deserialize, Serialize};
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{BufWriter, Write};
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -244,17 +243,6 @@ impl std::fmt::Debug for TranscriptRecorder {
     }
 }
 
-/// Transcripts can hold secrets, so the file is private (0600), and a name
-/// already taken, even by a symbolic link, is refused rather than opened.
-fn create_transcript_file(path: &Path) -> std::io::Result<File> {
-    OpenOptions::new()
-        .append(true)
-        .create_new(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
-}
-
 impl TranscriptRecorder {
     pub fn new(
         dir: &Path,
@@ -266,9 +254,12 @@ impl TranscriptRecorder {
         let path = dir.join(format!("transcript_{}.jsonl", super::generate_session_id()));
         let directory = dir.to_path_buf();
         let file_path = path.clone();
+        // Transcripts can hold secrets: the directory and the file are
+        // private, and a name already taken, even by a link, is refused.
         let factory: SinkFactory = Box::new(move || {
             crate::safe_fs::ensure_private_directory(&directory)?;
-            Ok(Box::new(FileSink(create_transcript_file(&file_path)?)))
+            let file = crate::safe_fs::create_private(&file_path)?;
+            Ok(Box::new(FileSink(file)))
         });
         Self::with_factory(
             path,
@@ -1005,7 +996,7 @@ mod tests {
     }
 
     #[test]
-    fn transcript_files_are_private_and_never_opened_through_a_link() {
+    fn transcript_files_are_private() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let mut recorder =
@@ -1014,14 +1005,6 @@ mod tests {
         finish_and_read(&mut recorder);
         let mode = fs::metadata(recorder.path()).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
-
-        let target = dir.path().join("elsewhere");
-        fs::write(&target, "untouched").unwrap();
-        let link = dir.path().join("transcript_link.jsonl");
-        std::os::unix::fs::symlink(&target, &link).unwrap();
-        assert!(create_transcript_file(&link).is_err());
-        assert!(create_transcript_file(&target).is_err());
-        assert_eq!(fs::read_to_string(&target).unwrap(), "untouched");
     }
 
     #[test]

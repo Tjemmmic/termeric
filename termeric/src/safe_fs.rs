@@ -1,8 +1,8 @@
 //! Hardened access to Termeric's own files: reads never follow a symlink,
 //! block on a FIFO, or read past a limit, writes replace a file atomically
 //! through a private staging file beside it, publishing a staged entry
-//! never replaces another, and private directories are never reached
-//! through a symlink.
+//! never replaces another, private files are only ever created new, and
+//! private directories are never reached through a symlink.
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, BufWriter, Read, Write};
@@ -74,6 +74,23 @@ fn size_error(limit: usize) -> io::Error {
         io::ErrorKind::InvalidData,
         format!("file exceeds its {limit}-byte limit"),
     )
+}
+
+/// Create `path` as a new file only this user can read and write (mode
+/// 0600 exactly, whatever the umask), opened for both. Anything already at
+/// `path`, even a symbolic link, fails with [`io::ErrorKind::AlreadyExists`]
+/// and is left alone, so the file is never opened through a link or reused.
+pub(crate) fn create_private(path: &Path) -> io::Result<fs::File> {
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?;
+    // The umask can only narrow the creation mode; set it exactly, since
+    // readers such as a resumed upload or the token check expect 0600.
+    file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    Ok(file)
 }
 
 /// Replace `path` with what `write` produces: write a private (0600)
@@ -388,6 +405,39 @@ mod tests {
         assert!(!rescued, "the read waited for a FIFO writer");
         assert!(result.unwrap_err().to_string().contains("regular file"));
         assert!(path.exists());
+    }
+
+    #[test]
+    fn private_files_are_only_ever_created_new_and_never_through_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("private");
+        let mut file = create_private(&path).unwrap();
+        file.write_all(b"secret").unwrap();
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            create_private(&path).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), "secret");
+
+        let target = dir.path().join("target");
+        fs::write(&target, "untouched").unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let dangling = dir.path().join("dangling");
+        let missing = dir.path().join("missing");
+        std::os::unix::fs::symlink(&missing, &dangling).unwrap();
+        for linked in [&link, &dangling] {
+            assert_eq!(
+                create_private(linked).unwrap_err().kind(),
+                io::ErrorKind::AlreadyExists
+            );
+        }
+        assert_eq!(fs::read_to_string(&target).unwrap(), "untouched");
+        assert!(!missing.exists());
     }
 
     #[test]

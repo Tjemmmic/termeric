@@ -55,7 +55,7 @@ pub fn build_directory_archive(
             let (path, file) = super::io_util::create_unique(
                 &std::env::temp_dir(),
                 ".termeric-directory-archive-",
-                super::io_util::private_file,
+                crate::safe_fs::create_private,
             )
             .context("create private directory upload archive")?;
             fs::remove_file(&path).context("unlink private directory upload archive")?;

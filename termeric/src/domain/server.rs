@@ -883,9 +883,12 @@ fn receive_file_upload(
             if fs::symlink_metadata(&target_path).is_ok() {
                 anyhow::bail!("destination already exists; uploads never overwrite destinations");
             }
-            let (path, file) =
-                io_util::create_unique(&directory, ".termeric-upload-", io_util::private_file)
-                    .context("create temporary upload in pane directory")?;
+            let (path, file) = io_util::create_unique(
+                &directory,
+                ".termeric-upload-",
+                crate::safe_fs::create_private,
+            )
+            .context("create temporary upload in pane directory")?;
             let temporary = TemporaryUpload {
                 path,
                 file,
@@ -2741,12 +2744,7 @@ mod tests {
     fn temporary_upload_publication_is_private_atomic_and_never_overwrites() {
         let directory = tempfile::tempdir().unwrap();
         let temporary_path = directory.path().join(".termeric-upload-fixture");
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&temporary_path)
-            .unwrap();
+        let file = crate::safe_fs::create_private(&temporary_path).unwrap();
         let mut temporary = TemporaryUpload {
             path: temporary_path.clone(),
             file,
@@ -2764,12 +2762,7 @@ mod tests {
         );
 
         let second_path = directory.path().join(".termeric-upload-second");
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&second_path)
-            .unwrap();
+        let file = crate::safe_fs::create_private(&second_path).unwrap();
         let mut second = TemporaryUpload {
             path: second_path.clone(),
             file,

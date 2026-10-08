@@ -45,12 +45,7 @@ fn trickled_upload_chunk_and_commit_release_capacity_without_publishing_and_can_
         let directory = tempfile::tempdir().unwrap();
         let staging = directory.path().join(".termeric-upload-fixture");
         let target = directory.path().join("result.bin");
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&staging)
-            .unwrap();
+        let mut file = crate::safe_fs::create_private(&staging).unwrap();
         file.write_all(b"abc").unwrap();
         let metadata = file.metadata().unwrap();
         drop(file);
