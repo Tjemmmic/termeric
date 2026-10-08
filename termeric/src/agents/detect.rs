@@ -119,6 +119,89 @@ pub fn foreground_argv(process_group: i32) -> Option<Vec<String>> {
     (!argv.is_empty()).then_some(argv)
 }
 
+/// Whether a terminal's own child, its shell or the program the tab
+/// launched, holds the terminal's foreground rather than a program it
+/// started.
+pub(crate) fn child_holds_foreground(child: Option<i64>, foreground_group: Option<i32>) -> bool {
+    child.is_some() && child == foreground_group.map(i64::from)
+}
+
+/// Re-identify the coding agent in the terminal on `pty`, launched as
+/// `launch`, from its foreground process, recording it in `session`. A
+/// terminal Termeric launched as an agent keeps that identity even where
+/// the platform cannot report the foreground process. Returns whether the
+/// terminal's agent changed.
+pub(crate) fn observe_terminal(
+    catalog: &super::AgentCatalog,
+    pty: &termeric_core::pty::PtyHandle,
+    launch: &crate::workspace::WorkspaceLaunch,
+    session: &mut crate::session::terminal_state::TerminalIntegration,
+) -> bool {
+    let (launched_id, profile) = match launch {
+        crate::workspace::WorkspaceLaunch::Plugin { plugin_id, profile } => (
+            catalog
+                .get(plugin_id)
+                .filter(|agent| agent.enabled)
+                .map(|agent| agent.id.as_str()),
+            profile,
+        ),
+        _ => (None, &None),
+    };
+    let foreground_group = pty.foreground_process_group();
+    let foreground = foreground_group
+        .and_then(foreground_argv)
+        .and_then(|argv| catalog.identify(&argv).map(|agent| agent.id.clone()));
+    // An agent that reports through hooks stays recognized, even when its
+    // process name is unfamiliar (for example one started through `npx`),
+    // only while the process group it reported from still holds the
+    // foreground. Anything started after it, such as a shell or `ssh`, is
+    // not the agent.
+    let child = pty.child_id().map(i64::from);
+    // The terminal's own child (its shell) in front means no agent is,
+    // whatever a program elsewhere that inherited this terminal's identity
+    // reports.
+    let child_in_front = child_holds_foreground(child, foreground_group);
+    let reported = session
+        .agent_status
+        .as_ref()
+        .filter(|status| {
+            !child_in_front
+                && foreground_group.is_some()
+                && status.process_group == foreground_group
+        })
+        .map(|status| status.agent_id.clone());
+    // The agent Termeric started, itself in front, is known exactly; a guess
+    // from its program name could name another agent that shares the
+    // program.
+    let launched_in_front = launched_id.filter(|_| child_in_front);
+    let observed = launched_in_front
+        .map(|agent_id| (agent_id.to_owned(), child))
+        .or_else(|| foreground.map(|agent_id| (agent_id, foreground_group.map(i64::from))))
+        .or_else(|| reported.map(|agent_id| (agent_id, foreground_group.map(i64::from))))
+        .or_else(|| launched_id.map(|agent_id| (agent_id.to_owned(), child)))
+        .map(|(agent_id, process)| {
+            let launched = launched_id == Some(agent_id.as_str());
+            super::AgentSession {
+                profile: launched.then(|| profile.clone()).flatten(),
+                launched,
+                agent_id,
+                process,
+            }
+        });
+    let mut changed = false;
+    if session.agent_status.as_ref().is_some_and(|status| {
+        observed
+            .as_ref()
+            .is_none_or(|agent| agent.agent_id != status.agent_id)
+    }) {
+        // The agent that reported is gone, even if it never said so.
+        session.agent_status = None;
+        changed = true;
+    }
+    changed |= session.set_agent(observed);
+    changed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
