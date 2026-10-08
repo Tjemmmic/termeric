@@ -770,7 +770,7 @@ impl App {
                 // Spinners and slides at 30 frames a second.
                 deadlines.push(now + std::time::Duration::from_millis(33));
             } else if self.agent_view.state.has_keyboard() {
-                deadlines.push(self.agent_view.state.next_caret_toggle(now));
+                deadlines.extend(self.agent_view.state.next_caret_toggle(now));
             }
         }
         deadlines.into_iter().min()
@@ -794,8 +794,11 @@ impl App {
         if self.agent_view_animating() {
             self.request_redraw(RedrawReason::Animation);
         } else if self.agent_view.state.has_keyboard()
-            && self.agent_view.state.next_caret_toggle(now)
-                <= now + std::time::Duration::from_millis(5)
+            && self
+                .agent_view
+                .state
+                .next_caret_toggle(now)
+                .is_some_and(|toggle| toggle <= now + std::time::Duration::from_millis(5))
         {
             self.request_redraw(RedrawReason::CursorBlink);
         }

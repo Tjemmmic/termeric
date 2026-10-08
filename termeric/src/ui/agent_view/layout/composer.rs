@@ -231,7 +231,7 @@ impl Builder<'_, '_> {
             caret = Some(Caret {
                 bounds: caret_bounds,
             });
-            if focused && caret_visible(state.caret_moved, self.input.now) {
+            if focused && state.caret_visible(self.input.now) {
                 region.prims.push(Prim::Fill {
                     bounds: caret_bounds,
                     radius: 0.0,
@@ -512,11 +512,4 @@ impl Builder<'_, '_> {
             }
         }
     }
-}
-
-/// The caret blinks on a one-second cycle, starting visible after it moves.
-pub(super) fn caret_visible(moved: Instant, now: Instant) -> bool {
-    let elapsed = now.saturating_duration_since(moved);
-    elapsed < super::super::CARET_HOLD
-        || (elapsed.as_millis() / super::super::CARET_PHASE.as_millis()).is_multiple_of(2)
 }

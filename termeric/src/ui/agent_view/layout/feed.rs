@@ -521,7 +521,7 @@ impl Builder<'_, '_> {
                 center: [x + self.m.px(8.0) + self.m.icon, y + row / 2.0],
                 radius: self.m.px(5.0),
                 thickness: self.m.px(1.6),
-                phase: spinner_phase(self.input.now),
+                phase: spinner_phase(self.input.now, self.input.state.reduced_motion()),
                 color: self.c.accent,
             });
         }
@@ -676,7 +676,7 @@ impl Builder<'_, '_> {
                     center: [x + self.m.px(7.0), center],
                     radius: self.m.px(5.0),
                     thickness: self.m.px(1.6),
-                    phase: spinner_phase(self.input.now),
+                    phase: spinner_phase(self.input.now, self.input.state.reduced_motion()),
                     color: self.c.accent,
                 });
                 if status == RowStatus::Preparing {
@@ -2755,7 +2755,7 @@ impl Builder<'_, '_> {
             center: [x + self.m.px(8.0), y + height / 2.0],
             radius: self.m.px(6.0),
             thickness: self.m.px(1.8),
-            phase: spinner_phase(self.input.now),
+            phase: spinner_phase(self.input.now, self.input.state.reduced_motion()),
             color: self.c.accent,
         });
         self.label(
@@ -2917,8 +2917,12 @@ pub(super) fn duration(duration: std::time::Duration) -> String {
     }
 }
 
-/// Spinners turn once a second, from a fixed origin so frames agree.
-pub(super) fn spinner_phase(now: std::time::Instant) -> f32 {
+/// Spinners turn once a second, from a fixed origin so frames agree; with
+/// reduced motion they hold still.
+pub(super) fn spinner_phase(now: std::time::Instant, reduced_motion: bool) -> f32 {
+    if reduced_motion {
+        return 0.0;
+    }
     use std::sync::OnceLock;
     static ORIGIN: OnceLock<std::time::Instant> = OnceLock::new();
     let origin = *ORIGIN.get_or_init(std::time::Instant::now);

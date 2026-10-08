@@ -727,14 +727,27 @@ impl AgentViewState {
         self.caret_moved = Instant::now();
     }
 
-    /// When the blinking caret next appears or disappears.
-    pub fn next_caret_toggle(&self, now: Instant) -> Instant {
+    /// Whether the caret shows at `now`: it blinks on a one-second cycle,
+    /// starting visible after it moves, and stays solid with reduced motion.
+    pub fn caret_visible(&self, now: Instant) -> bool {
+        let elapsed = now.saturating_duration_since(self.caret_moved);
+        self.reduced_motion
+            || elapsed < CARET_HOLD
+            || (elapsed.as_millis() / CARET_PHASE.as_millis()).is_multiple_of(2)
+    }
+
+    /// When the blinking caret next appears or disappears; never with
+    /// reduced motion, when it stays solid.
+    pub fn next_caret_toggle(&self, now: Instant) -> Option<Instant> {
+        if self.reduced_motion {
+            return None;
+        }
         let elapsed = now.saturating_duration_since(self.caret_moved);
         if elapsed < CARET_HOLD {
-            return self.caret_moved + CARET_HOLD;
+            return Some(self.caret_moved + CARET_HOLD);
         }
         let phases = elapsed.as_millis() / CARET_PHASE.as_millis() + 1;
-        self.caret_moved + CARET_PHASE * u32::try_from(phases).unwrap_or(u32::MAX)
+        Some(self.caret_moved + CARET_PHASE * u32::try_from(phases).unwrap_or(u32::MAX))
     }
 }
 
@@ -803,6 +816,21 @@ mod tests {
         assert!(scroll.animating(now));
         assert_eq!(scroll.offset(900.0, now), 900.0);
         assert_eq!(scroll.offset(900.0, now + SCROLL_DURATION), 0.0);
+    }
+
+    #[test]
+    fn the_caret_blinks_after_a_hold_and_stays_solid_with_reduced_motion() {
+        let mut state = AgentViewState::default();
+        state.touch_caret();
+        let moved = state.caret_moved;
+        let hidden = moved + CARET_HOLD;
+        assert!(state.caret_visible(moved));
+        assert!(!state.caret_visible(hidden));
+        assert_eq!(state.next_caret_toggle(moved), Some(moved + CARET_HOLD));
+
+        state.set_reduced_motion(true);
+        assert!(state.caret_visible(hidden));
+        assert_eq!(state.next_caret_toggle(hidden), None);
     }
 
     #[test]

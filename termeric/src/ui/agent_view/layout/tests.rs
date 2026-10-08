@@ -1020,3 +1020,15 @@ fn a_short_menu_has_no_search() {
     assert!(scene.hit_for(&Target::MenuSearch).is_none());
     assert_eq!(scene.menu_height, scene.menu_viewport.unwrap().height);
 }
+
+#[test]
+fn spinners_hold_still_with_reduced_motion() {
+    let now = Instant::now();
+    let later = now + std::time::Duration::from_millis(250);
+    assert_ne!(
+        feed::spinner_phase(now, false),
+        feed::spinner_phase(later, false)
+    );
+    assert_eq!(feed::spinner_phase(now, true), 0.0);
+    assert_eq!(feed::spinner_phase(later, true), 0.0);
+}
