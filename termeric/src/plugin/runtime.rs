@@ -1553,6 +1553,28 @@ pub(crate) fn execute_admin_at(
     }
 }
 
+/// Puts the manifest an install moved aside at `backup` back at `manifest`,
+/// replacing whatever the install wrote there.
+fn restore_manifest(backup: &Path, manifest: &Path) -> Result<()> {
+    fs::rename(backup, manifest).with_context(|| {
+        format!(
+            "could not restore the previous plugin manifest from {}",
+            backup.display()
+        )
+    })
+}
+
+/// `error`, the reason an install failed, and also why undoing it failed
+/// when it did, so a half-installed plugin is never reported as untouched.
+fn with_rollback(error: anyhow::Error, rollback: Result<()>) -> anyhow::Error {
+    match rollback {
+        Ok(()) => error,
+        Err(rollback) => {
+            anyhow::anyhow!("{error:#}; undoing the install also failed: {rollback:#}")
+        }
+    }
+}
+
 fn install_manifest(
     registry: &mut PluginRegistry,
     registry_path: &Path,
@@ -1636,18 +1658,19 @@ fn install_manifest(
         }
         fs::rename(&destination_manifest, &backup)?;
     }
+    let rollback = had_previous.then_some(backup.as_path());
     if let Err(error) =
         crate::safe_fs::atomic_replace(&destination_manifest, |writer| writer.write_all(&bytes))
     {
-        if had_previous {
-            let _ = fs::rename(&backup, &destination_manifest);
-        }
-        return Err(error).with_context(|| {
-            format!(
-                "failed to write installed plugin manifest {}",
-                destination_manifest.display()
-            )
+        let error = anyhow::Error::new(error).context(format!(
+            "failed to write installed plugin manifest {}",
+            destination_manifest.display()
+        ));
+        // The replace is atomic, so a failed one left no new manifest behind.
+        let restored = rollback.map_or(Ok(()), |backup| {
+            restore_manifest(backup, &destination_manifest)
         });
+        return Err(with_rollback(error, restored));
     }
     let default_profile = previous
         .as_ref()
@@ -1676,11 +1699,17 @@ fn install_manifest(
             .sort_by(|left, right| left.id.cmp(&right.id));
     }
     if let Err(error) = registry.save_to(registry_path) {
-        let _ = fs::remove_file(&destination_manifest);
-        if had_previous {
-            let _ = fs::rename(&backup, &destination_manifest);
-        }
-        return Err(error);
+        let restored = match rollback {
+            // The rename puts the previous manifest back over the new one.
+            Some(backup) => restore_manifest(backup, &destination_manifest),
+            None => fs::remove_file(&destination_manifest).with_context(|| {
+                format!(
+                    "could not remove the new plugin manifest {}",
+                    destination_manifest.display()
+                )
+            }),
+        };
+        return Err(with_rollback(error, restored));
     }
     if had_previous && let Err(error) = fs::remove_file(&backup) {
         log::warn!(
@@ -2613,6 +2642,52 @@ events = ["command-invoked"]
                 .plugins
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn a_failed_registry_save_restores_the_installed_manifest() {
+        let (temp, source, root, registry_path) = fixture();
+        install(&source, permissions(&[]), false, &registry_path, &root).unwrap();
+        let installed = root.join("sample-tools").join(MANIFEST_NAME);
+        let original = fs::read(&installed).unwrap();
+        // A registry that cannot be written: a directory stands in its place.
+        let unwritable = temp.path().join("blocked").join("plugins.toml");
+        fs::create_dir_all(unwritable.join("occupied")).unwrap();
+        let attempt = |root: &Path| {
+            let (manifest, source, bytes) = PluginManifest::from_directory(&source).unwrap();
+            let mut registry = PluginRegistry::load_from(&registry_path).unwrap();
+            install_manifest(
+                &mut registry,
+                &unwritable,
+                root,
+                manifest,
+                source,
+                bytes,
+                PluginPermissions::default(),
+                false,
+                true,
+            )
+        };
+
+        // An update puts the previous manifest back and leaves no rollback
+        // copy.
+        fs::write(
+            source.join(MANIFEST_NAME),
+            manifest("2.0.0", "", "sample-cli"),
+        )
+        .unwrap();
+        assert!(attempt(&root).is_err());
+        assert_eq!(fs::read(&installed).unwrap(), original);
+        assert!(
+            !installed
+                .with_file_name(format!("{MANIFEST_NAME}.previous"))
+                .exists()
+        );
+
+        // A first install leaves no manifest behind.
+        let fresh_root = temp.path().join("fresh");
+        assert!(attempt(&fresh_root).is_err());
+        assert!(!fresh_root.join("sample-tools").join(MANIFEST_NAME).exists());
     }
 
     #[test]
