@@ -45,7 +45,6 @@ impl Renderer {
             height: panel_height,
         } = layout.panel;
         let padding = layout.padding;
-        let row_height = layout.row_height;
         self.build_modal_frame(panel_x, panel_y, panel_width, panel_height, anim);
         let line = self.px(1.0);
         let size = self.ui_label_px();
@@ -97,13 +96,13 @@ impl Renderer {
         let label_x = panel_x + padding + cell_width * 0.5;
         let right = panel_x + panel_width - padding - scrollbar_width - self.px(6.0);
         for (row_index, entry) in info.entries.iter().enumerate().take(layout.rows_that_fit) {
-            let row_y = (list_y + row_index as f32 * row_height).round();
+            let row = layout.row(row_index);
             if entry.is_header {
                 self.push_ui_label(
                     entry.label,
                     panel_x + padding,
-                    row_y,
-                    row_height,
+                    row.y,
+                    row.height,
                     right - panel_x - padding,
                     size * 0.9,
                     dim,
@@ -112,10 +111,10 @@ impl Renderer {
             }
             if entry.selected {
                 self.rect_pipeline.push_rounded_rect(
-                    panel_x + padding * 0.5,
-                    row_y,
-                    panel_width - padding,
-                    row_height,
+                    row.x,
+                    row.y,
+                    row.width,
+                    row.height,
                     fade(self.ui.menu_highlight, 1.0),
                     self.px(BUTTON_CORNER_RADIUS),
                 );
@@ -132,8 +131,8 @@ impl Renderer {
             self.push_ui_label(
                 binding,
                 right - binding_width,
-                row_y,
-                row_height,
+                row.y,
+                row.height,
                 available,
                 size,
                 binding_color,
@@ -145,8 +144,8 @@ impl Renderer {
             self.push_ui_label(
                 entry.label,
                 label_x,
-                row_y,
-                row_height,
+                row.y,
+                row.height,
                 right - binding_width - self.px(16.0) - label_x,
                 size,
                 label_color,

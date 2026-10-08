@@ -114,23 +114,24 @@ impl ListDialogLayout {
         self.panel.contains(x, y)
     }
 
-    /// The `visible_index`th visible row.
+    /// The `visible_index`th visible row. Its edges are rounded to whole
+    /// pixels, and each row's bottom is the next row's top, so the rows tile
+    /// the list with no gap or overlap.
     pub fn row(&self, visible_index: usize) -> Bounds {
+        let edge = |index: usize| (self.list.y + index as f32 * self.row_height).round();
+        let top = edge(visible_index);
         Bounds::new(
             self.list.x,
-            self.list.y + visible_index as f32 * self.row_height,
+            top,
             self.list.width,
-            self.row_height,
+            edge(visible_index + 1) - top,
         )
     }
 
-    /// The visible row under a point, if any.
+    /// The visible row under a point, if any: the one whose drawn bounds
+    /// contain it.
     pub fn row_at(&self, x: f32, y: f32) -> Option<usize> {
-        if !self.list.contains(x, y) || self.row_height <= 0.0 {
-            return None;
-        }
-        let row = ((y - self.list.y) / self.row_height).floor() as usize;
-        (row < self.visible_count).then_some(row)
+        (0..self.visible_count).find(|&index| self.row(index).contains(x, y))
     }
 
     /// Keep the caret visible without splitting a grapheme or drawing outside
@@ -182,7 +183,7 @@ mod tests {
             // The side padding and the edges after the last row belong to the frame.
             assert_eq!(layout.row_at(last.x - 0.5, last.y + 0.5), None);
             assert_eq!(layout.row_at(last.right(), last.y + 0.5), None);
-            assert_eq!(layout.row_at(last.x, layout.list.bottom()), None);
+            assert_eq!(layout.row_at(last.x, last.bottom()), None);
         }
         let titled =
             ListDialogLayout::calculate(SHORTCUTS_DIALOG, 1000.0, 700.0, 10.0, 20.0, 1.0, 0);
@@ -193,6 +194,30 @@ mod tests {
         let untitled =
             ListDialogLayout::calculate(PALETTE_DIALOG, 1000.0, 700.0, 10.0, 20.0, 1.0, 0);
         assert_eq!(untitled.input.y, untitled.panel.y + untitled.padding);
+    }
+
+    #[test]
+    fn every_row_edge_belongs_to_the_row_drawn_below_it() {
+        for shape in [PALETTE_DIALOG, SHORTCUTS_DIALOG] {
+            for cell_height in [13.7, 19.5, 23.3, 31.9] {
+                let layout =
+                    ListDialogLayout::calculate(shape, 1280.0, 4000.0, 9.5, cell_height, 0.7, 60);
+                assert!(layout.visible_count > 20);
+                for index in 0..layout.visible_count {
+                    let row = layout.row(index);
+                    assert_eq!([row.y, row.height].map(f32::fract), [0.0; 2]);
+                    assert_eq!(layout.row_at(row.x, row.y), Some(index));
+                    assert_eq!(
+                        layout.row_at(row.x, row.y.next_down()),
+                        index.checked_sub(1)
+                    );
+                    assert_eq!(layout.row_at(row.x, row.bottom().next_down()), Some(index));
+                    if index + 1 < layout.visible_count {
+                        assert_eq!(row.bottom(), layout.row(index + 1).y);
+                    }
+                }
+            }
+        }
     }
 
     #[test]

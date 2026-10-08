@@ -63,7 +63,6 @@ impl Renderer {
             height: panel_height,
         } = layout.panel;
         let padding = layout.padding;
-        let row_height = layout.row_height;
 
         self.build_modal_frame(panel_x, panel_y, panel_width, panel_height, anim);
         let line = self.px(1.0);
@@ -108,14 +107,14 @@ impl Renderer {
         let scrollbar_width = self.px(3.0);
         let right = panel_x + panel_width - padding - scrollbar_width - self.px(6.0);
         for (row_index, entry) in info.entries.iter().enumerate().take(layout.visible_count) {
-            let row_y = (list_y + row_index as f32 * row_height).round();
+            let row = layout.row(row_index);
             let selected = row_index == info.selected;
             if selected {
                 self.rect_pipeline.push_rounded_rect(
-                    panel_x + padding * 0.5,
-                    row_y,
-                    panel_width - padding,
-                    row_height,
+                    row.x,
+                    row.y,
+                    row.width,
+                    row.height,
                     fade(self.ui.menu_highlight, 1.0),
                     self.px(BUTTON_CORNER_RADIUS),
                 );
@@ -134,8 +133,8 @@ impl Renderer {
                     self.push_ui_label(
                         &detail,
                         (right - width).max(right - available),
-                        row_y,
-                        row_height,
+                        row.y,
+                        row.height,
                         available,
                         size,
                         dim,
@@ -148,8 +147,8 @@ impl Renderer {
                 &entry.title,
                 &entry.match_positions,
                 text_x,
-                row_y,
-                row_height,
+                row.y,
+                row.height,
                 right - detail_width - text_x,
                 size,
                 text,
