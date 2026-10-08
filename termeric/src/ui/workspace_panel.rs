@@ -283,12 +283,7 @@ impl WorkspacePanelLayout {
     }
 
     pub fn entry(self, visible_index: usize) -> WorkspaceEntryLayout {
-        let row = Bounds {
-            x: self.panel.x,
-            y: self.list_start_y + visible_index as f32 * self.row_height,
-            width: self.panel.width,
-            height: self.row_height,
-        };
+        let row = self.list_top().row(self.row_height, visible_index);
         let button_height = self.cell_height * 1.5;
         let button_y = row.y + self.padding_y + self.cell_height * 0.1;
         let delete_width = self.cell_width * 8.0;
@@ -349,12 +344,18 @@ impl WorkspacePanelLayout {
         }
     }
 
+    /// The visible row whose drawn bounds hold height `y`, the rows a press
+    /// and the renderer use.
     pub fn visible_row_at(self, y: f32) -> Option<usize> {
-        if y < self.list_start_y {
-            return None;
-        }
-        let row = ((y - self.list_start_y) / self.row_height) as usize;
-        (row < self.visible_count).then_some(row)
+        (0..self.visible_count).find(|&index| {
+            let row = self.list_top().row(self.row_height, index);
+            (row.y..row.bottom()).contains(&y)
+        })
+    }
+
+    /// The panel's width at the top of its list, where rows start.
+    fn list_top(self) -> Bounds {
+        Bounds::new(self.panel.x, self.list_start_y, self.panel.width, 0.0)
     }
 
     /// What a primary press at `(x, y)` on the panel showing `info` does.
@@ -1053,6 +1054,29 @@ mod tests {
         assert_eq!(panel.build_info().rename_text.as_deref(), Some("Roots 🫚"));
         assert!(!panel.accessibility_set_rename("bad\nname"));
         assert!(!panel.accessibility_set_rename(&"x".repeat(129)));
+    }
+
+    /// Hover finds the row drawn under the pointer: each row's top edge is
+    /// its own and the pixel above belongs to the row before, even when
+    /// the row height is fractional.
+    #[test]
+    fn hover_rows_are_the_rows_drawn() {
+        let layout =
+            WorkspacePanelLayout::calculate(800.0, 900.0, 0.0, 8.0, 15.3, 1.0, false, true, 6);
+        assert!(layout.row_height.fract() != 0.0 && layout.visible_count > 2);
+        for index in 0..layout.visible_count {
+            let row = layout.entry(index).row;
+            assert_eq!(row.y.fract(), 0.0);
+            assert_eq!(layout.visible_row_at(row.y), Some(index));
+            assert_eq!(layout.visible_row_at(row.bottom() - 0.5), Some(index));
+            assert_eq!(
+                layout.visible_row_at(row.y - 0.5),
+                index.checked_sub(1),
+                "row {index}"
+            );
+        }
+        let last = layout.entry(layout.visible_count - 1).row;
+        assert_eq!(layout.visible_row_at(last.bottom()), None);
     }
 
     #[test]
