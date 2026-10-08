@@ -1816,36 +1816,6 @@ impl TabManager {
             })
     }
 
-    /// Find the index of the first tab owned by a given plugin
-    #[cfg(test)]
-    pub fn find_plugin_tab_index(&self, plugin_id: &str) -> Option<usize> {
-        self.tabs.iter().position(|tab| {
-            !tab.closed
-                && !tab.is_closing()
-                && matches!(&tab.tab_type, TabType::Plugin { plugin_id: id } if id == plugin_id)
-        })
-    }
-
-    /// Prefer the active tab, then other live tabs in order. Within each tab,
-    /// prefer its focused matching owner, then its first matching pane in
-    /// visual order. Tab presentation is not launch identity.
-    #[cfg(test)]
-    pub(crate) fn plugin_terminal_identity(&self, plugin_id: &str) -> Option<TerminalIdentity> {
-        // Prefer the active tab's matching owner before searching other tabs.
-        // Otherwise moving a focused plugin beside an earlier same-plugin tab
-        // would make subsequent profile/restart commands target that sibling.
-        self.active_tab()
-            .into_iter()
-            .chain(self.tabs.iter())
-            .find_map(|tab| {
-                tab.plugin_pane_id(plugin_id)
-                    .map(|pane_id| TerminalIdentity {
-                        tab_id: tab.id,
-                        pane_id,
-                    })
-            })
-    }
-
     /// Get tab info for display (index, title, is_active, has_activity)
     pub fn tab_info(&self) -> Vec<TabInfo> {
         self.tabs

@@ -59,7 +59,13 @@ fn moved_agent_restart_and_archive_keep_its_resolved_profile() {
         .program
         .replace(dir.path().join("not-installed").display().to_string());
     app.sync_plugins_from_config();
-    app.restart_plugin("codex");
+    app.restart_plugin_at(
+        "codex",
+        TerminalIdentity {
+            tab_id: destination,
+            pane_id: moved,
+        },
+    );
     assert!(!observer.poll().unwrap().terminal_closed);
     assert_eq!(app.tabs.as_ref().unwrap().count(), 2);
     assert_eq!(launch(&app), red);
@@ -82,7 +88,13 @@ fn moved_agent_restart_and_archive_keep_its_resolved_profile() {
             .insert("CAPTURE_DIR".into(), captures.display().to_string());
     }
     app.sync_plugins_from_config();
-    app.restart_plugin("codex");
+    app.restart_plugin_at(
+        "codex",
+        TerminalIdentity {
+            tab_id: destination,
+            pane_id: moved,
+        },
+    );
     let captured = captures.join("red");
     wait_for_file_text(&captured, "--fixture=red");
     assert_eq!(

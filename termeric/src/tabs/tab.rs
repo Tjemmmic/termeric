@@ -333,18 +333,6 @@ impl Tab {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn plugin_pane_id(&self, plugin_id: &str) -> Option<PaneId> {
-        let focused = self.focused_terminal_identity().pane_id;
-        if self.pane_plugin_id(focused) == Some(plugin_id) {
-            return Some(focused);
-        }
-        self.panes
-            .pane_ids()
-            .into_iter()
-            .find(|pane_id| self.pane_plugin_id(*pane_id) == Some(plugin_id))
-    }
-
     pub(crate) fn focused_pane_read_only(&self) -> bool {
         self.focused_pane().is_some_and(|pane| pane.read_only)
     }

@@ -557,7 +557,7 @@ impl App {
         let Some(agent) = self.focused_agent().filter(|agent| agent.session.launched) else {
             return;
         };
-        self.restart_plugin_at(&agent.definition.id, Some(agent.identity));
+        self.restart_plugin_at(&agent.definition.id, agent.identity);
     }
 
     /// Run one `agent.*` palette command. Returns false for other ids.

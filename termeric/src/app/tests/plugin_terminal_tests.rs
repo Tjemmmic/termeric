@@ -13,7 +13,14 @@ fn unavailable_plugin_restart_preserves_the_original_mixed_tab() {
         .tab_type = crate::tabs::TabType::Plugin {
         plugin_id: "synthetic-capture".into(),
     };
-    app.restart_plugin("synthetic-capture");
+    let tab_id = app.tabs.as_ref().unwrap().active_tab_id().unwrap();
+    app.restart_plugin_at(
+        "synthetic-capture",
+        crate::tabs::TerminalIdentity {
+            tab_id,
+            pane_id: PaneId(0),
+        },
+    );
     let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
     assert!(
         !tab.is_closing(),

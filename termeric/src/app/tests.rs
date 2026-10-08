@@ -688,8 +688,14 @@ fn wait_for_plugin_fixture(app: &mut App, plugin_id: &str, needle: &str) {
         }
         app.tabs
             .as_ref()
-            .and_then(|tabs| tabs.find_plugin_tab_index(plugin_id))
-            .and_then(|index| tabs_at(app, index))
+            .and_then(|tabs| {
+                tabs.iter().find_map(|(_, tab)| {
+                    (!tab.closed
+                        && !tab.is_closing()
+                        && matches!(&tab.tab_type, crate::tabs::TabType::Plugin { plugin_id: id } if id == plugin_id))
+                        .then_some(tab)
+                })
+            })
             .and_then(|tab| tab.focused_terminal())
             .is_some_and(|terminal| terminal.grid().plain_lines().join("\n").contains(needle))
     });

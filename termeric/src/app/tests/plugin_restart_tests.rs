@@ -125,7 +125,13 @@ fn failed_restart_preserves_old_owners_layout_and_focus() {
             });
         }
         let focused = app.active_harvest_source();
-        app.restart_plugin("synthetic-capture");
+        app.restart_plugin_at(
+            "synthetic-capture",
+            crate::tabs::TerminalIdentity {
+                tab_id: entry.source.tab_id,
+                pane_id: PaneId(0),
+            },
+        );
         let tabs = app.tabs.as_ref().unwrap();
         assert_eq!(tabs.count(), 1, "{mode}");
         let tab = tabs.tab_by_id(entry.source.tab_id).unwrap();
@@ -144,6 +150,24 @@ fn failed_restart_preserves_old_owners_layout_and_focus() {
             "{mode}"
         );
     }
+}
+
+#[test]
+fn restarting_a_terminal_the_plugin_does_not_own_opens_nothing() {
+    let (mut app, directory, entry, _) = harvest_rerun_capture_fixture_in(false);
+    let seen = register_restart_fixture(&mut app, directory.path(), "success");
+    // The fixture's terminal is a shell, not the plugin's.
+    app.restart_plugin_at(
+        "synthetic-capture",
+        crate::tabs::TerminalIdentity {
+            tab_id: entry.source.tab_id,
+            pane_id: PaneId(0),
+        },
+    );
+    let tabs = app.tabs.as_ref().unwrap();
+    assert_eq!(tabs.count(), 1);
+    assert!(!tabs.tab_by_id(entry.source.tab_id).unwrap().is_closing());
+    assert!(seen.lock().unwrap().is_empty());
 }
 
 #[test]
@@ -210,7 +234,13 @@ fn successful_restart_retires_only_source_and_preserves_cwd_profile_and_siblings
             .filter(|(origin, _)| origin.pane_id != source)
             .collect::<Vec<_>>();
         let seen = register_restart_fixture(&mut app, directory.path(), "success");
-        app.restart_plugin("synthetic-capture");
+        app.restart_plugin_at(
+            "synthetic-capture",
+            crate::tabs::TerminalIdentity {
+                tab_id: entry.source.tab_id,
+                pane_id: source,
+            },
+        );
         let replacement = app.tabs.as_ref().unwrap().active_tab_id().unwrap();
         assert_ne!(replacement, entry.source.tab_id);
         let tabs = app.tabs.as_ref().unwrap();
@@ -258,30 +288,4 @@ fn successful_restart_retires_only_source_and_preserves_cwd_profile_and_siblings
                 .all(Vec::is_empty)
         );
     }
-}
-
-#[test]
-fn restart_without_existing_owner_opens_one_fresh_terminal() {
-    let (mut app, directory, entry, _) = harvest_rerun_capture_fixture_in(false);
-    register_restart_fixture(&mut app, directory.path(), "success");
-    app.restart_plugin("synthetic-capture");
-    assert_eq!(app.tabs.as_ref().unwrap().count(), 2);
-    assert!(
-        !app.tabs
-            .as_ref()
-            .unwrap()
-            .tab_by_id(entry.source.tab_id)
-            .unwrap()
-            .is_closing()
-    );
-    assert_ne!(
-        app.tabs.as_ref().unwrap().active_tab_id(),
-        Some(entry.source.tab_id)
-    );
-    let captures = current_harvest_capture_routes(&mut app, directory.path());
-    assert!(
-        fenced_harvest_capture(&mut app, &captures)
-            .iter()
-            .all(Vec::is_empty)
-    );
 }
