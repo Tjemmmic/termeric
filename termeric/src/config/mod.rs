@@ -356,12 +356,13 @@ impl Config {
             }
         }
         validate_range("font.size", self.font.size, FONT_SIZE_RANGE, Some("points"))?;
-        if !(MIN_FONT_WEIGHT..=MAX_FONT_WEIGHT).contains(&self.font.weight) {
-            bail!("font.weight must be between {MIN_FONT_WEIGHT} and {MAX_FONT_WEIGHT}");
-        }
-        if !(MIN_FONT_WEIGHT..=MAX_FONT_WEIGHT).contains(&self.font.bold_weight) {
-            bail!("font.bold_weight must be between {MIN_FONT_WEIGHT} and {MAX_FONT_WEIGHT}");
-        }
+        validate_range("font.weight", self.font.weight, FONT_WEIGHT_RANGE, None)?;
+        validate_range(
+            "font.bold_weight",
+            self.font.bold_weight,
+            FONT_WEIGHT_RANGE,
+            None,
+        )?;
         if self.font.bold_weight < self.font.weight {
             bail!("font.bold_weight must be greater than or equal to font.weight");
         }
@@ -409,15 +410,17 @@ impl Config {
                 self.shortcuts[later].action
             );
         }
-        if self.copy_mode.patterns.len() > 32 {
-            bail!("copy_mode.patterns must contain at most 32 entries");
+        if self.copy_mode.patterns.len() > MAX_COPY_MODE_PATTERNS {
+            bail!("copy_mode.patterns must contain at most {MAX_COPY_MODE_PATTERNS} entries");
         }
         for pattern in &self.copy_mode.patterns {
             if pattern.name.trim().is_empty() {
                 bail!("copy_mode pattern names must not be empty");
             }
-            if pattern.regex.len() > 4096 {
-                bail!("copy_mode pattern regexes must not exceed 4096 bytes");
+            if pattern.regex.len() > MAX_COPY_MODE_PATTERN_BYTES {
+                bail!(
+                    "copy_mode pattern regexes must not exceed {MAX_COPY_MODE_PATTERN_BYTES} bytes"
+                );
             }
             regex::Regex::new(&pattern.regex).with_context(|| {
                 format!("copy_mode pattern {:?} has an invalid regex", pattern.name)
@@ -436,11 +439,18 @@ impl Config {
             WINDOW_PADDING_RANGE,
             Some("pixels"),
         )?;
-        if !(320..=16_384).contains(&self.window.width)
-            || !(200..=16_384).contains(&self.window.height)
-        {
-            bail!("window dimensions must be between 320x200 and 16384x16384");
-        }
+        validate_range(
+            "window.width",
+            self.window.width,
+            WINDOW_WIDTH_RANGE,
+            Some("pixels"),
+        )?;
+        validate_range(
+            "window.height",
+            self.window.height,
+            WINDOW_HEIGHT_RANGE,
+            Some("pixels"),
+        )?;
         validate_range(
             "cursor.blink_rate",
             self.cursor.blink_rate,
@@ -453,11 +463,12 @@ impl Config {
             BELL_DURATION_RANGE,
             Some("milliseconds"),
         )?;
-        if !(1..=termeric_core::ansi::MAX_OSC52_DECODED_BYTES)
-            .contains(&self.security.osc52.max_bytes)
-        {
-            bail!("security.osc52.max_bytes must be between 1 and 1048576");
-        }
+        validate_range(
+            "security.osc52.max_bytes",
+            self.security.osc52.max_bytes,
+            1..=termeric_core::ansi::MAX_OSC52_DECODED_BYTES,
+            Some("bytes"),
+        )?;
         validate_range(
             "harvest.max_history",
             self.harvest.max_history,
@@ -517,6 +528,14 @@ pub const LINE_HEIGHT_RANGE: RangeInclusive<f32> = 0.8..=3.0;
 pub const WINDOW_OPACITY_RANGE: RangeInclusive<f32> = 0.1..=1.0;
 pub const BACKGROUND_IMAGE_OPACITY_RANGE: RangeInclusive<f32> = 0.0..=1.0;
 pub const WINDOW_PADDING_RANGE: RangeInclusive<u32> = 0..=256;
+/// A new window's size, in logical pixels. The command line's `--geometry`
+/// and the control protocol take physical pixels, with their own smaller
+/// minimum (`control::protocol::MIN_WINDOW_WIDTH`), so they cannot share it.
+pub const WINDOW_WIDTH_RANGE: RangeInclusive<u32> = 320..=16_384;
+/// Logical pixels, as for [`WINDOW_WIDTH_RANGE`].
+pub const WINDOW_HEIGHT_RANGE: RangeInclusive<u32> = 200..=16_384;
+pub const MAX_COPY_MODE_PATTERNS: usize = 32;
+pub const MAX_COPY_MODE_PATTERN_BYTES: usize = 4_096;
 /// Milliseconds.
 pub const CURSOR_BLINK_RATE_RANGE: RangeInclusive<u32> = 100..=5_000;
 /// Milliseconds.
@@ -960,8 +979,7 @@ pub const MAX_FONT_FALLBACKS: usize = 16;
 pub const MAX_FONT_FAMILY_BYTES: usize = 256;
 pub const MAX_FONT_FEATURES: usize = 32;
 pub const MAX_FONT_RANGE_OVERRIDES: usize = 64;
-pub const MIN_FONT_WEIGHT: u16 = 1;
-pub const MAX_FONT_WEIGHT: u16 = 1_000;
+pub const FONT_WEIGHT_RANGE: RangeInclusive<u16> = 1..=1_000;
 pub const DEFAULT_FONT_WEIGHT: u16 = 400;
 pub const DEFAULT_BOLD_FONT_WEIGHT: u16 = 700;
 

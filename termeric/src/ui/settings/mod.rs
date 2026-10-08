@@ -1062,7 +1062,7 @@ impl SettingsPanel {
                     kind: SettingKind::Numeric {
                         value: f32::from(config.font.weight),
                         set: |weight| SettingsAction::SetFontWeight(weight as u16),
-                        min: crate::config::MIN_FONT_WEIGHT as f32,
+                        min: f32::from(*crate::config::FONT_WEIGHT_RANGE.start()),
                         max: config.font.bold_weight as f32,
                         step: 25.0,
                     },
@@ -1074,7 +1074,7 @@ impl SettingsPanel {
                         value: f32::from(config.font.bold_weight),
                         set: |weight| SettingsAction::SetBoldFontWeight(weight as u16),
                         min: config.font.weight as f32,
-                        max: crate::config::MAX_FONT_WEIGHT as f32,
+                        max: f32::from(*crate::config::FONT_WEIGHT_RANGE.end()),
                         step: 25.0,
                     },
                 },
