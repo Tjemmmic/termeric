@@ -532,14 +532,14 @@ impl Application {
         self.windows
             .get(&native_id)
             .filter(|window| !window.should_exit)
-            .ok_or_else(|| format!("GUI window {window_id} is closing"))
+            .ok_or_else(|| format!("GUI window {window_id} is already closing"))
     }
 
     fn live_window_mut(&mut self, native_id: WindowId, window_id: u64) -> Result<&mut App, String> {
         self.windows
             .get_mut(&native_id)
             .filter(|window| !window.should_exit)
-            .ok_or_else(|| format!("GUI window {window_id} is closing"))
+            .ok_or_else(|| format!("GUI window {window_id} is already closing"))
     }
 
     /// The live window a request names by control ID, with its native ID.
