@@ -333,12 +333,7 @@ mod tests {
             let tab = app.tabs.as_ref().and_then(TabManager::active_tab);
             let tab_id = tab.map_or(usize::MAX, |tab| tab.id);
             let original_title = tab.and_then(|tab| tab.user_title().map(str::to_owned));
-            app.tab_rename = Some(TabRenameState::new(
-                tab_id,
-                original_title.clone(),
-                "Roots",
-                max_chars,
-            ));
+            app.tab_rename = Some(TabRenameState::new(tab_id, "Roots", max_chars));
             assert_eq!(app.text_target(), TextTarget::TabRename);
             app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
             for value in [
@@ -393,11 +388,9 @@ mod tests {
             );
             assert_eq!(app.search.query(), search_before);
             assert!(app.pending_live_domain_controls.is_empty()); // no commit/request
+            // The draft stays the rename's own until Enter saves it.
             if let Some(tab) = app.tabs.as_ref().and_then(TabManager::active_tab) {
-                assert_eq!(
-                    tab.user_title(),
-                    Some(app.tab_rename.as_ref().unwrap().input.text())
-                );
+                assert_eq!(tab.user_title(), original_title.as_deref());
             }
             assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::Escape)));
             assert!(app.tab_rename.is_none());
@@ -408,7 +401,7 @@ mod tests {
     }
 
     #[test]
-    fn tab_rename_paste_is_atomic_at_both_title_limits_and_cancel_restores_preview() {
+    fn tab_rename_paste_is_atomic_at_both_title_limits_and_never_reaches_the_tab() {
         let mut app = App::new_headless(Config::default()).unwrap();
         app.search.start();
         exercise_tab_rename_paste(&mut app);
@@ -417,7 +410,7 @@ mod tests {
     #[test]
     fn tab_rename_paste_honors_rebinding_disabling_and_higher_modal_guards() {
         let mut app = App::new_headless(Config::default()).unwrap();
-        app.tab_rename = Some(TabRenameState::new(usize::MAX, None, "Roots", 256));
+        app.tab_rename = Some(TabRenameState::new(usize::MAX, "Roots", 256));
         let rebound = assert_paste_binding_follows_registry(&mut app);
         app.commands_panel.toggle();
         assert!(app.clipboard_paste_blocked());

@@ -377,15 +377,15 @@ fn clear_wake_pending(pending: &AtomicBool) {
 #[derive(Debug, Clone)]
 struct TabRenameState {
     tab_id: usize,
-    original: Option<String>,
-    /// The draft title. The tab shows it in place with a caret at its end,
-    /// where typing and Backspace always work.
+    /// The draft title. The tab bar shows it in the tab's place with a
+    /// caret at its end, where typing and Backspace always work; the tab
+    /// itself keeps its title until Enter saves the draft.
     input: crate::ui::text_input::TextInput,
 }
 
 impl TabRenameState {
     /// A draft starting from `title`, cut to one line of `max_chars`.
-    fn new(tab_id: usize, original: Option<String>, title: &str, max_chars: usize) -> Self {
+    fn new(tab_id: usize, title: &str, max_chars: usize) -> Self {
         use crate::ui::text_input::{TextInput, TextLimit};
         let title: String = title
             .chars()
@@ -394,11 +394,7 @@ impl TabRenameState {
             .collect();
         let mut input = TextInput::new(TextLimit::Chars(max_chars));
         input.replace(&title);
-        Self {
-            tab_id,
-            original,
-            input,
-        }
+        Self { tab_id, input }
     }
 }
 
@@ -1790,6 +1786,7 @@ impl App {
         let metrics = self.ui_metrics();
         let (chrome, animating) = self.build_chrome(&metrics, reduced_motion);
         let harvest_render_info = self.harvest_frame_info(reduced_motion);
+        let mut tab_info = self.tab_bar_info();
 
         let Some(renderer) = &mut self.renderer else {
             return;
@@ -1801,10 +1798,6 @@ impl App {
         let Some(terminal) = tab.focused_terminal() else {
             return;
         };
-        let mut tab_info = tabs.tab_info();
-        if let Some(rename) = &self.tab_rename {
-            rename.mark(tabs, &mut tab_info);
-        }
         if let Some((tab_id, _, state)) = &broadcast_render
             && tab.id == *tab_id
             && let Some(active) = tab_info.iter_mut().find(|info| info.is_active)

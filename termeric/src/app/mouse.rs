@@ -1622,15 +1622,8 @@ impl App {
             .tab_rename
             .as_ref()
             .is_some_and(|rename| Some(rename.tab_id) != active_tab_id)
-            && let Some(rename) = self.tab_rename.take()
         {
-            if let Some(tab) = self.tabs.as_mut().and_then(|tabs| {
-                tabs.all_tabs_mut()
-                    .iter_mut()
-                    .find(|tab| tab.id == rename.tab_id)
-            }) {
-                tab.set_user_title(rename.original);
-            }
+            self.tab_rename = None;
             self.toasts.info("Tab rename cancelled after focus changed");
         }
         // A composition belongs to the pane that owned focus when it began.

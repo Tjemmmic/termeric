@@ -280,9 +280,8 @@ impl App {
     /// title being renamed. A tab scrolled out of the strip has none, and
     /// the input method is never sent to the terminal cursor instead.
     fn tab_rename_ime_target(&mut self) -> Option<crate::renderer::ImePreeditRenderInfo> {
-        let rename = self.tab_rename.as_ref()?;
-        let mut tab_info = self.tabs.as_ref()?.tab_info();
-        rename.mark(self.tabs.as_ref()?, &mut tab_info);
+        self.tab_rename.as_ref()?;
+        let tab_info = self.tab_bar_info();
         let renderer = self.renderer.as_mut()?;
         let (width, height) = renderer.window_size();
         let caret = renderer.tab_rename_caret(&tab_info, width as f32, height as f32)?;

@@ -103,15 +103,8 @@ impl Application {
         if let Some(refusal) = source.agent_view_tab_move_refusal(destination, moving) {
             anyhow::bail!(refusal);
         }
-        if let Some(rename) = source.tab_rename.take()
-            && let Some(tab) = source.tabs.as_mut().and_then(|tabs| {
-                tabs.all_tabs_mut()
-                    .iter_mut()
-                    .find(|tab| tab.id == rename.tab_id)
-            })
-        {
-            tab.set_user_title(rename.original);
-        }
+        // A draft never reached its tab, so dropping it leaves the title.
+        source.tab_rename = None;
         let tab = source
             .tabs
             .as_mut()

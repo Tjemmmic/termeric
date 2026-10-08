@@ -290,7 +290,7 @@ fn retained_search_does_not_steal_ime_geometry_from_modal_or_text_owners() {
             app.info_overlay.show("Notice", vec![]);
         },
         |app| app.domain_picker.open(&app.config.domains),
-        |app| app.tab_rename = Some(TabRenameState::new(0, None, "", 80)),
+        |app| app.tab_rename = Some(TabRenameState::new(0, "", 80)),
     ];
     for open in openers {
         let mut app = App::new_headless(Config::default()).unwrap();
@@ -608,7 +608,6 @@ fn exercise_retained_rename_modal_ownership(app: &mut App) {
                 .as_ref()
                 .and_then(TabManager::active_tab_id)
                 .unwrap_or(usize::MAX),
-            None,
             "retained",
             256,
         ));
@@ -851,71 +850,35 @@ fn modal_atomic_commits_never_fall_through_to_a_live_pty() {
         .unwrap()
         .set_user_title(Some("Roots".into()));
     app.begin_tab_rename();
+    // The draft takes every edit; the tab keeps its title until Enter.
+    let draft = |app: &App| app.tab_rename.as_ref().unwrap().input.text().to_owned();
+    let saved = |app: &App| {
+        app.tabs
+            .as_ref()
+            .unwrap()
+            .active_tab()
+            .unwrap()
+            .user_title()
+            .map(str::to_owned)
+    };
     assert!(app.handle_tab_rename_key(&Key::Character("e\u{301}👩\u{200d}💻".into())));
-    assert_eq!(
-        app.tabs
-            .as_ref()
-            .unwrap()
-            .active_tab()
-            .unwrap()
-            .user_title(),
-        Some("Rootse\u{301}👩\u{200d}💻")
-    );
+    assert_eq!(draft(&app), "Rootse\u{301}👩\u{200d}💻");
     assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::Backspace)));
-    assert_eq!(
-        app.tabs
-            .as_ref()
-            .unwrap()
-            .active_tab()
-            .unwrap()
-            .user_title(),
-        Some("Rootse\u{301}")
-    );
+    assert_eq!(draft(&app), "Rootse\u{301}");
     app.handle_ime_event(Ime::Commit("bad\ncommit".into()));
-    assert_eq!(
-        app.tabs
-            .as_ref()
-            .unwrap()
-            .active_tab()
-            .unwrap()
-            .user_title(),
-        Some("Rootse\u{301}")
-    );
+    assert_eq!(draft(&app), "Rootse\u{301}");
+    assert_eq!(saved(&app).as_deref(), Some("Roots"));
     assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::Escape)));
-    assert_eq!(
-        app.tabs
-            .as_ref()
-            .unwrap()
-            .active_tab()
-            .unwrap()
-            .user_title(),
-        Some("Roots")
-    );
+    assert_eq!(saved(&app).as_deref(), Some("Roots"));
     app.begin_tab_rename();
     app.handle_ime_event(Ime::Commit(" 🫚".into()));
     assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::Enter)));
     assert!(app.tab_rename.is_none());
-    assert_eq!(
-        app.tabs
-            .as_ref()
-            .unwrap()
-            .active_tab()
-            .unwrap()
-            .user_title(),
-        Some("Roots 🫚")
-    );
-    // A vanished captured owner cannot preview into the focused tab.
-    app.tab_rename = Some(TabRenameState::new(usize::MAX, None, "", 128));
+    assert_eq!(saved(&app).as_deref(), Some("Roots 🫚"));
+    // A rename whose tab has gone never reaches the focused tab.
+    app.tab_rename = Some(TabRenameState::new(usize::MAX, "", 128));
     app.handle_ime_event(Ime::Commit("wrong owner".into()));
-    assert_eq!(
-        app.tabs
-            .as_ref()
-            .unwrap()
-            .active_tab()
-            .unwrap()
-            .user_title(),
-        Some("Roots 🫚")
-    );
+    assert_eq!(saved(&app).as_deref(), Some("Roots 🫚"));
     assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::Escape)));
     app.assert_pty_untouched();
 }
@@ -925,7 +888,7 @@ fn the_agent_view_composes_only_when_nothing_above_it_takes_text() {
     let mut app = App::new_headless(Config::default()).unwrap();
     app.open_agent_view(true);
     assert_eq!(app.text_target(), TextTarget::AgentView);
-    app.tab_rename = Some(TabRenameState::new(0, None, "", 128));
+    app.tab_rename = Some(TabRenameState::new(0, "", 128));
     assert_ne!(app.text_target(), TextTarget::AgentView);
     app.tab_rename = None;
     app.command_palette.open();

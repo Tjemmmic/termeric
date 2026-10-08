@@ -1035,17 +1035,13 @@ impl Application {
         if let Some(refusal) = source.agent_view_tab_move_refusal(destination, tab_id) {
             return Err(format!("Could not move tab {tab_id}: {refusal}"));
         }
+        // A draft never reached its tab, so dropping it leaves the title.
         if source
             .tab_rename
             .as_ref()
             .is_some_and(|rename| rename.tab_id == tab_id)
-            && let Some(rename) = source.tab_rename.take()
-            && let Some(tab) = source
-                .tabs
-                .as_mut()
-                .and_then(|tabs| tabs.tab_mut_by_id(tab_id))
         {
-            tab.set_user_title(rename.original);
+            source.tab_rename = None;
         }
         let tab = source
             .tabs
