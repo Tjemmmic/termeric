@@ -762,6 +762,7 @@ impl App {
             _ => ContextPickerAction::None,
         };
         self.apply_context_picker_action(action);
+        self.end_composition_outside_file_field();
     }
 
     pub(super) fn context_accessibility_snapshot(&mut self) -> ModalSnapshot {

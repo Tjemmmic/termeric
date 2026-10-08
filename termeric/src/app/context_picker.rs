@@ -43,7 +43,6 @@ impl App {
         let action = match key {
             Key::Named(NamedKey::Escape) => ContextPickerAction::Cancel { request_id },
             Key::Named(NamedKey::Tab) => {
-                self.ime.clear_preedit();
                 self.context_picker
                     .cycle_focus(request_id, self.modifiers.shift_key());
                 ContextPickerAction::None
@@ -67,7 +66,17 @@ impl App {
             _ => ContextPickerAction::None,
         };
         self.apply_context_picker_action(action);
+        self.end_composition_outside_file_field();
         self.request_redraw(RedrawReason::KeyboardInput);
+    }
+
+    /// Drop the input method's composition once the file field no longer
+    /// holds the keyboard (focus moved, the editor closed, or the picker
+    /// ended), so it cannot reappear in the field later.
+    pub(super) fn end_composition_outside_file_field(&mut self) {
+        if !self.context_picker.file_input_focused() {
+            self.ime.clear_preedit();
+        }
     }
 
     /// A key while the file field is focused: the shared editing keys, and
@@ -122,6 +131,7 @@ impl App {
             }
             _ => {}
         }
+        self.end_composition_outside_file_field();
     }
 
     /// Open the context picker for the agent in `terminal`. Terminal output
@@ -410,7 +420,12 @@ mod tests {
         app.press_context_picker(MouseButton::Middle, field.x - 1.0, y);
         assert!(app.context_picker.snapshot().file_input == text);
 
+        app.handle_ime_event(Ime::Preedit("draft".into(), None));
         press(&mut app, NamedKey::Tab);
+        assert!(
+            app.ime.preedit().is_none(),
+            "leaving the field ends composing"
+        );
         assert_eq!(app.text_target(), TextTarget::Blocked, "Back takes no text");
         assert!(!app.paste_clipboard_payload("x"));
         app.handle_ime_event(Ime::Preedit("draft".into(), None));
