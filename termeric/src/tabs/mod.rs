@@ -278,50 +278,40 @@ impl TabManager {
         Ok(())
     }
 
+    /// Attach `remote_tab` with every one of its panes laid out as the
+    /// daemon has them; local pane IDs number its panes in ascending order.
     fn attach_domain_tab(
         &mut self,
         domain_id: &str,
         remote_tab: &crate::domain::model::LiveTab,
         relay_command: &crate::domain::DomainRelayCommand,
     ) -> anyhow::Result<usize> {
-        let mut remote_panes = remote_tab.panes.clone();
-        remote_panes.sort_by_key(|pane| pane.id);
-        let primary = remote_panes
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("live domain tab {} has no panes", remote_tab.id))?;
-        self.new_tab_with_command(
-            relay_command.program(),
-            &relay_command.pane_arguments(domain_id, primary.id),
-            None,
-            Some(&remote_tab.title),
-            None,
-            HashMap::new(),
+        let index = self.attach_live_tab(
+            domain_id,
+            &crate::domain::model::LiveTopologyTab::from(remote_tab),
+            relay_command,
         )?;
-        let index = self.tabs.len() - 1;
-        let tab = &mut self.tabs[index];
-        tab.attach_live_domain(LiveDomainTab {
-            domain_id: domain_id.to_string(),
-            tab_id: remote_tab.id,
-            pane_ids: remote_panes
-                .iter()
+        if remote_tab.panes.len() > 1 {
+            let mut remote_panes: Vec<u32> = remote_tab.panes.iter().map(|pane| pane.id).collect();
+            remote_panes.sort_unstable();
+            let tab = &mut self.tabs[index];
+            tab.live_domain
+                .as_mut()
+                .expect("an attached live-domain tab has its route")
+                .pane_ids = remote_panes
+                .into_iter()
                 .enumerate()
-                .map(|(index, pane)| (PaneId(index as u32), pane.id))
-                .collect(),
-        });
-        tab.apply_terminal_policy(&self.policy, false);
-        tab.set_live_domain_metadata(
-            &remote_tab.title,
-            remote_tab.user_title.as_deref(),
-            remote_tab.pinned,
-        );
-        if remote_panes.len() > 1 {
+                .map(|(index, remote)| (PaneId(index as u32), remote))
+                .collect();
             tab.panes
                 .adopt_domain_layout(domain_id, remote_tab, relay_command)?;
         }
         Ok(index)
     }
 
-    fn attach_topology_tab(
+    /// Open a tab showing `remote_tab` through one relay, local pane 0, to
+    /// its lowest-numbered pane, and make it active. Returns its index.
+    fn attach_live_tab(
         &mut self,
         domain_id: &str,
         remote_tab: &crate::domain::model::LiveTopologyTab,
@@ -330,29 +320,42 @@ impl TabManager {
         let primary = remote_tab
             .panes
             .iter()
-            .min_by_key(|pane| pane.id)
+            .map(|pane| pane.id)
+            .min()
             .ok_or_else(|| anyhow::anyhow!("live domain tab {} has no panes", remote_tab.id))?;
-        self.new_tab_with_command(
-            relay_command.program(),
-            &relay_command.pane_arguments(domain_id, primary.id),
+        let id = self.next_id;
+        self.next_id += 1;
+        let policy = self.policy.for_relay();
+        let relay = crate::panes::Pane::new_relay(
+            PaneId(0),
+            self.area.geometry,
+            relay_command,
+            domain_id,
+            primary,
+            &policy,
             None,
-            Some(&remote_tab.title),
-            None,
-            HashMap::new(),
         )?;
-        let index = self.tabs.len() - 1;
-        self.tabs[index].attach_live_domain(LiveDomainTab {
-            domain_id: domain_id.to_string(),
-            tab_id: remote_tab.id,
-            pane_ids: HashMap::from([(PaneId(0), primary.id)]),
-        });
-        self.tabs[index].apply_terminal_policy(&self.policy, false);
-        self.tabs[index].set_live_domain_metadata(
+        let mut tab = Tab::new_live_domain(
+            id,
+            self.area,
+            relay,
+            &policy,
+            LiveDomainTab {
+                domain_id: domain_id.to_string(),
+                tab_id: remote_tab.id,
+                pane_ids: HashMap::from([(PaneId(0), primary)]),
+            },
+            self.shell.clone(),
+        );
+        tab.set_live_domain_metadata(
             &remote_tab.title,
             remote_tab.user_title.as_deref(),
             remote_tab.pinned,
         );
-        Ok(index)
+        self.tabs.push(tab);
+        self.active = self.tabs.len() - 1;
+        log::info!("Attached live-domain tab {} as tab {}", remote_tab.id, id);
+        Ok(self.active)
     }
 
     /// Apply one whole-domain daemon revision while preserving every relay PTY
@@ -403,7 +406,7 @@ impl TabManager {
             });
             let index = match index {
                 Some(index) => index,
-                None => self.attach_topology_tab(&snapshot.domain_id, remote_tab, relay_command)?,
+                None => self.attach_live_tab(&snapshot.domain_id, remote_tab, relay_command)?,
             };
             self.reconcile_live_domain_tab(index, &snapshot.domain_id, remote_tab, relay_command)?;
         }
@@ -3230,6 +3233,72 @@ mod tests {
             !manager.reconcile_closed_live_domain_pane(local_tab_id, 12),
             "duplicate completion must be idempotent"
         );
+    }
+
+    #[test]
+    fn a_tabs_first_relay_starts_like_every_later_one() {
+        use crate::domain::model::{DomainSnapshot, DomainTopology, LivePaneLayout, LiveTab};
+        let relay = crate::domain::DomainRelayCommand::local("/bin/true");
+        let snapshot = DomainSnapshot::fixture(
+            "relays",
+            7,
+            vec![LiveTab::fixture(
+                7,
+                LivePaneLayout::split(
+                    70,
+                    SplitDirection::Vertical,
+                    500,
+                    LivePaneLayout::pane(5),
+                    LivePaneLayout::pane(9),
+                ),
+            )],
+        );
+        let kitty_files = TerminalPolicy {
+            kitty_file_transmission: true,
+            ..TerminalPolicy::with_scrollback(1_000, 1024 * 1024)
+        };
+        let manager = || {
+            let mut manager = TabManager::for_test(crate::test_support::sleeping_shell());
+            manager.set_terminal_policy(kitty_files, false);
+            manager
+        };
+        // Attached whole, and grown by a topology revision from one relay.
+        let mut attached = manager();
+        attached.attach_domain(&snapshot, &relay).unwrap();
+        let mut revised = manager();
+        revised
+            .reconcile_live_domain(&DomainTopology::from(&snapshot), &relay)
+            .unwrap();
+        for manager in [&mut attached, &mut revised] {
+            let tab = manager.active_tab_mut().unwrap();
+            assert_eq!(tab.panes.pane_count(), 2);
+            for pane in tab.panes.all_panes_mut() {
+                let id = pane.id;
+                assert!(pane.suppress_protocol_replies, "{id:?}");
+                assert_eq!(
+                    pane.shell_integration,
+                    crate::terminal::shell_integration::ShellIntegrationSupport::Unavailable(
+                        "Persistent-domain relays do not install a local shell hook".into()
+                    ),
+                    "{id:?}"
+                );
+                assert_eq!(
+                    pane.last_command.as_deref(),
+                    Some("termeric domain relay"),
+                    "{id:?}"
+                );
+                assert_eq!(pane.launch, crate::workspace::WorkspaceLaunch::Shell);
+                assert_eq!(pane.launch_shell, ShellConfig::default(), "{id:?}");
+                assert!(!pane.terminal.kitty_file_transmission(), "{id:?}");
+                // A relay takes the daemon's graphics snapshot, which an
+                // invalid one consumes, clearing what it seeded.
+                pane.terminal
+                    .process(b"\x1b_Ga=T,f=32,s=1,v=1,i=9,c=1,r=1,C=1;AQIDBA==\x1b\\");
+                assert!(pane.terminal.has_images(), "{id:?}");
+                pane.terminal.process(b"\x1b_TG;end\x1b\\");
+                assert!(!pane.terminal.has_images(), "{id:?}");
+            }
+        }
     }
 
     #[test]

@@ -159,39 +159,24 @@ impl Pane {
         )
     }
 
-    pub(crate) fn new_local(
+    /// A pane of `geometry` running `command` on a new PTY under `policy`,
+    /// launched as a shell with nothing yet known about it: no title, no
+    /// command, and the default shell configuration. Each constructor sets
+    /// what it knows.
+    fn spawn(
         id: PaneId,
         geometry: TerminalGeometry,
-        shell: &ShellConfig,
         policy: &TerminalPolicy,
-        working_dir: Option<&str>,
-        plugin: bool,
+        command: PtyCommand<'_>,
+        shell_integration: ShellIntegrationSupport,
     ) -> anyhow::Result<Self> {
         let mut terminal = Terminal::new(geometry.cols, geometry.rows);
         terminal.set_pixel_geometry(geometry.pixel_width.into(), geometry.pixel_height.into());
         policy.apply(&mut terminal, true);
-        let launch = if plugin {
-            ShellLaunch::without_integration(
-                shell,
-                "Plugin launches do not install local shell hooks",
-            )
-        } else {
-            prepare_shell_launch(shell)
-        };
-        let pty = Pty::spawn(
-            geometry.pty_size(),
-            PtyCommand {
-                program: launch.program.as_deref(),
-                args: &launch.args,
-                cwd: working_dir.map(std::path::Path::new),
-                env: &launch.env,
-                ..PtyCommand::default()
-            },
-        )?;
+        let pty = Pty::spawn(geometry.pty_size(), command)?;
         terminal.set_term_name(pty.term_name());
         let (handle, reader) = pty.take_reader();
         let rx = spawn_reader_thread_with_waker(reader, crate::app::pty_event_waker());
-
         Ok(Self {
             id,
             title: None,
@@ -202,14 +187,47 @@ impl Pane {
             read_only: false,
             geometry,
             harvest: crate::harvest::HarvestTerminalState::default(),
-            shell_integration: launch.integration,
+            shell_integration,
             last_command: None,
             integration: crate::session::terminal_state::TerminalIntegration::default(),
             launch: crate::workspace::WorkspaceLaunch::Shell,
-            launch_shell: shell.clone(),
+            launch_shell: ShellConfig::default(),
             event_overflow_reported: false,
             suppress_protocol_replies: false,
         })
+    }
+
+    pub(crate) fn new_local(
+        id: PaneId,
+        geometry: TerminalGeometry,
+        shell: &ShellConfig,
+        policy: &TerminalPolicy,
+        working_dir: Option<&str>,
+        plugin: bool,
+    ) -> anyhow::Result<Self> {
+        let launch = if plugin {
+            ShellLaunch::without_integration(
+                shell,
+                "Plugin launches do not install local shell hooks",
+            )
+        } else {
+            prepare_shell_launch(shell)
+        };
+        let mut pane = Self::spawn(
+            id,
+            geometry,
+            policy,
+            PtyCommand {
+                program: launch.program.as_deref(),
+                args: &launch.args,
+                cwd: working_dir.map(std::path::Path::new),
+                env: &launch.env,
+                ..PtyCommand::default()
+            },
+            launch.integration,
+        )?;
+        pane.launch_shell = shell.clone();
+        Ok(pane)
     }
 
     /// Create a pane running a program directly, without a shell or its
@@ -220,16 +238,15 @@ impl Pane {
         launch: &crate::tabs::CommandLaunch,
         policy: &TerminalPolicy,
     ) -> anyhow::Result<Self> {
-        let mut terminal = Terminal::new(geometry.cols, geometry.rows);
-        terminal.set_pixel_geometry(geometry.pixel_width.into(), geometry.pixel_height.into());
-        policy.apply(&mut terminal, true);
         let env: Vec<(String, String)> = launch
             .env
             .iter()
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect();
-        let pty = Pty::spawn(
-            geometry.pty_size(),
+        let mut pane = Self::spawn(
+            id,
+            geometry,
+            policy,
             PtyCommand {
                 program: Some(&launch.program),
                 args: &launch.args,
@@ -237,86 +254,52 @@ impl Pane {
                 env: &env,
                 policy: Some(&launch.environment_policy),
             },
-        )?;
-        terminal.set_term_name(pty.term_name());
-        let (handle, reader) = pty.take_reader();
-        let rx = spawn_reader_thread_with_waker(reader, crate::app::pty_event_waker());
-        Ok(Self {
-            id,
-            title: None,
-            terminal,
-            pty: handle,
-            pty_rx: rx,
-            closed: false,
-            read_only: false,
-            geometry,
-            harvest: crate::harvest::HarvestTerminalState::default(),
-            shell_integration: ShellIntegrationSupport::Unavailable(
+            ShellIntegrationSupport::Unavailable(
                 "Direct command tabs do not provide shell prompt marks".into(),
             ),
-            last_command: Some(launch.program.clone()),
-            integration: crate::session::terminal_state::TerminalIntegration::default(),
-            launch: match &launch.tab_type {
-                Some(crate::tabs::TabType::Plugin { plugin_id }) => {
-                    crate::workspace::WorkspaceLaunch::Plugin {
-                        plugin_id: plugin_id.clone(),
-                        profile: None,
-                    }
-                }
-                _ => crate::workspace::WorkspaceLaunch::Shell,
-            },
-            launch_shell: ShellConfig::default(),
-            event_overflow_reported: false,
-            suppress_protocol_replies: false,
-        })
+        )?;
+        pane.last_command = Some(launch.program.clone());
+        if let Some(crate::tabs::TabType::Plugin { plugin_id }) = &launch.tab_type {
+            pane.launch = crate::workspace::WorkspaceLaunch::Plugin {
+                plugin_id: plugin_id.clone(),
+                profile: None,
+            };
+        }
+        Ok(pane)
     }
 
-    /// Create a pane backed by a direct command instead of the configured
-    /// shell. Persistent-domain GUI attachments use this for one authenticated
-    /// relay process per remote pane.
-    pub(crate) fn new_with_command(
+    /// A pane showing the live domain's pane `remote_pane` through an
+    /// authenticated relay process. The daemon answers protocol queries at
+    /// the real PTY, so the relay sends no replies of its own, and it takes
+    /// the daemon's graphics snapshot.
+    pub(crate) fn new_relay(
         id: PaneId,
         geometry: TerminalGeometry,
-        program: &str,
-        args: &[String],
+        relay_command: &crate::domain::DomainRelayCommand,
+        domain_id: &str,
+        remote_pane: u32,
         policy: &TerminalPolicy,
         title: Option<String>,
     ) -> anyhow::Result<Self> {
-        let mut terminal = Terminal::new(geometry.cols, geometry.rows);
-        terminal.set_pixel_geometry(geometry.pixel_width.into(), geometry.pixel_height.into());
-        policy.apply(&mut terminal, true);
-        terminal.set_graphics_relay_snapshot_allowed(true);
-        let pty = Pty::spawn(
-            geometry.pty_size(),
+        let arguments = relay_command.pane_arguments(domain_id, remote_pane);
+        let mut pane = Self::spawn(
+            id,
+            geometry,
+            policy,
             PtyCommand {
-                program: Some(program),
-                args,
+                program: Some(relay_command.program()),
+                args: &arguments,
                 ..PtyCommand::default()
             },
-        )?;
-        terminal.set_term_name(pty.term_name());
-        let (handle, reader) = pty.take_reader();
-        let rx = spawn_reader_thread_with_waker(reader, crate::app::pty_event_waker());
-        Ok(Self {
-            id,
-            title,
-            terminal,
-            pty: handle,
-            pty_rx: rx,
-            closed: false,
-            read_only: false,
-            geometry,
-            harvest: crate::harvest::HarvestTerminalState::default(),
-            shell_integration: ShellIntegrationSupport::Unavailable(
+            ShellIntegrationSupport::Unavailable(
                 "Persistent-domain relays do not install a local shell hook".into(),
             ),
-            last_command: Some("termeric domain relay".into()),
-            integration: Default::default(),
-            launch: crate::workspace::WorkspaceLaunch::Shell,
-            launch_shell: ShellConfig::default(),
-            event_overflow_reported: false,
-            suppress_protocol_replies: true,
-        })
+        )?;
+        pane.terminal.set_graphics_relay_snapshot_allowed(true);
+        pane.title = title;
+        pane.last_command = Some("termeric domain relay".into());
+        pane.suppress_protocol_replies = true;
+        Ok(pane)
     }
 
     /// Poll PTY output and immediately consume terminal-generated replies on
@@ -799,12 +782,12 @@ impl PaneManager {
                 self.area.cell_width,
                 self.area.cell_height,
             );
-            let arguments = relay_command.pane_arguments(domain_id, remote.id);
-            let pane = Pane::new_with_command(
+            let pane = Pane::new_relay(
                 local_id,
                 geometry,
-                relay_command.program(),
-                &arguments,
+                relay_command,
+                domain_id,
+                remote.id,
                 &self.policy,
                 Some(remote.title.clone()),
             )?;
@@ -852,13 +835,13 @@ impl PaneManager {
             }
             let local_id = PaneId(next_id);
             next_id = next_id.checked_add(1).context("pane ID space exhausted")?;
-            let arguments = relay_command.pane_arguments(domain_id, remote.id);
             // Laying the tree out below gives the relay its own share.
-            let pane = Pane::new_with_command(
+            let pane = Pane::new_relay(
                 local_id,
                 self.area.geometry,
-                relay_command.program(),
-                &arguments,
+                relay_command,
+                domain_id,
+                remote.id,
                 &self.policy,
                 Some(remote.title.clone()),
             )?;

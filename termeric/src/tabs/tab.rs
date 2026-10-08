@@ -225,15 +225,28 @@ impl Tab {
         poll
     }
 
-    /// Make this tab show a live domain's tab through relay processes. The
-    /// daemon answers protocol queries at the real PTYs, so the relays send
-    /// no replies of their own.
-    pub(crate) fn attach_live_domain(&mut self, live: LiveDomainTab) {
-        for pane in self.panes.all_panes_mut() {
-            pane.suppress_protocol_replies = true;
-            pane.terminal.set_graphics_relay_snapshot_allowed(true);
-        }
-        self.live_domain = Some(live);
+    /// A tab showing a live domain's tab, `live`, through `relay` (see
+    /// [`Pane::new_relay`]), which fills `area`. `policy` is the relays'
+    /// own ([`TerminalPolicy::for_relay`]).
+    pub(crate) fn new_live_domain(
+        id: usize,
+        area: TerminalArea,
+        relay: Pane,
+        policy: &TerminalPolicy,
+        live: LiveDomainTab,
+        split_shell: ShellConfig,
+    ) -> Self {
+        let mut tab = Self::with_terminal(
+            id,
+            format!("Tab {}", id + 1),
+            relay,
+            area,
+            policy,
+            TabType::Shell,
+            split_shell,
+        );
+        tab.live_domain = Some(live);
+        tab
     }
 
     /// The tab's panes while it is split into more than one. Pane-only
