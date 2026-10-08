@@ -835,8 +835,9 @@ impl Renderer {
 
         let size_px = self.ui_label_px();
         let text_x = label.text_x;
+        let (title, _) = self.fitted_tab_title(tab, &label);
         let drawn = self.push_ui_label(
-            &tab.title,
+            &title,
             text_x,
             y,
             height,
@@ -1275,6 +1276,22 @@ impl Renderer {
         chrome.label(tab, surface, badge_width)
     }
 
+    /// `tab`'s title as it fits in `label`, and its width. A draft being
+    /// typed keeps its end, where the caret is; any other title its start.
+    fn fitted_tab_title<'a>(
+        &mut self,
+        tab: &'a TabInfo,
+        label: &TabLabelLayout,
+    ) -> (std::borrow::Cow<'a, str>, f32) {
+        let size_px = self.ui_label_px();
+        let max_width = label.text_right - label.text_x;
+        if tab.renaming {
+            self.fit_ui_label_end(&tab.title, max_width, size_px)
+        } else {
+            self.fit_ui_label(&tab.title, max_width, size_px)
+        }
+    }
+
     /// The caret at the end of `tab`'s title as it is drawn in `label`.
     fn tab_rename_caret_in(
         &mut self,
@@ -1283,8 +1300,7 @@ impl Renderer {
         surface: Bounds,
     ) -> Bounds {
         let size_px = self.ui_label_px();
-        let (_, title_width) =
-            self.fit_ui_label(&tab.title, label.text_right - label.text_x, size_px);
+        let (_, title_width) = self.fitted_tab_title(tab, label);
         let metrics = self.glyph_cache.ui_font_metrics(size_px);
         self.tab_chrome()
             .rename_caret(label, title_width, surface, metrics)

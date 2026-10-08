@@ -6,6 +6,7 @@ use std::sync::Arc;
 use super::glyph_cache::GlyphCache;
 use super::text::TextClip;
 use super::{Renderer, physical_font_size};
+use crate::ui::text_layout::fit_end_with_ellipsis;
 pub(super) use crate::ui::text_layout::fit_with_ellipsis;
 use crate::ui::text_layout::{TextLayout, TextMeasure, TextSize, TextSpan, UiFace};
 
@@ -61,12 +62,32 @@ impl Renderer {
         let fitted = fit_with_ellipsis(text, max_width, |candidate| {
             glyphs.ui_text_width(candidate, size_px)
         });
-        let width = if fitted.is_empty() {
+        let width = self.fitted_width(&fitted, size_px);
+        (fitted, width)
+    }
+
+    /// [`Renderer::fit_ui_label`] keeping the end of `text` behind an
+    /// ellipsis instead of its start, for a draft whose caret sits at its end.
+    pub(super) fn fit_ui_label_end<'a>(
+        &mut self,
+        text: &'a str,
+        max_width: f32,
+        size_px: f32,
+    ) -> (Cow<'a, str>, f32) {
+        let glyphs = &mut self.glyph_cache;
+        let fitted = fit_end_with_ellipsis(text, max_width, |candidate| {
+            glyphs.ui_text_width(candidate, size_px)
+        });
+        let width = self.fitted_width(&fitted, size_px);
+        (fitted, width)
+    }
+
+    fn fitted_width(&mut self, fitted: &str, size_px: f32) -> f32 {
+        if fitted.is_empty() {
             0.0
         } else {
-            self.glyph_cache.ui_text_width(&fitted, size_px)
-        };
-        (fitted, width)
+            self.glyph_cache.ui_text_width(fitted, size_px)
+        }
     }
 
     /// [`Renderer::push_ui_label`] centred on `center_x`.
