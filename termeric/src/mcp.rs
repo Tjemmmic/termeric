@@ -17,8 +17,9 @@ use crate::control::protocol::{AgentSummary, MAX_TEXT_HISTORY_LINES};
 /// Protocol revisions this server speaks, newest first.
 const SUPPORTED_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 const DEFAULT_READ_LINES: u16 = 80;
-/// Lines longer than this are refused rather than buffered without bound.
-const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
+/// Input lines (each one JSON-RPC message or batch) longer than this are
+/// refused rather than buffered without bound.
+const MAX_INPUT_LINE_BYTES: usize = 1024 * 1024;
 
 const INSTRUCTIONS: &str = "Termeric is the terminal these agents run in. \
 list_agents shows every coding agent in Termeric with its state (working, needs_input, \
@@ -175,7 +176,7 @@ fn serve_on(backend: impl Backend, mut reader: impl BufRead, mut writer: impl Wr
     let mut line = Vec::new();
     // A last message without a newline is still a message.
     while let Some(read) =
-        crate::line_reader::read_bounded_line(&mut reader, MAX_MESSAGE_BYTES, &mut line)
+        crate::line_reader::read_bounded_line(&mut reader, MAX_INPUT_LINE_BYTES, &mut line)
             .context("read from standard input")?
     {
         let reply = if read.oversized {
@@ -838,9 +839,9 @@ mod tests {
             assert_eq!(value.len(), length);
             value
         };
-        input.extend_from_slice(padded(MAX_MESSAGE_BYTES).as_bytes());
+        input.extend_from_slice(padded(MAX_INPUT_LINE_BYTES).as_bytes());
         input.push(b'\n');
-        input.extend_from_slice(padded(MAX_MESSAGE_BYTES + 1).as_bytes());
+        input.extend_from_slice(padded(MAX_INPUT_LINE_BYTES + 1).as_bytes());
         input.push(b'\n');
         // A batch gets one reply per request, and none for notifications or
         // responses.
