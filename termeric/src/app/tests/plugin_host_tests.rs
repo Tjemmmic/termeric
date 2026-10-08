@@ -467,3 +467,85 @@ fn every_active_tab_change_raises_one_tab_switched_by_tab_id() {
     app.report_active_tab_switch();
     assert_eq!(take(), vec![(Some(other), neighbour)]);
 }
+
+#[test]
+fn plugin_context_cwd_follows_the_focused_pane_and_single_terminal() {
+    let temporary = tempfile::tempdir().unwrap();
+    let left_cwd = temporary.path().join("left-context");
+    let right_cwd = temporary.path().join("right-context");
+    let single_cwd = temporary.path().join("single-context");
+    for directory in [&left_cwd, &right_cwd, &single_cwd] {
+        std::fs::create_dir(directory).unwrap();
+    }
+
+    let shell = crate::test_support::sleeping_shell();
+    let mut panes = PaneManager::for_test(
+        80,
+        24,
+        shell,
+        1_000,
+        8 * 1024 * 1024,
+        800.0,
+        480.0,
+        10.0,
+        20.0,
+    )
+    .unwrap();
+    let right = panes.split(SplitDirection::Vertical).unwrap();
+    panes
+        .get_pane_mut(PaneId(0))
+        .unwrap()
+        .terminal
+        .process(format!("\x1b]7;file://{}\x07", left_cwd.display()).as_bytes());
+    panes
+        .get_pane_mut(right)
+        .unwrap()
+        .terminal
+        .process(format!("\x1b]7;file://{}\x07", right_cwd.display()).as_bytes());
+    panes.focus(PaneId(0));
+
+    let mut tabs = TabManager::for_test(ShellConfig::default());
+    tabs.new_tab_with_command(
+        "/bin/sh",
+        &crate::test_support::sleeping_args(),
+        None,
+        Some("plugin-context-routing"),
+        None,
+        HashMap::new(),
+    )
+    .unwrap();
+    tabs.active_tab_mut().unwrap().panes = panes;
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.tabs = Some(tabs);
+
+    assert_eq!(app.build_plugin_context().cwd.as_deref(), left_cwd.to_str());
+    app.active_panes_mut().focus(right);
+    app.refresh_focused_terminal_surfaces();
+    assert_eq!(
+        app.build_plugin_context().cwd.as_deref(),
+        right_cwd.to_str()
+    );
+
+    let mut single_tabs = TabManager::for_test(ShellConfig::default());
+    single_tabs
+        .new_tab_with_command(
+            "/bin/sh",
+            &crate::test_support::sleeping_args(),
+            None,
+            Some("single-plugin-context"),
+            None,
+            HashMap::new(),
+        )
+        .unwrap();
+    single_tabs
+        .active_tab_mut()
+        .unwrap()
+        .focused_terminal_mut()
+        .unwrap()
+        .process(format!("\x1b]7;file://{}\x07", single_cwd.display()).as_bytes());
+    app.tabs = Some(single_tabs);
+    assert_eq!(
+        app.build_plugin_context().cwd.as_deref(),
+        single_cwd.to_str()
+    );
+}

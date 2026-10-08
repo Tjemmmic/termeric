@@ -629,3 +629,23 @@ fn shortcuts_outrank_plugin_keybindings_and_both_outrank_the_terminal() {
     // The reader takes the first six bytes the terminal was sent.
     app.wait_for_screen_text("P   L   U   G   I   N");
 }
+
+#[test]
+fn fullscreen_is_window_local_transient_state_for_shortcut_and_palette_routes() {
+    let mut first = App::new_headless(Config::default()).unwrap();
+    let second = App::new_headless(Config::default()).unwrap();
+
+    assert!(!first.fullscreen_requested);
+    assert!(!second.fullscreen_requested);
+    assert!(first.handle_action(Action::ToggleFullscreen));
+    assert!(first.fullscreen_requested);
+    assert!(!second.fullscreen_requested);
+
+    first.command_palette.open();
+    let result = first
+        .command_palette
+        .execute_command("core.toggle-fullscreen")
+        .unwrap();
+    first.handle_palette_result(result);
+    assert!(!first.fullscreen_requested);
+}
