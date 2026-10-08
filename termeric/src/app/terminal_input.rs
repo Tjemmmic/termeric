@@ -282,9 +282,15 @@ mod tests {
             100,
             1024 * 1024,
         );
-        tabs.new_tab_with_command("/bin/sh", &[
-            "-c".into(), format!("stty raw -echo; printf READY; dd bs=1 count={count} 2>/dev/null | od -An -tx1 -v; sleep 0.2"),
-        ], None, Some("saved-command-bytes"), None, Default::default()).unwrap();
+        tabs.new_tab_with_command(
+            "/bin/sh",
+            &["-c".into(), crate::test_support::byte_probe(count)],
+            None,
+            Some("saved-command-bytes"),
+            None,
+            Default::default(),
+        )
+        .unwrap();
         let mut app = App::new_headless(Config::default()).unwrap();
         app.tabs = Some(tabs);
         wait_command_output(&mut app, "READY");
@@ -477,9 +483,18 @@ mod tests {
             let typed = "git checkout ma";
             let mut app = raw_command_app(typed.len() + 1);
             app.write_to_pty(typed.as_bytes());
-            app.tabs.as_mut().unwrap().new_tab_with_command("/bin/sh", &[
-                "-c".into(), "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.2".into(),
-            ], None, Some("shortcut-target-reader"), None, Default::default()).unwrap();
+            app.tabs
+                .as_mut()
+                .unwrap()
+                .new_tab_with_command(
+                    "/bin/sh",
+                    &["-c".into(), crate::test_support::FIRST_BYTE_PROBE.into()],
+                    None,
+                    Some("shortcut-target-reader"),
+                    None,
+                    Default::default(),
+                )
+                .unwrap();
             wait_command_output(&mut app, "READY");
             app.tabs.as_mut().unwrap().switch_to(0);
             if read_only {
@@ -586,13 +601,7 @@ mod tests {
         let mut app = raw_command_app(1);
         let shell = crate::config::ShellConfig {
             program: Some("/bin/sh".into()),
-            args: vec![
-                "-c".into(),
-                format!(
-                    "stty raw -echo; printf READY; dd bs=1 count={} 2>/dev/null | od -An -tx1 -v; sleep 0.2",
-                    expected.len()
-                ),
-            ],
+            args: vec!["-c".into(), crate::test_support::byte_probe(expected.len())],
             env: Default::default(),
         };
         let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
@@ -783,7 +792,7 @@ mod tests {
         let mut app = raw_command_app(4);
         let shell = crate::config::ShellConfig {
             program: Some("/bin/sh".into()),
-            args: vec!["-c".into(), "stty raw -echo; printf READY; dd bs=1 count=4 2>/dev/null | od -An -tx1; sleep 0.2".into()],
+            args: vec!["-c".into(), crate::test_support::byte_probe(4)],
             env: Default::default(),
         };
         let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();

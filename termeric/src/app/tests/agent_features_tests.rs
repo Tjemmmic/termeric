@@ -94,10 +94,7 @@ fn a_fresh_configuration_offers_no_agent_features() {
 
 #[test]
 fn agent_shortcuts_reach_the_terminal_while_agent_features_are_off() {
-    let mut app = App::new_headless_running(
-        "stty raw -echo; printf READY; dd bs=1 count=2 2>/dev/null | od -An -tx1; sleep 0.1",
-        "agent-chords",
-    );
+    let mut app = App::new_headless_running(&crate::test_support::byte_probe(2), "agent-chords");
     app.wait_for_screen_text("READY");
     let toasts = app.toasts.iter().count();
     app.modifiers = ModifiersState::CONTROL | ModifiersState::SHIFT;

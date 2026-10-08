@@ -586,10 +586,8 @@ fn unicode_picker_tracks_only_the_same_focused_owner_through_topology_changes() 
 fn shortcuts_outrank_plugin_keybindings_and_both_outrank_the_terminal() {
     use crate::input::keybindings::{KeyAction, KeyBinding};
     use winit::keyboard::{Key, ModifiersState};
-    let mut app = App::new_headless_running(
-        "stty raw -echo; printf READY; dd bs=1 count=6 2>/dev/null | od -An -c; sleep 0.2",
-        "bound-key-reader",
-    );
+    let mut app =
+        App::new_headless_running(&crate::test_support::byte_probe(6), "bound-key-reader");
     app.wait_for_screen_text("READY");
     let control_shift = |key: &str, text: &str| KeyBinding {
         key: key.into(),
@@ -618,8 +616,8 @@ fn shortcuts_outrank_plugin_keybindings_and_both_outrank_the_terminal() {
     app.modifiers = ModifiersState::empty();
     assert!(!app.handle_bound_key(&Key::Character("z".into())));
 
-    // The reader takes the first six bytes the terminal was sent.
-    app.wait_for_screen_text("P   L   U   G   I   N");
+    // The reader takes the first six bytes the terminal was sent: PLUGIN.
+    app.wait_for_screen_text("50 4c 55 47 49 4e");
 }
 
 #[test]

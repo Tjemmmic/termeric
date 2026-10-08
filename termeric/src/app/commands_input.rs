@@ -545,10 +545,8 @@ mod tests {
 
     #[test]
     fn keyboard_run_activates_only_the_selected_command_in_an_inert_raw_pty() {
-        let mut app = App::new_headless_running(
-            "stty raw -echo; printf READY; dd bs=1 count=3 2>/dev/null | od -An -tx1; sleep 0.1",
-            "command-navigation",
-        );
+        let mut app =
+            App::new_headless_running(&crate::test_support::byte_probe(3), "command-navigation");
         app.wait_for_screen_text("READY");
         app.config.commands = ["A", "B"]
             .into_iter()

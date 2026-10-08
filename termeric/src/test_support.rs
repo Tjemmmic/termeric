@@ -13,11 +13,21 @@ use termeric_core::{CellFlags, Terminal};
 mod benchmarks;
 mod soak;
 
-/// An `sh -c` script that shows whether input reached its terminal: with no
-/// echo or line editing it prints `READY`, then the first byte it reads, in
-/// hex. `App::assert_pty_untouched` writes the byte it expects first.
+/// An `sh -c` script that shows what input reached its terminal: with no
+/// echo or line editing it prints `READY`, then the first `count` bytes it
+/// reads, in hex, and stays a moment so its output is read before it exits.
+/// Write to it only once it shows `READY`.
+pub(crate) fn byte_probe(count: usize) -> String {
+    format!(
+        "stty raw -echo; printf READY; dd bs=1 count={count} 2>/dev/null | od -An -tx1 -v; sleep 0.2"
+    )
+}
+
+/// [`byte_probe`] for one byte, which shows whether input reached its
+/// terminal at all. `App::assert_pty_untouched` writes the byte it expects
+/// first.
 pub(crate) const FIRST_BYTE_PROBE: &str =
-    "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.1";
+    "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1 -v; sleep 0.2";
 
 /// `sh -c` arguments for a child that stays alive through a test without
 /// printing anything: a real PTY whose process is still running when the
@@ -308,4 +318,9 @@ fn plugin_quick_exit_crosses_pty_tab_and_diagnostic_capture() {
     assert_eq!(captured.len(), 1);
     assert_eq!(captured[0].0, "fixture-plugin");
     assert!(captured[0].1.join("\n").contains("plugin failed"));
+}
+
+#[test]
+fn the_first_byte_probe_is_the_one_byte_probe() {
+    assert_eq!(FIRST_BYTE_PROBE, byte_probe(1));
 }
