@@ -586,8 +586,12 @@ impl App {
                 }
             }
             Some(ModalLayer::ContextPicker) => {
-                if left && let Some(pos) = pos {
-                    self.press_context_picker(pos.0 as f32, pos.1 as f32);
+                if matches!(
+                    button,
+                    winit::event::MouseButton::Left | winit::event::MouseButton::Middle
+                ) && let Some(pos) = pos
+                {
+                    self.press_context_picker(button, pos.0 as f32, pos.1 as f32);
                     self.request_redraw(RedrawReason::PointerInput);
                 }
             }

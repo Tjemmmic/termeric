@@ -18,6 +18,8 @@ pub(super) enum TextTarget {
     CommandsForm,
     /// The focused field of a dialog, such as a font editor's.
     DialogField,
+    /// The context picker's file-path field, while it is focused.
+    ContextFiles,
     TabRename,
     AgentView,
     Search,
@@ -66,6 +68,9 @@ impl App {
                     TextTarget::CommandsForm
                 }
                 ModalLayer::Dialog if self.dialog.field_focused() => TextTarget::DialogField,
+                ModalLayer::ContextPicker if self.context_picker.file_input_focused() => {
+                    TextTarget::ContextFiles
+                }
                 _ => TextTarget::Blocked,
             });
         }

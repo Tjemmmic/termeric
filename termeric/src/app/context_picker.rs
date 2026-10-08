@@ -2,8 +2,10 @@
 //! event loop, and typing it into the agent's terminal.
 
 use super::text_field_keys::{FieldKey, types_text};
+use super::text_target::TextTarget;
 use super::*;
-use crate::ui::context_picker::{ContextPickerAction, ContextPickerPhase};
+use crate::ui::context_picker::{ContextPickerAction, ContextPickerPhase, ContextPickerTarget};
+use winit::event::MouseButton;
 use winit::keyboard::{Key, NamedKey};
 
 impl App {
@@ -86,15 +88,35 @@ impl App {
         }
     }
 
-    /// A primary press on the context picker: a button or source row takes
-    /// focus and is pressed, and the file field takes focus.
-    pub(super) fn press_context_picker(&mut self, x: f32, y: f32) {
+    /// A primary or middle press on the context picker. The primary button
+    /// works its buttons and source rows, which take focus and are pressed.
+    /// Either button on the file field focuses it and puts the caret at the
+    /// press; the middle one then pastes the primary selection there, as on
+    /// every other field. A middle press anywhere else does nothing.
+    pub(super) fn press_context_picker(&mut self, button: MouseButton, x: f32, y: f32) {
         let snapshot = self.context_picker.snapshot();
-        let Some(target) = self.context_picker_layout().target_at(x, y, &snapshot) else {
-            return;
-        };
-        let action = self.context_picker.press(snapshot.request_id, target);
-        self.apply_context_picker_action(action);
+        let request_id = snapshot.request_id;
+        let layout = self.context_picker_layout();
+        match layout.target_at(x, y, &snapshot) {
+            Some(ContextPickerTarget::FileInput) => {
+                self.context_picker
+                    .press(request_id, ContextPickerTarget::FileInput);
+                if let Some(cursor) =
+                    layout.file_caret_at(&snapshot.file_input, snapshot.file_cursor, x)
+                    && self.context_picker.place_file_caret(request_id, cursor)
+                {
+                    self.ime.clear_preedit();
+                }
+                if button == MouseButton::Middle {
+                    self.paste_primary_into_field(TextTarget::ContextFiles);
+                }
+            }
+            Some(target) if button == MouseButton::Left => {
+                let action = self.context_picker.press(request_id, target);
+                self.apply_context_picker_action(action);
+            }
+            _ => {}
+        }
     }
 
     /// Open the context picker for the agent in `terminal`. Terminal output
@@ -328,6 +350,76 @@ mod tests {
         assert_eq!(app.context_picker.phase(), ContextPickerPhase::FilePaths);
     }
 
+    /// Pastes, middle-click pastes, and composed text reach the focused file
+    /// field as they reach every other field: whole or not at all, at the
+    /// caret, and nowhere once the field loses focus.
+    #[test]
+    fn pastes_and_composed_text_reach_the_focused_file_field() {
+        use crate::app::text_target::TextTarget;
+        use winit::event::Ime;
+        let directory = tempfile::tempdir().unwrap();
+        let mut app = App::new_headless(Config::default()).unwrap();
+        let (clipboard, memory) = super::super::clipboard::Clipboard::in_memory();
+        memory.lock().unwrap().primary = Some("src/".into());
+        app.clipboard = clipboard;
+        let request = open_in(&mut app, directory.path());
+        assert_eq!(
+            app.text_target(),
+            TextTarget::Blocked,
+            "the list takes no text"
+        );
+        app.apply_context_picker_action(ContextPickerButton::ChooseFiles.action(request));
+        assert_eq!(app.text_target(), TextTarget::ContextFiles);
+
+        assert!(app.paste_clipboard_payload("my notes.md"));
+        assert!(
+            !app.paste_clipboard_payload("a.rs\nb.rs"),
+            "whole or nothing"
+        );
+        let longer_than_a_query = "a".repeat(crate::terminal::search::MAX_SEARCH_QUERY_BYTES + 1);
+        assert!(app.paste_clipboard_payload(&format!(", {longer_than_a_query}")));
+        let full = "a".repeat(crate::ui::context_picker::MAX_FILE_INPUT_BYTES);
+        assert!(
+            !app.paste_clipboard_payload(&full),
+            "past the field's limit"
+        );
+        press(&mut app, NamedKey::Home);
+        app.handle_ime_event(Ime::Preedit("draft".into(), None));
+        assert!(app.ime.preedit().is_some());
+        app.handle_ime_event(Ime::Commit("~/".into()));
+        let text = app.context_picker.snapshot().file_input;
+        assert!(
+            text == format!("~/my notes.md, {longer_than_a_query}"),
+            "{text:.24}"
+        );
+
+        // A middle press on the field pastes the primary selection where it
+        // landed: just inside its first character, before it.
+        let viewport = app.field_ime_viewport(TextTarget::ContextFiles).unwrap();
+        let field = app.context_picker_layout().file_input;
+        assert!(field.contains(viewport.cursor_x, viewport.text_y));
+        let y = field.center()[1];
+        app.press_context_picker(MouseButton::Middle, viewport.text_x + 1.0, y);
+        let text = app.context_picker.snapshot().file_input;
+        assert!(text.starts_with("src/~/my notes.md, "), "{text:.24}");
+        app.press_context_picker(MouseButton::Middle, field.x - 1.0, y);
+        assert!(app.context_picker.snapshot().file_input == text);
+
+        press(&mut app, NamedKey::Tab);
+        assert_eq!(app.text_target(), TextTarget::Blocked, "Back takes no text");
+        assert!(!app.paste_clipboard_payload("x"));
+        app.handle_ime_event(Ime::Preedit("draft".into(), None));
+        assert!(app.ime.preedit().is_none());
+        app.handle_ime_event(Ime::Commit("x".into()));
+        assert!(app.context_picker.snapshot().file_input == text);
+
+        // A middle press focuses the field again before it pastes.
+        app.press_context_picker(MouseButton::Middle, viewport.text_x + 1.0, y);
+        assert_eq!(app.context_picker.focus(), ContextPickerFocus::FileInput);
+        let pasted = app.context_picker.snapshot().file_input;
+        assert!(pasted.starts_with("src/src/~/"), "{pasted:.24}");
+    }
+
     #[test]
     fn choose_files_is_reached_with_tab_and_pressed_with_enter_or_space() {
         let directory = tempfile::tempdir().unwrap();
@@ -405,7 +497,7 @@ mod tests {
             .choose_files_button
             .unwrap()
             .center();
-        app.press_context_picker(x, y);
+        app.press_context_picker(MouseButton::Left, x, y);
         assert_eq!(app.context_picker.phase(), ContextPickerPhase::FilePaths);
         assert_eq!(app.context_picker.focus(), ContextPickerFocus::FileInput);
     }

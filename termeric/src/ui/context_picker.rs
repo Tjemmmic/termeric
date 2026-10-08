@@ -7,6 +7,7 @@ use super::animation::OverlayAnimation;
 use super::constants::CONTENT_CHAR_SCALE;
 use super::request_scope::RequestScope;
 use super::text_input::{TextInput, TextInputEdit, TextLimit};
+use super::text_input_viewport::TextInputViewport;
 use crate::agents::AgentTarget;
 use crate::agents::context::{
     ContextGatherRequest, MAX_CONTEXT_FILES, MAX_CONTEXT_PATH_CHARS, MAX_CONTEXT_SOURCE_CHARS,
@@ -17,6 +18,9 @@ use crate::ui::geometry::Bounds;
 pub const MAX_CONTEXT_SOURCES: usize = 6;
 /// Every path, with room for the separators between them.
 const MAX_FILE_INPUT_CHARS: usize = MAX_CONTEXT_PATH_CHARS * MAX_CONTEXT_FILES;
+/// The most one paste into the file field can carry: everything the field
+/// holds, each character at its widest UTF-8 length.
+pub const MAX_FILE_INPUT_BYTES: usize = MAX_FILE_INPUT_CHARS * 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ContextSourceId {
@@ -167,6 +171,8 @@ pub struct ContextPickerSnapshot {
     pub scroll_offset: usize,
     pub phase: ContextPickerPhase,
     pub file_input: String,
+    /// The file field's caret, as a byte offset into `file_input`.
+    pub file_cursor: usize,
     pub status: Option<String>,
     pub awaiting: bool,
     pub animation: f32,
@@ -209,6 +215,12 @@ pub struct ContextPickerLayout {
     pub row_height: f32,
     pub visible_count: usize,
     pub char_scale: f32,
+    /// The terminal cell, which the file field's text is placed by, like
+    /// every other single-line field.
+    pub cell_width: f32,
+    pub cell_height: f32,
+    /// The gap between the file field's edges and its text.
+    pub field_inset: f32,
 }
 
 impl ContextPickerLayout {
@@ -324,7 +336,31 @@ impl ContextPickerLayout {
             row_height,
             visible_count,
             char_scale,
+            cell_width,
+            cell_height,
+            field_inset: cell_width.round(),
         }
+    }
+
+    /// The file field's visible text and caret for `text` with its caret at
+    /// byte `cursor`: what is drawn, where the input method's caret goes,
+    /// and where a press places the caret.
+    pub fn file_input_viewport(&self, text: &str, cursor: usize) -> Option<TextInputViewport> {
+        let field = self.file_input;
+        TextInputViewport::calculate(
+            text,
+            cursor,
+            field.x + self.field_inset,
+            (field.y + (field.height - self.cell_height) / 2.0).round(),
+            field.right() - self.field_inset,
+            self.cell_width,
+        )
+    }
+
+    /// The caret position a press at `x` on the file field puts in `text`.
+    pub fn file_caret_at(&self, text: &str, cursor: usize, x: f32) -> Option<usize> {
+        self.file_input_viewport(text, cursor)?
+            .cursor_at(text, x, self.cell_width)
     }
 
     /// The `visible_index`th visible source row, where it is drawn.
@@ -524,6 +560,7 @@ impl ContextPicker {
             scroll_offset: self.scroll_offset,
             phase: self.phase,
             file_input: self.file_input.text().to_string(),
+            file_cursor: self.file_input.cursor(),
             status: self.status.clone(),
             awaiting: self.is_awaiting_current(),
             animation: self.animation(),
@@ -565,6 +602,14 @@ impl ContextPicker {
             return true;
         }
         self.file_input.cursor() != caret
+    }
+
+    /// Put the file field's caret at byte `cursor`, a grapheme boundary.
+    /// True when it moved.
+    pub fn place_file_caret(&mut self, request_id: u64, cursor: usize) -> bool {
+        self.editing_files(request_id)
+            && self.file_input.cursor() != cursor
+            && self.file_input.place_caret(cursor)
     }
 
     /// Whether request `request_id` is awaited and its file editor is open.

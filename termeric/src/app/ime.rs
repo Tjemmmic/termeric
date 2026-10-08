@@ -92,6 +92,10 @@ impl App {
                 let request_id = self.dialog.request_id();
                 self.dialog.insert_field_text(request_id, text);
             }
+            TextTarget::ContextFiles => {
+                let request_id = self.context_picker.request_id();
+                self.context_picker.insert_file_text(request_id, text);
+            }
             TextTarget::TabRename => {
                 self.insert_tab_rename_text(text);
             }
@@ -134,6 +138,11 @@ impl App {
                 .workspace_panel
                 .rename_input_viewport(&self.workspace_panel_layout()),
             TextTarget::CommandsForm => self.commands_ime_viewport(),
+            TextTarget::ContextFiles => {
+                let snapshot = self.context_picker.snapshot();
+                self.context_picker_layout()
+                    .file_input_viewport(&snapshot.file_input, snapshot.file_cursor)
+            }
             TextTarget::DialogField
             | TextTarget::TabRename
             | TextTarget::AgentView

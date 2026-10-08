@@ -131,10 +131,13 @@ impl App {
         if text.is_empty() {
             return false;
         }
-        let limit = if target == TextTarget::CommandsForm {
-            crate::ui::commands::panel::CommandsPanel::MAX_FORM_COMMAND_BYTES
-        } else {
-            crate::terminal::search::MAX_SEARCH_QUERY_BYTES
+        let limit = match target {
+            TextTarget::CommandsForm => {
+                crate::ui::commands::panel::CommandsPanel::MAX_FORM_COMMAND_BYTES
+            }
+            // A list of paths may be longer than a query.
+            TextTarget::ContextFiles => crate::ui::context_picker::MAX_FILE_INPUT_BYTES,
+            _ => crate::terminal::search::MAX_SEARCH_QUERY_BYTES,
         };
         if text.len() > limit || text.chars().any(crate::safe_text::breaks_single_line) {
             self.toasts.warning(
@@ -152,6 +155,10 @@ impl App {
             TextTarget::DialogField => {
                 let request_id = self.dialog.request_id();
                 self.dialog.insert_field_text(request_id, text)
+            }
+            TextTarget::ContextFiles => {
+                let request_id = self.context_picker.request_id();
+                self.context_picker.insert_file_text(request_id, text)
             }
             TextTarget::Search => self.insert_search_text(text),
             TextTarget::Blocked | TextTarget::Terminal | TextTarget::AgentView => unreachable!(),
