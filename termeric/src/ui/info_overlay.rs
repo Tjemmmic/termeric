@@ -139,6 +139,9 @@ pub struct InfoOverlayLayout {
     pub continue_button: Bounds,
     /// The keyboard hint under the buttons.
     pub hint: Bounds,
+    /// The rules under the title and under the content.
+    pub title_rule: Bounds,
+    pub content_rule: Bounds,
     pub padding: f32,
     pub title_height: f32,
     pub line_height: f32,
@@ -183,6 +186,8 @@ impl InfoOverlayLayout {
             copy_button: text.button(copy_x, copy_width),
             continue_button: text.button(continue_x, continue_width),
             hint: text.hint,
+            title_rule: text.title_rule,
+            content_rule: text.content_rule,
             padding: text.padding,
             title_height: text.title_height,
             line_height: text.line_height,

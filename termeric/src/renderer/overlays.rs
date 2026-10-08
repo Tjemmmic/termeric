@@ -17,8 +17,10 @@ use crate::ui::icon::Icon;
 const CARD_SCROLLBAR_WIDTH: f32 = 4.0;
 
 impl Renderer {
-    /// A border-width rule across `width` whose outer sixths fade out.
-    fn draw_faded_separator(&mut self, x: f32, y: f32, width: f32, anim: f32) {
+    /// A border-width rule down from the top edge of `rule`, across its
+    /// width, whose outer sixths fade out.
+    fn draw_faded_separator(&mut self, rule: Bounds, anim: f32) {
+        let Bounds { x, y, width, .. } = rule;
         let fade_width = width * 0.15;
         let thickness = self.px(BORDER_WIDTH);
         let center = with_alpha(self.ui.palette_border, 0.25 * anim);
@@ -59,7 +61,6 @@ impl Renderer {
         let card_y = layout.card.y;
         let card_width = layout.card.width;
         let padding = layout.padding;
-        let content_height = layout.content.height;
         let char_scale = layout.char_scale;
         self.draw_card_shadow(layout.card, 0.08 * anim, 3);
         self.draw_card(
@@ -88,16 +89,9 @@ impl Renderer {
             with_alpha(self.ui.palette_accent, anim),
         );
 
-        let separator_width = (card_width - padding * 2.0).max(1.0);
-        self.draw_faded_separator(
-            card_x + padding,
-            title_y + cell_height * 1.5,
-            separator_width,
-            anim,
-        );
+        self.draw_faded_separator(layout.title_rule, anim);
 
         // ── Content lines ──
-        let content_start_y = layout.content.y;
         let text_color = with_alpha(self.ui.palette_text, 0.9 * anim);
         let dim_color = with_alpha(self.ui.palette_text_dim, 0.7 * anim);
         let content_x = layout.content.x;
@@ -199,12 +193,7 @@ impl Renderer {
             anim,
         );
 
-        self.draw_faded_separator(
-            card_x + padding,
-            content_start_y + content_height + cell_height * 0.5,
-            separator_width,
-            anim,
-        );
+        self.draw_faded_separator(layout.content_rule, anim);
 
         // ── Two buttons: "Copy" and "Continue" ──
         let copy_label = "Copy";
