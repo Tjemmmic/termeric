@@ -125,8 +125,8 @@ impl App {
                 self.settings_panel.close();
                 self.commands_panel.close();
                 self.agents_panel.close();
-                self.session_panel
-                    .open(crate::session::listing::SessionListing::workspaces());
+                self.workspace_panel
+                    .open(crate::session::listing::WorkspaceListing::workspaces());
             }
         }
         self.request_redraw(RedrawReason::Action);
@@ -164,7 +164,7 @@ mod tests {
         assert!(app.workspace_menu.is_some());
         app.handle_workspace_menu_key(&Key::Named(NamedKey::Escape));
         assert!(app.workspace_menu.is_none());
-        assert!(!app.session_panel.is_open());
+        assert!(!app.workspace_panel.is_open());
         crate::workspace::set_test_workspaces_base_dir(None);
     }
 
@@ -175,7 +175,7 @@ mod tests {
         app.handle_workspace_menu_key(&Key::Named(NamedKey::End));
         app.handle_workspace_menu_key(&Key::Named(NamedKey::Enter));
         assert!(app.workspace_menu.is_none());
-        assert!(app.session_panel.is_open() && app.session_panel.is_workspace_mode());
+        assert!(app.workspace_panel.is_open() && app.workspace_panel.is_workspace_mode());
         crate::workspace::set_test_workspaces_base_dir(None);
     }
 

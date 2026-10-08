@@ -48,7 +48,6 @@ mod runtime_plugins;
 mod search_input;
 mod search_presentation;
 mod session_export;
-mod session_input;
 mod sessions;
 mod settings_input;
 mod shortcuts_input;
@@ -68,6 +67,7 @@ mod transcripts;
 mod unicode_picker;
 mod workspace_actions;
 mod workspace_menu;
+mod workspace_panel_input;
 mod workspaces;
 
 use anyhow::Result;
@@ -756,7 +756,7 @@ pub struct App {
     /// Application runtime state (for first boot tracking, etc.)
     app_state: AppState,
     /// Last workspace-manager row click, for double-click opening.
-    session_row_click: crate::input::DoubleClick<String>,
+    workspace_row_click: crate::input::DoubleClick<String>,
     /// Presses on tabs, by tab ID, for double-click renaming.
     tab_click: crate::input::DoubleClick<usize>,
     /// The theme in effect while "Change Theme…" previews others.
@@ -764,8 +764,8 @@ pub struct App {
     /// The toolbar Workspaces menu while it is open.
     workspace_menu:
         Option<crate::ui::popup_menu::PopupMenu<crate::ui::workspace_menu::WorkspaceMenuAction>>,
-    /// Session management panel
-    session_panel: crate::ui::session_panel::SessionPanel,
+    /// Workspace and closed-tab snapshot panel
+    workspace_panel: crate::ui::workspace_panel::WorkspacePanel,
     /// Custom commands panel
     commands_panel: crate::ui::commands::panel::CommandsPanel,
     /// This window's agents and supervisor at a glance.
@@ -1086,10 +1086,10 @@ impl App {
                 AppState::default()
             },
             workspace_menu: None,
-            session_row_click: Default::default(),
+            workspace_row_click: Default::default(),
             tab_click: Default::default(),
             theme_preview: None,
-            session_panel: crate::ui::session_panel::SessionPanel::new(),
+            workspace_panel: crate::ui::workspace_panel::WorkspacePanel::new(),
             commands_panel: crate::ui::commands::panel::CommandsPanel::new(),
             agents_panel: crate::ui::agents_panel::AgentsPanel::new(),
             agent_view: agent_view::AgentViewWindow::default(),
@@ -1931,7 +1931,7 @@ impl App {
                 search_bar: chrome.search_bar.as_ref(),
                 ime_preedit: ime_preedit_info.as_ref(),
                 workspace_menu: chrome.workspace_menu.as_ref(),
-                session_panel: chrome.session_panel.as_ref(),
+                workspace_panel: chrome.workspace_panel.as_ref(),
                 commands_panel: chrome.commands_panel.as_ref(),
                 agents_panel: chrome.agents_panel.as_ref(),
                 command_palette: chrome.palette.as_ref(),
@@ -2757,7 +2757,7 @@ impl App {
 
         self.commands_panel.close();
         self.agents_panel.close();
-        self.session_panel.close();
+        self.workspace_panel.close();
         self.close_workspace_menu();
         self.sync_settings_theme_names();
         self.settings_panel.toggle();
@@ -2908,14 +2908,14 @@ impl App {
 
     /// Show the workspace manager in place of any other side panel, or hide it.
     fn toggle_workspace_manager(&mut self) {
-        if self.session_panel.is_open() {
-            self.session_panel.close();
+        if self.workspace_panel.is_open() {
+            self.workspace_panel.close();
         } else {
             self.settings_panel.close();
             self.commands_panel.close();
             self.agents_panel.close();
-            self.session_panel
-                .open(crate::session::listing::SessionListing::workspaces());
+            self.workspace_panel
+                .open(crate::session::listing::WorkspaceListing::workspaces());
         }
         self.request_redraw(RedrawReason::Action);
     }

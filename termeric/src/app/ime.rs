@@ -84,7 +84,7 @@ impl App {
                 self.settings_panel.insert_filter_text(text);
             }
             TextTarget::WorkspaceRename => {
-                self.session_panel.insert_rename_text(text);
+                self.workspace_panel.insert_rename_text(text);
             }
             TextTarget::CommandsForm => {
                 self.commands_panel.insert_form_text(text);
@@ -133,7 +133,7 @@ impl App {
                     .input_viewport(width, height, cell_width, cell_height)
             }
             TextTarget::WorkspaceRename => {
-                self.session_ime_viewport(width, height, cell_width, cell_height)
+                self.workspace_ime_viewport(width, height, cell_width, cell_height)
             }
             TextTarget::CommandsForm => {
                 self.commands_ime_viewport(width, height, cell_width, cell_height)
@@ -168,7 +168,7 @@ impl App {
         .input_viewport(&info.input, info.cursor)
     }
 
-    fn session_ime_viewport(
+    fn workspace_ime_viewport(
         &self,
         width: f32,
         height: f32,
@@ -179,7 +179,7 @@ impl App {
             .renderer
             .as_ref()
             .map_or(0.0, crate::renderer::Renderer::tab_bar_height);
-        self.session_panel
+        self.workspace_panel
             .rename_input_viewport(width, height, top, cell_width, cell_height)
     }
 

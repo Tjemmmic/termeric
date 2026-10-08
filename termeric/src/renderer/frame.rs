@@ -30,7 +30,7 @@ pub struct ChromeFrame<'a> {
     pub search_bar: Option<&'a SearchBarInfo>,
     pub ime_preedit: Option<&'a ImePreeditRenderInfo>,
     pub workspace_menu: Option<&'a PopupMenuInfo>,
-    pub session_panel: Option<&'a crate::ui::session_panel::SessionPanelInfo>,
+    pub workspace_panel: Option<&'a crate::ui::workspace_panel::WorkspacePanelInfo>,
     pub commands_panel: Option<&'a crate::ui::commands::panel::CommandsPanelInfo>,
     pub agents_panel: Option<&'a crate::ui::agents_panel::AgentsPanelInfo>,
     pub command_palette: Option<&'a PaletteInfo>,
@@ -273,7 +273,7 @@ impl Renderer {
                     search_bar,
                     ime_preedit,
                     workspace_menu,
-                    session_panel,
+                    workspace_panel,
                     commands_panel,
                     agents_panel,
                     command_palette,
@@ -474,11 +474,11 @@ impl Renderer {
                         self.build_popup_menu(menu);
                     }
                 }
-                ModalLayer::SessionPanel => {
-                    if let Some(sp) = session_panel
+                ModalLayer::WorkspacePanel => {
+                    if let Some(sp) = workspace_panel
                         && sp.animation > 0.001
                     {
-                        self.build_session_management_panel(sp, window_width, window_height);
+                        self.build_workspace_panel(sp, window_width, window_height);
                     }
                 }
                 ModalLayer::Settings => {

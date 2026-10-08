@@ -453,7 +453,7 @@ impl App {
             ModalLayer::Settings => self.handle_settings_panel_key(key),
             ModalLayer::WorkspaceMenu => self.handle_workspace_menu_key(key),
             // Rename input and dismissal; no key leaks through to the PTY.
-            ModalLayer::SessionPanel => self.handle_session_panel_key(key),
+            ModalLayer::WorkspacePanel => self.handle_workspace_panel_key(key),
             // Both browse mode and the inline form.
             ModalLayer::CommandsPanel => {
                 self.handle_commands_panel_key(key);
@@ -546,7 +546,7 @@ impl App {
             | Some(
                 ModalLayer::Settings
                 | ModalLayer::WorkspaceMenu
-                | ModalLayer::SessionPanel
+                | ModalLayer::WorkspacePanel
                 | ModalLayer::CommandsPanel
                 | ModalLayer::AgentsPanel,
             ) => {
@@ -772,10 +772,12 @@ impl App {
                     delta: rows,
                 },
             ),
-            Some(ModalLayer::SessionPanel) if rows < 0 => {
-                self.session_panel.scroll_up(rows.unsigned_abs());
+            Some(ModalLayer::WorkspacePanel) if rows < 0 => {
+                self.workspace_panel.scroll_up(rows.unsigned_abs());
             }
-            Some(ModalLayer::SessionPanel) => self.session_panel.scroll_down(rows.unsigned_abs()),
+            Some(ModalLayer::WorkspacePanel) => {
+                self.workspace_panel.scroll_down(rows.unsigned_abs())
+            }
             Some(ModalLayer::Settings) if rows < 0 => {
                 self.settings_panel.scroll_up(rows.unsigned_abs());
             }

@@ -283,8 +283,8 @@ fn retained_search_does_not_steal_ime_geometry_from_modal_or_text_owners() {
         |app| app.shortcuts_panel.open(),
         |app| app.commands_panel.toggle(),
         |app| {
-            app.session_panel
-                .open(crate::session::listing::SessionListing::workspaces())
+            app.workspace_panel
+                .open(crate::session::listing::WorkspaceListing::workspaces())
         },
         |app| {
             app.info_overlay.show("Notice", vec![]);
@@ -327,9 +327,9 @@ fn search_ime_commit_inserts_at_query_caret_without_leaking_into_pty() {
 #[test]
 fn workspace_rename_ime_matches_paint_geometry_without_a_terminal() {
     let mut app = App::new_headless(Config::default()).unwrap();
-    app.session_panel.set_reduced_motion(true);
-    app.session_panel.set_test_entries(
-        vec![crate::ui::session_panel::SessionEntry {
+    app.workspace_panel.set_reduced_motion(true);
+    app.workspace_panel.set_test_entries(
+        vec![crate::ui::workspace_panel::WorkspaceEntry {
             id: "workspace-test".into(),
             display_name: "Roots".into(),
             subtitle: String::new(),
@@ -337,12 +337,12 @@ fn workspace_rename_ime_matches_paint_geometry_without_a_terminal() {
         }],
         true,
     );
-    app.session_panel.begin_rename("workspace-test");
+    app.workspace_panel.begin_rename("workspace-test");
     let name = "界e\u{301}👩\u{200d}💻".repeat(16);
-    assert!(app.session_panel.accessibility_set_rename(&name));
+    assert!(app.workspace_panel.accessibility_set_rename(&name));
     for (width, cell) in [(800.0, 8.0), (1400.0, 16.0)] {
-        let info = app.session_panel.build_info();
-        let layout = crate::ui::session_panel::SessionPanelLayout::calculate(
+        let info = app.workspace_panel.build_info();
+        let layout = crate::ui::workspace_panel::WorkspacePanelLayout::calculate(
             width,
             800.0,
             0.0,
@@ -351,7 +351,7 @@ fn workspace_rename_ime_matches_paint_geometry_without_a_terminal() {
             info.animation,
             true,
             true,
-            info.sessions.len(),
+            info.entries.len(),
         );
         let expected = layout.rename_input_viewport(&name, name.len()).unwrap();
         assert_eq!(
@@ -379,10 +379,10 @@ fn workspace_rename_ime_matches_paint_geometry_without_a_terminal() {
     app.settings_panel.toggle();
     assert!(ime_viewport_of(&app, TextTarget::WorkspaceRename, 800.0, 600.0, 10.0, 20.0).is_none());
     app.settings_panel.toggle();
-    app.session_panel.cancel_rename();
+    app.workspace_panel.cancel_rename();
     assert!(ime_viewport_of(&app, TextTarget::WorkspaceRename, 800.0, 600.0, 10.0, 20.0).is_none());
     assert!(app.active_terminal().is_none());
-    assert_eq!(app.session_panel.sessions()[0].display_name, "Roots");
+    assert_eq!(app.workspace_panel.entries()[0].display_name, "Roots");
 }
 
 #[test]
@@ -600,7 +600,7 @@ fn preedit_cursor_must_be_a_valid_utf8_range() {
 }
 
 fn exercise_retained_rename_modal_ownership(app: &mut App) {
-    use crate::ui::session_panel::{SessionEntry, SessionPanelAction};
+    use crate::ui::workspace_panel::{WorkspaceEntry, WorkspacePanelAction};
     use winit::keyboard::{Key, NamedKey};
     for owner in ["settings", "shortcuts", "session", "commands"] {
         app.tab_rename = Some(TabRenameState::new(
@@ -623,9 +623,9 @@ fn exercise_retained_rename_modal_ownership(app: &mut App) {
                 app.shortcuts_panel.open();
             }
             "session" => {
-                app.session_panel.set_reduced_motion(true);
-                app.session_panel.set_test_entries(
-                    vec![SessionEntry {
+                app.workspace_panel.set_reduced_motion(true);
+                app.workspace_panel.set_test_entries(
+                    vec![WorkspaceEntry {
                         id: "modal-owner-fixture".into(),
                         display_name: "Roots".into(),
                         subtitle: String::new(),
@@ -633,10 +633,10 @@ fn exercise_retained_rename_modal_ownership(app: &mut App) {
                     }],
                     true,
                 );
-                app.apply_session_panel_action(SessionPanelAction::Rename(
+                app.apply_workspace_panel_action(WorkspacePanelAction::Rename(
                     "modal-owner-fixture".into(),
                 ));
-                assert!(app.session_panel.accessibility_set_rename(""));
+                assert!(app.workspace_panel.accessibility_set_rename(""));
             }
             _ => {
                 app.commands_panel.set_reduced_motion(true);
@@ -648,7 +648,7 @@ fn exercise_retained_rename_modal_ownership(app: &mut App) {
         assert!(match owner {
             "settings" => app.handle_settings_filter_key(&key),
             "shortcuts" => app.handle_shortcuts_filter_key(&key),
-            "session" => app.handle_session_rename_key(&key),
+            "session" => app.handle_workspace_rename_key(&key),
             _ => app.handle_commands_panel_key(&key),
         });
         app.handle_ime_event(Ime::Preedit("draft".into(), None));
@@ -674,7 +674,7 @@ fn exercise_retained_rename_modal_ownership(app: &mut App) {
                     .build_info(&app.shortcut_registry)
                     .filter
             }
-            "session" => app.session_panel.build_info().rename_text.unwrap(),
+            "session" => app.workspace_panel.build_info().rename_text.unwrap(),
             _ => app.commands_panel.form_name.text().to_owned(),
         };
         assert_eq!(text, "KIP", "wrong {owner} input destination");
@@ -698,7 +698,7 @@ fn exercise_retained_rename_modal_ownership(app: &mut App) {
             "shortcuts" => app
                 .shortcuts_panel
                 .start_recording(crate::input::keybindings::BindableAction::Copy),
-            "session" => app.apply_session_panel_action(SessionPanelAction::CancelRename),
+            "session" => app.apply_workspace_panel_action(WorkspacePanelAction::CancelRename),
             _ => {
                 app.commands_panel.cancel_edit();
                 assert!(app.handle_commands_panel_key(&Key::Character("blocked".into())));
@@ -715,7 +715,7 @@ fn exercise_retained_rename_modal_ownership(app: &mut App) {
         match owner {
             "settings" => app.settings_panel.close(),
             "shortcuts" => app.shortcuts_panel.close_immediately(),
-            "session" => app.apply_session_panel_action(SessionPanelAction::Close),
+            "session" => app.apply_workspace_panel_action(WorkspacePanelAction::Close),
             _ => {
                 assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::Escape)));
             }
@@ -768,8 +768,8 @@ fn modal_atomic_commits_never_fall_through_to_a_live_pty() {
         app.unicode_picker.close();
         app.unicode_picker.finish_search_for_test();
     }
-    app.session_panel.set_test_entries(
-        vec![crate::ui::session_panel::SessionEntry {
+    app.workspace_panel.set_test_entries(
+        vec![crate::ui::workspace_panel::WorkspaceEntry {
             id: "workspace-fixture".into(),
             display_name: "Roots".into(),
             subtitle: String::new(),
@@ -777,27 +777,27 @@ fn modal_atomic_commits_never_fall_through_to_a_live_pty() {
         }],
         true,
     );
-    app.apply_session_panel_action(crate::ui::session_panel::SessionPanelAction::Rename(
+    app.apply_workspace_panel_action(crate::ui::workspace_panel::WorkspacePanelAction::Rename(
         "workspace-fixture".into(),
     ));
     assert!(
-        app.session_panel
+        app.workspace_panel
             .accessibility_set_rename(&"界".repeat(127))
     );
     app.handle_ime_event(Ime::Commit("xy".into()));
     app.handle_ime_event(Ime::Commit("bad\ncommit".into()));
     assert_eq!(
-        app.session_panel.build_info().rename_text,
+        app.workspace_panel.build_info().rename_text,
         Some("界".repeat(127))
     );
     app.handle_ime_event(Ime::Commit("🫚".into()));
     assert_eq!(
-        app.session_panel.build_info().rename_text,
+        app.workspace_panel.build_info().rename_text,
         Some(format!("{}🫚", "界".repeat(127)))
     );
     use winit::keyboard::{Key, NamedKey};
     assert!(
-        app.session_panel
+        app.workspace_panel
             .accessibility_set_rename("a界e\u{301}👩\u{200d}💻z")
     );
     for key in [
@@ -806,21 +806,21 @@ fn modal_atomic_commits_never_fall_through_to_a_live_pty() {
         NamedKey::Delete,
         NamedKey::ArrowRight,
     ] {
-        assert!(app.handle_session_rename_key(&Key::Named(key)));
+        assert!(app.handle_workspace_rename_key(&Key::Named(key)));
     }
-    assert!(app.handle_session_rename_key(&Key::Character("Q".into())));
+    assert!(app.handle_workspace_rename_key(&Key::Character("Q".into())));
     assert_eq!(
-        app.session_panel.build_info().rename_text.as_deref(),
+        app.workspace_panel.build_info().rename_text.as_deref(),
         Some("ae\u{301}Q👩\u{200d}💻z")
     );
     app.modifiers = ModifiersState::CONTROL;
-    assert!(app.handle_session_rename_key(&Key::Named(NamedKey::Delete)));
+    assert!(app.handle_workspace_rename_key(&Key::Named(NamedKey::Delete)));
     assert_eq!(
-        app.session_panel.build_info().rename_text.as_deref(),
+        app.workspace_panel.build_info().rename_text.as_deref(),
         Some("ae\u{301}Qz")
     );
-    let info = app.session_panel.build_info();
-    let layout = crate::ui::session_panel::SessionPanelLayout::calculate(
+    let info = app.workspace_panel.build_info();
+    let layout = crate::ui::workspace_panel::WorkspacePanelLayout::calculate(
         800.0, 600.0, 0.0, 8.0, 16.0, 1.0, true, true, 1,
     );
     let text = info.rename_text.as_deref().unwrap();
@@ -831,18 +831,18 @@ fn modal_atomic_commits_never_fall_through_to_a_live_pty() {
     let action = layout
         .rename_input_click(text, info.rename_cursor, view.text_x + 8.0, view.text_y)
         .unwrap();
-    app.apply_session_panel_action(action);
+    app.apply_workspace_panel_action(action);
     assert!(app.ime.preedit().is_none());
-    assert_eq!(app.session_panel.build_info().rename_cursor, 1);
+    assert_eq!(app.workspace_panel.build_info().rename_cursor, 1);
     app.handle_ime_event(Ime::Commit("R".into()));
     assert_eq!(
-        app.session_panel.build_info().rename_text.as_deref(),
+        app.workspace_panel.build_info().rename_text.as_deref(),
         Some("aRe\u{301}Qz")
     );
     app.modifiers = ModifiersState::empty();
-    assert!(app.handle_session_rename_key(&Key::Named(NamedKey::Escape)));
-    assert_eq!(app.session_panel.sessions()[0].display_name, "Roots");
-    app.apply_session_panel_action(crate::ui::session_panel::SessionPanelAction::Close);
+    assert!(app.handle_workspace_rename_key(&Key::Named(NamedKey::Escape)));
+    assert_eq!(app.workspace_panel.entries()[0].display_name, "Roots");
+    app.apply_workspace_panel_action(crate::ui::workspace_panel::WorkspacePanelAction::Close);
     exercise_retained_rename_modal_ownership(&mut app);
     app.tabs
         .as_mut()

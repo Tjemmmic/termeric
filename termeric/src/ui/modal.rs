@@ -17,7 +17,7 @@ pub enum ModalLayer {
     ShortcutsPanel,
     Settings,
     WorkspaceMenu,
-    SessionPanel,
+    WorkspacePanel,
     CommandsPanel,
     AgentsPanel,
 }
@@ -38,7 +38,7 @@ impl ModalLayer {
         ModalLayer::Settings,
         // A popup over the panel it may have opened from.
         ModalLayer::WorkspaceMenu,
-        ModalLayer::SessionPanel,
+        ModalLayer::WorkspacePanel,
         ModalLayer::CommandsPanel,
         ModalLayer::AgentsPanel,
     ];
@@ -49,7 +49,7 @@ impl ModalLayer {
         matches!(
             self,
             ModalLayer::Settings
-                | ModalLayer::SessionPanel
+                | ModalLayer::WorkspacePanel
                 | ModalLayer::WorkspaceMenu
                 | ModalLayer::CommandsPanel
                 | ModalLayer::AgentsPanel

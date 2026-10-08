@@ -1,18 +1,18 @@
 //! What the workspace panel lists, read from disk: saved workspaces or
 //! closed-tab snapshots.
 
-use crate::ui::session_panel::SessionEntry;
+use crate::ui::workspace_panel::WorkspaceEntry;
 
 /// One reading of the panel's list.
-pub struct SessionListing {
+pub struct WorkspaceListing {
     /// Saved workspaces rather than closed-tab snapshots.
     pub workspaces: bool,
-    pub entries: Vec<SessionEntry>,
+    pub entries: Vec<WorkspaceEntry>,
     /// Closed-tab snapshots, counted for the workspace list's link to them.
     pub snapshot_count: usize,
 }
 
-impl SessionListing {
+impl WorkspaceListing {
     pub fn workspaces() -> Self {
         Self::load(true)
     }
@@ -44,7 +44,11 @@ impl SessionListing {
 
 /// One listed archive. A workspace counts its tabs and panes; a closed tab,
 /// already named for its directory and command, counts only extra panes.
-fn entry(archive: crate::workspace::WorkspaceListEntry, workspace: bool, now: u64) -> SessionEntry {
+fn entry(
+    archive: crate::workspace::WorkspaceListEntry,
+    workspace: bool,
+    now: u64,
+) -> WorkspaceEntry {
     use crate::ui::text::plural;
     let subtitle = archive.warning.unwrap_or_else(|| {
         if workspace {
@@ -59,7 +63,7 @@ fn entry(archive: crate::workspace::WorkspaceListEntry, workspace: bool, now: u6
             String::new()
         }
     });
-    SessionEntry {
+    WorkspaceEntry {
         id: archive.id,
         display_name: archive.name,
         subtitle,
@@ -116,8 +120,8 @@ mod tests {
         tab("workspace-a", true, 1);
         tab("workspace-b", true, 2);
         tab("workspace-c", false, 1);
-        let workspaces = SessionListing::workspaces();
-        let closed_tabs = SessionListing::closed_tabs();
+        let workspaces = WorkspaceListing::workspaces();
+        let closed_tabs = WorkspaceListing::closed_tabs();
         crate::workspace::set_test_workspaces_base_dir(None);
         assert_eq!(workspaces.snapshot_count, 2);
         assert_eq!(workspaces.entries.len(), 1);

@@ -150,19 +150,19 @@ impl App {
 
     /// A double-click on a workspace row opens it; a single click only
     /// selects.
-    fn promote_session_double_click(
+    fn promote_workspace_double_click(
         &mut self,
-        action: crate::ui::session_panel::SessionPanelAction,
-    ) -> crate::ui::session_panel::SessionPanelAction {
-        use crate::ui::session_panel::SessionPanelAction;
-        let SessionPanelAction::Select(id) = action else {
-            self.session_row_click.reset();
+        action: crate::ui::workspace_panel::WorkspacePanelAction,
+    ) -> crate::ui::workspace_panel::WorkspacePanelAction {
+        use crate::ui::workspace_panel::WorkspacePanelAction;
+        let WorkspacePanelAction::Select(id) = action else {
+            self.workspace_row_click.reset();
             return action;
         };
-        if self.session_row_click.press(id.clone(), Instant::now()) {
-            SessionPanelAction::Load(id)
+        if self.workspace_row_click.press(id.clone(), Instant::now()) {
+            WorkspacePanelAction::Load(id)
         } else {
-            SessionPanelAction::Select(id)
+            WorkspacePanelAction::Select(id)
         }
     }
 
@@ -410,18 +410,18 @@ impl App {
                                 self.click_workspace_menu(px, py);
                                 return;
                             }
-                            Some(ModalLayer::SessionPanel) => {
+                            Some(ModalLayer::WorkspacePanel) => {
                                 if let Some(size) = window_size {
-                                    let info = self.session_panel.build_info();
-                                    let action = renderer.session_panel_hit_test(
+                                    let info = self.workspace_panel.build_info();
+                                    let action = renderer.workspace_panel_hit_test(
                                         px,
                                         py,
                                         &info,
                                         size.width as f32,
                                         size.height as f32,
                                     );
-                                    let action = self.promote_session_double_click(action);
-                                    self.apply_session_panel_action(action);
+                                    let action = self.promote_workspace_double_click(action);
+                                    self.apply_workspace_panel_action(action);
                                     self.request_redraw(RedrawReason::PointerInput);
                                     return;
                                 }
@@ -835,8 +835,8 @@ impl App {
                 }
                 return;
             }
-            Some(ModalLayer::SessionPanel) => {
-                self.hover_session_panel(position.0 as f32, position.1 as f32);
+            Some(ModalLayer::WorkspacePanel) => {
+                self.hover_workspace_panel(position.0 as f32, position.1 as f32);
                 self.request_redraw(RedrawReason::PointerInput);
                 return;
             }
@@ -962,13 +962,13 @@ impl App {
     }
 
     /// Hover over the workspace manager at `(px, py)`: its rows and controls.
-    fn hover_session_panel(&mut self, px: f32, py: f32) {
+    fn hover_workspace_panel(&mut self, px: f32, py: f32) {
         if let Some(renderer) = &self.renderer {
             let (ui_cw, cell_height) = renderer.cell_size();
             let window_size = self.window.as_ref().map(|w| w.inner_size());
             if let Some(size) = window_size {
-                let info = self.session_panel.build_info();
-                let layout = crate::ui::session_panel::SessionPanelLayout::calculate(
+                let info = self.workspace_panel.build_info();
+                let layout = crate::ui::workspace_panel::WorkspacePanelLayout::calculate(
                     size.width as f32,
                     size.height as f32,
                     renderer.tab_bar_height(),
@@ -977,7 +977,7 @@ impl App {
                     info.animation,
                     info.rename_text.is_some(),
                     info.workspaces,
-                    info.sessions.len(),
+                    info.entries.len(),
                 );
                 let control = layout.control_at(px, py, info.snapshot_count);
                 let hovered = if px >= layout.panel.x && control.is_none() {
@@ -987,7 +987,7 @@ impl App {
                 } else {
                     None
                 };
-                self.session_panel.set_hover(hovered, control);
+                self.workspace_panel.set_hover(hovered, control);
             }
         }
     }
@@ -2812,23 +2812,23 @@ mod tests {
 
     #[test]
     fn a_second_click_on_the_same_workspace_row_opens_it() {
-        use crate::ui::session_panel::SessionPanelAction;
+        use crate::ui::workspace_panel::WorkspacePanelAction;
         let mut app = App::new_headless(crate::config::Config::default()).unwrap();
-        let select = |id: &str| SessionPanelAction::Select(id.into());
+        let select = |id: &str| WorkspacePanelAction::Select(id.into());
 
-        assert_eq!(app.promote_session_double_click(select("a")), select("a"));
-        assert_eq!(app.promote_session_double_click(select("b")), select("b"));
+        assert_eq!(app.promote_workspace_double_click(select("a")), select("a"));
+        assert_eq!(app.promote_workspace_double_click(select("b")), select("b"));
         assert_eq!(
-            app.promote_session_double_click(select("b")),
-            SessionPanelAction::Load("b".into())
+            app.promote_workspace_double_click(select("b")),
+            WorkspacePanelAction::Load("b".into())
         );
         // A third click starts a new pair rather than opening again.
-        assert_eq!(app.promote_session_double_click(select("b")), select("b"));
+        assert_eq!(app.promote_workspace_double_click(select("b")), select("b"));
         // Any other action in between breaks the pair.
         assert_eq!(
-            app.promote_session_double_click(SessionPanelAction::None),
-            SessionPanelAction::None
+            app.promote_workspace_double_click(WorkspacePanelAction::None),
+            WorkspacePanelAction::None
         );
-        assert_eq!(app.promote_session_double_click(select("b")), select("b"));
+        assert_eq!(app.promote_workspace_double_click(select("b")), select("b"));
     }
 }

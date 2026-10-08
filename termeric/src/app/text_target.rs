@@ -44,7 +44,7 @@ impl App {
                 ModalLayer::Settings if !self.settings_panel.is_dropdown_open() => {
                     TextTarget::SettingsFilter
                 }
-                ModalLayer::SessionPanel if self.session_panel.is_renaming() => {
+                ModalLayer::WorkspacePanel if self.workspace_panel.is_renaming() => {
                     TextTarget::WorkspaceRename
                 }
                 ModalLayer::CommandsPanel if self.commands_panel.is_editing() => {

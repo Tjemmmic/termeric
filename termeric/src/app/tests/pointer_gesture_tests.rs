@@ -786,10 +786,10 @@ fn pointer_panel_ownership_tracks_the_full_open_close_lifecycle() {
         ),
         (
             |app| {
-                app.session_panel
-                    .open(crate::session::listing::SessionListing::workspaces())
+                app.workspace_panel
+                    .open(crate::session::listing::WorkspaceListing::workspaces())
             },
-            |app| app.session_panel.close(),
+            |app| app.workspace_panel.close(),
         ),
         (
             |app| {
@@ -837,8 +837,8 @@ fn modal_interruption_finishes_native_gestures_before_pointer_motion() {
         |app| app.domain_picker.open(&app.config.domains),
         |app| app.commands_panel.toggle(),
         |app| {
-            app.session_panel
-                .open(crate::session::listing::SessionListing::workspaces())
+            app.workspace_panel
+                .open(crate::session::listing::WorkspaceListing::workspaces())
         },
         |app| {
             app.workspace_menu = Some(crate::ui::popup_menu::PopupMenu::new(

@@ -27,7 +27,7 @@ impl App {
             ModalLayer::CommandPalette => self.command_palette.is_active(),
             ModalLayer::ShortcutsPanel => self.shortcuts_panel.is_active(),
             ModalLayer::Settings => self.settings_panel.is_active(),
-            ModalLayer::SessionPanel => self.session_panel.is_open(),
+            ModalLayer::WorkspacePanel => self.workspace_panel.is_open(),
             ModalLayer::WorkspaceMenu => self.workspace_menu.is_some(),
             ModalLayer::CommandsPanel => self.commands_panel.is_open(),
             ModalLayer::AgentsPanel => self.agents_panel.is_open(),
@@ -52,8 +52,8 @@ mod tests {
         assert_eq!(app.top_modal_layer(), None);
         assert!(!app.pointer_panel_owns_input());
 
-        app.session_panel.set_test_entries(Vec::new(), true);
-        assert_eq!(app.top_modal_layer(), Some(ModalLayer::SessionPanel));
+        app.workspace_panel.set_test_entries(Vec::new(), true);
+        assert_eq!(app.top_modal_layer(), Some(ModalLayer::WorkspacePanel));
         assert!(app.pointer_panel_owns_input());
 
         app.workspace_menu = Some(crate::ui::popup_menu::PopupMenu::new(
@@ -65,10 +65,10 @@ mod tests {
         app.command_palette.open();
         assert_eq!(app.top_modal_layer(), Some(ModalLayer::CommandPalette));
         assert!(!app.pointer_panel_owns_input());
-        assert!(app.modal_layer_open(ModalLayer::SessionPanel));
+        assert!(app.modal_layer_open(ModalLayer::WorkspacePanel));
 
         app.command_palette.close();
         app.workspace_menu = None;
-        assert_eq!(app.top_modal_layer(), Some(ModalLayer::SessionPanel));
+        assert_eq!(app.top_modal_layer(), Some(ModalLayer::WorkspacePanel));
     }
 }

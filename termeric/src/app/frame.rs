@@ -18,7 +18,7 @@ pub(super) struct ChromeInfo {
     pub(super) settings: Option<SettingsPanelInfo>,
     pub(super) search_bar: Option<SearchBarInfo>,
     pub(super) workspace_menu: Option<PopupMenuInfo>,
-    pub(super) session_panel: Option<crate::ui::session_panel::SessionPanelInfo>,
+    pub(super) workspace_panel: Option<crate::ui::workspace_panel::WorkspacePanelInfo>,
     pub(super) commands_panel: Option<CommandsPanelInfo>,
     pub(super) agents_panel: Option<AgentsPanelInfo>,
     pub(super) palette: Option<PaletteInfo>,
@@ -47,8 +47,8 @@ impl App {
             (self.search.is_active() || self.search.has_results() || self.search.is_searching())
                 .then(|| self.search.build_info(self.search_cursor_pos));
         animating |= self.settings_panel.needs_redraw();
-        animating |= self.session_panel.needs_redraw();
-        let session_panel = self.session_panel_frame_info(metrics);
+        animating |= self.workspace_panel.needs_redraw();
+        let workspace_panel = self.workspace_panel_frame_info(metrics);
         animating |= self.commands_panel.needs_redraw() || self.agents_panel.needs_redraw();
         self.bell.update();
         animating |= self.bell.is_visual_active();
@@ -77,7 +77,7 @@ impl App {
                 settings,
                 search_bar,
                 workspace_menu,
-                session_panel,
+                workspace_panel,
                 commands_panel,
                 agents_panel,
                 palette,
@@ -115,15 +115,15 @@ impl App {
         Some(info)
     }
 
-    fn session_panel_frame_info(
+    fn workspace_panel_frame_info(
         &mut self,
         metrics: &UiMetrics,
-    ) -> Option<crate::ui::session_panel::SessionPanelInfo> {
-        if self.session_panel.is_closed() {
+    ) -> Option<crate::ui::workspace_panel::WorkspacePanelInfo> {
+        if self.workspace_panel.is_closed() {
             return None;
         }
-        let preview = self.session_panel.build_info();
-        let layout = crate::ui::session_panel::SessionPanelLayout::calculate(
+        let preview = self.workspace_panel.build_info();
+        let layout = crate::ui::workspace_panel::WorkspacePanelLayout::calculate(
             metrics.width,
             metrics.height,
             metrics.tab_bar_height,
@@ -132,10 +132,10 @@ impl App {
             preview.animation,
             preview.rename_text.is_some(),
             preview.workspaces,
-            preview.sessions.len(),
+            preview.entries.len(),
         );
-        self.session_panel.set_max_visible(layout.rows_that_fit);
-        Some(self.session_panel.build_info())
+        self.workspace_panel.set_max_visible(layout.rows_that_fit);
+        Some(self.workspace_panel.build_info())
     }
 
     /// The palette-style modals share the palette's renderer and geometry;

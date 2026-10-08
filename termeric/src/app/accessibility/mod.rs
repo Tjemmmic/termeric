@@ -65,15 +65,15 @@ const COMMANDS_NAME: NodeId = NodeId(45);
 const COMMANDS_COMMAND: NodeId = NodeId(46);
 const COMMANDS_SAVE: NodeId = NodeId(47);
 const COMMANDS_CANCEL: NodeId = NodeId(48);
-const SESSION_DIALOG: NodeId = NodeId(50);
-const SESSION_CLOSE: NodeId = NodeId(51);
-const SESSION_LIST: NodeId = NodeId(52);
-const SESSION_EMPTY: NodeId = NodeId(53);
-const SESSION_RENAME_INPUT: NodeId = NodeId(54);
-const SESSION_RENAME_SAVE: NodeId = NodeId(55);
-const SESSION_RENAME_CANCEL: NodeId = NodeId(56);
-const SESSION_BACK: NodeId = NodeId(57);
-const SESSION_SNAPSHOTS: NodeId = NodeId(58);
+const WORKSPACE_DIALOG: NodeId = NodeId(50);
+const WORKSPACE_CLOSE: NodeId = NodeId(51);
+const WORKSPACE_LIST: NodeId = NodeId(52);
+const WORKSPACE_EMPTY: NodeId = NodeId(53);
+const WORKSPACE_RENAME_INPUT: NodeId = NodeId(54);
+const WORKSPACE_RENAME_SAVE: NodeId = NodeId(55);
+const WORKSPACE_RENAME_CANCEL: NodeId = NodeId(56);
+const WORKSPACE_BACK: NodeId = NodeId(57);
+const WORKSPACE_SNAPSHOTS: NodeId = NodeId(58);
 const SHORTCUTS_DIALOG: NodeId = NodeId(60);
 const SHORTCUTS_INPUT: NodeId = NodeId(61);
 const SHORTCUTS_LIST: NodeId = NodeId(62);
@@ -130,7 +130,7 @@ const TOAST_DISMISS_ACTION: i32 = 2;
 const TAB_BASE: u64 = 1_000;
 const PANE_BASE: u64 = 10_000;
 const LINE_BASE: u64 = 1_000_000;
-const SESSION_ENTRY_BASE: u64 = 1 << 57;
+const WORKSPACE_ENTRY_BASE: u64 = 1 << 57;
 const SHORTCUTS_ENTRY_BASE: u64 = 1 << 56;
 const DOMAIN_ENTRY_BASE: u64 = 1 << 55;
 const GUARDRAIL_ACTION_BASE: u64 = 1 << 54;
@@ -172,17 +172,17 @@ enum CommandsSemanticTarget {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct SessionSemanticKey {
+struct WorkspaceSemanticKey {
     id: String,
     workspaces: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum SessionSemanticTarget {
-    Group(SessionSemanticKey),
-    Load(SessionSemanticKey),
-    Rename(SessionSemanticKey),
-    Delete(SessionSemanticKey),
+enum WorkspaceSemanticTarget {
+    Group(WorkspaceSemanticKey),
+    Load(WorkspaceSemanticKey),
+    Rename(WorkspaceSemanticKey),
+    Delete(WorkspaceSemanticKey),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -302,7 +302,7 @@ pub(super) struct AccessibilityState {
     /// Agent rows, by the terminal they show, so a row keeps its node as
     /// urgency reorders the list.
     agents: NodeRegistry<crate::ui::agents_panel::AgentOrigin>,
-    session: NodeRegistry<SessionSemanticTarget>,
+    workspace: NodeRegistry<WorkspaceSemanticTarget>,
     shortcuts: NodeRegistry<ShortcutsSemanticTarget>,
     domain: NodeRegistry<String>,
     unicode: NodeRegistry<String>,
@@ -326,7 +326,7 @@ impl Default for AccessibilityState {
             settings: NodeRegistry::new(SETTINGS_ENTRY_BASE),
             commands: NodeRegistry::new(COMMANDS_ENTRY_BASE),
             agents: NodeRegistry::new(AGENTS_ENTRY_BASE),
-            session: NodeRegistry::new(SESSION_ENTRY_BASE),
+            workspace: NodeRegistry::new(WORKSPACE_ENTRY_BASE),
             shortcuts: NodeRegistry::new(SHORTCUTS_ENTRY_BASE),
             domain: NodeRegistry::new(DOMAIN_ENTRY_BASE),
             unicode: NodeRegistry::new(UNICODE_ENTRY_BASE),
@@ -429,19 +429,19 @@ impl AccessibilityState {
         ) || self.commands.contains(node)
     }
 
-    fn is_session_node(&self, node: NodeId) -> bool {
+    fn is_workspace_node(&self, node: NodeId) -> bool {
         matches!(
             node,
-            SESSION_DIALOG
-                | SESSION_CLOSE
-                | SESSION_LIST
-                | SESSION_EMPTY
-                | SESSION_RENAME_INPUT
-                | SESSION_RENAME_SAVE
-                | SESSION_RENAME_CANCEL
-                | SESSION_BACK
-                | SESSION_SNAPSHOTS
-        ) || self.session.contains(node)
+            WORKSPACE_DIALOG
+                | WORKSPACE_CLOSE
+                | WORKSPACE_LIST
+                | WORKSPACE_EMPTY
+                | WORKSPACE_RENAME_INPUT
+                | WORKSPACE_RENAME_SAVE
+                | WORKSPACE_RENAME_CANCEL
+                | WORKSPACE_BACK
+                | WORKSPACE_SNAPSHOTS
+        ) || self.workspace.contains(node)
     }
 
     fn is_shortcuts_node(&self, node: NodeId) -> bool {
@@ -600,7 +600,7 @@ impl App {
                 }
                 ModalLayer::ShortcutsPanel => self.handle_shortcuts_accessibility_action(request),
                 ModalLayer::Settings => self.handle_settings_accessibility_action(request),
-                ModalLayer::SessionPanel => self.handle_session_accessibility_action(request),
+                ModalLayer::WorkspacePanel => self.handle_workspace_accessibility_action(request),
                 ModalLayer::WorkspaceMenu => {
                     self.handle_workspace_menu_accessibility_action(request)
                 }
@@ -1119,7 +1119,7 @@ impl App {
             }
             ModalLayer::ShortcutsPanel => self.shortcuts_accessibility_snapshot(),
             ModalLayer::Settings => self.settings_accessibility_snapshot(),
-            ModalLayer::SessionPanel => self.session_accessibility_snapshot(),
+            ModalLayer::WorkspacePanel => self.workspace_accessibility_snapshot(),
             ModalLayer::WorkspaceMenu => self.workspace_menu_accessibility_snapshot(),
             ModalLayer::CommandsPanel => self.commands_accessibility_snapshot(),
             ModalLayer::AgentsPanel => self.agents_accessibility_snapshot(),
@@ -1153,7 +1153,7 @@ impl App {
             ModalLayer::CommandPalette => node == PALETTE_INPUT,
             ModalLayer::ShortcutsPanel => self.accessibility.is_shortcuts_node(node),
             ModalLayer::Settings => self.accessibility.is_settings_node(node),
-            ModalLayer::SessionPanel => self.accessibility.is_session_node(node),
+            ModalLayer::WorkspacePanel => self.accessibility.is_workspace_node(node),
             ModalLayer::WorkspaceMenu => {
                 node == WORKSPACE_MENU || workspace_menu_row(node).is_some()
             }

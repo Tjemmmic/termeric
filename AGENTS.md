@@ -148,7 +148,7 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `palette.rs` | Command palette and the shared modal frame (`build_modal_frame`) |
 | `settings_render.rs` | Settings dialog and its dropdown overlay |
 | `shortcuts_render.rs` | Shortcuts panel |
-| `panels.rs` | Commands, Agents, and session panels, their shared frame, and the Commands/session panel hit tests |
+| `panels.rs` | Commands, Agents, and workspace panels, their shared frame, and the Commands/workspace panel hit tests |
 | `popup_menu.rs` | Anchored popup menu (used by the Workspaces menu) |
 | `overlays.rs` | Info overlay, diff review, context picker, guardrail confirmation |
 | `toasts.rs` | Toast cards |
@@ -187,20 +187,20 @@ When adding a component that blocks input, trace its whole lifecycle — open, i
 
 ### Modal Layers
 
-`ModalLayer::INPUT_PRIORITY` (`ui/modal.rs`) is the one stacking order: guardrail → info overlay → diff review → context picker → Harvest sprout menu → Harvest cellar → domain picker → Unicode picker → command palette → shortcuts panel → Settings → Workspaces menu → session panel → Commands panel → Agents panel. Only `App::top_modal_layer()` owns input: keys, clicks, wheel, hover, IME, paste, and accessibility actions and snapshots all gate on it, and the renderer draws the layers in the reverse order, so the surface in front is the one that answers. A consumer with nothing to do for the top layer swallows the input rather than passing it beneath.
+`ModalLayer::INPUT_PRIORITY` (`ui/modal.rs`) is the one stacking order: guardrail → info overlay → diff review → context picker → Harvest sprout menu → Harvest cellar → domain picker → Unicode picker → command palette → shortcuts panel → Settings → Workspaces menu → workspace panel → Commands panel → Agents panel. Only `App::top_modal_layer()` owns input: keys, clicks, wheel, hover, IME, paste, and accessibility actions and snapshots all gate on it, and the renderer draws the layers in the reverse order, so the surface in front is the one that answers. A consumer with nothing to do for the top layer swallows the input rather than passing it beneath.
 
 ### Mouse Click Dispatch Priority
 
 In `app/event_loop.rs` (MouseInput handler), before anything else:
 1. A press on a toast dismisses it and nothing else: toasts draw above every modal layer (`Renderer::toast_hit_test`, the same placement `build_toasts` draws)
 2. A press exits copy mode; a release that completes terminal mouse capture goes back to its terminal
-3. The top modal layer above the panels, which swallows clicks while on top; on a palette, the Shortcuts panel, Settings, or the session or Commands panel, a middle press on the text field puts the caret there and pastes the primary selection (`App::middle_press_field`), and elsewhere does nothing
+3. The top modal layer above the panels, which swallows clicks while on top; on a palette, the Shortcuts panel, Settings, or the workspace or Commands panel, a middle press on the text field puts the caret there and pastes the primary selection (`App::middle_press_field`), and elsewhere does nothing
 4. Everything else goes to `handle_mouse_input`
 
 In `app/mouse.rs` (`handle_mouse_input`): 0. The docked agent view claims presses on its area and divider when `pointer_panel_owns_input()` is false; a press elsewhere returns the keyboard to the terminals
 1. A primary press on a pane's scrollbar (when no find box or toast is drawn over it) or a divider, only when `pointer_panel_owns_input()` is false
 2. Global Settings button (preserves direct panel-to-Settings switching)
-3. The top panel layer (Settings, Workspaces menu, session, Commands, or Agents panel) intercepts its clicks, including outside-click dismissal, before background controls
+3. The top panel layer (Settings, Workspaces menu, workspace, Commands, or Agents panel) intercepts its clicks, including outside-click dismissal, before background controls
 4. Tab bar, then any press on chrome floating over the panes (`press_floating_chrome`: the find box works it, a scrollbar swallows other buttons), then toggling a pane in or out of an armed broadcast target set
 5. Pane focus, Ctrl+Click hyperlink, and terminal mouse reporting when requested; Shift bypasses to native selection
 6. Terminal selection (default)
@@ -242,7 +242,7 @@ Mouse, focus, alternate-scroll, and paste reports snapshot mode from the termina
 
 - Child modules access the parent's private fields via `&mut self` on `impl Renderer` blocks
 - Types in `types.rs` are re-exported via `pub use types::*` in mod.rs; a type defined in another sub-module needs its own `pub use` there (e.g. `PopupMenuInfo`)
-- A hit test must use the same geometry as the `build_*` function that drew the element: the tab bar shares one geometry source (`TabChrome`), the side panels and the find box each compute one `*Layout` that their builder and hit test both use (`commands_panel_layout`, `session_panel_layout`, `SearchBarLayout::calculate`)
+- A hit test must use the same geometry as the `build_*` function that drew the element: the tab bar shares one geometry source (`TabChrome`), the side panels and the find box each compute one `*Layout` that their builder and hit test both use (`commands_panel_layout`, `workspace_panel_layout`, `SearchBarLayout::calculate`)
 - Terminal panes are placed by `PanePlacement::pane_bounds` for drawing, the Git completion anchor, pointer-to-cell mapping, the IME caret, and accessibility. It is the one place a tab's only pane differs from split panes: it fills the terminal area inside the padding on every side (its grid starts one padding below the tab bar) and shows its grid's own cells, while split panes sit at their layout rectangles from the area's top edge. `PanePlacement::pane_cells` is how many cells each shows, and `PanePlacement::pane_scrollbar` where its scrollbar is drawn and hit
 
 ### Animation Timing

@@ -639,10 +639,10 @@ impl App {
                 self.toasts.error(format!("Delete failed: {error:#}"));
             }
         }
-        if self.session_panel.is_open() {
-            self.session_panel
-                .refresh(crate::session::listing::SessionListing::load(
-                    self.session_panel.is_workspace_mode(),
+        if self.workspace_panel.is_open() {
+            self.workspace_panel
+                .refresh(crate::session::listing::WorkspaceListing::load(
+                    self.workspace_panel.is_workspace_mode(),
                 ));
         }
     }

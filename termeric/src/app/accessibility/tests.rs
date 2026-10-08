@@ -884,7 +884,7 @@ fn workspace_menu_is_a_menu_whose_items_focus_and_activate_like_the_keyboard() {
         data: None,
     });
     assert!(app.workspace_menu.is_none());
-    assert!(app.session_panel.is_open() && app.session_panel.is_workspace_mode());
+    assert!(app.workspace_panel.is_open() && app.workspace_panel.is_workspace_mode());
     crate::workspace::set_test_workspaces_base_dir(None);
 }
 
@@ -1201,10 +1201,10 @@ fn modals_consume_stale_background_accessibility_actions() {
         (
             "workspace manager",
             |app| {
-                app.session_panel
-                    .set_test_entries(test_session_entries(1), true)
+                app.workspace_panel
+                    .set_test_entries(test_workspace_entries(1), true)
             },
-            |app| app.session_panel.is_open(),
+            |app| app.workspace_panel.is_open(),
             SETTINGS,
         ),
         (
@@ -2672,9 +2672,9 @@ fn stale_custom_command_actions_cannot_retarget_another_command() {
     );
 }
 
-fn test_session_entries(count: usize) -> Vec<crate::ui::session_panel::SessionEntry> {
+fn test_workspace_entries(count: usize) -> Vec<crate::ui::workspace_panel::WorkspaceEntry> {
     (0..count)
-        .map(|index| crate::ui::session_panel::SessionEntry {
+        .map(|index| crate::ui::workspace_panel::WorkspaceEntry {
             id: format!("workspace-{index}"),
             display_name: format!("Workspace {index}"),
             subtitle: format!("{} tabs", index + 1),
@@ -2686,10 +2686,10 @@ fn test_session_entries(count: usize) -> Vec<crate::ui::session_panel::SessionEn
 #[test]
 fn workspace_manager_is_modal_bounded_and_uses_shared_action_geometry() {
     let mut app = App::new_headless(Config::default()).unwrap();
-    app.session_panel
-        .set_test_entries(test_session_entries(20), true);
-    let preview = app.session_panel.build_info();
-    let layout = app.session_accessibility_layout(&preview);
+    app.workspace_panel
+        .set_test_entries(test_workspace_entries(20), true);
+    let preview = app.workspace_panel.build_info();
+    let layout = app.workspace_accessibility_layout(&preview);
     let snapshot = app.accessibility_snapshot();
     let node = |id| {
         &snapshot
@@ -2699,47 +2699,47 @@ fn workspace_manager_is_modal_bounded_and_uses_shared_action_geometry() {
             .unwrap()
             .1
     };
-    assert_eq!(node(ROOT).children(), &[SESSION_DIALOG]);
-    assert_eq!(node(SESSION_DIALOG).role(), Role::Dialog);
-    assert!(node(SESSION_DIALOG).is_modal());
-    assert_eq!(node(SESSION_LIST).role(), Role::List);
+    assert_eq!(node(ROOT).children(), &[WORKSPACE_DIALOG]);
+    assert_eq!(node(WORKSPACE_DIALOG).role(), Role::Dialog);
+    assert!(node(WORKSPACE_DIALOG).is_modal());
+    assert_eq!(node(WORKSPACE_LIST).role(), Role::List);
 
-    let key = SessionSemanticKey {
+    let key = WorkspaceSemanticKey {
         id: "workspace-0".into(),
         workspaces: true,
     };
     let group = *app
         .accessibility
-        .session
+        .workspace
         .nodes
-        .get(&SessionSemanticTarget::Group(key.clone()))
+        .get(&WorkspaceSemanticTarget::Group(key.clone()))
         .unwrap();
     let load = *app
         .accessibility
-        .session
+        .workspace
         .nodes
-        .get(&SessionSemanticTarget::Load(key.clone()))
+        .get(&WorkspaceSemanticTarget::Load(key.clone()))
         .unwrap();
     let rename = *app
         .accessibility
-        .session
+        .workspace
         .nodes
-        .get(&SessionSemanticTarget::Rename(key.clone()))
+        .get(&WorkspaceSemanticTarget::Rename(key.clone()))
         .unwrap();
     let delete = *app
         .accessibility
-        .session
+        .workspace
         .nodes
-        .get(&SessionSemanticTarget::Delete(key))
+        .get(&WorkspaceSemanticTarget::Delete(key))
         .unwrap();
     assert_eq!(node(group).children(), &[load, rename, delete]);
-    assert_eq!(node(SESSION_LIST).active_descendant(), Some(group));
+    assert_eq!(node(WORKSPACE_LIST).active_descendant(), Some(group));
     assert_eq!(snapshot.focus, load);
     assert!(node(load).supports_action(Action::Click));
 
     let actual = node(load).bounds().unwrap();
     let button = layout.entry(0).load_button;
-    let dialog = node(SESSION_DIALOG).bounds().unwrap();
+    let dialog = node(WORKSPACE_DIALOG).bounds().unwrap();
     let expected = rect(
         dialog.x0 as f32 + (button.x - layout.panel.x),
         dialog.y0 as f32 + (button.y - layout.panel.y),
@@ -2755,7 +2755,7 @@ fn workspace_manager_is_modal_bounded_and_uses_shared_action_geometry() {
         assert!((actual - expected).abs() < 0.1, "{actual} != {expected}");
     }
 
-    let exposed_groups = node(SESSION_LIST).children().len();
+    let exposed_groups = node(WORKSPACE_LIST).children().len();
     assert_eq!(exposed_groups, layout.visible_count);
     assert!(exposed_groups < 20);
 }
@@ -2763,18 +2763,18 @@ fn workspace_manager_is_modal_bounded_and_uses_shared_action_geometry() {
 #[test]
 fn workspace_rename_semantics_accept_utf8_and_cancel_without_persistence() {
     let mut app = App::new_headless(Config::default()).unwrap();
-    app.session_panel
-        .set_test_entries(test_session_entries(1), true);
+    app.workspace_panel
+        .set_test_entries(test_workspace_entries(1), true);
     app.accessibility_snapshot();
-    let key = SessionSemanticKey {
+    let key = WorkspaceSemanticKey {
         id: "workspace-0".into(),
         workspaces: true,
     };
     let rename = *app
         .accessibility
-        .session
+        .workspace
         .nodes
-        .get(&SessionSemanticTarget::Rename(key))
+        .get(&WorkspaceSemanticTarget::Rename(key))
         .unwrap();
     app.handle_accessibility_action(ActionRequest {
         action: Action::Click,
@@ -2783,15 +2783,15 @@ fn workspace_rename_semantics_accept_utf8_and_cancel_without_persistence() {
         data: None,
     });
     let form = app.accessibility_snapshot();
-    assert_eq!(form.focus, SESSION_RENAME_INPUT);
+    assert_eq!(form.focus, WORKSPACE_RENAME_INPUT);
     assert!(form.nodes.iter().any(|(id, node)| {
-        *id == SESSION_RENAME_SAVE && node.bounds().is_some() && node.role() == Role::Button
+        *id == WORKSPACE_RENAME_SAVE && node.bounds().is_some() && node.role() == Role::Button
     }));
     let load = *app
         .accessibility
-        .session
+        .workspace
         .nodes
-        .get(&SessionSemanticTarget::Load(SessionSemanticKey {
+        .get(&WorkspaceSemanticTarget::Load(WorkspaceSemanticKey {
             id: "workspace-0".into(),
             workspaces: true,
         }))
@@ -2808,17 +2808,17 @@ fn workspace_rename_semantics_accept_utf8_and_cancel_without_persistence() {
     app.handle_accessibility_action(ActionRequest {
         action: Action::SetValue,
         target_tree: TreeId::ROOT,
-        target_node: SESSION_RENAME_INPUT,
+        target_node: WORKSPACE_RENAME_INPUT,
         data: Some(ActionData::Value("New roots 🫚".into())),
     });
     assert_eq!(
-        app.session_panel.build_info().rename_text.as_deref(),
+        app.workspace_panel.build_info().rename_text.as_deref(),
         Some("New roots 🫚")
     );
     // Keyboard caret moves are reflected as scalar positions in the
     // semantic tree, even though the editor tracks UTF-8 byte offsets.
     assert!(
-        app.session_panel
+        app.workspace_panel
             .accessibility_set_rename("e\u{301}👩\u{200d}💻z")
     );
     for (key, expected_index) in [
@@ -2827,13 +2827,13 @@ fn workspace_rename_semantics_accept_utf8_and_cancel_without_persistence() {
         (winit::keyboard::NamedKey::ArrowRight, 5),
         (winit::keyboard::NamedKey::ArrowLeft, 2),
     ] {
-        assert!(app.handle_session_rename_key(&winit::keyboard::Key::Named(key)));
+        assert!(app.handle_workspace_rename_key(&winit::keyboard::Key::Named(key)));
         let snapshot = app.accessibility_snapshot();
-        assert_eq!(snapshot.focus, SESSION_RENAME_INPUT);
+        assert_eq!(snapshot.focus, WORKSPACE_RENAME_INPUT);
         let node = &snapshot
             .nodes
             .iter()
-            .find(|(id, _)| *id == SESSION_RENAME_INPUT)
+            .find(|(id, _)| *id == WORKSPACE_RENAME_INPUT)
             .unwrap()
             .1;
         let selection = node.text_selection().unwrap();
@@ -2846,16 +2846,16 @@ fn workspace_rename_semantics_accept_utf8_and_cancel_without_persistence() {
         app.handle_accessibility_action(ActionRequest {
             action: Action::SetValue,
             target_tree: TreeId::ROOT,
-            target_node: SESSION_RENAME_INPUT,
+            target_node: WORKSPACE_RENAME_INPUT,
             data: Some(ActionData::Value(value.into())),
         });
         assert!(app.ime.preedit().is_none());
         let snapshot = app.accessibility_snapshot();
-        assert_eq!(snapshot.focus, SESSION_RENAME_INPUT);
+        assert_eq!(snapshot.focus, WORKSPACE_RENAME_INPUT);
         let node = &snapshot
             .nodes
             .iter()
-            .find(|(id, _)| *id == SESSION_RENAME_INPUT)
+            .find(|(id, _)| *id == WORKSPACE_RENAME_INPUT)
             .unwrap()
             .1;
         assert_eq!(node.value(), Some(value));
@@ -2864,59 +2864,61 @@ fn workspace_rename_semantics_accept_utf8_and_cancel_without_persistence() {
             value.chars().count()
         );
     }
-    assert!(app.session_panel.accessibility_set_rename("New roots 🫚"));
+    assert!(app.workspace_panel.accessibility_set_rename("New roots 🫚"));
     app.handle_ime_event(winit::event::Ime::Preedit("keep".into(), None));
     app.handle_accessibility_action(ActionRequest {
         action: Action::SetValue,
         target_tree: TreeId::ROOT,
-        target_node: SESSION_RENAME_INPUT,
+        target_node: WORKSPACE_RENAME_INPUT,
         data: Some(ActionData::Value("bad\nname".into())),
     });
     assert!(app.ime.preedit().is_some());
     assert_eq!(
-        app.session_panel.build_info().rename_text.as_deref(),
+        app.workspace_panel.build_info().rename_text.as_deref(),
         Some("New roots 🫚")
     );
     app.handle_accessibility_action(ActionRequest {
         action: Action::Click,
         target_tree: TreeId::ROOT,
-        target_node: SESSION_RENAME_CANCEL,
+        target_node: WORKSPACE_RENAME_CANCEL,
         data: None,
     });
-    assert!(!app.session_panel.is_renaming());
+    assert!(!app.workspace_panel.is_renaming());
     assert!(app.ime.preedit().is_none());
-    assert_eq!(app.session_panel.sessions()[0].display_name, "Workspace 0");
+    assert_eq!(app.workspace_panel.entries()[0].display_name, "Workspace 0");
 }
 
 #[test]
 fn stale_workspace_actions_cannot_retarget_another_entry() {
     let mut app = App::new_headless(Config::default()).unwrap();
-    app.session_panel
-        .set_test_entries(test_session_entries(2), true);
+    app.workspace_panel
+        .set_test_entries(test_workspace_entries(2), true);
     app.accessibility_snapshot();
     let stale_delete = *app
         .accessibility
-        .session
+        .workspace
         .nodes
-        .get(&SessionSemanticTarget::Delete(SessionSemanticKey {
+        .get(&WorkspaceSemanticTarget::Delete(WorkspaceSemanticKey {
             id: "workspace-0".into(),
             workspaces: true,
         }))
         .unwrap();
-    app.session_panel
-        .set_test_entries(test_session_entries(2).into_iter().skip(1).collect(), true);
+    app.workspace_panel.set_test_entries(
+        test_workspace_entries(2).into_iter().skip(1).collect(),
+        true,
+    );
     app.handle_accessibility_action(ActionRequest {
         action: Action::Click,
         target_tree: TreeId::ROOT,
         target_node: stale_delete,
         data: None,
     });
-    assert_eq!(app.session_panel.sessions().len(), 1);
-    assert_eq!(app.session_panel.sessions()[0].id, "workspace-1");
+    assert_eq!(app.workspace_panel.entries().len(), 1);
+    assert_eq!(app.workspace_panel.entries()[0].id, "workspace-1");
     app.accessibility_snapshot();
     assert!(
         !app.accessibility
-            .session
+            .workspace
             .targets
             .contains_key(&stale_delete)
     );
@@ -2925,14 +2927,14 @@ fn stale_workspace_actions_cannot_retarget_another_entry() {
 #[test]
 fn legacy_snapshot_semantics_never_offer_rename() {
     let mut app = App::new_headless(Config::default()).unwrap();
-    app.session_panel
-        .set_test_entries(test_session_entries(1), false);
+    app.workspace_panel
+        .set_test_entries(test_workspace_entries(1), false);
     let snapshot = app.accessibility_snapshot();
     assert_eq!(
         snapshot
             .nodes
             .iter()
-            .find(|(id, _)| *id == SESSION_DIALOG)
+            .find(|(id, _)| *id == WORKSPACE_DIALOG)
             .unwrap()
             .1
             .label(),
@@ -2940,12 +2942,12 @@ fn legacy_snapshot_semantics_never_offer_rename() {
     );
     assert!(
         !app.accessibility
-            .session
+            .workspace
             .targets
             .keys()
             .any(|target| matches!(
-                app.accessibility.session.targets.get(target),
-                Some(SessionSemanticTarget::Rename(_))
+                app.accessibility.workspace.targets.get(target),
+                Some(WorkspaceSemanticTarget::Rename(_))
             ))
     );
 }

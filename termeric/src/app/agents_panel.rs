@@ -80,7 +80,7 @@ impl App {
     pub(super) fn toggle_agents_panel(&mut self) {
         if !self.agents_panel.is_open() {
             self.commands_panel.close();
-            self.session_panel.close();
+            self.workspace_panel.close();
             self.close_workspace_menu();
         }
         let rows = self.agents_panel_rows();

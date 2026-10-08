@@ -1091,68 +1091,68 @@ impl App {
         }
     }
 
-    pub(super) fn handle_session_accessibility_action(&mut self, request: ActionRequest) {
-        use crate::ui::session_panel::SessionPanelAction;
+    pub(super) fn handle_workspace_accessibility_action(&mut self, request: ActionRequest) {
+        use crate::ui::workspace_panel::WorkspacePanelAction;
 
         match request.target_node {
-            SESSION_BACK | SESSION_SNAPSHOTS => match request.action {
+            WORKSPACE_BACK | WORKSPACE_SNAPSHOTS => match request.action {
                 Action::Click => {
-                    self.apply_session_panel_action(if request.target_node == SESSION_BACK {
-                        SessionPanelAction::ShowWorkspaces
+                    self.apply_workspace_panel_action(if request.target_node == WORKSPACE_BACK {
+                        WorkspacePanelAction::ShowWorkspaces
                     } else {
-                        SessionPanelAction::ShowSnapshots
+                        WorkspacePanelAction::ShowSnapshots
                     });
                     self.accessibility.focus_override = None;
                 }
                 Action::Focus => self.accessibility.focus_override = Some(request.target_node),
                 _ => {}
             },
-            SESSION_CLOSE => match request.action {
+            WORKSPACE_CLOSE => match request.action {
                 Action::Click => {
-                    self.apply_session_panel_action(SessionPanelAction::Close);
+                    self.apply_workspace_panel_action(WorkspacePanelAction::Close);
                     self.accessibility.focus_override = None;
                 }
-                Action::Focus => self.accessibility.focus_override = Some(SESSION_CLOSE),
+                Action::Focus => self.accessibility.focus_override = Some(WORKSPACE_CLOSE),
                 _ => {}
             },
-            SESSION_RENAME_INPUT if self.session_panel.is_renaming() => match request.action {
+            WORKSPACE_RENAME_INPUT if self.workspace_panel.is_renaming() => match request.action {
                 Action::Focus => {
-                    self.accessibility.focus_override = Some(SESSION_RENAME_INPUT);
+                    self.accessibility.focus_override = Some(WORKSPACE_RENAME_INPUT);
                 }
                 Action::SetValue => {
                     let Some(ActionData::Value(value)) = request.data.as_ref() else {
                         return;
                     };
-                    if self.session_panel.accessibility_set_rename(value) {
+                    if self.workspace_panel.accessibility_set_rename(value) {
                         self.ime.clear_preedit();
-                        self.accessibility.focus_override = Some(SESSION_RENAME_INPUT);
+                        self.accessibility.focus_override = Some(WORKSPACE_RENAME_INPUT);
                     }
                 }
                 _ => {}
             },
-            SESSION_RENAME_SAVE if self.session_panel.is_renaming() => match request.action {
+            WORKSPACE_RENAME_SAVE if self.workspace_panel.is_renaming() => match request.action {
                 Action::Click => {
-                    self.apply_session_panel_action(SessionPanelAction::SubmitRename);
+                    self.apply_workspace_panel_action(WorkspacePanelAction::SubmitRename);
                     self.accessibility.focus_override = None;
                 }
-                Action::Focus => self.accessibility.focus_override = Some(SESSION_RENAME_SAVE),
+                Action::Focus => self.accessibility.focus_override = Some(WORKSPACE_RENAME_SAVE),
                 _ => {}
             },
-            SESSION_RENAME_CANCEL if self.session_panel.is_renaming() => match request.action {
+            WORKSPACE_RENAME_CANCEL if self.workspace_panel.is_renaming() => match request.action {
                 Action::Click => {
-                    self.apply_session_panel_action(SessionPanelAction::CancelRename);
+                    self.apply_workspace_panel_action(WorkspacePanelAction::CancelRename);
                     self.accessibility.focus_override = None;
                 }
-                Action::Focus => self.accessibility.focus_override = Some(SESSION_RENAME_CANCEL),
+                Action::Focus => self.accessibility.focus_override = Some(WORKSPACE_RENAME_CANCEL),
                 _ => {}
             },
             _ => {
-                if self.session_panel.is_renaming() {
+                if self.workspace_panel.is_renaming() {
                     return;
                 }
                 let Some(target) = self
                     .accessibility
-                    .session
+                    .workspace
                     .targets
                     .get(&request.target_node)
                     .cloned()
@@ -1160,39 +1160,39 @@ impl App {
                     return;
                 };
                 let key = match &target {
-                    SessionSemanticTarget::Group(key)
-                    | SessionSemanticTarget::Load(key)
-                    | SessionSemanticTarget::Rename(key)
-                    | SessionSemanticTarget::Delete(key) => key,
+                    WorkspaceSemanticTarget::Group(key)
+                    | WorkspaceSemanticTarget::Load(key)
+                    | WorkspaceSemanticTarget::Rename(key)
+                    | WorkspaceSemanticTarget::Delete(key) => key,
                 };
-                if key.workspaces != self.session_panel.is_workspace_mode()
-                    || !self.session_panel.is_visible_id(&key.id)
+                if key.workspaces != self.workspace_panel.is_workspace_mode()
+                    || !self.workspace_panel.is_visible_id(&key.id)
                 {
                     return;
                 }
                 match (target, request.action) {
                     (
-                        SessionSemanticTarget::Load(key)
-                        | SessionSemanticTarget::Rename(key)
-                        | SessionSemanticTarget::Delete(key),
+                        WorkspaceSemanticTarget::Load(key)
+                        | WorkspaceSemanticTarget::Rename(key)
+                        | WorkspaceSemanticTarget::Delete(key),
                         Action::Focus,
                     ) => {
-                        if self.session_panel.select_id(&key.id) {
+                        if self.workspace_panel.select_id(&key.id) {
                             self.accessibility.focus_override = Some(request.target_node);
                         }
                     }
-                    (SessionSemanticTarget::Load(key), Action::Click) => {
-                        self.apply_session_panel_action(SessionPanelAction::Load(key.id));
+                    (WorkspaceSemanticTarget::Load(key), Action::Click) => {
+                        self.apply_workspace_panel_action(WorkspacePanelAction::Load(key.id));
                         self.accessibility.focus_override = None;
                     }
-                    (SessionSemanticTarget::Rename(key), Action::Click) => {
-                        self.apply_session_panel_action(SessionPanelAction::Rename(key.id));
-                        if self.session_panel.is_renaming() {
-                            self.accessibility.focus_override = Some(SESSION_RENAME_INPUT);
+                    (WorkspaceSemanticTarget::Rename(key), Action::Click) => {
+                        self.apply_workspace_panel_action(WorkspacePanelAction::Rename(key.id));
+                        if self.workspace_panel.is_renaming() {
+                            self.accessibility.focus_override = Some(WORKSPACE_RENAME_INPUT);
                         }
                     }
-                    (SessionSemanticTarget::Delete(key), Action::Click) => {
-                        self.apply_session_panel_action(SessionPanelAction::Delete(key.id));
+                    (WorkspaceSemanticTarget::Delete(key), Action::Click) => {
+                        self.apply_workspace_panel_action(WorkspacePanelAction::Delete(key.id));
                         self.accessibility.focus_override = None;
                     }
                     _ => {}
@@ -1201,10 +1201,10 @@ impl App {
         }
     }
 
-    pub(super) fn session_accessibility_layout(
+    pub(super) fn workspace_accessibility_layout(
         &self,
-        info: &crate::ui::session_panel::SessionPanelInfo,
-    ) -> crate::ui::session_panel::SessionPanelLayout {
+        info: &crate::ui::workspace_panel::WorkspacePanelInfo,
+    ) -> crate::ui::workspace_panel::WorkspacePanelLayout {
         let UiMetrics {
             width,
             height,
@@ -1212,7 +1212,7 @@ impl App {
             cell_width,
             cell_height,
         } = self.ui_metrics();
-        crate::ui::session_panel::SessionPanelLayout::calculate(
+        crate::ui::workspace_panel::WorkspacePanelLayout::calculate(
             width,
             height,
             top,
@@ -1221,21 +1221,21 @@ impl App {
             info.animation,
             info.rename_text.is_some(),
             info.workspaces,
-            info.sessions.len(),
+            info.entries.len(),
         )
     }
 
-    pub(super) fn session_accessibility_snapshot(&mut self) -> ModalSnapshot {
-        let mut info = self.session_panel.build_info();
-        let mut layout = self.session_accessibility_layout(&info);
-        self.session_panel.set_max_visible(layout.rows_that_fit);
-        info = self.session_panel.build_info();
-        layout = self.session_accessibility_layout(&info);
+    pub(super) fn workspace_accessibility_snapshot(&mut self) -> ModalSnapshot {
+        let mut info = self.workspace_panel.build_info();
+        let mut layout = self.workspace_accessibility_layout(&info);
+        self.workspace_panel.set_max_visible(layout.rows_that_fit);
+        info = self.workspace_panel.build_info();
+        layout = self.workspace_accessibility_layout(&info);
 
         let keys = info
-            .sessions
+            .entries
             .iter()
-            .map(|entry| SessionSemanticKey {
+            .map(|entry| WorkspaceSemanticKey {
                 id: entry.id.clone(),
                 workspaces: info.workspaces,
             })
@@ -1244,18 +1244,18 @@ impl App {
             .iter()
             .flat_map(|key| {
                 let mut targets = vec![
-                    SessionSemanticTarget::Group(key.clone()),
-                    SessionSemanticTarget::Load(key.clone()),
-                    SessionSemanticTarget::Delete(key.clone()),
+                    WorkspaceSemanticTarget::Group(key.clone()),
+                    WorkspaceSemanticTarget::Load(key.clone()),
+                    WorkspaceSemanticTarget::Delete(key.clone()),
                 ];
                 if info.workspaces {
-                    targets.push(SessionSemanticTarget::Rename(key.clone()));
+                    targets.push(WorkspaceSemanticTarget::Rename(key.clone()));
                 }
                 targets
             })
             .collect::<HashSet<_>>();
         self.accessibility
-            .session
+            .workspace
             .retain(|target| retained.contains(target));
 
         let mut nodes = Vec::with_capacity(layout.visible_count * 4 + 10);
@@ -1269,17 +1269,17 @@ impl App {
         close.add_action(Action::Click);
         close.add_action(Action::Focus);
         close.set_bounds(bounds_rect(layout.close_button));
-        nodes.push((SESSION_CLOSE, close));
+        nodes.push((WORKSPACE_CLOSE, close));
 
-        let mut dialog_children = vec![SESSION_CLOSE];
+        let mut dialog_children = vec![WORKSPACE_CLOSE];
         if let Some(back) = layout.back_button {
             let mut node = Node::new(Role::Button);
             node.set_label("Back to workspaces");
             node.add_action(Action::Click);
             node.add_action(Action::Focus);
             node.set_bounds(bounds_rect(back));
-            nodes.push((SESSION_BACK, node));
-            dialog_children.push(SESSION_BACK);
+            nodes.push((WORKSPACE_BACK, node));
+            dialog_children.push(WORKSPACE_BACK);
         }
         if info.snapshot_count > 0
             && let Some(link) = layout.snapshots_link
@@ -1290,64 +1290,64 @@ impl App {
             node.add_action(Action::Click);
             node.add_action(Action::Focus);
             node.set_bounds(bounds_rect(link));
-            nodes.push((SESSION_SNAPSHOTS, node));
-            dialog_children.push(SESSION_SNAPSHOTS);
+            nodes.push((WORKSPACE_SNAPSHOTS, node));
+            dialog_children.push(WORKSPACE_SNAPSHOTS);
         }
         if let (Some(value), Some(rename)) = (&info.rename_text, layout.rename) {
             let mut input = Node::new(Role::TextInput);
             input.set_label("Workspace name");
             set_text_value(
                 &mut input,
-                SESSION_RENAME_INPUT,
+                WORKSPACE_RENAME_INPUT,
                 value,
                 Some(info.rename_cursor),
             );
             input.add_action(Action::Focus);
             input.add_action(Action::SetValue);
             input.set_bounds(bounds_rect(rename.input));
-            nodes.push((SESSION_RENAME_INPUT, input));
+            nodes.push((WORKSPACE_RENAME_INPUT, input));
 
             let mut save = Node::new(Role::Button);
             save.set_label("Save workspace name");
             save.add_action(Action::Click);
             save.add_action(Action::Focus);
             save.set_bounds(bounds_rect(rename.save_button));
-            nodes.push((SESSION_RENAME_SAVE, save));
+            nodes.push((WORKSPACE_RENAME_SAVE, save));
 
             let mut cancel = Node::new(Role::Button);
             cancel.set_label("Cancel workspace rename");
             cancel.add_action(Action::Click);
             cancel.add_action(Action::Focus);
             cancel.set_bounds(bounds_rect(rename.cancel_button));
-            nodes.push((SESSION_RENAME_CANCEL, cancel));
+            nodes.push((WORKSPACE_RENAME_CANCEL, cancel));
             dialog_children.extend([
-                SESSION_RENAME_INPUT,
-                SESSION_RENAME_SAVE,
-                SESSION_RENAME_CANCEL,
+                WORKSPACE_RENAME_INPUT,
+                WORKSPACE_RENAME_SAVE,
+                WORKSPACE_RENAME_CANCEL,
             ]);
         }
 
-        let end = (info.scroll_offset + layout.visible_count).min(info.sessions.len());
+        let end = (info.scroll_offset + layout.visible_count).min(info.entries.len());
         let rename_active = info.rename_text.is_some();
         let mut group_nodes = Vec::with_capacity(layout.visible_count);
         let mut selected_group = None;
         let mut selected_load = None;
         for (visible_index, absolute_index) in (info.scroll_offset..end).enumerate() {
-            let entry = &info.sessions[absolute_index];
+            let entry = &info.entries[absolute_index];
             let key = keys[absolute_index].clone();
             let geometry = layout.entry(visible_index);
             let group_id = self
                 .accessibility
-                .session
-                .node(&SessionSemanticTarget::Group(key.clone()));
+                .workspace
+                .node(&WorkspaceSemanticTarget::Group(key.clone()));
             let load_id = self
                 .accessibility
-                .session
-                .node(&SessionSemanticTarget::Load(key.clone()));
+                .workspace
+                .node(&WorkspaceSemanticTarget::Load(key.clone()));
             let delete_id = self
                 .accessibility
-                .session
-                .node(&SessionSemanticTarget::Delete(key.clone()));
+                .workspace
+                .node(&WorkspaceSemanticTarget::Delete(key.clone()));
             let mut load = Node::new(Role::Button);
             load.set_label(format!("Open {}", entry.display_name));
             load.set_description(if info.workspaces {
@@ -1368,8 +1368,8 @@ impl App {
             if info.workspaces {
                 let rename_id = self
                     .accessibility
-                    .session
-                    .node(&SessionSemanticTarget::Rename(key.clone()));
+                    .workspace
+                    .node(&WorkspaceSemanticTarget::Rename(key.clone()));
                 let mut rename = Node::new(Role::Button);
                 rename.set_label(format!("Rename {}", entry.display_name));
                 if rename_active {
@@ -1424,9 +1424,9 @@ impl App {
 
         let mut list = Node::new(Role::List);
         list.set_label(if info.workspaces {
-            format!("{} saved workspaces", info.sessions.len())
+            format!("{} saved workspaces", info.entries.len())
         } else {
-            format!("{} tab snapshots", info.sessions.len())
+            format!("{} tab snapshots", info.entries.len())
         });
         list.set_orientation(accesskit::Orientation::Vertical);
         list.set_bounds(rect(
@@ -1439,10 +1439,10 @@ impl App {
             list.set_active_descendant(selected);
         }
         list.set_children(group_nodes);
-        nodes.push((SESSION_LIST, list));
-        dialog_children.push(SESSION_LIST);
+        nodes.push((WORKSPACE_LIST, list));
+        dialog_children.push(WORKSPACE_LIST);
 
-        if info.sessions.is_empty() {
+        if info.entries.is_empty() {
             let mut empty = Node::new(Role::Status);
             empty.set_label(if info.workspaces {
                 "No saved workspaces"
@@ -1450,8 +1450,8 @@ impl App {
                 "No tab snapshots"
             });
             empty.set_live(Live::Polite);
-            nodes.push((SESSION_EMPTY, empty));
-            dialog_children.push(SESSION_EMPTY);
+            nodes.push((WORKSPACE_EMPTY, empty));
+            dialog_children.push(WORKSPACE_EMPTY);
         }
 
         let mut dialog = Node::new(Role::Dialog);
@@ -1468,20 +1468,20 @@ impl App {
         dialog.set_modal();
         dialog.set_bounds(bounds_rect(layout.panel));
         dialog.set_children(dialog_children);
-        nodes.push((SESSION_DIALOG, dialog));
+        nodes.push((WORKSPACE_DIALOG, dialog));
 
         let default_focus = if info.rename_text.is_some() {
-            SESSION_RENAME_INPUT
+            WORKSPACE_RENAME_INPUT
         } else {
-            selected_load.unwrap_or(SESSION_CLOSE)
+            selected_load.unwrap_or(WORKSPACE_CLOSE)
         };
         let focus = self
             .accessibility
             .modal_focus(&nodes, default_focus, |accessibility, node| {
-                accessibility.is_session_node(node)
+                accessibility.is_workspace_node(node)
             });
         ModalSnapshot {
-            dialog: SESSION_DIALOG,
+            dialog: WORKSPACE_DIALOG,
             nodes,
             focus,
         }

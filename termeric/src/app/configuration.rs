@@ -631,7 +631,7 @@ impl App {
         let reduced_motion = self.reduced_motion_enabled();
         let high_contrast = self.high_contrast_enabled();
         self.settings_panel.set_reduced_motion(reduced_motion);
-        self.session_panel.set_reduced_motion(reduced_motion);
+        self.workspace_panel.set_reduced_motion(reduced_motion);
         self.commands_panel.set_reduced_motion(reduced_motion);
         self.agents_panel.set_reduced_motion(reduced_motion);
         self.command_palette.set_reduced_motion(reduced_motion);

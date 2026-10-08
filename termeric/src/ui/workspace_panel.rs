@@ -3,7 +3,7 @@
 //! A slide-in panel for listing, loading, renaming, and deleting saved
 //! workspaces, and for the closed-tab snapshots offered beside them.
 
-use crate::session::listing::SessionListing;
+use crate::session::listing::WorkspaceListing;
 use crate::ui::animation::PanelAnimation;
 use crate::ui::geometry::Bounds;
 use crate::ui::side_panel::SidePanelFrame;
@@ -13,7 +13,7 @@ const MAX_RENAME_CHARACTERS: usize = 128;
 
 /// One saved workspace or closed-tab snapshot, as the panel lists it.
 #[derive(Debug, Clone)]
-pub struct SessionEntry {
+pub struct WorkspaceEntry {
     /// The archive's id, which loading, renaming, and deleting name it by.
     pub id: String,
     /// Display name shown to the user
@@ -26,7 +26,7 @@ pub struct SessionEntry {
 
 /// Click result from the workspace panel
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SessionPanelAction {
+pub enum WorkspacePanelAction {
     /// Load a workspace or snapshot by its id
     Load(String),
     /// Delete a workspace or snapshot by its id
@@ -53,7 +53,7 @@ pub enum SessionPanelAction {
 
 /// Header and footer controls that show pointer hover.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SessionPanelControl {
+pub enum WorkspacePanelControl {
     Close,
     Back,
     SnapshotsLink,
@@ -61,15 +61,15 @@ pub enum SessionPanelControl {
 
 /// Info passed to the renderer
 #[derive(Debug, Clone)]
-pub struct SessionPanelInfo {
+pub struct WorkspacePanelInfo {
     /// Animation progress (0.0 = hidden, 1.0 = fully visible)
     pub animation: f32,
     /// The workspaces or snapshots to display
-    pub sessions: Vec<SessionEntry>,
+    pub entries: Vec<WorkspaceEntry>,
     /// Mouse-hovered entry index (None if not hovering any entry)
     pub hovered_index: Option<usize>,
     /// Header or footer control under the pointer.
-    pub hovered_control: Option<SessionPanelControl>,
+    pub hovered_control: Option<WorkspacePanelControl>,
     /// Inline rename text, when active.
     pub rename_text: Option<String>,
     /// UTF-8 byte cursor within the rename input.
@@ -85,14 +85,14 @@ pub struct SessionPanelInfo {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SessionRenameLayout {
+pub struct WorkspaceRenameLayout {
     pub input: Bounds,
     pub save_button: Bounds,
     pub cancel_button: Bounds,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SessionEntryLayout {
+pub struct WorkspaceEntryLayout {
     pub row: Bounds,
     pub load_button: Bounds,
     pub rename_button: Option<Bounds>,
@@ -102,7 +102,7 @@ pub struct SessionEntryLayout {
 /// Shared workspace panel geometry for rendering, hit testing, hover, and
 /// accessibility bounds.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SessionPanelLayout {
+pub struct WorkspacePanelLayout {
     window_width: f32,
     pub panel: Bounds,
     pub padding_x: f32,
@@ -116,7 +116,7 @@ pub struct SessionPanelLayout {
     /// Opens tab snapshots from the workspace list. Reserved in workspace
     /// mode and drawn only when snapshots exist.
     pub snapshots_link: Option<Bounds>,
-    pub rename: Option<SessionRenameLayout>,
+    pub rename: Option<WorkspaceRenameLayout>,
     pub separator_y: f32,
     pub list_start_y: f32,
     pub row_height: f32,
@@ -127,7 +127,7 @@ pub struct SessionPanelLayout {
     pub workspaces: bool,
 }
 
-impl SessionPanelLayout {
+impl WorkspacePanelLayout {
     /// Hit the painted rename field, clamping padding to visible text edges.
     /// A collapsed viewport consumes the field click without moving a caret.
     pub fn rename_input_click(
@@ -136,7 +136,7 @@ impl SessionPanelLayout {
         cursor: usize,
         x: f32,
         y: f32,
-    ) -> Option<SessionPanelAction> {
+    ) -> Option<WorkspacePanelAction> {
         let rename = self.rename?;
         if !self.panel.contains(x, y)
             || x > self.window_width
@@ -149,8 +149,8 @@ impl SessionPanelLayout {
         Some(
             self.rename_input_viewport(text, cursor)
                 .and_then(|view| view.cursor_at(text, x, self.cell_width))
-                .map_or(SessionPanelAction::None, |cursor| {
-                    SessionPanelAction::PlaceRenameCaret { cursor }
+                .map_or(WorkspacePanelAction::None, |cursor| {
+                    WorkspacePanelAction::PlaceRenameCaret { cursor }
                 }),
         )
     }
@@ -223,7 +223,7 @@ impl SessionPanelLayout {
             let save_width = cell_width * 6.0;
             let cancel_x = panel_x + panel_width - padding_x - cancel_width;
             let save_x = cancel_x - cell_width * 0.5 - save_width;
-            SessionRenameLayout {
+            WorkspaceRenameLayout {
                 input: Bounds {
                     x: panel_x + padding_x,
                     y: form_y,
@@ -282,7 +282,7 @@ impl SessionPanelLayout {
         }
     }
 
-    pub fn entry(self, visible_index: usize) -> SessionEntryLayout {
+    pub fn entry(self, visible_index: usize) -> WorkspaceEntryLayout {
         let row = Bounds {
             x: self.panel.x,
             y: self.list_start_y + visible_index as f32 * self.row_height,
@@ -321,7 +321,7 @@ impl SessionPanelLayout {
             width: load_width,
             height: button_height,
         };
-        SessionEntryLayout {
+        WorkspaceEntryLayout {
             row,
             load_button,
             rename_button,
@@ -331,14 +331,19 @@ impl SessionPanelLayout {
 
     /// The header or footer control at a point. The snapshots link only
     /// exists while there are snapshots to open.
-    pub fn control_at(self, x: f32, y: f32, snapshot_count: usize) -> Option<SessionPanelControl> {
+    pub fn control_at(
+        self,
+        x: f32,
+        y: f32,
+        snapshot_count: usize,
+    ) -> Option<WorkspacePanelControl> {
         if self.close_button.contains(x, y) {
-            Some(SessionPanelControl::Close)
+            Some(WorkspacePanelControl::Close)
         } else if self.back_button.is_some_and(|back| back.contains(x, y)) {
-            Some(SessionPanelControl::Back)
+            Some(WorkspacePanelControl::Back)
         } else if snapshot_count > 0 && self.snapshots_link.is_some_and(|link| link.contains(x, y))
         {
-            Some(SessionPanelControl::SnapshotsLink)
+            Some(WorkspacePanelControl::SnapshotsLink)
         } else {
             None
         }
@@ -354,16 +359,16 @@ impl SessionPanelLayout {
 }
 
 /// Workspace panel state
-pub struct SessionPanel {
+pub struct WorkspacePanel {
     /// Animation state
     animation: PanelAnimation,
     /// Currently highlighted entry index
     selected_index: usize,
     /// Cached workspace or snapshot entries
-    sessions: Vec<SessionEntry>,
+    entries: Vec<WorkspaceEntry>,
     /// Mouse-hovered entry index
     hovered_index: Option<usize>,
-    hovered_control: Option<SessionPanelControl>,
+    hovered_control: Option<WorkspacePanelControl>,
     rename_target: Option<String>,
     rename_input: TextInput,
     workspaces: bool,
@@ -372,12 +377,12 @@ pub struct SessionPanel {
     snapshot_count: usize,
 }
 
-impl SessionPanel {
+impl WorkspacePanel {
     pub fn new() -> Self {
         Self {
             animation: PanelAnimation::new(),
             selected_index: 0,
-            sessions: Vec::new(),
+            entries: Vec::new(),
             hovered_index: None,
             hovered_control: None,
             rename_target: None,
@@ -390,7 +395,7 @@ impl SessionPanel {
     }
 
     /// Open on `listing`: the workspace manager or the tab snapshot list.
-    pub fn open(&mut self, listing: SessionListing) {
+    pub fn open(&mut self, listing: WorkspaceListing) {
         self.animation.open();
         self.selected_index = 0;
         self.scroll_offset = 0;
@@ -433,21 +438,21 @@ impl SessionPanel {
     }
 
     /// Show `listing`, keeping the selection where it still fits.
-    pub fn refresh(&mut self, listing: SessionListing) {
+    pub fn refresh(&mut self, listing: WorkspaceListing) {
         self.workspaces = listing.workspaces;
         self.snapshot_count = listing.snapshot_count;
-        self.sessions = listing.entries;
+        self.entries = listing.entries;
         self.selected_index = self
             .selected_index
-            .min(self.sessions.len().saturating_sub(1));
+            .min(self.entries.len().saturating_sub(1));
         self.ensure_selection_visible();
     }
 
     /// Build info for the renderer
-    pub fn build_info(&self) -> SessionPanelInfo {
-        SessionPanelInfo {
+    pub fn build_info(&self) -> WorkspacePanelInfo {
+        WorkspacePanelInfo {
             animation: self.animation_progress(),
-            sessions: self.sessions.clone(),
+            entries: self.entries.clone(),
             hovered_index: self.hovered_index,
             hovered_control: self.hovered_control,
             rename_text: self
@@ -489,7 +494,7 @@ impl SessionPanel {
         let layout = self.renaming_layout(width, height, top, cell_width, cell_height)?;
         match layout.rename_input_click(self.rename_input.text(), self.rename_input.cursor(), x, y)
         {
-            Some(SessionPanelAction::PlaceRenameCaret { cursor }) => Some(cursor),
+            Some(WorkspacePanelAction::PlaceRenameCaret { cursor }) => Some(cursor),
             _ => None,
         }
     }
@@ -502,11 +507,11 @@ impl SessionPanel {
         top: f32,
         cell_width: f32,
         cell_height: f32,
-    ) -> Option<SessionPanelLayout> {
+    ) -> Option<WorkspacePanelLayout> {
         if !self.is_open() || !self.is_renaming() {
             return None;
         }
-        Some(SessionPanelLayout::calculate(
+        Some(WorkspacePanelLayout::calculate(
             width,
             height,
             top,
@@ -515,20 +520,20 @@ impl SessionPanel {
             self.animation_progress(),
             true,
             self.workspaces,
-            self.sessions.len(),
+            self.entries.len(),
         ))
     }
 
     /// Update hover state from mouse position
-    pub fn set_hover(&mut self, index: Option<usize>, control: Option<SessionPanelControl>) {
+    pub fn set_hover(&mut self, index: Option<usize>, control: Option<WorkspacePanelControl>) {
         self.hovered_index = index;
         self.hovered_control = control;
     }
 
     /// The listed entries
     #[cfg(test)]
-    pub fn sessions(&self) -> &[SessionEntry] {
-        &self.sessions
+    pub fn entries(&self) -> &[WorkspaceEntry] {
+        &self.entries
     }
 
     pub fn is_renaming(&self) -> bool {
@@ -543,14 +548,14 @@ impl SessionPanel {
         if !self.workspaces {
             return;
         }
-        let Some(entry) = self.sessions.iter().find(|entry| entry.id == id) else {
+        let Some(entry) = self.entries.iter().find(|entry| entry.id == id) else {
             return;
         };
         self.rename_target = Some(id.to_string());
         // A stored name the field would refuse starts the draft empty.
         self.rename_input.clear();
         self.rename_input.replace(&entry.display_name);
-        if let Some(index) = self.sessions.iter().position(|entry| entry.id == id) {
+        if let Some(index) = self.entries.iter().position(|entry| entry.id == id) {
             self.selected_index = index;
             self.ensure_selection_visible();
         }
@@ -601,12 +606,12 @@ impl SessionPanel {
     }
 
     pub fn scroll_down(&mut self, rows: usize) {
-        let max = self.sessions.len().saturating_sub(self.max_visible);
+        let max = self.entries.len().saturating_sub(self.max_visible);
         self.scroll_offset = (self.scroll_offset + rows).min(max);
     }
 
     pub fn select_id(&mut self, id: &str) -> bool {
-        let Some(index) = self.sessions.iter().position(|entry| entry.id == id) else {
+        let Some(index) = self.entries.iter().position(|entry| entry.id == id) else {
             return false;
         };
         self.selected_index = index;
@@ -615,7 +620,7 @@ impl SessionPanel {
     }
 
     pub fn is_visible_id(&self, id: &str) -> bool {
-        self.sessions
+        self.entries
             .iter()
             .position(|entry| entry.id == id)
             .is_some_and(|index| {
@@ -623,50 +628,50 @@ impl SessionPanel {
             })
     }
 
-    pub fn handle_key(&mut self, key: SessionPanelKey) -> SessionPanelAction {
+    pub fn handle_key(&mut self, key: WorkspacePanelKey) -> WorkspacePanelAction {
         if self.is_renaming() {
             return match key {
-                SessionPanelKey::Enter => SessionPanelAction::SubmitRename,
-                SessionPanelKey::Escape => SessionPanelAction::CancelRename,
-                _ => SessionPanelAction::None,
+                WorkspacePanelKey::Enter => WorkspacePanelAction::SubmitRename,
+                WorkspacePanelKey::Escape => WorkspacePanelAction::CancelRename,
+                _ => WorkspacePanelAction::None,
             };
         }
         match key {
-            SessionPanelKey::Up => {
+            WorkspacePanelKey::Up => {
                 self.selected_index = self.selected_index.saturating_sub(1);
                 self.ensure_selection_visible();
-                SessionPanelAction::None
+                WorkspacePanelAction::None
             }
-            SessionPanelKey::Down => {
-                if self.selected_index + 1 < self.sessions.len() {
+            WorkspacePanelKey::Down => {
+                if self.selected_index + 1 < self.entries.len() {
                     self.selected_index += 1;
                     self.ensure_selection_visible();
                 }
-                SessionPanelAction::None
+                WorkspacePanelAction::None
             }
-            SessionPanelKey::Enter => self.selected_action(SessionPanelAction::Load),
-            SessionPanelKey::Delete => self.selected_action(SessionPanelAction::Delete),
-            SessionPanelKey::Rename if self.workspaces => {
-                self.selected_action(SessionPanelAction::Rename)
+            WorkspacePanelKey::Enter => self.selected_action(WorkspacePanelAction::Load),
+            WorkspacePanelKey::Delete => self.selected_action(WorkspacePanelAction::Delete),
+            WorkspacePanelKey::Rename if self.workspaces => {
+                self.selected_action(WorkspacePanelAction::Rename)
             }
-            SessionPanelKey::Escape if !self.workspaces => SessionPanelAction::ShowWorkspaces,
-            SessionPanelKey::Escape => SessionPanelAction::Close,
-            SessionPanelKey::Rename => SessionPanelAction::None,
+            WorkspacePanelKey::Escape if !self.workspaces => WorkspacePanelAction::ShowWorkspaces,
+            WorkspacePanelKey::Escape => WorkspacePanelAction::Close,
+            WorkspacePanelKey::Rename => WorkspacePanelAction::None,
         }
     }
 
     fn selected_action(
         &self,
-        action: impl FnOnce(String) -> SessionPanelAction,
-    ) -> SessionPanelAction {
-        self.sessions
+        action: impl FnOnce(String) -> WorkspacePanelAction,
+    ) -> WorkspacePanelAction {
+        self.entries
             .get(self.selected_index)
             .map(|entry| action(entry.id.clone()))
-            .unwrap_or(SessionPanelAction::None)
+            .unwrap_or(WorkspacePanelAction::None)
     }
 
     fn ensure_selection_visible(&mut self) {
-        if self.sessions.is_empty() {
+        if self.entries.is_empty() {
             self.selected_index = 0;
             self.scroll_offset = 0;
             return;
@@ -676,12 +681,12 @@ impl SessionPanel {
             self.selected_index,
             self.max_visible,
         )
-        .min(self.sessions.len().saturating_sub(self.max_visible));
+        .min(self.entries.len().saturating_sub(self.max_visible));
     }
 
     #[cfg(test)]
-    pub(crate) fn set_test_entries(&mut self, entries: Vec<SessionEntry>, workspaces: bool) {
-        self.sessions = entries;
+    pub(crate) fn set_test_entries(&mut self, entries: Vec<WorkspaceEntry>, workspaces: bool) {
+        self.entries = entries;
         self.workspaces = workspaces;
         self.selected_index = 0;
         self.scroll_offset = 0;
@@ -690,7 +695,7 @@ impl SessionPanel {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SessionPanelKey {
+pub enum WorkspacePanelKey {
     Up,
     Down,
     Enter,
@@ -706,8 +711,8 @@ mod tests {
 
     #[test]
     fn workspace_rename_is_inline_and_never_activates_for_tab_snapshots() {
-        let mut panel = SessionPanel::new();
-        panel.sessions.push(SessionEntry {
+        let mut panel = WorkspacePanel::new();
+        panel.entries.push(WorkspaceEntry {
             id: "workspace-1".into(),
             display_name: "Roots".into(),
             subtitle: String::new(),
@@ -728,10 +733,10 @@ mod tests {
 
     #[test]
     fn keyboard_selection_reveals_entries_and_returns_stable_id_actions() {
-        let mut panel = SessionPanel::new();
+        let mut panel = WorkspacePanel::new();
         panel.set_test_entries(
             (0..8)
-                .map(|index| SessionEntry {
+                .map(|index| WorkspaceEntry {
                     id: format!("workspace-{index}"),
                     display_name: format!("Workspace {index}"),
                     subtitle: String::new(),
@@ -743,28 +748,28 @@ mod tests {
         panel.set_max_visible(3);
         for _ in 0..5 {
             assert_eq!(
-                panel.handle_key(SessionPanelKey::Down),
-                SessionPanelAction::None
+                panel.handle_key(WorkspacePanelKey::Down),
+                WorkspacePanelAction::None
             );
         }
         let info = panel.build_info();
         assert_eq!(info.selected_index, 5);
         assert_eq!(info.scroll_offset, 3);
         assert_eq!(
-            panel.handle_key(SessionPanelKey::Enter),
-            SessionPanelAction::Load("workspace-5".into())
+            panel.handle_key(WorkspacePanelKey::Enter),
+            WorkspacePanelAction::Load("workspace-5".into())
         );
         assert_eq!(
-            panel.handle_key(SessionPanelKey::Rename),
-            SessionPanelAction::Rename("workspace-5".into())
+            panel.handle_key(WorkspacePanelKey::Rename),
+            WorkspacePanelAction::Rename("workspace-5".into())
         );
     }
 
     #[test]
     fn rename_text_is_atomic_single_line_and_backspace_removes_whole_graphemes() {
-        let mut panel = SessionPanel::new();
+        let mut panel = WorkspacePanel::new();
         panel.set_test_entries(
-            vec![SessionEntry {
+            vec![WorkspaceEntry {
                 id: "workspace-test".into(),
                 display_name: "Roots".into(),
                 subtitle: String::new(),
@@ -806,7 +811,7 @@ mod tests {
         for width in [400.0, 800.0, 1600.0] {
             for cell in [8.0, 12.0, 20.0] {
                 for animation in [0.2, 0.8, 1.0] {
-                    let layout = SessionPanelLayout::calculate(
+                    let layout = WorkspacePanelLayout::calculate(
                         width,
                         600.0,
                         0.0,
@@ -854,7 +859,7 @@ mod tests {
             (800.0, 600.0, 0.0, true),
             (800.0, 600.0, 1.0, false),
         ] {
-            let layout = SessionPanelLayout::calculate(
+            let layout = WorkspacePanelLayout::calculate(
                 width, height, 0.0, 10.0, 20.0, animation, renaming, true, 0,
             );
             assert!(layout.rename_input_viewport(&text, text.len()).is_none());
@@ -868,7 +873,7 @@ mod tests {
         for width in [400.0, 800.0, 1600.0] {
             for cell in [8.0, 12.0, 20.0] {
                 for animation in [0.2, 0.8, 1.0] {
-                    let layout = SessionPanelLayout::calculate(
+                    let layout = WorkspacePanelLayout::calculate(
                         width,
                         600.0,
                         0.0,
@@ -900,13 +905,13 @@ mod tests {
                         let hit = |x| layout.rename_input_click(&text, cursor, x, y);
                         assert_eq!(
                             hit(field.input.x.max(0.0)),
-                            Some(SessionPanelAction::PlaceRenameCaret {
+                            Some(WorkspacePanelAction::PlaceRenameCaret {
                                 cursor: view.text_range.start
                             })
                         );
                         assert_eq!(
                             hit(view.right),
-                            Some(SessionPanelAction::PlaceRenameCaret {
+                            Some(WorkspacePanelAction::PlaceRenameCaret {
                                 cursor: view.text_range.end
                             })
                         );
@@ -918,13 +923,13 @@ mod tests {
                                 termeric_core::unicode::grapheme_width(cluster) as f32 * cell;
                             assert_eq!(
                                 hit(x + pixels * 0.25),
-                                Some(SessionPanelAction::PlaceRenameCaret {
+                                Some(WorkspacePanelAction::PlaceRenameCaret {
                                     cursor: view.text_range.start + offset
                                 })
                             );
                             assert_eq!(
                                 hit(x + pixels * 0.75),
-                                Some(SessionPanelAction::PlaceRenameCaret {
+                                Some(WorkspacePanelAction::PlaceRenameCaret {
                                     cursor: view.text_range.start + offset + cluster.len()
                                 })
                             );
@@ -948,19 +953,19 @@ mod tests {
         // Partially revealed fields can be clickable before a single text
         // cell fits. Such clicks must not move a hidden caret.
         let layout =
-            SessionPanelLayout::calculate(800.0, 600.0, 0.0, 8.0, 16.0, 0.06, true, true, 1);
+            WorkspacePanelLayout::calculate(800.0, 600.0, 0.0, 8.0, 16.0, 0.06, true, true, 1);
         let field = layout.rename.unwrap();
         assert!(layout.rename_input_viewport(&text, text.len()).is_none());
         assert_eq!(
             layout.rename_input_click(&text, text.len(), field.input.x + 1.0, field.input.y + 1.0),
-            Some(SessionPanelAction::None)
+            Some(WorkspacePanelAction::None)
         );
     }
 
     #[test]
     fn rename_layout_and_value_limits_are_explicit() {
         let layout =
-            SessionPanelLayout::calculate(1000.0, 800.0, 0.0, 10.0, 20.0, 1.0, true, true, 4);
+            WorkspacePanelLayout::calculate(1000.0, 800.0, 0.0, 10.0, 20.0, 1.0, true, true, 4);
         let rename = layout.rename.unwrap();
         assert!(!rename.input.contains(
             rename.save_button.x + rename.save_button.width / 2.0,
@@ -968,9 +973,9 @@ mod tests {
         ));
         assert!(layout.list_start_y > rename.input.y + rename.input.height);
 
-        let mut panel = SessionPanel::new();
+        let mut panel = WorkspacePanel::new();
         panel.set_test_entries(
-            vec![SessionEntry {
+            vec![WorkspaceEntry {
                 id: "workspace-1".into(),
                 display_name: "Roots".into(),
                 subtitle: String::new(),
@@ -989,12 +994,12 @@ mod tests {
     fn header_and_footer_controls_are_hit_exactly_and_rows_stay_above_the_link() {
         let centre = |rect: Bounds| (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
         let workspaces =
-            SessionPanelLayout::calculate(1000.0, 800.0, 34.0, 10.0, 20.0, 1.0, false, true, 40);
+            WorkspacePanelLayout::calculate(1000.0, 800.0, 34.0, 10.0, 20.0, 1.0, false, true, 40);
         assert!(workspaces.panel.y == 34.0 && workspaces.back_button.is_none());
         let (x, y) = centre(workspaces.close_button);
         assert_eq!(
             workspaces.control_at(x, y, 0),
-            Some(SessionPanelControl::Close)
+            Some(WorkspacePanelControl::Close)
         );
         let link = workspaces.snapshots_link.unwrap();
         let (x, y) = centre(link);
@@ -1005,19 +1010,19 @@ mod tests {
         );
         assert_eq!(
             workspaces.control_at(x, y, 2),
-            Some(SessionPanelControl::SnapshotsLink)
+            Some(WorkspacePanelControl::SnapshotsLink)
         );
         let last_row =
             workspaces.list_start_y + workspaces.row_height * workspaces.visible_count as f32;
         assert!(last_row <= link.y);
 
         let snapshots =
-            SessionPanelLayout::calculate(1000.0, 800.0, 34.0, 10.0, 20.0, 1.0, false, false, 1);
+            WorkspacePanelLayout::calculate(1000.0, 800.0, 34.0, 10.0, 20.0, 1.0, false, false, 1);
         assert!(snapshots.snapshots_link.is_none());
         let (x, y) = centre(snapshots.back_button.unwrap());
         assert_eq!(
             snapshots.control_at(x, y, 0),
-            Some(SessionPanelControl::Back)
+            Some(WorkspacePanelControl::Back)
         );
     }
 }

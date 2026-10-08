@@ -1,5 +1,5 @@
-//! Slide-in side panels — Commands, Agents, and session management — their
-//! shared frame and header buttons, and the Commands and session panel hit tests.
+//! Slide-in side panels — Commands, Agents, and Workspaces — their shared
+//! frame and header buttons, and the Commands and workspace panel hit tests.
 
 use super::Renderer;
 use super::draw::FieldTextColors;
@@ -30,14 +30,14 @@ impl Renderer {
         .scrolled(info.scroll_offset)
     }
 
-    /// The session panel's geometry, shared by its drawing and hit test.
-    fn session_panel_layout(
+    /// The workspace panel's geometry, shared by its drawing and hit test.
+    fn workspace_panel_layout(
         &self,
-        info: &crate::ui::session_panel::SessionPanelInfo,
+        info: &crate::ui::workspace_panel::WorkspacePanelInfo,
         window_width: f32,
         window_height: f32,
-    ) -> crate::ui::session_panel::SessionPanelLayout {
-        crate::ui::session_panel::SessionPanelLayout::calculate(
+    ) -> crate::ui::workspace_panel::WorkspacePanelLayout {
+        crate::ui::workspace_panel::WorkspacePanelLayout::calculate(
             window_width,
             window_height,
             self.tab_bar_height(),
@@ -46,7 +46,7 @@ impl Renderer {
             info.animation,
             info.rename_text.is_some(),
             info.workspaces,
-            info.sessions.len(),
+            info.entries.len(),
         )
     }
 
@@ -581,20 +581,20 @@ impl Renderer {
         layout.row_action(x, y)
     }
 
-    pub(super) fn build_session_management_panel(
+    pub(super) fn build_workspace_panel(
         &mut self,
-        info: &crate::ui::session_panel::SessionPanelInfo,
+        info: &crate::ui::workspace_panel::WorkspacePanelInfo,
         window_width: f32,
         window_height: f32,
     ) {
-        use crate::ui::session_panel::SessionPanelControl;
+        use crate::ui::workspace_panel::WorkspacePanelControl;
 
         let anim = info.animation;
         if anim <= 0.0 {
             return;
         }
         let cell_height = self.cell_height();
-        let layout = self.session_panel_layout(info, window_width, window_height);
+        let layout = self.workspace_panel_layout(info, window_width, window_height);
         let panel = layout.panel;
         let padding_x = layout.padding_x;
         let size = self.ui_label_px();
@@ -611,14 +611,14 @@ impl Renderer {
             self.build_header_icon_button(
                 back,
                 Icon::Back,
-                hovered_control == Some(SessionPanelControl::Back),
+                hovered_control == Some(WorkspacePanelControl::Back),
             );
             title_x = back.x + back.width + self.px(2.0);
         }
         self.build_header_icon_button(
             close,
             Icon::Close,
-            hovered_control == Some(SessionPanelControl::Close),
+            hovered_control == Some(WorkspacePanelControl::Close),
         );
         let title = if info.workspaces {
             "Workspaces"
@@ -691,7 +691,7 @@ impl Renderer {
         );
 
         // ── Entries ──
-        if info.sessions.is_empty() {
+        if info.entries.is_empty() {
             let empty = if info.workspaces {
                 "No saved workspaces"
             } else {
@@ -707,9 +707,9 @@ impl Renderer {
                 dim,
             );
         }
-        let end = (info.scroll_offset + layout.visible_count).min(info.sessions.len());
-        let start = info.scroll_offset.min(info.sessions.len());
-        for (visible_index, session) in info.sessions[start..end].iter().enumerate() {
+        let end = (info.scroll_offset + layout.visible_count).min(info.entries.len());
+        let start = info.scroll_offset.min(info.entries.len());
+        for (visible_index, workspace) in info.entries[start..end].iter().enumerate() {
             let absolute_index = info.scroll_offset + visible_index;
             let entry = layout.entry(visible_index);
             let row = entry.row;
@@ -734,7 +734,7 @@ impl Renderer {
             };
             let name_x = row.x + padding_x;
             self.push_ui_label(
-                &session.display_name,
+                &workspace.display_name,
                 name_x,
                 title_top,
                 line,
@@ -743,12 +743,12 @@ impl Renderer {
                 text,
             );
             let meta = match (
-                session.subtitle.is_empty(),
-                session.last_modified.is_empty(),
+                workspace.subtitle.is_empty(),
+                workspace.last_modified.is_empty(),
             ) {
-                (false, false) => format!("{} · {}", session.subtitle, session.last_modified),
-                (false, true) => session.subtitle.clone(),
-                (true, _) => session.last_modified.clone(),
+                (false, false) => format!("{} · {}", workspace.subtitle, workspace.last_modified),
+                (false, true) => workspace.subtitle.clone(),
+                (true, _) => workspace.last_modified.clone(),
             };
             self.push_ui_label(
                 &meta,
@@ -773,7 +773,7 @@ impl Renderer {
         if info.snapshot_count > 0
             && let Some(link) = layout.snapshots_link
         {
-            let link_color = if hovered_control == Some(SessionPanelControl::SnapshotsLink) {
+            let link_color = if hovered_control == Some(WorkspacePanelControl::SnapshotsLink) {
                 self.rect_pipeline.push_rect(
                     link.x + self.px(1.0),
                     link.y,
@@ -851,35 +851,35 @@ impl Renderer {
         );
     }
 
-    /// Hit-test the session management panel for click handling
-    pub fn session_panel_hit_test(
+    /// Hit-test the workspace panel for click handling
+    pub fn workspace_panel_hit_test(
         &self,
         x: f32,
         y: f32,
-        info: &crate::ui::session_panel::SessionPanelInfo,
+        info: &crate::ui::workspace_panel::WorkspacePanelInfo,
         window_width: f32,
         window_height: f32,
-    ) -> crate::ui::session_panel::SessionPanelAction {
-        use crate::ui::session_panel::{SessionPanelAction, SessionPanelControl};
+    ) -> crate::ui::workspace_panel::WorkspacePanelAction {
+        use crate::ui::workspace_panel::{WorkspacePanelAction, WorkspacePanelControl};
 
-        let layout = self.session_panel_layout(info, window_width, window_height);
+        let layout = self.workspace_panel_layout(info, window_width, window_height);
 
         // A click beside or above the panel (the toolbar) dismisses it.
         if x < layout.panel.x || y < layout.panel.y {
-            return SessionPanelAction::Close;
+            return WorkspacePanelAction::Close;
         }
 
         let control = layout.control_at(x, y, info.snapshot_count);
-        if control == Some(SessionPanelControl::Close) {
-            return SessionPanelAction::Close;
+        if control == Some(WorkspacePanelControl::Close) {
+            return WorkspacePanelAction::Close;
         }
 
         if let Some(rename) = layout.rename {
             if rename.save_button.contains(x, y) {
-                return SessionPanelAction::SubmitRename;
+                return WorkspacePanelAction::SubmitRename;
             }
             if rename.cancel_button.contains(x, y) {
-                return SessionPanelAction::CancelRename;
+                return WorkspacePanelAction::CancelRename;
             }
             if let Some(text) = &info.rename_text
                 && let Some(action) = layout.rename_input_click(text, info.rename_cursor, x, y)
@@ -887,18 +887,20 @@ impl Renderer {
                 return action;
             }
             // The rename form owns input until it is saved or cancelled.
-            return SessionPanelAction::None;
+            return WorkspacePanelAction::None;
         }
 
         match control {
-            Some(SessionPanelControl::Back) => return SessionPanelAction::ShowWorkspaces,
-            Some(SessionPanelControl::SnapshotsLink) => return SessionPanelAction::ShowSnapshots,
-            Some(SessionPanelControl::Close) | None => {}
+            Some(WorkspacePanelControl::Back) => return WorkspacePanelAction::ShowWorkspaces,
+            Some(WorkspacePanelControl::SnapshotsLink) => {
+                return WorkspacePanelAction::ShowSnapshots;
+            }
+            Some(WorkspacePanelControl::Close) | None => {}
         }
 
-        let end = (info.scroll_offset + layout.visible_count).min(info.sessions.len());
-        for (visible_index, session) in info.sessions
-            [info.scroll_offset.min(info.sessions.len())..end]
+        let end = (info.scroll_offset + layout.visible_count).min(info.entries.len());
+        for (visible_index, workspace) in info.entries
+            [info.scroll_offset.min(info.entries.len())..end]
             .iter()
             .enumerate()
         {
@@ -909,23 +911,23 @@ impl Renderer {
 
             // Check if click is in the button row area
             if entry.delete_button.contains(x, y) {
-                return SessionPanelAction::Delete(session.id.clone());
+                return WorkspacePanelAction::Delete(workspace.id.clone());
             }
             if entry
                 .rename_button
                 .is_some_and(|button| button.contains(x, y))
             {
-                return SessionPanelAction::Rename(session.id.clone());
+                return WorkspacePanelAction::Rename(workspace.id.clone());
             }
             if entry.load_button.contains(x, y) {
-                return SessionPanelAction::Load(session.id.clone());
+                return WorkspacePanelAction::Load(workspace.id.clone());
             }
 
             // Elsewhere on the row selects it; restoring replaces the open
             // tabs, so it needs Open, Enter, or a double click.
-            return SessionPanelAction::Select(session.id.clone());
+            return WorkspacePanelAction::Select(workspace.id.clone());
         }
 
-        SessionPanelAction::None
+        WorkspacePanelAction::None
     }
 }
