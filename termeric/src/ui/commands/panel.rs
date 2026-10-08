@@ -697,17 +697,13 @@ impl CommandsPanel {
         self.form_command.replace(value)
     }
 
-    /// Try to submit the form — returns the new command if valid
+    /// Try to submit the form — returns the new command if valid. The fields
+    /// already keep their values single-line and within their limits, so only
+    /// a blank name or command is refused here.
     pub fn try_submit(&mut self) -> Option<CustomCommand> {
         let name = self.form_name.text().trim().to_string();
         let command = self.form_command.text().trim().to_string();
-        if name.is_empty()
-            || command.is_empty()
-            || name.len() > Self::MAX_FORM_NAME_BYTES
-            || command.len() > Self::MAX_FORM_COMMAND_BYTES
-            || name.contains(['\0', '\n', '\r'])
-            || command.contains(['\0', '\n', '\r'])
-        {
+        if name.is_empty() || command.is_empty() {
             return None;
         }
         self.cancel_edit();
