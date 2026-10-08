@@ -7,7 +7,8 @@
 # key you leave out keeps its default, and Termeric runs fine with no file.
 #
 # Termeric reloads the file within a second of a save. A key it doesn't know,
-# or a value outside its range, is an error that names the key and its line:
+# a value outside its range, or a file over 1 MiB (the limit for theme files
+# too) is an error that names the key and its line, or the file:
 # Termeric keeps the settings it had (or starts with the defaults), shows a
 # notice until the file loads, and never saves over it. Settings (Ctrl+,)
 # changes most of these too, and keeps your comments and layout when it saves.

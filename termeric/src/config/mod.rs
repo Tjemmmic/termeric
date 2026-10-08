@@ -263,7 +263,7 @@ impl Config {
     /// is none.
     pub fn load_from(config_path: &std::path::Path) -> Result<Self> {
         if config_path.exists() {
-            let content = std::fs::read_to_string(config_path)
+            let content = crate::safe_fs::read_linked_text(config_path, MAX_CONFIG_FILE_BYTES)
                 .with_context(|| format!("failed to read {}", config_path.display()))?;
             Self::from_toml(&content, config_path)
         } else {
@@ -528,6 +528,9 @@ pub const LINE_HEIGHT_RANGE: RangeInclusive<f32> = 0.8..=3.0;
 pub const WINDOW_OPACITY_RANGE: RangeInclusive<f32> = 0.1..=1.0;
 pub const BACKGROUND_IMAGE_OPACITY_RANGE: RangeInclusive<f32> = 0.0..=1.0;
 pub const WINDOW_PADDING_RANGE: RangeInclusive<u32> = 0..=256;
+/// The most `config.toml` or a theme file may hold. Either is read whole,
+/// so a file that is far larger, or never ends (a FIFO), is refused.
+pub const MAX_CONFIG_FILE_BYTES: usize = 1024 * 1024;
 /// A new window's size, in logical pixels. The command line's `--geometry`
 /// and the control protocol take physical pixels, with their own smaller
 /// minimum (`control::protocol::MIN_WINDOW_WIDTH`), so they cannot share it.
@@ -2172,6 +2175,46 @@ mod tests {
             let error = format!("{:#}", Config::from_toml(source, path).unwrap_err());
             assert!(error.contains("unknown field"), "{source}: {error}");
             assert!(error.contains(&format!("line {line}")), "{source}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_config_or_theme_file_over_its_limit_or_a_fifo_is_a_load_error() {
+        use std::os::unix::ffi::OsStrExt;
+        let directory = tempfile::tempdir().unwrap();
+        // Valid TOML, only too long: one comment past the limit.
+        let oversized = directory.path().join("oversized.toml");
+        std::fs::write(
+            &oversized,
+            format!("# {}\n", "x".repeat(MAX_CONFIG_FILE_BYTES)),
+        )
+        .unwrap();
+        let fifo = directory.path().join("fifo.toml");
+        let name = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: name is a live C string within this private fixture directory.
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        for (path, kind) in [
+            (oversized, Some(std::io::ErrorKind::InvalidData)),
+            (fifo, None),
+        ] {
+            // A plain read of a FIFO waits for a writer, so read off-thread.
+            let (send, receive) = std::sync::mpsc::channel();
+            let source = path.clone();
+            std::thread::spawn(move || {
+                let config = Config::load_from(&source).map(drop);
+                let theme = theme::Theme::load(&source).map(drop);
+                send.send((config, theme)).unwrap();
+            });
+            let (config, theme) = receive
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap_or_else(|_| panic!("reading {} waited for a writer", path.display()));
+            for error in [config.unwrap_err(), theme.unwrap_err()] {
+                let io = error
+                    .chain()
+                    .find_map(|cause| cause.downcast_ref::<std::io::Error>())
+                    .unwrap_or_else(|| panic!("{error:#}"));
+                assert!(kind.is_none_or(|kind| io.kind() == kind), "{error:#}");
+            }
         }
     }
 

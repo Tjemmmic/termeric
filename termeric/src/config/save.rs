@@ -105,7 +105,7 @@ pub fn save(path: &Path, baseline: &toml::Table, live: &Config) -> Result<toml::
 /// symbolic link is followed and its file replaced.
 pub fn reset(path: &Path, now: SystemTime) -> Result<Option<PathBuf>> {
     let target = link_target(path)?;
-    let backup = match fs::read(&target) {
+    let backup = match crate::safe_fs::read_bytes(&target, super::MAX_CONFIG_FILE_BYTES) {
         Ok(bytes) => Some(keep_copy(path, &target, &bytes, now)?),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(error).with_context(|| format!("read {}", target.display())),
@@ -132,7 +132,7 @@ fn link_target(path: &Path) -> Result<PathBuf> {
 }
 
 fn read_if_present(path: &Path) -> Result<Option<String>> {
-    match fs::read_to_string(path) {
+    match crate::safe_fs::read_linked_text(path, super::MAX_CONFIG_FILE_BYTES) {
         Ok(text) => Ok(Some(text)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error).with_context(|| format!("read {}", path.display())),

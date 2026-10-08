@@ -86,7 +86,7 @@ impl Theme {
     /// Load theme from a TOML file
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref();
-        let content = std::fs::read_to_string(path)
+        let content = crate::safe_fs::read_linked_text(path, super::MAX_CONFIG_FILE_BYTES)
             .with_context(|| format!("failed to read theme {}", path.display()))?;
         let theme: Theme = toml::from_str(&content)
             .with_context(|| format!("failed to parse theme {}", path.display()))?;
