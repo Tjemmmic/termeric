@@ -447,12 +447,7 @@ impl App {
             if let Some(shortcut) = choice.shortcut {
                 node.set_keyboard_shortcut(shortcut.to_string());
             }
-            node.set_bounds(rect(
-                layout.content.x,
-                layout.content.y + visible_row as f32 * layout.line_height,
-                layout.content.width,
-                layout.line_height,
-            ));
+            node.set_bounds(bounds_rect(layout.row(visible_row)));
             if awaiting {
                 node.add_action(Action::Click);
                 node.add_action(Action::Focus);
@@ -955,12 +950,7 @@ impl App {
                     Toggled::False
                 });
                 node.set_selected(source_index == snapshot.selected_index);
-                node.set_bounds(rect(
-                    layout.content.x,
-                    layout.content.y + visible_index as f32 * layout.row_height,
-                    layout.content.width,
-                    layout.row_height,
-                ));
+                node.set_bounds(bounds_rect(layout.row(visible_index)));
                 if snapshot.awaiting && source.available {
                     node.add_action(Action::Click);
                     node.add_action(Action::Focus);

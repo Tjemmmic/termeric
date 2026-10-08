@@ -118,14 +118,7 @@ impl ListDialogLayout {
     /// pixels, and each row's bottom is the next row's top, so the rows tile
     /// the list with no gap or overlap.
     pub fn row(&self, visible_index: usize) -> Bounds {
-        let edge = |index: usize| (self.list.y + index as f32 * self.row_height).round();
-        let top = edge(visible_index);
-        Bounds::new(
-            self.list.x,
-            top,
-            self.list.width,
-            edge(visible_index + 1) - top,
-        )
+        self.list.row(self.row_height, visible_index)
     }
 
     /// The visible row under a point, if any: the one whose drawn bounds

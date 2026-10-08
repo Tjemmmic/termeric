@@ -191,6 +191,12 @@ impl ContextPickerLayout {
         }
     }
 
+    /// The `visible_index`th visible source row, where it is drawn.
+    pub fn row(&self, visible_index: usize) -> Bounds {
+        self.content.row(self.row_height, visible_index)
+    }
+
+    /// The source under a point, if any: the one whose drawn row contains it.
     pub fn source_row_at(
         &self,
         x: f32,
@@ -198,12 +204,12 @@ impl ContextPickerLayout {
         scroll_offset: usize,
         source_count: usize,
     ) -> Option<usize> {
-        if !self.content.contains(x, y) {
-            return None;
-        }
-        let visible = ((y - self.content.y) / self.row_height).floor() as usize;
-        let source = scroll_offset.saturating_add(visible);
-        (source < source_count).then_some(source)
+        let visible_rows = source_count
+            .saturating_sub(scroll_offset)
+            .min(self.visible_count);
+        (0..visible_rows)
+            .find(|&visible_index| self.row(visible_index).contains(x, y))
+            .map(|visible_index| scroll_offset + visible_index)
     }
 
     pub fn hit_test(
@@ -698,6 +704,48 @@ mod tests {
             picker.snapshot().scroll_offset,
             picker.sources().len() - layout.visible_count
         );
+    }
+
+    #[test]
+    fn source_rows_answer_exactly_where_they_are_drawn() {
+        // The opening slide puts the content at fractional heights.
+        for phase in [1.0, 0.875, 0.5, 0.125, 0.0] {
+            let layout = ContextPickerLayout::calculate(
+                900.0,
+                300.0,
+                10.0,
+                20.0,
+                phase,
+                ContextPickerPhase::Sources,
+                MAX_CONTEXT_SOURCES,
+            );
+            let x = layout.content.x + 1.0;
+            let sources = MAX_CONTEXT_SOURCES;
+            assert_eq!(
+                layout.source_row_at(x, layout.row(0).y - 0.01, 1, sources),
+                None
+            );
+            for visible in 0..layout.visible_count {
+                let row = layout.row(visible);
+                assert_eq!(row.bottom(), layout.row(visible + 1).y);
+                assert_eq!(
+                    layout.source_row_at(x, row.y, 1, sources),
+                    Some(1 + visible)
+                );
+                assert_eq!(
+                    layout.source_row_at(x, row.bottom() - 0.01, 1, sources),
+                    Some(1 + visible)
+                );
+            }
+            let last = layout.row(layout.visible_count - 1);
+            assert_eq!(layout.source_row_at(x, last.bottom(), 1, sources), None);
+            assert_eq!(layout.source_row_at(last.right(), last.y, 1, sources), None);
+            // Rows past the last source answer nothing.
+            assert_eq!(
+                layout.source_row_at(x, layout.row(1).y, sources - 1, sources),
+                None
+            );
+        }
     }
 
     #[test]

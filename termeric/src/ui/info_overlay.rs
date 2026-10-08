@@ -193,6 +193,13 @@ impl InfoOverlayLayout {
         }
     }
 
+    /// The `visible_row`th content row, where its line is drawn.
+    pub fn row(&self, visible_row: usize) -> Bounds {
+        self.content.row(self.line_height, visible_row)
+    }
+
+    /// The source line under a point, if any: the one whose drawn row
+    /// contains it.
     pub fn content_row_at(
         &self,
         x: f32,
@@ -200,12 +207,12 @@ impl InfoOverlayLayout {
         scroll_offset: usize,
         total_lines: usize,
     ) -> Option<usize> {
-        if !self.content.contains(x, y) {
-            return None;
-        }
-        let visible_row = ((y - self.content.y) / self.line_height).floor() as usize;
-        let source_row = scroll_offset.saturating_add(visible_row);
-        (source_row < total_lines).then_some(source_row)
+        let visible_rows = total_lines
+            .saturating_sub(scroll_offset)
+            .min(self.rows_that_fit);
+        (0..visible_rows)
+            .find(|&visible_row| self.row(visible_row).contains(x, y))
+            .map(|visible_row| scroll_offset + visible_row)
     }
 
     pub fn source_line_rect(
@@ -220,12 +227,7 @@ impl InfoOverlayLayout {
         {
             return None;
         }
-        Some(Bounds {
-            x: self.content.x,
-            y: self.content.y + source_line.saturating_sub(scroll_offset) as f32 * self.line_height,
-            width: self.content.width,
-            height: self.line_height,
-        })
+        Some(self.row(source_line - scroll_offset))
     }
 }
 
@@ -988,7 +990,7 @@ mod tests {
         );
         // The pixel between two rows belongs to the lower one only; hover
         // reads the same answer, so one row lights at a time.
-        let boundary = layout.content.y + layout.line_height;
+        let boundary = layout.row(1).y;
         assert_eq!(
             layout.content_row_at(layout.content.x + 1.0, boundary, 5, lines.len()),
             Some(6)
@@ -997,6 +999,33 @@ mod tests {
             layout.content_row_at(layout.content.x + 1.0, boundary - 0.01, 5, lines.len()),
             Some(5)
         );
+    }
+
+    #[test]
+    fn content_rows_answer_exactly_where_they_are_drawn() {
+        // The opening slide puts the content at fractional heights.
+        for phase in [1.0, 0.875, 0.5, 0.125, 0.0] {
+            let layout =
+                InfoOverlayLayout::calculate(900.0, 500.0, 10.0, 20.0, phase, "Notice", 40, 80);
+            let x = layout.content.x + 1.0;
+            let first = layout.row(0);
+            assert_eq!(layout.content_row_at(x, first.y - 0.01, 5, 40), None);
+            for visible in 0..layout.rows_that_fit {
+                let row = layout.row(visible);
+                assert_eq!(row.bottom(), layout.row(visible + 1).y);
+                assert_eq!(layout.content_row_at(x, row.y, 5, 40), Some(5 + visible));
+                assert_eq!(
+                    layout.content_row_at(x, row.bottom() - 0.01, 5, 40),
+                    Some(5 + visible)
+                );
+                assert_eq!(layout.source_line_rect(5 + visible, 5, 40), Some(row));
+            }
+            let last = layout.row(layout.rows_that_fit - 1);
+            assert_eq!(layout.content_row_at(x, last.bottom(), 5, 40), None);
+            assert_eq!(layout.content_row_at(last.right(), last.y, 5, 40), None);
+            // Rows past the last line answer nothing, though the card has room.
+            assert_eq!(layout.content_row_at(x, layout.row(1).y, 39, 40), None);
+        }
     }
 
     #[test]
@@ -1028,11 +1057,7 @@ mod tests {
             }
             for visible in 0..layout.rows_that_fit {
                 let row = layout.source_line_rect(5 + visible, 5, 40).unwrap();
-                assert_eq!(row.x, layout.content.x);
-                assert_eq!(
-                    row.y,
-                    layout.content.y + visible as f32 * layout.line_height
-                );
+                assert_eq!(row, layout.row(visible));
                 assert_eq!(
                     layout.content_row_at(row.x + 1.0, row.y + row.height / 2.0, 5, 40),
                     Some(5 + visible)
@@ -1136,8 +1161,7 @@ mod tests {
     fn input_line_geometry_tracks_the_shared_scrolled_layout() {
         let layout = InfoOverlayLayout::calculate(900.0, 500.0, 10.0, 20.0, 1.0, "Edit", 20, 20);
         let rect = layout.source_line_rect(7, 5, 20).unwrap();
-        assert_eq!(rect.x, layout.content.x);
-        assert_eq!(rect.y, layout.content.y + layout.line_height * 2.0);
+        assert_eq!(rect, layout.row(2));
         assert!(layout.source_line_rect(4, 5, 20).is_none());
         assert!(
             layout

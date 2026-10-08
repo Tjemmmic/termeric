@@ -53,6 +53,16 @@ impl Bounds {
     pub fn center(self) -> [f32; 2] {
         [self.x + self.width / 2.0, self.y + self.height / 2.0]
     }
+
+    /// The `index`th of rows `row_height` tall down from this rectangle's
+    /// top, as wide as it. Row edges are rounded to whole pixels, and each
+    /// row's bottom is the next row's top, so the rows tile with no gap or
+    /// overlap.
+    pub fn row(self, row_height: f32, index: usize) -> Self {
+        let edge = |index: usize| (self.y + index as f32 * row_height).round();
+        let top = edge(index);
+        Self::new(self.x, top, self.width, edge(index + 1) - top)
+    }
 }
 
 #[cfg(test)]
@@ -79,5 +89,17 @@ mod tests {
         assert_eq!(a.intersect(Bounds::new(10.0, 0.0, 5.0, 5.0)), None);
         assert_eq!(a.inset(2.0, 3.0), Bounds::new(2.0, 3.0, 6.0, 4.0));
         assert_eq!(a.inset(20.0, 0.0).width, 0.0);
+    }
+
+    #[test]
+    fn rows_land_on_whole_pixels_and_tile() {
+        let area = Bounds::new(4.0, 10.25, 50.0, 100.0);
+        assert_eq!(area.row(13.5, 0), Bounds::new(4.0, 10.0, 50.0, 14.0));
+        assert_eq!(area.row(13.5, 1), Bounds::new(4.0, 24.0, 50.0, 13.0));
+        for index in 0..8 {
+            let row = area.row(13.5, index);
+            assert_eq!(row.y.fract(), 0.0);
+            assert_eq!(row.bottom(), area.row(13.5, index + 1).y);
+        }
     }
 }

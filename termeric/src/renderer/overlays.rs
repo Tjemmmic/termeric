@@ -59,7 +59,6 @@ impl Renderer {
         let card_y = layout.card.y;
         let card_width = layout.card.width;
         let padding = layout.padding;
-        let line_height = layout.line_height;
         let content_height = layout.content.height;
         let char_scale = layout.char_scale;
         self.draw_card_shadow(layout.card, 0.08 * anim, 3);
@@ -109,7 +108,7 @@ impl Renderer {
             layout.content_row_at(mouse_x, mouse_y, info.scroll_offset, info.total_lines);
 
         for (visible_row, (source_row, line)) in info.visible_lines.iter().enumerate() {
-            let line_y = content_start_y + visible_row as f32 * line_height;
+            let row = layout.row(visible_row);
             let input = info
                 .input
                 .as_ref()
@@ -122,28 +121,28 @@ impl Renderer {
                 info.awaiting && choice.is_some() && hovered_row == Some(*source_row);
             if input.is_some() {
                 self.rect_pipeline.push_rounded_rect(
-                    layout.content.x,
-                    line_y,
-                    layout.content.width,
-                    line_height,
+                    row.x,
+                    row.y,
+                    row.width,
+                    row.height,
                     with_alpha(self.ui.palette_accent, 0.08 * anim),
                     self.px(BUTTON_CORNER_RADIUS),
                 );
                 let underline = self.px(BORDER_WIDTH);
                 self.rect_pipeline.push_rect(
-                    layout.content.x,
-                    line_y + line_height - underline,
-                    layout.content.width,
+                    row.x,
+                    row.bottom() - underline,
+                    row.width,
                     underline,
                     with_alpha(self.ui.palette_accent, 0.55 * anim),
                 );
             } else if choice.is_some() {
                 let alpha = if choice_hovered { 0.14 } else { 0.06 };
                 self.rect_pipeline.push_rounded_rect(
-                    layout.content.x,
-                    line_y,
-                    layout.content.width,
-                    line_height,
+                    row.x,
+                    row.y,
+                    row.width,
+                    row.height,
                     with_alpha(self.ui.palette_accent, alpha * anim),
                     self.px(BUTTON_CORNER_RADIUS),
                 );
@@ -160,7 +159,7 @@ impl Renderer {
             };
             for (i, c) in line.chars().enumerate() {
                 let cx = content_x + i as f32 * char_scale;
-                self.text_pipeline.push_char(c, cx, line_y, color);
+                self.text_pipeline.push_char(c, cx, row.y, color);
             }
             if let Some(input) = input
                 && info.focus == Some(crate::ui::info_overlay::InfoOverlayFocus::Input)
@@ -177,9 +176,9 @@ impl Renderer {
                         + cursor_column.saturating_sub(info.horizontal_offset) as f32 * char_scale;
                     self.rect_pipeline.push_rounded_rect(
                         cursor_x,
-                        line_y + cell_height * 0.12,
+                        row.y + cell_height * 0.12,
                         2.0_f32.max(char_scale * 0.12),
-                        (line_height - cell_height * 0.24).max(1.0),
+                        (row.height - cell_height * 0.24).max(1.0),
                         with_alpha(self.ui.palette_accent, anim),
                         1.0,
                     );
@@ -508,7 +507,6 @@ impl Renderer {
             with_alpha(self.ui.palette_accent, anim),
         );
 
-        let content_start_y = layout.content.y;
         let text_color = with_alpha(self.ui.palette_text, anim);
         let dim_color = with_alpha(self.ui.palette_text_dim, 0.5 * anim);
         let highlight_color = with_alpha(self.ui.palette_accent, 0.12 * anim);
@@ -524,13 +522,13 @@ impl Renderer {
                     .take(layout.visible_count)
                     .enumerate()
                 {
-                    let line_y = content_start_y + visible_row as f32 * layout.row_height;
+                    let row = layout.row(visible_row);
                     if source_index == snapshot.selected_index {
                         self.rect_pipeline.push_rounded_rect(
-                            layout.content.x,
-                            line_y,
-                            layout.content.width,
-                            layout.row_height,
+                            row.x,
+                            row.y,
+                            row.width,
+                            row.height,
                             highlight_color,
                             self.px(BUTTON_CORNER_RADIUS),
                         );
@@ -544,7 +542,7 @@ impl Renderer {
                     let size = self.px(12.0);
                     let check = Bounds::new(
                         (layout.content.x + self.px(4.0)).round(),
-                        (line_y + (layout.row_height - size) / 2.0).round(),
+                        (row.y + (row.height - size) / 2.0).round(),
                         size,
                         size,
                     );
@@ -565,8 +563,8 @@ impl Renderer {
                     self.push_ui_label(
                         &source.label,
                         label_x,
-                        line_y,
-                        layout.row_height,
+                        row.y,
+                        row.height,
                         layout.content.right() - label_x,
                         label_size,
                         color,

@@ -239,7 +239,7 @@ impl App {
                     * layout.char_scale;
             let y = row.y;
             return self.ime_target(
-                [x, y, layout.char_scale, layout.line_height],
+                [x, y, layout.char_scale, row.height],
                 (row.x + row.width - x).max(layout.char_scale),
             );
         }
