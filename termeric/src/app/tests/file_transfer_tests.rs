@@ -75,24 +75,7 @@ fn local_file_drop_writes_one_bracketed_payload_without_enter() {
         .unwrap()
         .set_mode(termeric_core::term::TerminalMode::BRACKETED_PASTE, true);
 
-    let ready_deadline = Instant::now() + Duration::from_secs(3);
-    let mut ready = false;
-    while Instant::now() < ready_deadline {
-        app.process_pty_events();
-        if app
-            .active_terminal()
-            .unwrap()
-            .grid()
-            .plain_lines()
-            .join("\n")
-            .contains("READY")
-        {
-            ready = true;
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(2));
-    }
-    assert!(ready, "drop receiver did not become ready");
+    app.wait_for_screen_text("READY");
 
     assert!(app.handle_dropped_path(&path));
     assert!(app.write_terminal_protocol_input(b"X"));
@@ -101,24 +84,24 @@ fn local_file_drop_writes_one_bracketed_payload_without_enter() {
         .map(|byte| format!("{byte:02x}"))
         .collect::<Vec<_>>()
         .concat();
-    let deadline = Instant::now() + Duration::from_secs(3);
+    // The hex dump wraps across rows, so match it with whitespace removed.
+    let report = format!("drop={expected_hex}next=58");
     let mut output = String::new();
-    while Instant::now() < deadline {
+    let arrived = crate::test_support::poll_until(Duration::from_secs(3), || {
         app.process_pty_events();
-        let Some(terminal) = app.active_terminal() else {
-            break;
-        };
-        output = terminal.grid().plain_lines().join("\n");
-        let compact = output
+        output = app.active_terminal().map_or_else(String::new, |terminal| {
+            terminal.grid().plain_lines().join("\n")
+        });
+        output
             .chars()
             .filter(|character| !character.is_whitespace())
-            .collect::<String>();
-        if compact.contains(&format!("drop={expected_hex}next=58")) {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(2));
-    }
-    panic!("exact drop payload did not arrive without Enter: {output:?}");
+            .collect::<String>()
+            .contains(&report)
+    });
+    assert!(
+        arrived,
+        "exact drop payload did not arrive without Enter: {output:?}"
+    );
 }
 
 #[test]
