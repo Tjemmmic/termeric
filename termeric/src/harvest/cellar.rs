@@ -8,9 +8,10 @@ use crate::ui::geometry::Bounds;
 use std::collections::VecDeque;
 use termeric_core::CommandRegion;
 
-/// Default maximum number of commands to keep in history. Overridable per-
-/// cellar via [`RootCellar::with_capacity`].
-const DEFAULT_MAX_COMMANDS: usize = 100;
+/// Default maximum number of commands to keep in history, and the default of
+/// `harvest.max_history`. Overridable per-cellar via
+/// [`RootCellar::with_capacity`].
+pub const DEFAULT_MAX_COMMANDS: usize = 100;
 pub const MAX_HARVEST_COMMAND_CHARS: usize = 512;
 pub const MAX_HARVEST_COMMAND_BYTES: usize = termeric_core::MAX_COMMAND_TEXT_BYTES;
 /// Per-entry output snapshot ceiling. At the default 100-entry history this

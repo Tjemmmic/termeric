@@ -710,7 +710,7 @@ impl Default for HarvestConfig {
         Self {
             enabled: false,
             show_indicators: true,
-            max_history: 100,
+            max_history: crate::harvest::DEFAULT_MAX_COMMANDS,
         }
     }
 }
