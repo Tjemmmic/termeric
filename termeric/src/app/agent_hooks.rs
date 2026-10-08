@@ -50,7 +50,9 @@ impl HookSetupSummary {
     }
 }
 
-fn termeric_executable() -> Result<PathBuf, String> {
+/// This Termeric's executable, as hooks and the supervisor's MCP server
+/// name it.
+pub(super) fn termeric_executable() -> Result<PathBuf, String> {
     std::env::current_exe()
         .and_then(|path| path.canonicalize())
         .map_err(|error| format!("Could not locate the Termeric executable: {error}"))

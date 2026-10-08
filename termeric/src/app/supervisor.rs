@@ -130,11 +130,6 @@ impl Supervisor {
     }
 }
 
-/// A random token, as 32 lowercase hex digits.
-fn new_token() -> Option<String> {
-    termeric_core::hex::random(16).ok()
-}
-
 impl App {
     pub(super) fn supervisor_running(&self) -> bool {
         self.supervisor.is_some()
@@ -239,10 +234,10 @@ impl App {
         let (_, rules) = self
             .ensure_rules_file()
             .map_err(|error| format!("Could not read the supervisor rules: {error:#}"))?;
-        let token = new_token().ok_or("Could not create a supervisor token")?;
-        let executable = std::env::current_exe()
-            .and_then(|path| path.canonicalize())
-            .map_err(|error| format!("Could not locate the Termeric executable: {error}"))?;
+        // 32 lowercase hex digits.
+        let token = termeric_core::hex::random(16)
+            .map_err(|error| format!("Could not create a supervisor token: {error}"))?;
+        let executable = super::agent_hooks::termeric_executable()?;
         let runtime_directory = std::env::var("XDG_RUNTIME_DIR").ok();
         let server = supervisor::SupervisorServer {
             termeric: &executable,
