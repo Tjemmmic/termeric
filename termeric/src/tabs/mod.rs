@@ -494,6 +494,17 @@ impl TabManager {
                 // only that relay and still converge to daemon state.
                 continue;
             }
+            // The daemon's layout replaces the destination's tree below, so
+            // any relay there that can take a neighbour anchors the move;
+            // without one, reconciliation replaces the relay as above.
+            let destination_panes = &self.tabs[destination_index].panes;
+            let Some(anchor) = destination_panes
+                .pane_ids()
+                .into_iter()
+                .find(|id| destination_panes.validate_attach_target(*id).is_ok())
+            else {
+                continue;
+            };
 
             let (source, destination) = if source_index < destination_index {
                 let (before, after) = self.tabs.split_at_mut(destination_index);
@@ -514,7 +525,7 @@ impl TabManager {
                 .remove(&source_local);
             let destination_local = destination
                 .panes
-                .attach(pane, crate::panes::SplitDirection::Vertical)
+                .attach_target(pane, anchor, crate::panes::SplitDirection::Vertical)
                 .context("live-domain relay could not join its destination tab")?;
             destination
                 .live_domain
@@ -2318,7 +2329,11 @@ mod tests {
                 .is_err()
         );
         assert!(panes.validate_attach_target(focused).is_err());
-        assert!(panes.attach(moved, SplitDirection::Vertical).is_err());
+        assert!(
+            panes
+                .attach_target(moved, focused, SplitDirection::Vertical)
+                .is_err()
+        );
         assert_eq!(panes.pane_count(), MAX_PANES_PER_TAB);
         assert_eq!(panes.focused_id(), focused);
 

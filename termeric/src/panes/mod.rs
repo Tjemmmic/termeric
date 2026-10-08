@@ -1566,29 +1566,6 @@ impl PaneManager {
         Some(pane)
     }
 
-    /// Attach an existing live PTY beside the focused pane under a new stable,
-    /// tab-local ID. No process or reader thread is recreated.
-    pub(crate) fn attach(
-        &mut self,
-        mut pane: Pane,
-        direction: SplitDirection,
-    ) -> anyhow::Result<PaneId> {
-        self.ensure_room_for_pane()?;
-        let id = PaneId(self.next_id);
-        self.next_id = self.next_id.saturating_add(1);
-        pane.id = id;
-        self.panes.insert(id, pane);
-        assert!(
-            self.tree.split(self.focused, id, direction),
-            "focused pane and divider ID remain splittable"
-        );
-        self.focused = id;
-        self.zoomed = None;
-        self.navigation_memory.clear();
-        self.recalculate_sizes();
-        Ok(id)
-    }
-
     /// Fails when the tab already holds [`MAX_PANES_PER_TAB`] panes. Every
     /// way a pane is added asks this first.
     pub(crate) fn ensure_room_for_pane(&self) -> anyhow::Result<()> {
@@ -1616,7 +1593,8 @@ impl PaneManager {
         Ok(())
     }
 
-    /// Attach a detached owner beside an exact stable destination pane.
+    /// Attach a detached owner beside an exact stable destination pane,
+    /// under a new tab-local ID. No process or reader thread is recreated.
     pub(crate) fn attach_target(
         &mut self,
         mut pane: Pane,
@@ -2369,8 +2347,9 @@ mod tests {
             let child = source.get_pane(selected).unwrap().pty.child_id();
             let pane = source.detach_focused().unwrap();
             let attached = destination
-                .attach(
+                .attach_target(
                     pane,
+                    destination.focused_id(),
                     if state & 1 == 0 {
                         SplitDirection::Horizontal
                     } else {
@@ -2393,8 +2372,9 @@ mod tests {
             let child = destination.get_pane(selected).unwrap().pty.child_id();
             let pane = destination.detach_focused().unwrap();
             let attached = source
-                .attach(
+                .attach_target(
                     pane,
+                    source.focused_id(),
                     if state & 1 == 0 {
                         SplitDirection::Horizontal
                     } else {
@@ -2628,7 +2608,9 @@ mod tests {
         assert_eq!(source.pane_count(), 1);
 
         let mut destination = make();
-        let target = destination.attach(pane, SplitDirection::Vertical).unwrap();
+        let target = destination
+            .attach_target(pane, destination.focused_id(), SplitDirection::Vertical)
+            .unwrap();
         assert_eq!(destination.get_pane(target).unwrap().pty.child_id(), child);
         assert_eq!(destination.focused_id(), target);
         assert_eq!(destination.pane_count(), 2);
