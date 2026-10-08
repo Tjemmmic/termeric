@@ -430,7 +430,7 @@ impl App {
             // Actions are request-scoped, so input during the dialog's
             // close animation cannot target a replacement dialog.
             ModalLayer::Dialog => self.handle_dialog_key(key, event.repeat),
-            ModalLayer::DiffReview => self.handle_diff_review_key(key),
+            ModalLayer::DiffReview => self.handle_diff_review_key(key, event.repeat),
             ModalLayer::ContextPicker => self.handle_context_picker_key(key),
             ModalLayer::SproutMenu => {
                 if let Some(request_id) = self
@@ -581,12 +581,7 @@ impl App {
             }
             Some(ModalLayer::DiffReview) => {
                 if left && let Some(pos) = pos {
-                    let action = self.diff_review_layout().hit_test(
-                        pos.0 as f32,
-                        pos.1 as f32,
-                        self.diff_review.request_id(),
-                    );
-                    self.apply_diff_review_action(action);
+                    self.press_diff_review(pos.0 as f32, pos.1 as f32);
                     self.request_redraw(RedrawReason::PointerInput);
                 }
             }

@@ -206,6 +206,8 @@ pub struct DiffReviewInfo {
     pub scroll_offset: usize,
     pub horizontal_offset: usize,
     pub awaiting: bool,
+    /// The button with keyboard focus, which draws the focus ring.
+    pub focused_button: Option<crate::ui::diff_review::DiffReviewButton>,
     pub animation: f32,
     pub layout: crate::ui::diff_review::DiffReviewLayout,
     pub mouse_pos: Option<(f32, f32)>,

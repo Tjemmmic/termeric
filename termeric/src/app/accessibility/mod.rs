@@ -209,10 +209,7 @@ enum DialogSemanticTarget {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum DiffSemanticTarget {
     Content(u64),
-    Copy(u64),
-    Dismiss(u64),
-    Stage(u64),
-    Revert(u64),
+    Button(u64, crate::ui::diff_review::DiffReviewButton),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

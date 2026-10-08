@@ -26,7 +26,7 @@ impl Renderer {
         window_width: f32,
         window_height: f32,
     ) {
-        use crate::ui::diff_review::DiffReviewRow;
+        use crate::ui::diff_review::{DiffReviewButton, DiffReviewRow};
 
         let anim = info.animation;
         let cell_height = self.cell_height();
@@ -98,8 +98,6 @@ impl Renderer {
         }
 
         let (mouse_x, mouse_y) = info.mouse_pos.unwrap_or((-1.0, -1.0));
-        let copy_hovered = info.awaiting && layout.copy_button.contains(mouse_x, mouse_y);
-        let done_hovered = info.awaiting && layout.done_button.contains(mouse_x, mouse_y);
         self.draw_scrollbar(
             card_scrollbar_track(
                 layout.card,
@@ -112,50 +110,28 @@ impl Renderer {
             info.scroll_offset,
             anim,
         );
-        for (button, label) in [
-            (layout.stage_button, "Stage"),
-            (layout.revert_button, "Revert…"),
-        ] {
-            let Some(button) = button else {
+        for button in DiffReviewButton::row(layout.stage_button.is_some()) {
+            let Some(bounds) = layout.button(*button) else {
                 continue;
             };
-            let hovered = info.awaiting && button.contains(mouse_x, mouse_y);
+            let hovered = info.awaiting && bounds.contains(mouse_x, mouse_y);
             self.draw_button(
-                button,
-                label,
-                ButtonRole::Neutral,
+                bounds,
+                button.label(),
+                if *button == DiffReviewButton::Done {
+                    ButtonRole::Suggested
+                } else {
+                    ButtonRole::Neutral
+                },
                 ButtonState {
                     hovered,
                     pressed: hovered && info.mouse_pressed,
-                    ..ButtonState::default()
+                    focused: info.awaiting && info.focused_button == Some(*button),
+                    disabled: false,
                 },
                 anim,
             );
         }
-        self.draw_button(
-            layout.copy_button,
-            "Copy",
-            ButtonRole::Neutral,
-            ButtonState {
-                hovered: copy_hovered,
-                pressed: copy_hovered && info.mouse_pressed,
-                ..ButtonState::default()
-            },
-            anim,
-        );
-        // Enter and Escape both answer Done, so it shows the focus ring.
-        self.draw_button(
-            layout.done_button,
-            "Done",
-            ButtonRole::Suggested,
-            ButtonState {
-                hovered: done_hovered,
-                pressed: done_hovered && info.mouse_pressed,
-                focused: info.awaiting,
-                disabled: false,
-            },
-            anim,
-        );
     }
 
     /// Build the context picker overlay

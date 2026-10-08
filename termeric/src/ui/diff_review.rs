@@ -72,6 +72,62 @@ pub struct DiffReviewTarget {
     pub diff_id: u64,
 }
 
+/// The review's buttons. Every action is one of them; there are no letter
+/// keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DiffReviewButton {
+    /// Stage the reviewed agent change.
+    Stage,
+    /// Ask to put the reviewed file back as it was when the agent started.
+    Revert,
+    Copy,
+    /// Mark the diff reviewed and close; Escape answers it too.
+    Done,
+}
+
+impl DiffReviewButton {
+    /// Left to right as drawn, which is also the focus order.
+    const CHANGE_ROW: [Self; 4] = [Self::Stage, Self::Revert, Self::Copy, Self::Done];
+    const DIFF_ROW: [Self; 2] = [Self::Copy, Self::Done];
+
+    /// The buttons a review offers: Stage and Revert only for an agent's change.
+    pub fn row(change_actions: bool) -> &'static [Self] {
+        if change_actions {
+            &Self::CHANGE_ROW
+        } else {
+            &Self::DIFF_ROW
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Stage => "Stage",
+            Self::Revert => "Revert…",
+            Self::Copy => "Copy",
+            Self::Done => "Done",
+        }
+    }
+
+    /// What pressing it does for request `request_id`.
+    pub fn action(self, request_id: u64) -> DiffReviewAction {
+        match self {
+            Self::Stage => DiffReviewAction::Stage { request_id },
+            Self::Revert => DiffReviewAction::Revert { request_id },
+            Self::Copy => DiffReviewAction::Copy { request_id },
+            Self::Done => DiffReviewAction::Dismiss { request_id },
+        }
+    }
+}
+
+/// Where the review's keyboard focus is. Tab moves it between the buttons;
+/// the content takes it only from assistive technology, and the arrows
+/// scroll the content wherever focus is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffReviewFocus {
+    Content,
+    Button(DiffReviewButton),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiffReviewAction {
     Copy {
@@ -186,24 +242,25 @@ impl DiffReviewLayout {
         self.content.row(self.line_height, visible_index)
     }
 
-    pub fn hit_test(&self, x: f32, y: f32, request_id: u64) -> DiffReviewAction {
-        if self
-            .stage_button
-            .is_some_and(|button| button.contains(x, y))
-        {
-            DiffReviewAction::Stage { request_id }
-        } else if self
-            .revert_button
-            .is_some_and(|button| button.contains(x, y))
-        {
-            DiffReviewAction::Revert { request_id }
-        } else if self.copy_button.contains(x, y) {
-            DiffReviewAction::Copy { request_id }
-        } else if self.done_button.contains(x, y) {
-            DiffReviewAction::Dismiss { request_id }
-        } else {
-            DiffReviewAction::None
+    /// Where `button` is drawn, if this review offers it.
+    pub fn button(&self, button: DiffReviewButton) -> Option<Bounds> {
+        match button {
+            DiffReviewButton::Stage => self.stage_button,
+            DiffReviewButton::Revert => self.revert_button,
+            DiffReviewButton::Copy => Some(self.copy_button),
+            DiffReviewButton::Done => Some(self.done_button),
         }
+    }
+
+    /// The button under a point, if any.
+    pub fn button_at(&self, x: f32, y: f32) -> Option<DiffReviewButton> {
+        DiffReviewButton::row(self.stage_button.is_some())
+            .iter()
+            .copied()
+            .find(|&button| {
+                self.button(button)
+                    .is_some_and(|bounds| bounds.contains(x, y))
+            })
     }
 }
 
@@ -219,6 +276,7 @@ pub struct DiffReviewOverlay {
     change_text: String,
     request: RequestScope,
     viewport: TextViewport,
+    focus: DiffReviewFocus,
 }
 
 impl DiffReviewOverlay {
@@ -232,6 +290,7 @@ impl DiffReviewOverlay {
             change_text: String::new(),
             request: RequestScope::default(),
             viewport: TextViewport::default(),
+            focus: DiffReviewFocus::Button(DiffReviewButton::Done),
         }
     }
 
@@ -277,6 +336,9 @@ impl DiffReviewOverlay {
             .max()
             .unwrap_or(0);
         self.viewport.reset(self.rows.len(), widest);
+        // Nothing here is destructive (Revert asks first), so focus starts
+        // on the suggested Done.
+        self.focus = DiffReviewFocus::Button(DiffReviewButton::Done);
         self.animation.open();
         self.request.id()
     }
@@ -324,6 +386,56 @@ impl DiffReviewOverlay {
     /// Whether Stage and Revert are offered.
     pub fn has_change_actions(&self) -> bool {
         self.change.is_some()
+    }
+
+    /// The buttons this review offers, left to right.
+    pub fn buttons(&self) -> &'static [DiffReviewButton] {
+        DiffReviewButton::row(self.has_change_actions())
+    }
+
+    /// The focused button, if focus is on one.
+    pub fn focused_button(&self) -> Option<DiffReviewButton> {
+        match self.focus {
+            DiffReviewFocus::Button(button) => Some(button),
+            DiffReviewFocus::Content => None,
+        }
+    }
+
+    /// Focus is request-scoped and never activates anything by itself.
+    pub fn set_focus(&mut self, request_id: u64, focus: DiffReviewFocus) -> bool {
+        let offered = match focus {
+            DiffReviewFocus::Content => true,
+            DiffReviewFocus::Button(button) => self.buttons().contains(&button),
+        };
+        if !self.is_awaiting(request_id) || !offered {
+            return false;
+        }
+        self.focus = focus;
+        true
+    }
+
+    /// Move focus to the next button, or the previous one, wrapping around.
+    /// From the content, it goes to the first or last button.
+    pub fn cycle_focus(&mut self, request_id: u64, backwards: bool) -> bool {
+        let buttons = self.buttons();
+        let position = self
+            .focused_button()
+            .and_then(|button| buttons.iter().position(|&offered| offered == button));
+        let next = match (position, backwards) {
+            (Some(index), false) => (index + 1) % buttons.len(),
+            (Some(index), true) => (index + buttons.len() - 1) % buttons.len(),
+            (None, false) => 0,
+            (None, true) => buttons.len() - 1,
+        };
+        self.set_focus(request_id, DiffReviewFocus::Button(buttons[next]))
+    }
+
+    /// What Enter or Space does: press the focused button.
+    pub fn activate_focused(&self, request_id: u64) -> DiffReviewAction {
+        match self.focused_button() {
+            Some(button) if self.is_awaiting(request_id) => button.action(request_id),
+            _ => DiffReviewAction::None,
+        }
     }
 
     pub fn filename(&self) -> &str {
@@ -595,9 +707,76 @@ mod tests {
         assert!(layout.card.height < 500.0);
         assert!(layout.card.width < 900.0);
         assert_eq!(
-            layout.hit_test(layout.done_button.x + 1.0, layout.done_button.y + 1.0, 7),
-            DiffReviewAction::Dismiss { request_id: 7 }
+            layout.button_at(layout.done_button.x + 1.0, layout.done_button.y + 1.0),
+            Some(DiffReviewButton::Done)
         );
+        assert_eq!(layout.button_at(layout.content.x, layout.content.y), None);
+    }
+
+    #[test]
+    fn focus_starts_on_done_cycles_the_offered_buttons_and_is_request_scoped() {
+        use DiffReviewButton as B;
+        let mut overlay = DiffReviewOverlay::new();
+        let request = overlay.show(&fixture(1, 3, 10), 9, crate::panes::PaneId(0));
+        assert_eq!(overlay.focused_button(), Some(B::Done));
+        assert_eq!(
+            overlay.activate_focused(request),
+            DiffReviewAction::Dismiss {
+                request_id: request
+            }
+        );
+        assert!(overlay.cycle_focus(request, false));
+        assert_eq!(
+            overlay.focused_button(),
+            Some(B::Copy),
+            "wraps to the first"
+        );
+        assert!(overlay.cycle_focus(request, true));
+        assert!(overlay.cycle_focus(request, true));
+        assert_eq!(overlay.focused_button(), Some(B::Copy));
+        assert_eq!(
+            overlay.activate_focused(request),
+            DiffReviewAction::Copy {
+                request_id: request
+            }
+        );
+        assert!(
+            !overlay.set_focus(request, DiffReviewFocus::Button(B::Stage)),
+            "a detected diff offers no Stage"
+        );
+        assert!(overlay.set_focus(request, DiffReviewFocus::Content));
+        assert_eq!(overlay.activate_focused(request), DiffReviewAction::None);
+        assert!(overlay.cycle_focus(request, true));
+        assert_eq!(
+            overlay.focused_button(),
+            Some(B::Done),
+            "from the content, last"
+        );
+
+        let target = ChangeReviewTarget {
+            owner: ChangeOwner::Terminal(crate::tabs::TerminalIdentity {
+                tab_id: 1,
+                pane_id: crate::panes::PaneId(0),
+            }),
+            path: "src/lib.rs".into(),
+        };
+        let change = overlay.show_change("@@ -1 +1 @@\n-a\n+b\n", target);
+        assert_eq!(overlay.buttons(), [B::Stage, B::Revert, B::Copy, B::Done]);
+        assert_eq!(
+            overlay.focused_button(),
+            Some(B::Done),
+            "each review starts on Done"
+        );
+        let mut order = Vec::new();
+        for _ in 0..4 {
+            assert!(overlay.cycle_focus(change, false));
+            order.push(overlay.focused_button().unwrap());
+        }
+        assert_eq!(order, [B::Stage, B::Revert, B::Copy, B::Done]);
+        assert!(!overlay.cycle_focus(request, false), "an earlier review");
+        assert!(overlay.dismiss(change));
+        assert!(!overlay.cycle_focus(change, false));
+        assert_eq!(overlay.activate_focused(change), DiffReviewAction::None);
     }
 
     #[test]
@@ -658,16 +837,10 @@ mod tests {
         let last = layout.done_button;
         assert!(last.x + last.width <= layout.card.x + layout.card.width);
         let centre = |rect: Bounds| (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
-        let hit = |rect| {
-            let (x, y) = centre(rect);
-            layout.hit_test(x, y, 3)
-        };
-        assert_eq!(hit(stage), DiffReviewAction::Stage { request_id: 3 });
-        assert_eq!(hit(revert), DiffReviewAction::Revert { request_id: 3 });
-        assert_eq!(
-            hit(layout.copy_button),
-            DiffReviewAction::Copy { request_id: 3 }
-        );
+        for button in DiffReviewButton::row(true) {
+            let (x, y) = centre(layout.button(*button).unwrap());
+            assert_eq!(layout.button_at(x, y), Some(*button));
+        }
     }
 
     #[test]

@@ -475,7 +475,7 @@ impl App {
     }
 
     pub(super) fn handle_diff_accessibility_action(&mut self, request: ActionRequest) {
-        use crate::ui::diff_review::DiffReviewAction;
+        use crate::ui::diff_review::{DiffReviewAction, DiffReviewFocus};
 
         let Some(target) = self
             .accessibility
@@ -489,31 +489,26 @@ impl App {
             return;
         };
         let request_id = match target {
-            DiffSemanticTarget::Content(request_id)
-            | DiffSemanticTarget::Copy(request_id)
-            | DiffSemanticTarget::Dismiss(request_id)
-            | DiffSemanticTarget::Stage(request_id)
-            | DiffSemanticTarget::Revert(request_id) => request_id,
+            DiffSemanticTarget::Content(request_id) | DiffSemanticTarget::Button(request_id, _) => {
+                request_id
+            }
         };
         if !self.diff_review.is_awaiting(request_id) {
             return;
         }
         let action = match (request.action, target) {
-            (Action::Focus, _) => {
-                self.accessibility.focus_override = Some(request.target_node);
+            (Action::Focus, target) => {
+                let focus = match target {
+                    DiffSemanticTarget::Content(_) => DiffReviewFocus::Content,
+                    DiffSemanticTarget::Button(_, button) => DiffReviewFocus::Button(button),
+                };
+                if self.diff_review.set_focus(request_id, focus) {
+                    self.accessibility.focus_override = Some(request.target_node);
+                }
                 DiffReviewAction::None
             }
-            (Action::Click, DiffSemanticTarget::Copy(request_id)) => {
-                DiffReviewAction::Copy { request_id }
-            }
-            (Action::Click, DiffSemanticTarget::Dismiss(request_id)) => {
-                DiffReviewAction::Dismiss { request_id }
-            }
-            (Action::Click, DiffSemanticTarget::Stage(request_id)) => {
-                DiffReviewAction::Stage { request_id }
-            }
-            (Action::Click, DiffSemanticTarget::Revert(request_id)) => {
-                DiffReviewAction::Revert { request_id }
+            (Action::Click, DiffSemanticTarget::Button(request_id, button)) => {
+                button.action(request_id)
             }
             (Action::ScrollUp, DiffSemanticTarget::Content(request_id)) => {
                 DiffReviewAction::Scroll {
@@ -555,25 +550,17 @@ impl App {
         let total_rows = self.diff_review.rows().len();
 
         let content_target = DiffSemanticTarget::Content(request_id);
-        let copy_target = DiffSemanticTarget::Copy(request_id);
-        let dismiss_target = DiffSemanticTarget::Dismiss(request_id);
-        let change_actions = [
-            (DiffSemanticTarget::Stage(request_id), layout.stage_button),
-            (DiffSemanticTarget::Revert(request_id), layout.revert_button),
-        ];
-        let mut targets = HashSet::from([content_target, copy_target, dismiss_target]);
+        let buttons = self.diff_review.buttons();
+        let mut targets = HashSet::from([content_target]);
         targets.extend(
-            change_actions
+            buttons
                 .iter()
-                .filter(|(_, button)| button.is_some())
-                .map(|(target, _)| *target),
+                .map(|button| DiffSemanticTarget::Button(request_id, *button)),
         );
         self.accessibility
             .diff
             .retain(|target| targets.contains(target));
         let content_id = self.accessibility.diff.node(&content_target);
-        let copy_id = self.accessibility.diff.node(&copy_target);
-        let dismiss_id = self.accessibility.diff.node(&dismiss_target);
 
         let visible_rows: Vec<_> = self
             .diff_review
@@ -641,53 +628,44 @@ impl App {
         status.set_live(Live::Polite);
         nodes.push((DIFF_STATUS, status));
 
-        let mut change_ids = Vec::new();
-        for (target, button) in change_actions {
-            let Some(button) = button else {
+        let mut button_ids = Vec::with_capacity(buttons.len());
+        let mut focused_id = None;
+        for &button in buttons {
+            use crate::ui::diff_review::DiffReviewButton;
+            let Some(bounds) = layout.button(button) else {
                 continue;
             };
-            let (label, shortcut) = match target {
-                DiffSemanticTarget::Stage(_) => ("Stage this file", "S"),
-                _ => ("Revert this file to how it was when the agent started", "R"),
-            };
-            let id = self.accessibility.diff.node(&target);
-            let mut node = Node::new(Role::Button);
-            node.set_label(label);
-            node.set_keyboard_shortcut(shortcut);
-            node.set_bounds(bounds_rect(button));
+            let id = self
+                .accessibility
+                .diff
+                .node(&DiffSemanticTarget::Button(request_id, button));
+            let mut node = Node::new(if button == DiffReviewButton::Done {
+                Role::DefaultButton
+            } else {
+                Role::Button
+            });
+            node.set_label(match button {
+                DiffReviewButton::Stage => "Stage this file",
+                DiffReviewButton::Revert => "Revert this file to how it was when the agent started",
+                DiffReviewButton::Copy => "Copy complete raw diff",
+                DiffReviewButton::Done => "Mark this diff reviewed and close",
+            });
+            if button == DiffReviewButton::Done {
+                node.set_keyboard_shortcut("Escape");
+            }
+            node.set_bounds(bounds_rect(bounds));
             if awaiting {
                 node.add_action(Action::Click);
                 node.add_action(Action::Focus);
             } else {
                 node.set_disabled();
             }
+            if self.diff_review.focused_button() == Some(button) {
+                focused_id = Some(id);
+            }
             nodes.push((id, node));
-            change_ids.push(id);
+            button_ids.push(id);
         }
-
-        let mut copy = Node::new(Role::Button);
-        copy.set_label("Copy complete raw diff");
-        copy.set_keyboard_shortcut("C");
-        copy.set_bounds(bounds_rect(layout.copy_button));
-        if awaiting {
-            copy.add_action(Action::Click);
-            copy.add_action(Action::Focus);
-        } else {
-            copy.set_disabled();
-        }
-        nodes.push((copy_id, copy));
-
-        let mut dismiss = Node::new(Role::DefaultButton);
-        dismiss.set_label("Mark this diff reviewed and close");
-        dismiss.set_keyboard_shortcut("Enter or Escape");
-        dismiss.set_bounds(bounds_rect(layout.done_button));
-        if awaiting {
-            dismiss.add_action(Action::Click);
-            dismiss.add_action(Action::Focus);
-        } else {
-            dismiss.set_disabled();
-        }
-        nodes.push((dismiss_id, dismiss));
 
         let mut dialog = Node::new(Role::Dialog);
         dialog.set_label(title_text);
@@ -700,18 +678,16 @@ impl App {
         dialog.add_action(Action::Focus);
         dialog.set_bounds(bounds_rect(layout.card));
         let mut children = vec![DIFF_TITLE, content_id, DIFF_STATUS];
-        children.extend(change_ids);
-        children.extend([copy_id, dismiss_id]);
+        children.extend(button_ids);
         dialog.set_children(children);
         nodes.push((DIFF_DIALOG, dialog));
 
-        let focus = self.accessibility.modal_focus(
-            &nodes,
-            if awaiting { dismiss_id } else { DIFF_DIALOG },
-            |accessibility, node| {
-                accessibility.is_diff_node(node) && (awaiting || node == DIFF_DIALOG)
-            },
-        );
+        // Assistive focus follows the review's own focus.
+        let focus = if awaiting {
+            focused_id.unwrap_or(content_id)
+        } else {
+            DIFF_DIALOG
+        };
         self.accessibility.focus_override = Some(focus);
         ModalSnapshot {
             dialog: DIFF_DIALOG,

@@ -3896,13 +3896,19 @@ fn diff_review_is_one_scrollable_modal_tree_with_shared_geometry() {
         .accessibility
         .diff
         .nodes
-        .get(&DiffSemanticTarget::Copy(request))
+        .get(&DiffSemanticTarget::Button(
+            request,
+            crate::ui::diff_review::DiffReviewButton::Copy,
+        ))
         .unwrap();
     let dismiss = *app
         .accessibility
         .diff
         .nodes
-        .get(&DiffSemanticTarget::Dismiss(request))
+        .get(&DiffSemanticTarget::Button(
+            request,
+            crate::ui::diff_review::DiffReviewButton::Done,
+        ))
         .unwrap();
 
     assert_eq!(node(ROOT).children(), &[DIFF_DIALOG]);
@@ -3944,7 +3950,10 @@ fn diff_review_rejects_retired_and_background_semantic_actions() {
         .accessibility
         .diff
         .nodes
-        .get(&DiffSemanticTarget::Dismiss(stale_request))
+        .get(&DiffSemanticTarget::Button(
+            stale_request,
+            crate::ui::diff_review::DiffReviewButton::Done,
+        ))
         .unwrap();
 
     let current = show_diff_fixture(&mut app, 52);
@@ -3967,6 +3976,52 @@ fn diff_review_rejects_retired_and_background_semantic_actions() {
 }
 
 #[test]
+fn diff_review_assistive_focus_follows_its_buttons_both_ways() {
+    use crate::ui::diff_review::DiffReviewButton;
+    use winit::keyboard::{Key, NamedKey};
+
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.diff_review.set_reduced_motion(true);
+    let request = show_diff_fixture(&mut app, 71);
+    let node = |app: &App, button| {
+        *app.accessibility
+            .diff
+            .nodes
+            .get(&DiffSemanticTarget::Button(request, button))
+            .unwrap()
+    };
+    let snapshot = app.accessibility_snapshot();
+    assert_eq!(snapshot.focus, node(&app, DiffReviewButton::Done));
+    let copy = snapshot
+        .nodes
+        .iter()
+        .find(|(id, _)| *id == node(&app, DiffReviewButton::Copy))
+        .unwrap();
+    assert_eq!(copy.1.keyboard_shortcut(), None, "no letter key");
+
+    app.handle_diff_review_key(&Key::Named(NamedKey::Tab), false);
+    assert_eq!(
+        app.accessibility_snapshot().focus,
+        node(&app, DiffReviewButton::Copy)
+    );
+
+    app.handle_accessibility_action(ActionRequest {
+        action: Action::Focus,
+        target_tree: TreeId::ROOT,
+        target_node: node(&app, DiffReviewButton::Done),
+        data: None,
+    });
+    assert_eq!(
+        app.diff_review.focused_button(),
+        Some(DiffReviewButton::Done)
+    );
+    assert_eq!(
+        app.accessibility_snapshot().focus,
+        node(&app, DiffReviewButton::Done)
+    );
+}
+
+#[test]
 fn diff_review_dismiss_revokes_actions_during_its_exit_animation() {
     let mut app = App::new_headless(Config::default()).unwrap();
     let request = show_diff_fixture(&mut app, 61);
@@ -3975,7 +4030,10 @@ fn diff_review_dismiss_revokes_actions_during_its_exit_animation() {
         .accessibility
         .diff
         .nodes
-        .get(&DiffSemanticTarget::Dismiss(request))
+        .get(&DiffSemanticTarget::Button(
+            request,
+            crate::ui::diff_review::DiffReviewButton::Done,
+        ))
         .unwrap();
     app.handle_accessibility_action(ActionRequest {
         action: Action::Click,

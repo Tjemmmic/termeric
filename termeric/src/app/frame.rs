@@ -187,6 +187,7 @@ impl App {
             scroll_offset: self.diff_review.viewport().row(),
             horizontal_offset: self.diff_review.viewport().column(),
             awaiting: self.diff_review.is_awaiting_current(),
+            focused_button: self.diff_review.focused_button(),
             animation: self.diff_review.animation(),
             layout,
             mouse_pos: self.last_cursor_pos.map(|(x, y)| (x as f32, y as f32)),
