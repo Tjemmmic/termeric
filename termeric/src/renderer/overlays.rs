@@ -545,6 +545,7 @@ mod tests {
             let diff = DiffReviewLayout::calculate(
                 2_000.0 * scale,
                 1_200.0 * scale,
+                scale,
                 cell_width,
                 cell_height,
                 1.0,
@@ -556,6 +557,7 @@ mod tests {
             let picker = ContextPickerLayout::calculate(
                 2_000.0 * scale,
                 1_200.0 * scale,
+                scale,
                 cell_width,
                 cell_height,
                 1.0,

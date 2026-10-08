@@ -2,7 +2,7 @@
 //! a terminal's output, or one file an agent changed, which can also be
 //! staged or reverted from here.
 
-use super::animation::OverlayAnimation;
+use super::animation::{OverlayAnimation, card_open_slide};
 use super::constants::CONTENT_CHAR_SCALE;
 use super::request_scope::RequestScope;
 use crate::terminal::diff_detector::{DetectedDiff, DiffLine};
@@ -283,10 +283,12 @@ impl DiffReviewLayout {
     /// naming `filename` and above the button row. It is wide enough for
     /// the title and for 50 to 100 columns of diff where the window allows,
     /// and never narrower than 500 pixels; `animation` slides it down into
-    /// place as it opens.
+    /// place as it opens, by a distance `scale` (logical to physical pixels)
+    /// sizes for the display.
     pub fn calculate(
         window_width: f32,
         window_height: f32,
+        scale: f32,
         cell_width: f32,
         cell_height: f32,
         animation: f32,
@@ -322,10 +324,10 @@ impl DiffReviewLayout {
         let rows_that_fit = ((content_budget / line_height).floor() as usize).max(1);
         let content_height = (total_rows.max(1).min(rows_that_fit) as f32 * line_height).round();
         let card_height = fixed_height + content_height;
-        let slide = ((1.0 - animation) * -20.0).round();
+        let slide = card_open_slide(animation, scale);
         let card = Bounds::new(
             ((window_width - card_width) / 2.0).round(),
-            ((window_height - card_height) / 2.0).round() + slide,
+            ((window_height - card_height) / 2.0).round() - slide,
             card_width,
             card_height,
         );
@@ -760,12 +762,21 @@ fn push_bounded_row(rows: &mut Vec<DiffReviewRow>, row: DiffReviewRow) -> bool {
 mod tests {
     #[test]
     fn explicit_animation_phases_translate_content_and_controls_together() {
+        for scale in [1.0, 1.5, 2.0] {
+            check_animation_phases_at(scale);
+        }
+    }
+
+    /// The card, its content, and its buttons slide together, by 20 logical
+    /// pixels at `scale` when closed.
+    fn check_animation_phases_at(scale: f32) {
         let calculate = |phase| {
             super::DiffReviewLayout::calculate(
-                900.0,
-                500.0,
-                10.0,
-                20.0,
+                900.0 * scale,
+                500.0 * scale,
+                scale,
+                10.0 * scale,
+                20.0 * scale,
                 phase,
                 "fixture.rs",
                 40,
@@ -774,9 +785,10 @@ mod tests {
             )
         };
         let settled = calculate(1.0);
+        assert_eq!(calculate(0.0).card.y, settled.card.y - 20.0 * scale);
         for phase in [0.0, 0.125, 0.5, 0.875, 1.0, 0.875, 0.5, 0.125, 0.0] {
             let layout = calculate(phase);
-            let translation = ((1.0 - phase) * -20.0_f32).round();
+            let translation = -((1.0 - phase) * (20.0 * scale).round()).round();
             assert_eq!(layout.rows_that_fit, settled.rows_that_fit);
             assert_eq!(layout.columns_that_fit, settled.columns_that_fit);
             for (actual, expected) in [
@@ -848,6 +860,7 @@ mod tests {
         let open = DiffReviewLayout::calculate(
             300.0,
             200.0,
+            1.0,
             10.0,
             20.0,
             1.0,
@@ -864,6 +877,7 @@ mod tests {
         let opening = DiffReviewLayout::calculate(
             300.0,
             200.0,
+            1.0,
             10.0,
             20.0,
             0.5,
@@ -886,6 +900,7 @@ mod tests {
                     let layout = DiffReviewLayout::calculate(
                         901.0,
                         501.0,
+                        1.0,
                         cell_width,
                         cell_height,
                         phase,
@@ -924,6 +939,7 @@ mod tests {
                 let layout = DiffReviewLayout::calculate(
                     1_600.0,
                     1_000.0,
+                    1.0,
                     cell_width,
                     cell_height,
                     1.0,
@@ -943,8 +959,18 @@ mod tests {
     #[test]
     fn rows_tile_the_content() {
         // 19.5-pixel cells give lines 29.25 pixels tall.
-        let layout =
-            DiffReviewLayout::calculate(901.0, 501.0, 9.6, 19.5, 0.37, "fixture.rs", 40, 80, false);
+        let layout = DiffReviewLayout::calculate(
+            901.0,
+            501.0,
+            1.0,
+            9.6,
+            19.5,
+            0.37,
+            "fixture.rs",
+            40,
+            80,
+            false,
+        );
         assert_ne!(layout.line_height.fract(), 0.0);
         assert_eq!(layout.row(0).y, layout.content.y);
         for index in 0..layout.rows_that_fit {
@@ -964,6 +990,7 @@ mod tests {
         let layout = DiffReviewLayout::calculate(
             900.0,
             500.0,
+            1.0,
             10.0,
             20.0,
             1.0,
@@ -1092,8 +1119,18 @@ mod tests {
 
     #[test]
     fn change_reviews_add_stage_and_revert_inside_the_card() {
-        let layout =
-            DiffReviewLayout::calculate(900.0, 500.0, 10.0, 20.0, 1.0, "src/lib.rs", 10, 40, true);
+        let layout = DiffReviewLayout::calculate(
+            900.0,
+            500.0,
+            1.0,
+            10.0,
+            20.0,
+            1.0,
+            "src/lib.rs",
+            10,
+            40,
+            true,
+        );
         let stage = layout.stage_button.unwrap();
         let revert = layout.revert_button.unwrap();
         let buttons = [stage, revert, layout.copy_button, layout.done_button];

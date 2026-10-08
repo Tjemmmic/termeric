@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use super::animation::OverlayAnimation;
+use super::animation::{OverlayAnimation, card_open_slide};
 use super::constants::CONTENT_CHAR_SCALE;
 use super::request_scope::RequestScope;
 use super::text_input::{TextInput, TextInputEdit, TextLimit};
@@ -226,10 +226,12 @@ pub struct ContextPickerLayout {
 impl ContextPickerLayout {
     /// Lay out the centred card: a title, the phase's rows, the button row,
     /// and the status line under it. `animation` slides it down into place
-    /// as it opens.
+    /// as it opens, by a distance `scale` (logical to physical pixels) sizes
+    /// for the display.
     pub fn calculate(
         window_width: f32,
         window_height: f32,
+        scale: f32,
         cell_width: f32,
         cell_height: f32,
         animation: f32,
@@ -264,10 +266,10 @@ impl ContextPickerLayout {
         let visible_count = desired_rows.min(rows_that_fit);
         let content_height = (visible_count as f32 * row_height).round();
         let card_height = fixed_height + content_height;
-        let slide = ((1.0 - animation) * -20.0).round();
+        let slide = card_open_slide(animation, scale);
         let card = Bounds::new(
             ((window_width - card_width) / 2.0).round(),
-            ((window_height - card_height) / 2.0).round() + slide,
+            ((window_height - card_height) / 2.0).round() - slide,
             card_width,
             card_height,
         );
@@ -1023,6 +1025,7 @@ mod tests {
         let layout = ContextPickerLayout::calculate(
             900.0,
             300.0,
+            1.0,
             10.0,
             20.0,
             1.0,
@@ -1074,7 +1077,8 @@ mod tests {
             ContextPickerPhase::FilePaths,
             ContextPickerPhase::Gathering,
         ] {
-            let layout = ContextPickerLayout::calculate(900.0, 600.0, 10.0, 20.0, 1.0, phase, 6);
+            let layout =
+                ContextPickerLayout::calculate(900.0, 600.0, 1.0, 10.0, 20.0, 1.0, phase, 6);
             let buttons: Vec<_> = ContextPickerButton::row(phase)
                 .iter()
                 .map(|button| layout.button(*button).unwrap())
@@ -1276,6 +1280,7 @@ mod tests {
             let layout = ContextPickerLayout::calculate(
                 window_width,
                 window_height,
+                1.0,
                 10.0,
                 20.0,
                 1.0,
@@ -1303,6 +1308,7 @@ mod tests {
                     let layout = ContextPickerLayout::calculate(
                         901.0,
                         701.0,
+                        1.0,
                         cell_width,
                         cell_height,
                         animation,
@@ -1344,6 +1350,7 @@ mod tests {
             let layout = ContextPickerLayout::calculate(
                 901.0,
                 701.0,
+                1.0,
                 cell_width,
                 cell_height,
                 1.0,
@@ -1368,12 +1375,40 @@ mod tests {
     }
 
     #[test]
+    fn the_card_slides_open_by_a_distance_that_scales_with_the_display() {
+        for scale in [1.0, 1.5, 2.0] {
+            let at = |animation| {
+                ContextPickerLayout::calculate(
+                    900.0 * scale,
+                    700.0 * scale,
+                    scale,
+                    10.0 * scale,
+                    20.0 * scale,
+                    animation,
+                    ContextPickerPhase::Sources,
+                    MAX_CONTEXT_SOURCES,
+                )
+            };
+            let open = at(1.0);
+            assert_eq!(at(0.0).card.y, open.card.y - 20.0 * scale);
+            let halfway = at(0.5);
+            assert_eq!(halfway.card.y, open.card.y - 10.0 * scale);
+            assert_eq!(
+                halfway.primary_button.y - halfway.card.y,
+                open.primary_button.y - open.card.y,
+                "everything slides with the card"
+            );
+        }
+    }
+
+    #[test]
     fn source_rows_answer_exactly_where_they_are_drawn() {
         // 19.5-pixel cells give rows 42.9 pixels tall.
         for phase in [1.0, 0.875, 0.5, 0.125, 0.0] {
             let layout = ContextPickerLayout::calculate(
                 900.0,
                 300.0,
+                1.0,
                 10.0,
                 19.5,
                 phase,

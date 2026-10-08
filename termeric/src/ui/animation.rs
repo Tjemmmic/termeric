@@ -6,6 +6,8 @@
 
 use std::time::Instant;
 
+use super::constants::CARD_OPEN_SLIDE;
+
 /// Default duration for overlay open/close animations (seconds).
 pub const DEFAULT_OVERLAY_DURATION: f32 = 0.15;
 
@@ -18,6 +20,13 @@ const ANIM_EPSILON: f32 = 0.001;
 /// Ease-out cubic: fast start, decelerating finish.
 pub fn ease_out_cubic(t: f32) -> f32 {
     1.0 - (1.0 - t).powi(3)
+}
+
+/// How far above its place a card still is at `progress` (0 closed, 1 open)
+/// of sliding open: [`CARD_OPEN_SLIDE`] logical pixels at display `scale`
+/// when closed, on whole physical pixels throughout.
+pub fn card_open_slide(progress: f32, scale: f32) -> f32 {
+    ((1.0 - progress.clamp(0.0, 1.0)) * (CARD_OPEN_SLIDE * scale).round()).round()
 }
 
 // ── OverlayAnimation ──────────────────────────────────────────────────
@@ -353,6 +362,26 @@ mod tests {
         assert!((ease_out_cubic(1.0) - 1.0).abs() < f32::EPSILON);
         // Mid-point should be > 0.5 (fast start, slow finish)
         assert!(ease_out_cubic(0.5) > 0.5);
+    }
+
+    #[test]
+    fn a_card_slides_its_logical_distance_at_every_scale_on_whole_pixels() {
+        for (scale, closed) in [(1.0, 20.0), (1.25, 25.0), (1.5, 30.0), (2.0, 40.0)] {
+            assert_eq!(card_open_slide(0.0, scale), closed);
+            assert_eq!(card_open_slide(1.0, scale), 0.0);
+            for progress in [0.13, 0.5, 0.875] {
+                let slide = card_open_slide(progress, scale);
+                assert_eq!(slide.fract(), 0.0, "{scale} at {progress}");
+                assert!((0.0..=closed).contains(&slide));
+            }
+        }
+        assert_eq!(card_open_slide(0.5, 2.0), 20.0);
+
+        // With reduced motion a card opens in place.
+        let mut overlay = OverlayAnimation::new();
+        overlay.set_reduced_motion(true);
+        overlay.open();
+        assert_eq!(card_open_slide(overlay.eased(), 2.0), 0.0);
     }
 
     #[test]

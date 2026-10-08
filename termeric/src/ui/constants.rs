@@ -30,5 +30,9 @@ pub const FILTER_TEXT_INSET_CELLS: f32 = 2.6;
 /// so a long query stops short of the rounded corner instead of touching it.
 pub const FILTER_TEXT_END_INSET_CELLS: f32 = 0.8;
 
+/// How far above its place a card starts as it opens, in logical pixels:
+/// diff review and the context picker.
+pub const CARD_OPEN_SLIDE: f32 = 20.0;
+
 /// Character scale factor for content text in overlays (relative to cell_width).
 pub const CONTENT_CHAR_SCALE: f32 = 0.85;

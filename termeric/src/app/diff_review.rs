@@ -40,9 +40,14 @@ impl App {
     /// accessibility.
     pub(super) fn diff_review_layout(&self) -> crate::ui::diff_review::DiffReviewLayout {
         let metrics = self.ui_metrics();
+        let scale = self
+            .renderer
+            .as_ref()
+            .map_or(1.0, |renderer| renderer.scale_factor());
         crate::ui::diff_review::DiffReviewLayout::calculate(
             metrics.width,
             metrics.height,
+            scale,
             metrics.cell_width,
             metrics.cell_height,
             self.diff_review.animation(),
