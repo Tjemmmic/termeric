@@ -263,8 +263,11 @@ impl App {
 
             WindowEvent::CursorMoved { position, .. } => {
                 self.last_cursor_pos = Some((position.x, position.y));
-                // Redraw for hover effects on overlays
-                if self.info_overlay.is_active() || self.diff_review.is_active() {
+                // The cards that draw hover from the pointer redraw as it moves.
+                if self.info_overlay.is_active()
+                    || self.diff_review.is_active()
+                    || self.context_picker.is_active()
+                {
                     self.request_redraw(RedrawReason::PointerInput);
                 }
                 self.handle_mouse_move((position.x, position.y));
