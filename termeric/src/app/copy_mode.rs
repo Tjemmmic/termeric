@@ -157,7 +157,7 @@ impl App {
             terminal,
             patterns,
             HintAction::Open,
-            crate::tabs::presentation_working_directory(terminal),
+            crate::terminal::process::presentation_working_directory(terminal),
             entered_copy_mode,
         );
         let count = copy_mode

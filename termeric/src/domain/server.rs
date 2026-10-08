@@ -2403,8 +2403,7 @@ impl PaneRuntime {
     /// Where the pane's program works: what its shell last reported, else
     /// the child's current directory, else the directory it was started in.
     fn working_directory(&self) -> Option<String> {
-        crate::tabs::terminal_working_directory(&self.terminal)
-            .or_else(|| self.pty.child_id().and_then(crate::tabs::get_process_cwd))
+        crate::terminal::process::working_directory(&self.terminal, &self.pty)
             .or_else(|| self.requested_cwd.clone())
     }
 

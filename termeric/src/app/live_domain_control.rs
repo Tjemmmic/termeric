@@ -379,7 +379,7 @@ impl App {
         let terminal = self.active_terminal();
         let working_directory = terminal
             .filter(|_| inherit_visible_cwd)
-            .and_then(crate::tabs::terminal_working_directory);
+            .and_then(crate::terminal::process::terminal_working_directory);
         self.live_domain_spawn_spec_sized_like(terminal, working_directory)
     }
 

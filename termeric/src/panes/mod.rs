@@ -124,6 +124,12 @@ impl Pane {
             || self.terminal.prompt_tracker().prompt_marks_seen()
     }
 
+    /// Where this pane's program works: the directory its shell last
+    /// reported for this machine, else its child's current directory.
+    pub(crate) fn working_directory(&self) -> Option<String> {
+        crate::terminal::process::working_directory(&self.terminal, &self.pty)
+    }
+
     /// The profile of a pane launched from a plugin or agent profile.
     #[cfg(test)]
     pub(crate) fn launch_profile(&self) -> Option<&str> {
@@ -385,7 +391,7 @@ impl Pane {
             && let Some(command) = self
                 .pty
                 .child_id()
-                .and_then(crate::tabs::get_foreground_process)
+                .and_then(crate::terminal::process::get_foreground_process)
         {
             self.last_command = Some(command);
         }
@@ -969,8 +975,7 @@ impl PaneManager {
             .panes
             .values()
             .map(|pane| {
-                let working_directory = crate::tabs::terminal_working_directory(&pane.terminal)
-                    .or_else(|| pane.pty.child_id().and_then(crate::tabs::get_process_cwd));
+                let working_directory = pane.working_directory();
                 crate::workspace::WorkspacePaneSnapshot {
                     id: pane.id.0,
                     launch: pane.launch.clone(),
@@ -983,7 +988,7 @@ impl PaneManager {
                     last_command: pane
                         .pty
                         .child_id()
-                        .and_then(crate::tabs::get_foreground_process)
+                        .and_then(crate::terminal::process::get_foreground_process)
                         .or_else(|| pane.last_command.clone()),
                     scrollback_file: None,
                     scrollback_truncated: false,
@@ -1090,12 +1095,7 @@ impl PaneManager {
         let geometry = self
             .split_geometry(self.focused, direction)
             .expect("validated focused split target");
-        let pane_cwd = |id: PaneId| {
-            self.panes.get(&id).and_then(|pane| {
-                crate::tabs::terminal_working_directory(&pane.terminal)
-                    .or_else(|| pane.pty.child_id().and_then(crate::tabs::get_process_cwd))
-            })
-        };
+        let pane_cwd = |id: PaneId| self.panes.get(&id).and_then(Pane::working_directory);
         let working_dir = self
             .cwd_mode
             .resolve(|| pane_cwd(self.focused), || pane_cwd(self.primary_id()));
@@ -2745,7 +2745,7 @@ mod tests {
                     .unwrap()
                     .pty
                     .child_id()
-                    .and_then(crate::tabs::get_process_cwd);
+                    .and_then(crate::terminal::process::get_process_cwd);
                 if cwd.as_deref() == expected.to_str() {
                     break;
                 }

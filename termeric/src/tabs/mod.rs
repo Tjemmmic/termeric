@@ -10,10 +10,6 @@ mod title;
 
 pub use tab::{CommandLaunch, SavedSnapshot, Tab, TabType};
 pub(crate) use tab::{LiveDomainTab, TabAgentView};
-pub(crate) use title::{
-    get_foreground_process, get_process_cwd, presentation_working_directory,
-    terminal_working_directory,
-};
 
 use crate::config::ShellConfig;
 use crate::panes::{PaneId, usable_workspace_cwd};

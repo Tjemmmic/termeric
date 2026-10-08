@@ -888,13 +888,13 @@ fn a_closed_split_tab_keeps_every_pane_and_is_named_for_the_focused_one() {
             .unwrap()
             .pty
             .child_id()
-            .and_then(crate::tabs::get_process_cwd);
+            .and_then(crate::terminal::process::get_process_cwd);
         let right_cwd = panes
             .get_pane(right_id)
             .unwrap()
             .pty
             .child_id()
-            .and_then(crate::tabs::get_process_cwd);
+            .and_then(crate::terminal::process::get_process_cwd);
         if left_cwd.as_deref() == left_dir.to_str() && right_cwd.as_deref() == right_dir.to_str() {
             break;
         }

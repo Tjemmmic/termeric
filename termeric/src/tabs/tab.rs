@@ -19,10 +19,8 @@ use termeric_core::Terminal;
 use termeric_core::pty::PtyEvent;
 use termeric_core::pty::PtyHandle;
 
-use super::title::{
-    abbreviate_path, dir_name_from_path, get_process_cwd, terminal_reported_directory_path,
-    terminal_working_directory,
-};
+use super::title::{abbreviate_path, dir_name_from_path, terminal_reported_directory_path};
+use crate::terminal::process::get_process_cwd;
 
 /// A closed tab's saved snapshot.
 #[derive(Debug, Clone)]
@@ -484,18 +482,16 @@ impl Tab {
         if matches!(self.tab_type, TabType::Serial { .. }) {
             return None;
         }
-        let pane = self.focused_pane()?;
-        terminal_working_directory(&pane.terminal)
-            .or_else(|| pane.pty.child_id().and_then(get_process_cwd))
+        self.focused_pane()?.working_directory()
     }
 
     pub(crate) fn pane_working_directory(&self, pane_id: PaneId) -> Option<String> {
         if self.closed || self.is_closing() || matches!(self.tab_type, TabType::Serial { .. }) {
             return None;
         }
-        let pane = self.pane(pane_id).filter(|pane| !pane.closed)?;
-        terminal_working_directory(&pane.terminal)
-            .or_else(|| pane.pty.child_id().and_then(get_process_cwd))
+        self.pane(pane_id)
+            .filter(|pane| !pane.closed)?
+            .working_directory()
     }
 
     /// Have this tab's splits launch `shell`, and record it as the launch

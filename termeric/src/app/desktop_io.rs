@@ -153,7 +153,7 @@ impl App {
         self.tabs
             .as_ref()?
             .terminal_for_origin(origin)
-            .and_then(crate::tabs::presentation_working_directory)
+            .and_then(crate::terminal::process::presentation_working_directory)
     }
 
     /// Opens a hyperlink on behalf of its terminal and reports a refusal or
