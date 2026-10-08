@@ -41,8 +41,12 @@ impl Renderer {
             anim,
             info.entries.len(),
         );
-        let (panel_x, panel_y) = (layout.panel_x.round(), layout.panel_y.round());
-        let (panel_width, panel_height) = (layout.panel_width.round(), layout.panel_height.round());
+        let Bounds {
+            x: panel_x,
+            y: panel_y,
+            width: panel_width,
+            height: panel_height,
+        } = layout.panel;
         self.build_modal_frame(panel_x, panel_y, panel_width, panel_height, anim);
         let line = self.px(1.0);
         let size = self.ui_label_px();

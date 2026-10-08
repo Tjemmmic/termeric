@@ -42,10 +42,8 @@ const FONT_FALLBACK_LABELS: [&str; crate::config::MAX_FONT_FALLBACKS] = [
 pub struct SettingsModalLayout {
     /// The filter field in the header.
     pub input: Bounds,
-    pub panel_x: f32,
-    pub panel_y: f32,
-    pub panel_width: f32,
-    pub panel_height: f32,
+    /// The dialog, on whole pixels.
+    pub panel: Bounds,
     pub padding: f32,
     pub header_height: f32,
     pub close_button: Bounds,
@@ -117,8 +115,18 @@ impl SettingsModalLayout {
         let panel_height = (window_height * 0.82)
             .clamp(320.0, 640.0)
             .min((window_height - cell_height * 2.0).max(0.0));
-        let panel_x = (window_width - panel_width) / 2.0;
-        let panel_y = (window_height - panel_height) * 0.4 + (1.0 - animation) * -30.0;
+        let panel = Bounds::new(
+            ((window_width - panel_width) / 2.0).round(),
+            ((window_height - panel_height) * 0.4 + (1.0 - animation) * -30.0).round(),
+            panel_width.round(),
+            panel_height.round(),
+        );
+        let Bounds {
+            x: panel_x,
+            y: panel_y,
+            width: panel_width,
+            height: panel_height,
+        } = panel;
         let padding = cell_width * 1.5;
         let control = cell_height * 1.5;
 
@@ -160,10 +168,7 @@ impl SettingsModalLayout {
 
         Self {
             input,
-            panel_x,
-            panel_y,
-            panel_width,
-            panel_height,
+            panel,
             padding,
             header_height,
             close_button,
@@ -192,13 +197,7 @@ impl SettingsModalLayout {
     }
 
     pub fn contains(&self, x: f32, y: f32) -> bool {
-        Bounds::new(
-            self.panel_x,
-            self.panel_y,
-            self.panel_width,
-            self.panel_height,
-        )
-        .contains(x, y)
+        self.panel.contains(x, y)
     }
 
     /// Sidebar row for the `index`th page.
@@ -233,10 +232,8 @@ impl SettingsModalLayout {
     /// Map a point to a 0-based row within the visible window, if any.
     pub fn visible_row_at(&self, x: f32, y: f32) -> Option<usize> {
         let first = self.row_rect(0);
-        if x < first.x || x > first.x + first.width {
-            return None;
-        }
-        if y < self.list_y || y >= self.list_y + self.list_height {
+        let rows = Bounds::new(first.x, self.list_y, first.width, self.list_height);
+        if !rows.contains(x, y) {
             return None;
         }
         let row = ((y - self.list_y) / self.row_height) as usize;
@@ -3722,6 +3719,24 @@ mod tests {
                 action: SettingsAction::OpenKeyboardShortcuts
             }
         ));
+    }
+
+    #[test]
+    fn rows_are_hit_from_their_left_and_top_edges_but_not_their_right_or_bottom() {
+        let layout = SettingsModalLayout::calculate(1001.0, 801.0, 10.0, 20.0, 1.0, 3);
+        let row = layout.row_rect(0);
+        assert_eq!(layout.visible_row_at(row.x, row.y), Some(0));
+        assert_eq!(layout.visible_row_at(row.right() - 0.5, row.y), Some(0));
+        assert_eq!(layout.visible_row_at(row.right(), row.y), None);
+        let last = layout.row_rect(2);
+        assert_eq!(layout.visible_row_at(last.x, last.bottom() - 0.5), Some(2));
+        assert_eq!(layout.visible_row_at(last.x, last.bottom()), None);
+        // The dialog lands on whole pixels, as the renderer draws it.
+        let panel = layout.panel;
+        assert_eq!(
+            [panel.x, panel.y, panel.width, panel.height].map(f32::fract),
+            [0.0; 4]
+        );
     }
 
     #[test]

@@ -1401,8 +1401,8 @@ fn settings_is_one_modal_tree_with_typed_controls_and_shared_geometry() {
     // Size is the Font page's first row, in the content column.
     let row = layout.row_rect(0);
     let expected = rect(
-        dialog.x0 as f32 + (row.x - layout.panel_x),
-        dialog.y0 as f32 + (row.y - layout.panel_y),
+        dialog.x0 as f32 + (row.x - layout.panel.x),
+        dialog.y0 as f32 + (row.y - layout.panel.y),
         row.width,
         row.height,
     );

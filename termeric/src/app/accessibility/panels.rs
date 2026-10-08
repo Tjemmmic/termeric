@@ -473,12 +473,7 @@ impl App {
         let mut dialog = Node::new(Role::Dialog);
         dialog.set_label("Settings");
         dialog.set_modal();
-        dialog.set_bounds(rect(
-            layout.panel_x,
-            layout.panel_y,
-            layout.panel_width,
-            layout.panel_height,
-        ));
+        dialog.set_bounds(bounds_rect(layout.panel));
         dialog.set_children(dialog_children);
         nodes.push((SETTINGS_DIALOG, dialog));
 
