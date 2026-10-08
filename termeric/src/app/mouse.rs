@@ -359,77 +359,83 @@ impl App {
                             }
                         }
 
-                        // If commands panel is open, intercept all clicks
-                        if self.modal_layer_on_top(ModalLayer::CommandsPanel) {
-                            let window_size = self.window.as_ref().map(|w| w.inner_size());
-                            if let Some(size) = window_size {
-                                let info = self.commands_panel.build_info(&self.config.commands);
-                                let action = renderer.commands_panel_hit_test(
-                                    px,
-                                    py,
-                                    &info,
-                                    size.width as f32,
-                                    size.height as f32,
-                                );
-                                self.apply_commands_panel_action(action);
-                                self.request_redraw(RedrawReason::PointerInput);
+                        // The panel layer on top owns every click, inside it
+                        // or beside it (which dismisses it), before the tab
+                        // bar or find box beneath its scrim can take it.
+                        let window_size = self.window.as_ref().map(|w| w.inner_size());
+                        match self.top_modal_layer() {
+                            Some(ModalLayer::Settings) => {
+                                if let Some(size) = window_size {
+                                    let action = self.settings_panel.handle_click(
+                                        px,
+                                        py,
+                                        &self.config,
+                                        &self.shortcut_registry,
+                                        size.width as f32,
+                                        size.height as f32,
+                                        cell_width,
+                                        cell_height,
+                                    );
+                                    self.apply_settings_action(action);
+                                    self.request_redraw(RedrawReason::PointerInput);
+                                    return;
+                                }
+                            }
+                            Some(ModalLayer::WorkspaceMenu) => {
+                                self.click_workspace_menu(px, py);
                                 return;
                             }
-                        }
-
-                        // The agents panel owns every click while open,
-                        // including the one beside it that closes it.
-                        if self.modal_layer_on_top(ModalLayer::AgentsPanel) {
-                            self.handle_agents_panel_click(px, py);
-                            return;
-                        }
-
-                        // If session management panel is open, intercept all clicks
-                        if self.modal_layer_on_top(ModalLayer::SessionPanel) {
-                            let window_size = self.window.as_ref().map(|w| w.inner_size());
-                            if let Some(size) = window_size {
-                                let info = self.session_panel.build_info();
-                                let action = renderer.session_panel_hit_test(
-                                    px,
-                                    py,
-                                    &info,
-                                    size.width as f32,
-                                    size.height as f32,
-                                );
-                                let action = self.promote_session_double_click(action);
-                                self.apply_session_panel_action(action);
-                                self.request_redraw(RedrawReason::PointerInput);
+                            Some(ModalLayer::SessionPanel) => {
+                                if let Some(size) = window_size {
+                                    let info = self.session_panel.build_info();
+                                    let action = renderer.session_panel_hit_test(
+                                        px,
+                                        py,
+                                        &info,
+                                        size.width as f32,
+                                        size.height as f32,
+                                    );
+                                    let action = self.promote_session_double_click(action);
+                                    self.apply_session_panel_action(action);
+                                    self.request_redraw(RedrawReason::PointerInput);
+                                    return;
+                                }
+                            }
+                            Some(ModalLayer::CommandsPanel) => {
+                                if let Some(size) = window_size {
+                                    let info =
+                                        self.commands_panel.build_info(&self.config.commands);
+                                    let action = renderer.commands_panel_hit_test(
+                                        px,
+                                        py,
+                                        &info,
+                                        size.width as f32,
+                                        size.height as f32,
+                                    );
+                                    self.apply_commands_panel_action(action);
+                                    self.request_redraw(RedrawReason::PointerInput);
+                                    return;
+                                }
+                            }
+                            Some(ModalLayer::AgentsPanel) => {
+                                self.handle_agents_panel_click(px, py);
                                 return;
                             }
-                        }
-
-                        // An open menu owns every click: rows activate and
-                        // anything outside dismisses it.
-                        if self.modal_layer_on_top(ModalLayer::WorkspaceMenu) {
-                            self.click_workspace_menu(px, py);
-                            return;
-                        }
-
-                        // Settings modal intercepts all clicks (inside: handle;
-                        // outside: dismiss). Must come before tab bar / search bar
-                        // so the modal can't be undercut by chrome under the scrim.
-                        if self.modal_layer_on_top(ModalLayer::Settings) {
-                            let window_size = self.window.as_ref().map(|w| w.inner_size());
-                            if let Some(size) = window_size {
-                                let action = self.settings_panel.handle_click(
-                                    px,
-                                    py,
-                                    &self.config,
-                                    &self.shortcut_registry,
-                                    size.width as f32,
-                                    size.height as f32,
-                                    cell_width,
-                                    cell_height,
-                                );
-                                self.apply_settings_action(action);
-                                self.request_redraw(RedrawReason::PointerInput);
-                                return;
-                            }
+                            // The layers above the panels took the press before
+                            // `handle_mouse_input`.
+                            None
+                            | Some(
+                                ModalLayer::Guardrail
+                                | ModalLayer::InfoOverlay
+                                | ModalLayer::DiffReview
+                                | ModalLayer::ContextPicker
+                                | ModalLayer::SproutMenu
+                                | ModalLayer::Cellar
+                                | ModalLayer::DomainPicker
+                                | ModalLayer::UnicodePicker
+                                | ModalLayer::CommandPalette
+                                | ModalLayer::ShortcutsPanel,
+                            ) => {}
                         }
 
                         if py < renderer.tab_bar_height() || px < renderer.tab_bar_width() {
@@ -860,119 +866,51 @@ impl App {
             }
         }
 
-        // Don't update selection when an overlay panel is open,
-        // but DO track hover state for visual highlights.
-        if self.modal_layer_on_top(ModalLayer::Settings) {
-            let px = position.0 as f32;
-            let py = position.1 as f32;
-            if let Some(renderer) = &self.renderer {
-                let (cell_width, cell_height) = renderer.cell_size();
-                if let Some(size) = self.window.as_ref().map(|w| w.inner_size()) {
-                    let entries = self
-                        .settings_panel
-                        .build_entries(&self.config, &self.shortcut_registry);
-                    let layout = crate::ui::settings::SettingsModalLayout::calculate(
-                        size.width as f32,
-                        size.height as f32,
-                        cell_width,
-                        cell_height,
-                        self.settings_panel.animation_progress(),
-                        entries.len(),
-                    );
-
-                    // Row and control hover (suppressed while the dropdown
-                    // overlay is open so nothing behind it lights up).
-                    let open = !self.settings_panel.is_dropdown_open();
-                    let hovered = open.then(|| layout.visible_row_at(px, py)).flatten();
-                    self.settings_panel.set_hover(hovered);
-                    let control = open
-                        .then(|| {
-                            use crate::ui::settings::SettingsControl;
-                            if layout.close_button.contains(px, py) {
-                                Some(SettingsControl::Close)
-                            } else if layout.save_button.contains(px, py) {
-                                Some(SettingsControl::Save)
-                            } else {
-                                layout.page_at(px, py).map(SettingsControl::Page)
-                            }
-                        })
-                        .flatten();
-                    self.settings_panel.set_control_hover(control);
-
-                    // Dropdown option hover (only when the overlay is open).
-                    if self.settings_panel.is_dropdown_open() {
-                        let dd_hover = self
-                            .settings_panel
-                            .dropdown_layout(&layout, &entries)
-                            .filter(|dropdown| dropdown.rect.bounds.contains(px, py))
-                            .and_then(|dropdown| {
-                                dropdown
-                                    .rect
-                                    .option_at(py)
-                                    .filter(|&i| i < dropdown.options.len())
-                            });
-                        self.settings_panel.set_dropdown_hover(dd_hover);
-                    } else {
-                        self.settings_panel.set_dropdown_hover(None);
-                    }
-                }
-            }
-            self.request_redraw(RedrawReason::PointerInput);
-            return;
-        }
-
-        if self.modal_layer_on_top(ModalLayer::CommandsPanel) {
-            let px = position.0 as f32;
-            let py = position.1 as f32;
-            let layout = self.commands_panel_layout();
-            self.commands_panel.set_hover(layout.control_at(px, py));
-            self.request_redraw(RedrawReason::PointerInput);
-            return;
-        }
-        if self.modal_layer_on_top(ModalLayer::AgentsPanel) {
-            self.update_agents_panel_hover(position.0 as f32, position.1 as f32);
-            return;
-        }
-
-        if self.modal_layer_on_top(ModalLayer::SessionPanel) {
-            let px = position.0 as f32;
-            let py = position.1 as f32;
-            if let Some(renderer) = &self.renderer {
-                let (ui_cw, cell_height) = renderer.cell_size();
-                let window_size = self.window.as_ref().map(|w| w.inner_size());
-                if let Some(size) = window_size {
-                    let info = self.session_panel.build_info();
-                    let layout = crate::ui::session_panel::SessionPanelLayout::calculate(
-                        size.width as f32,
-                        size.height as f32,
-                        renderer.tab_bar_height(),
-                        ui_cw,
-                        cell_height,
-                        info.animation,
-                        info.rename_text.is_some(),
-                        info.workspaces,
-                        info.sessions.len(),
-                    );
-                    let control = layout.control_at(px, py, info.snapshot_count);
-                    let hovered = if px >= layout.panel.x && control.is_none() {
-                        layout
-                            .visible_row_at(py)
-                            .map(|row| info.scroll_offset + row)
-                    } else {
-                        None
-                    };
-                    self.session_panel.set_hover(hovered, control);
-                }
-            }
-            self.request_redraw(RedrawReason::PointerInput);
-            return;
-        }
-
-        if self.modal_layer_on_top(ModalLayer::WorkspaceMenu) {
-            if self.hover_workspace_menu(position.0 as f32, position.1 as f32) {
+        // A panel layer on top tracks hover for its highlights, and the
+        // terminal beneath sees no motion: no selection, no reports.
+        match self.top_modal_layer() {
+            Some(ModalLayer::Settings) => {
+                self.hover_settings_panel(position.0 as f32, position.1 as f32);
                 self.request_redraw(RedrawReason::PointerInput);
+                return;
             }
-            return;
+            Some(ModalLayer::WorkspaceMenu) => {
+                if self.hover_workspace_menu(position.0 as f32, position.1 as f32) {
+                    self.request_redraw(RedrawReason::PointerInput);
+                }
+                return;
+            }
+            Some(ModalLayer::SessionPanel) => {
+                self.hover_session_panel(position.0 as f32, position.1 as f32);
+                self.request_redraw(RedrawReason::PointerInput);
+                return;
+            }
+            Some(ModalLayer::CommandsPanel) => {
+                let px = position.0 as f32;
+                let py = position.1 as f32;
+                let layout = self.commands_panel_layout();
+                self.commands_panel.set_hover(layout.control_at(px, py));
+                self.request_redraw(RedrawReason::PointerInput);
+                return;
+            }
+            Some(ModalLayer::AgentsPanel) => {
+                self.update_agents_panel_hover(position.0 as f32, position.1 as f32);
+                return;
+            }
+            // The layers above the panels returned before this.
+            None
+            | Some(
+                ModalLayer::Guardrail
+                | ModalLayer::InfoOverlay
+                | ModalLayer::DiffReview
+                | ModalLayer::ContextPicker
+                | ModalLayer::SproutMenu
+                | ModalLayer::Cellar
+                | ModalLayer::DomainPicker
+                | ModalLayer::UnicodePicker
+                | ModalLayer::CommandPalette
+                | ModalLayer::ShortcutsPanel,
+            ) => {}
         }
 
         self.refresh_terminal_pointer_cursor();
@@ -993,6 +931,93 @@ impl App {
         if self.mouse_pressed {
             self.extend_native_selection(grid_pos);
             self.request_redraw(RedrawReason::PointerInput);
+        }
+    }
+
+    /// Hover over Settings at `(px, py)`: its rows, controls, and open dropdown.
+    fn hover_settings_panel(&mut self, px: f32, py: f32) {
+        if let Some(renderer) = &self.renderer {
+            let (cell_width, cell_height) = renderer.cell_size();
+            if let Some(size) = self.window.as_ref().map(|w| w.inner_size()) {
+                let entries = self
+                    .settings_panel
+                    .build_entries(&self.config, &self.shortcut_registry);
+                let layout = crate::ui::settings::SettingsModalLayout::calculate(
+                    size.width as f32,
+                    size.height as f32,
+                    cell_width,
+                    cell_height,
+                    self.settings_panel.animation_progress(),
+                    entries.len(),
+                );
+
+                // Row and control hover (suppressed while the dropdown
+                // overlay is open so nothing behind it lights up).
+                let open = !self.settings_panel.is_dropdown_open();
+                let hovered = open.then(|| layout.visible_row_at(px, py)).flatten();
+                self.settings_panel.set_hover(hovered);
+                let control = open
+                    .then(|| {
+                        use crate::ui::settings::SettingsControl;
+                        if layout.close_button.contains(px, py) {
+                            Some(SettingsControl::Close)
+                        } else if layout.save_button.contains(px, py) {
+                            Some(SettingsControl::Save)
+                        } else {
+                            layout.page_at(px, py).map(SettingsControl::Page)
+                        }
+                    })
+                    .flatten();
+                self.settings_panel.set_control_hover(control);
+
+                // Dropdown option hover (only when the overlay is open).
+                if self.settings_panel.is_dropdown_open() {
+                    let dd_hover = self
+                        .settings_panel
+                        .dropdown_layout(&layout, &entries)
+                        .filter(|dropdown| dropdown.rect.bounds.contains(px, py))
+                        .and_then(|dropdown| {
+                            dropdown
+                                .rect
+                                .option_at(py)
+                                .filter(|&i| i < dropdown.options.len())
+                        });
+                    self.settings_panel.set_dropdown_hover(dd_hover);
+                } else {
+                    self.settings_panel.set_dropdown_hover(None);
+                }
+            }
+        }
+    }
+
+    /// Hover over the workspace manager at `(px, py)`: its rows and controls.
+    fn hover_session_panel(&mut self, px: f32, py: f32) {
+        if let Some(renderer) = &self.renderer {
+            let (ui_cw, cell_height) = renderer.cell_size();
+            let window_size = self.window.as_ref().map(|w| w.inner_size());
+            if let Some(size) = window_size {
+                let info = self.session_panel.build_info();
+                let layout = crate::ui::session_panel::SessionPanelLayout::calculate(
+                    size.width as f32,
+                    size.height as f32,
+                    renderer.tab_bar_height(),
+                    ui_cw,
+                    cell_height,
+                    info.animation,
+                    info.rename_text.is_some(),
+                    info.workspaces,
+                    info.sessions.len(),
+                );
+                let control = layout.control_at(px, py, info.snapshot_count);
+                let hovered = if px >= layout.panel.x && control.is_none() {
+                    layout
+                        .visible_row_at(py)
+                        .map(|row| info.scroll_offset + row)
+                } else {
+                    None
+                };
+                self.session_panel.set_hover(hovered, control);
+            }
         }
     }
 

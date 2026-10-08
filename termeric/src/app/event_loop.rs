@@ -337,116 +337,11 @@ impl App {
             return;
         }
 
-        // Handle guardrail confirmation (highest priority)
-        if self.modal_layer_on_top(ModalLayer::Guardrail) {
+        // The top modal layer owns every key, pressed or released, so none
+        // reaches anything beneath it.
+        if let Some(layer) = self.top_modal_layer() {
             if event.state == winit::event::ElementState::Pressed {
-                self.handle_guardrail_key(&event.logical_key);
-            }
-            return;
-        }
-
-        // Information overlays own all input until their close
-        // animation completes. Actions are request-scoped so input
-        // during exit cannot target a replacement notice.
-        if self.modal_layer_on_top(ModalLayer::InfoOverlay) {
-            if event.state == winit::event::ElementState::Pressed {
-                self.handle_info_overlay_key(&event.logical_key, event.repeat);
-            }
-            return;
-        }
-
-        // Handle diff review overlay input
-        if self.modal_layer_on_top(ModalLayer::DiffReview) {
-            if event.state == winit::event::ElementState::Pressed {
-                self.handle_diff_review_key(&event.logical_key);
-            }
-            return;
-        }
-
-        // Handle context picker input
-        if self.modal_layer_on_top(ModalLayer::ContextPicker) {
-            if event.state == winit::event::ElementState::Pressed {
-                self.handle_context_picker_key(&event.logical_key);
-            }
-            return;
-        }
-
-        // Harvest menus own keyboard input while logically open.
-        if self.modal_layer_on_top(ModalLayer::SproutMenu)
-            && let Some(request_id) = self
-                .harvest
-                .as_ref()
-                .and_then(|harvest| harvest.sprout_menu.as_ref().map(|menu| menu.request_id))
-        {
-            if event.state == winit::event::ElementState::Pressed {
-                self.handle_sprout_menu_key(request_id, &event.logical_key);
-            }
-            return;
-        }
-        if self.modal_layer_on_top(ModalLayer::Cellar) {
-            if event.state == winit::event::ElementState::Pressed {
-                self.handle_cellar_key(&event.logical_key);
-            }
-            return;
-        }
-
-        // The live-domain picker reuses palette interaction and
-        // geometry but owns a separate staged discovery state.
-        if event.state == winit::event::ElementState::Pressed
-            && self.handle_palette_edit_key(&event.logical_key)
-        {
-            return;
-        }
-        if self.open_palette_modal().is_some() {
-            if event.state == winit::event::ElementState::Pressed {
-                self.handle_palette_modal_key(&event.logical_key);
-            }
-            return;
-        }
-        // Handle shortcuts panel input (centered modal)
-        if self.modal_layer_on_top(ModalLayer::ShortcutsPanel) {
-            if event.state == winit::event::ElementState::Pressed {
-                self.handle_shortcuts_panel_key(&event.logical_key);
-            }
-            return;
-        }
-
-        // Settings owns every key while it is the top layer.
-        if self.modal_layer_on_top(ModalLayer::Settings) {
-            if event.state == winit::event::ElementState::Pressed {
-                self.handle_settings_panel_key(&event.logical_key);
-            }
-            return;
-        }
-
-        // The workspace manager is a modal side panel. Rename input
-        // and dismissal are handled here, and no keystroke may leak
-        // through to the focused PTY while it is open.
-        if self.modal_layer_on_top(ModalLayer::SessionPanel) {
-            if event.state == winit::event::ElementState::Pressed {
-                self.handle_session_panel_key(&event.logical_key);
-            }
-            return;
-        }
-
-        // An open toolbar menu owns every key, so none reaches the PTY.
-        if self.modal_layer_on_top(ModalLayer::WorkspaceMenu) {
-            if event.state == winit::event::ElementState::Pressed {
-                self.handle_workspace_menu_key(&event.logical_key);
-            }
-            return;
-        }
-
-        // Both browse mode and the inline form own modal input.
-        if self.modal_layer_on_top(ModalLayer::CommandsPanel) {
-            if event.state == winit::event::ElementState::Pressed {
-                self.handle_commands_panel_key(&event.logical_key);
-            }
-            return;
-        }
-        if self.modal_layer_on_top(ModalLayer::AgentsPanel) {
-            if event.state == winit::event::ElementState::Pressed {
-                self.handle_agents_panel_key(&event.logical_key);
+                self.handle_modal_layer_key(layer, &event);
             }
             return;
         }
@@ -524,6 +419,48 @@ impl App {
         }
     }
 
+    /// A pressed key for the modal layer `layer`, which is on top.
+    fn handle_modal_layer_key(&mut self, layer: ModalLayer, event: &winit::event::KeyEvent) {
+        let key = &event.logical_key;
+        match layer {
+            ModalLayer::Guardrail => self.handle_guardrail_key(key),
+            // Actions are request-scoped, so input during the overlay's
+            // close animation cannot target a replacement notice.
+            ModalLayer::InfoOverlay => self.handle_info_overlay_key(key, event.repeat),
+            ModalLayer::DiffReview => self.handle_diff_review_key(key),
+            ModalLayer::ContextPicker => self.handle_context_picker_key(key),
+            ModalLayer::SproutMenu => {
+                if let Some(request_id) = self
+                    .harvest
+                    .as_ref()
+                    .and_then(|harvest| harvest.sprout_menu.as_ref().map(|menu| menu.request_id))
+                {
+                    self.handle_sprout_menu_key(request_id, key);
+                }
+            }
+            ModalLayer::Cellar => self.handle_cellar_key(key),
+            // The palette-style modals share the palette's query editing;
+            // the live-domain picker keeps its own staged discovery state.
+            ModalLayer::DomainPicker | ModalLayer::UnicodePicker | ModalLayer::CommandPalette => {
+                if !self.handle_palette_edit_key(key) {
+                    self.handle_palette_modal_key(key);
+                }
+            }
+            ModalLayer::ShortcutsPanel => self.handle_shortcuts_panel_key(key),
+            ModalLayer::Settings => self.handle_settings_panel_key(key),
+            ModalLayer::WorkspaceMenu => self.handle_workspace_menu_key(key),
+            // Rename input and dismissal; no key leaks through to the PTY.
+            ModalLayer::SessionPanel => self.handle_session_panel_key(key),
+            // Both browse mode and the inline form.
+            ModalLayer::CommandsPanel => {
+                self.handle_commands_panel_key(key);
+            }
+            ModalLayer::AgentsPanel => {
+                self.handle_agents_panel_key(key);
+            }
+        }
+    }
+
     /// A pressed key's bindings: an application shortcut first, then a
     /// plugin or custom keybinding (SendText, RunCommand, PluginCommand).
     /// Returns true when one handled the key, which then never reaches the
@@ -583,32 +520,51 @@ impl App {
                 return;
             }
         }
-        if self.modal_layer_on_top(ModalLayer::Guardrail) {
-            if state == winit::event::ElementState::Pressed
-                && button == winit::event::MouseButton::Left
-            {
-                let request_id = self.guardrail.request_id();
-                let action = if let Some(pos) = self.last_cursor_pos {
-                    self.guardrail_layout()
-                        .hit_test(pos.0 as f32, pos.1 as f32, request_id)
-                } else {
-                    crate::terminal::guardrails::GuardrailAction::Cancel { request_id }
-                };
-                self.apply_guardrail_action(action);
-                self.request_redraw(RedrawReason::PointerInput);
+        let pressed = state == winit::event::ElementState::Pressed;
+        let left = button == winit::event::MouseButton::Left;
+        let pos = self.last_cursor_pos;
+        match self.top_modal_layer() {
+            // Settings, the Workspaces menu, and the side panels take the
+            // pointer in `handle_mouse_input`, after the global Settings
+            // button, as do the agent view and the terminals with none open.
+            // Settings dismisses itself on a click outside it there.
+            None
+            | Some(
+                ModalLayer::Settings
+                | ModalLayer::WorkspaceMenu
+                | ModalLayer::SessionPanel
+                | ModalLayer::CommandsPanel
+                | ModalLayer::AgentsPanel,
+            ) => {
+                if let Some(pos) = pos {
+                    self.handle_mouse_input(button, state, pos);
+                    self.finish_pointer_chrome_focus(button, state);
+                }
             }
-            return;
-        }
-        // Information overlay pointer actions use the same request and
-        // geometry as keyboard, rendering, and accessibility.
-        if self.modal_layer_on_top(ModalLayer::InfoOverlay) {
-            if state == winit::event::ElementState::Pressed
-                && matches!(
+            // Every layer above those owns the buttons while on top: it acts
+            // on presses of the ones it uses, and nothing beneath sees any.
+            Some(_) if !pressed => {}
+            Some(ModalLayer::Guardrail) => {
+                if left {
+                    let request_id = self.guardrail.request_id();
+                    let action = if let Some(pos) = pos {
+                        self.guardrail_layout()
+                            .hit_test(pos.0 as f32, pos.1 as f32, request_id)
+                    } else {
+                        crate::terminal::guardrails::GuardrailAction::Cancel { request_id }
+                    };
+                    self.apply_guardrail_action(action);
+                    self.request_redraw(RedrawReason::PointerInput);
+                }
+            }
+            // Information overlay pointer actions use the same request and
+            // geometry as keyboard, rendering, and accessibility.
+            Some(ModalLayer::InfoOverlay) => {
+                if matches!(
                     button,
                     winit::event::MouseButton::Left | winit::event::MouseButton::Middle
-                )
-            {
-                if let Some(pos) = self.last_cursor_pos {
+                ) && let Some(pos) = pos
+                {
                     let layout = self.info_overlay_layout();
                     let (mx, my) = (pos.0 as f32, pos.1 as f32);
                     let press = if layout.copy_button.contains(mx, my) {
@@ -634,131 +590,111 @@ impl App {
                     self.request_redraw(RedrawReason::PointerInput);
                 }
             }
-            return;
-        }
-        if self.modal_layer_on_top(ModalLayer::DiffReview) {
-            if state == winit::event::ElementState::Pressed
-                && button == winit::event::MouseButton::Left
-                && let Some(pos) = self.last_cursor_pos
-            {
-                let action = self.diff_review_layout().hit_test(
-                    pos.0 as f32,
-                    pos.1 as f32,
-                    self.diff_review.request_id(),
-                );
-                self.apply_diff_review_action(action);
-                self.request_redraw(RedrawReason::PointerInput);
-            }
-            return;
-        }
-        if self.modal_layer_on_top(ModalLayer::ContextPicker) {
-            if state == winit::event::ElementState::Pressed
-                && button == winit::event::MouseButton::Left
-                && let Some(pos) = self.last_cursor_pos
-            {
-                let snapshot = self.context_picker.snapshot();
-                let action =
-                    self.context_picker_layout()
-                        .hit_test(pos.0 as f32, pos.1 as f32, &snapshot);
-                self.apply_context_picker_action(action);
-                self.request_redraw(RedrawReason::PointerInput);
-            }
-            return;
-        }
-        // Sprout menu is an input-blocking context menu. Click an
-        // action to execute it, or click outside to dismiss.
-        if self.modal_layer_on_top(ModalLayer::SproutMenu) {
-            if state == winit::event::ElementState::Pressed
-                && button == winit::event::MouseButton::Left
-            {
-                let hit = self.last_cursor_pos.and_then(|pos| {
-                    self.sprout_menu_layout()?
-                        .hit_test(pos.0 as f32, pos.1 as f32)
-                });
-                let selected = hit.and_then(|index| {
-                    let menu = self.harvest.as_ref()?.sprout_menu.as_ref()?;
-                    let action = menu.actions.get(index).copied()?;
-                    menu.action_enabled(action)
-                        .then_some((menu.request_id, action))
-                });
-                if let Some((request_id, action)) = selected {
-                    self.execute_sprout_request(request_id, action);
-                } else if hit.is_none()
-                    && let Some(request_id) = self.harvest.as_ref().and_then(|harvest| {
-                        harvest.sprout_menu.as_ref().map(|menu| menu.request_id)
-                    })
-                {
-                    self.dismiss_sprout_request(request_id);
-                }
-                self.request_redraw(RedrawReason::PointerInput);
-            }
-            return;
-        }
-        if self.modal_layer_on_top(ModalLayer::Cellar) {
-            if state == winit::event::ElementState::Pressed
-                && button == winit::event::MouseButton::Left
-                && let Some(pos) = self.last_cursor_pos
-                && let Some(layout) = self.cellar_layout()
-            {
-                let action = layout.hit_test(pos.0 as f32, pos.1 as f32, true);
-                self.apply_cellar_action(action);
-                self.request_redraw(RedrawReason::PointerInput);
-            }
-            return;
-        }
-        // Palette-style modals take every click: an entry is chosen,
-        // the query takes the caret, and a click outside closes them.
-        if self.open_palette_modal().is_some() {
-            if state == winit::event::ElementState::Pressed
-                && button == winit::event::MouseButton::Left
-            {
-                self.handle_palette_modal_press();
-            }
-            return;
-        }
-        // When shortcuts panel is open, dismiss on outside clicks
-        if self.modal_layer_on_top(ModalLayer::ShortcutsPanel) {
-            if state == winit::event::ElementState::Pressed
-                && button == winit::event::MouseButton::Left
-            {
-                if let (Some(pos), Some(renderer)) = (self.last_cursor_pos, &self.renderer) {
-                    use crate::ui::shortcuts_panel::ShortcutsPanelLayout;
-                    let (sw, sh) = renderer.window_size();
-                    let (cw, ch) = (renderer.cell_width(), renderer.cell_height());
-                    let info = self.shortcuts_panel.build_info(&self.shortcut_registry);
-                    let layout = ShortcutsPanelLayout::calculate(
-                        sw as f32,
-                        sh as f32,
-                        cw,
-                        ch,
-                        info.animation,
-                        info.entries.len(),
+            Some(ModalLayer::DiffReview) => {
+                if left && let Some(pos) = pos {
+                    let action = self.diff_review_layout().hit_test(
+                        pos.0 as f32,
+                        pos.1 as f32,
+                        self.diff_review.request_id(),
                     );
-                    let (mx, my) = (pos.0 as f32, pos.1 as f32);
-                    if !layout.contains(mx, my) {
-                        self.shortcuts_panel.close();
-                    } else if !self.handle_shortcuts_filter_click(mx, my, &layout, cw, ch) {
-                        let action = self.shortcuts_panel.handle_click(
-                            mx,
-                            my,
-                            &layout,
-                            &self.shortcut_registry,
-                        );
-                        self.apply_shortcuts_action(action);
-                    }
-                } else {
-                    self.shortcuts_panel.close();
+                    self.apply_diff_review_action(action);
+                    self.request_redraw(RedrawReason::PointerInput);
                 }
-                self.request_redraw(RedrawReason::PointerInput);
             }
-            return;
+            Some(ModalLayer::ContextPicker) => {
+                if left && let Some(pos) = pos {
+                    let snapshot = self.context_picker.snapshot();
+                    let action = self.context_picker_layout().hit_test(
+                        pos.0 as f32,
+                        pos.1 as f32,
+                        &snapshot,
+                    );
+                    self.apply_context_picker_action(action);
+                    self.request_redraw(RedrawReason::PointerInput);
+                }
+            }
+            // An input-blocking context menu: a click on an action runs it,
+            // and one outside dismisses the menu.
+            Some(ModalLayer::SproutMenu) => {
+                if left {
+                    let hit = pos.and_then(|pos| {
+                        self.sprout_menu_layout()?
+                            .hit_test(pos.0 as f32, pos.1 as f32)
+                    });
+                    let selected = hit.and_then(|index| {
+                        let menu = self.harvest.as_ref()?.sprout_menu.as_ref()?;
+                        let action = menu.actions.get(index).copied()?;
+                        menu.action_enabled(action)
+                            .then_some((menu.request_id, action))
+                    });
+                    if let Some((request_id, action)) = selected {
+                        self.execute_sprout_request(request_id, action);
+                    } else if hit.is_none()
+                        && let Some(request_id) = self.harvest.as_ref().and_then(|harvest| {
+                            harvest.sprout_menu.as_ref().map(|menu| menu.request_id)
+                        })
+                    {
+                        self.dismiss_sprout_request(request_id);
+                    }
+                    self.request_redraw(RedrawReason::PointerInput);
+                }
+            }
+            Some(ModalLayer::Cellar) => {
+                if left
+                    && let Some(pos) = pos
+                    && let Some(layout) = self.cellar_layout()
+                {
+                    let action = layout.hit_test(pos.0 as f32, pos.1 as f32, true);
+                    self.apply_cellar_action(action);
+                    self.request_redraw(RedrawReason::PointerInput);
+                }
+            }
+            // Palette-style modals take every click: an entry is chosen,
+            // the query takes the caret, and a click outside closes them.
+            Some(
+                ModalLayer::DomainPicker | ModalLayer::UnicodePicker | ModalLayer::CommandPalette,
+            ) => {
+                if left {
+                    self.handle_palette_modal_press();
+                }
+            }
+            // A click outside the shortcuts panel dismisses it.
+            Some(ModalLayer::ShortcutsPanel) => {
+                if left {
+                    self.press_shortcuts_panel(pos);
+                }
+            }
         }
-        // Use tracked cursor position — settings_panel handle_click
-        // (called from handle_mouse_input) does outside-click dismiss.
-        if let Some(pos) = self.last_cursor_pos {
-            self.handle_mouse_input(button, state, pos);
-            self.finish_pointer_chrome_focus(button, state);
+    }
+
+    /// A primary press at `pos` while the shortcuts panel is on top.
+    fn press_shortcuts_panel(&mut self, pos: Option<(f64, f64)>) {
+        if let (Some(pos), Some(renderer)) = (pos, &self.renderer) {
+            use crate::ui::shortcuts_panel::ShortcutsPanelLayout;
+            let (sw, sh) = renderer.window_size();
+            let (cw, ch) = (renderer.cell_width(), renderer.cell_height());
+            let info = self.shortcuts_panel.build_info(&self.shortcut_registry);
+            let layout = ShortcutsPanelLayout::calculate(
+                sw as f32,
+                sh as f32,
+                cw,
+                ch,
+                info.animation,
+                info.entries.len(),
+            );
+            let (mx, my) = (pos.0 as f32, pos.1 as f32);
+            if !layout.contains(mx, my) {
+                self.shortcuts_panel.close();
+            } else if !self.handle_shortcuts_filter_click(mx, my, &layout, cw, ch) {
+                let action =
+                    self.shortcuts_panel
+                        .handle_click(mx, my, &layout, &self.shortcut_registry);
+                self.apply_shortcuts_action(action);
+            }
+        } else {
+            self.shortcuts_panel.close();
         }
+        self.request_redraw(RedrawReason::PointerInput);
     }
 }
 

@@ -40,11 +40,6 @@ impl App {
             .into_iter()
             .find(|layer| self.modal_layer_open(*layer))
     }
-
-    /// Whether `layer` is the one on top.
-    pub(super) fn modal_layer_on_top(&self, layer: ModalLayer) -> bool {
-        self.top_modal_layer() == Some(layer)
-    }
 }
 
 #[cfg(test)]
