@@ -4436,6 +4436,8 @@ mod tests {
             } if domain.tabs[1].title == "renamed λ"
                 && domain.tabs[1].user_title.as_deref() == Some("renamed λ")
         ));
+        // A multi-line title is refused and leaves the tab as it was; the
+        // next topology frame (revision 12) shows nothing was published.
         assert!(
             client
                 .request(Request::RenameTab {
@@ -4443,10 +4445,16 @@ mod tests {
                     tab: 1,
                     title: Some("two\nlines".into()),
                 })
-                .unwrap_err()
-                .to_string()
-                .contains("1 to 128")
+                .is_err()
         );
+        assert!(matches!(
+            client.request(Request::Describe {
+                domain: domain_id.clone(),
+            }),
+            Ok(Response::Domain { domain })
+                if domain.tabs[1].title == "renamed λ"
+                    && domain.tabs[1].user_title.as_deref() == Some("renamed λ")
+        ));
         let Response::Domain { domain } = client
             .request(Request::SetTabPinned {
                 domain: domain_id.clone(),
@@ -4470,6 +4478,8 @@ mod tests {
             } if domain.tabs.iter().map(|tab| tab.id).collect::<Vec<_>>() == vec![1, 0]
                 && domain.tabs[0].pinned
         ));
+        // Moving an unpinned tab into the pinned group is refused; the next
+        // topology frame (revision 13) shows nothing was published.
         assert!(
             client
                 .request(Request::MoveTab {
@@ -4477,10 +4487,15 @@ mod tests {
                     tab: 0,
                     index: 0,
                 })
-                .unwrap_err()
-                .to_string()
-                .contains("pinned group boundary")
+                .is_err()
         );
+        assert!(matches!(
+            client.request(Request::Describe {
+                domain: domain_id.clone(),
+            }),
+            Ok(Response::Domain { domain })
+                if domain.tabs.iter().map(|tab| tab.id).collect::<Vec<_>>() == vec![1, 0]
+        ));
         client
             .request(Request::SetTabPinned {
                 domain: domain_id.clone(),
