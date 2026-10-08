@@ -1,7 +1,7 @@
 //! Hardened access to Termeric's own files: reads never follow a symlink,
 //! block on a FIFO, or read past a limit, writes replace a file atomically
 //! through a private staging file beside it, publishing a staged entry
-//! never replaces another, private files are only ever created new, and
+//! never replaces another, created files are only ever new ones, and
 //! private directories are never reached through a symlink.
 
 use std::fs::{self, OpenOptions};
@@ -81,15 +81,22 @@ fn size_error(limit: usize) -> io::Error {
 /// `path`, even a symbolic link, fails with [`io::ErrorKind::AlreadyExists`]
 /// and is left alone, so the file is never opened through a link or reused.
 pub(crate) fn create_private(path: &Path) -> io::Result<fs::File> {
+    create_new(path, 0o600)
+}
+
+/// [`create_private`] with permissions `mode` (exactly, whatever the
+/// umask), for a file that must keep another file's mode or an executable
+/// bit.
+pub(crate) fn create_new(path: &Path, mode: u32) -> io::Result<fs::File> {
     let file = OpenOptions::new()
         .read(true)
         .write(true)
         .create_new(true)
-        .mode(0o600)
+        .mode(mode)
         .open(path)?;
     // The umask can only narrow the creation mode; set it exactly, since
-    // readers such as a resumed upload or the token check expect 0600.
-    file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    // readers such as a resumed upload or the token check expect it.
+    file.set_permissions(fs::Permissions::from_mode(mode))?;
     Ok(file)
 }
 
@@ -438,6 +445,23 @@ mod tests {
         }
         assert_eq!(fs::read_to_string(&target).unwrap(), "untouched");
         assert!(!missing.exists());
+    }
+
+    #[test]
+    fn new_files_take_their_mode_exactly_whatever_the_umask() {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, mode) in [("shared", 0o644), ("script", 0o700), ("open", 0o666)] {
+            let path = dir.path().join(name);
+            create_new(&path, mode).unwrap();
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                mode
+            );
+            assert_eq!(
+                create_new(&path, mode).unwrap_err().kind(),
+                io::ErrorKind::AlreadyExists
+            );
+        }
     }
 
     #[test]

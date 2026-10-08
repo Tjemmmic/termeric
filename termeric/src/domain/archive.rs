@@ -335,15 +335,9 @@ pub fn extract_directory_archive(
                 if !matches!(mode, 0o600 | 0o700) {
                     anyhow::bail!("directory archive contains invalid file metadata");
                 }
-                let mut file = OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .mode(mode as u32)
-                    .custom_flags(libc::O_NOFOLLOW)
-                    .open(&target)
+                let mut file = crate::safe_fs::create_new(&target, u32::from(mode))
                     .context("create staged upload file")?;
                 copy_exact(archive, &mut file, size)?;
-                file.set_permissions(fs::Permissions::from_mode(mode as u32))?;
                 file.flush()?;
                 file.sync_all()?;
             }
@@ -515,12 +509,7 @@ mod tests {
     fn extractor_rejects_parent_traversal() {
         let temporary = tempfile::tempdir().unwrap();
         let archive_path = temporary.path().join("bad.archive");
-        let mut archive = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(&archive_path)
-            .unwrap();
+        let mut archive = crate::safe_fs::create_private(&archive_path).unwrap();
         archive.write_all(MAGIC).unwrap();
         archive.write_all(&[ENTRY_FILE]).unwrap();
         archive.write_all(&6_u32.to_be_bytes()).unwrap();

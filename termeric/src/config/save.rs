@@ -6,7 +6,6 @@
 
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -477,12 +476,7 @@ fn keep_copy(path: &Path, target: &Path, bytes: &[u8], now: SystemTime) -> Resul
             format!("{seconds}-{attempt}")
         };
         let backup = path.with_file_name(format!("{name}.{suffix}.bak"));
-        let mut file = match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(mode)
-            .open(&backup)
-        {
+        let mut file = match crate::safe_fs::create_new(&backup, mode) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => {
@@ -897,6 +891,21 @@ action = { type = \"send_text\", text = \"first\" }
                 directory.path().join("config.toml.1700000000-2.bak"),
             ]
         );
+    }
+
+    #[test]
+    fn a_reset_keeps_the_old_file_with_its_own_permissions() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        for mode in [0o644, 0o600, 0o666] {
+            fs::write(&path, "[window]\npadding = 4\n").unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+            let backup = reset(&path, SystemTime::now()).unwrap().unwrap();
+            assert_eq!(
+                fs::metadata(&backup).unwrap().permissions().mode() & 0o777,
+                mode
+            );
+        }
     }
 
     #[test]
