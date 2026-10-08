@@ -596,20 +596,12 @@ mod tests {
 
     #[test]
     fn a_session_started_ahead_stays_out_of_every_list_until_its_first_message() {
-        let fake = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/agent_view/fake_claude.py");
-        assert!(
-            crate::agents::find_executable("python3").is_some(),
-            "python3 is required by this test"
-        );
         let mut config = Config::default();
-        config.agents.insert(
-            "claude-code".into(),
-            crate::agents::AgentConfig {
-                program: Some(fake.display().to_string()),
-                env: [("FAKE_CLAUDE_DELAY".to_owned(), "0".to_owned())].into(),
-                ..Default::default()
-            },
+        crate::test_support::fake_agent(
+            &mut config,
+            "claude-code",
+            "fake_claude.py",
+            "FAKE_CLAUDE_DELAY",
         );
         let mut app = two_tabs(config);
         app.open_agent_view(true);
@@ -650,30 +642,12 @@ mod tests {
 
     #[test]
     fn choosing_another_agent_starts_it_ahead_instead() {
-        assert!(
-            crate::agents::find_executable("python3").is_some(),
-            "python3 is required by this test"
-        );
-        let fixture = |name: &str| {
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/fixtures/agent_view")
-                .join(name)
-                .display()
-                .to_string()
-        };
         let mut config = Config::default();
         for (id, script, delay) in [
             ("claude-code", "fake_claude.py", "FAKE_CLAUDE_DELAY"),
             ("codex", "fake_codex.py", "FAKE_CODEX_DELAY"),
         ] {
-            config.agents.insert(
-                id.into(),
-                crate::agents::AgentConfig {
-                    program: Some(fixture(script)),
-                    env: [(delay.to_owned(), "0".to_owned())].into(),
-                    ..Default::default()
-                },
-            );
+            crate::test_support::fake_agent(&mut config, id, script, delay);
         }
         let mut app = two_tabs(config);
         app.open_agent_view(true);
@@ -717,21 +691,8 @@ mod tests {
 
     #[test]
     fn earlier_codex_conversations_are_offered_and_continued_with_codex() {
-        assert!(
-            crate::agents::find_executable("python3").is_some(),
-            "python3 is required by this test"
-        );
-        let fake = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/agent_view/fake_codex.py");
         let mut config = Config::default();
-        config.agents.insert(
-            "codex".into(),
-            crate::agents::AgentConfig {
-                program: Some(fake.display().to_string()),
-                env: [("FAKE_CODEX_DELAY".to_owned(), "0".to_owned())].into(),
-                ..Default::default()
-            },
-        );
+        crate::test_support::fake_agent(&mut config, "codex", "fake_codex.py", "FAKE_CODEX_DELAY");
         let mut app = two_tabs(config);
         app.open_agent_view(true);
         app.agent_view
@@ -783,20 +744,12 @@ mod tests {
 
     #[test]
     fn the_session_started_ahead_follows_the_folder_while_the_terminal_types() {
-        assert!(
-            crate::agents::find_executable("python3").is_some(),
-            "python3 is required by this test"
-        );
-        let fake = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/agent_view/fake_claude.py");
         let mut config = Config::default();
-        config.agents.insert(
-            "claude-code".into(),
-            crate::agents::AgentConfig {
-                program: Some(fake.display().to_string()),
-                env: [("FAKE_CLAUDE_DELAY".to_owned(), "0".to_owned())].into(),
-                ..Default::default()
-            },
+        crate::test_support::fake_agent(
+            &mut config,
+            "claude-code",
+            "fake_claude.py",
+            "FAKE_CLAUDE_DELAY",
         );
         let mut app = two_tabs(config);
         // Open beside the terminal, which keeps the keyboard.

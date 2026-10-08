@@ -20,6 +20,33 @@ pub(crate) fn sleeping_args() -> Vec<String> {
     vec!["-c".into(), "sleep 2".into()]
 }
 
+/// Point the catalog's agent `id` at the fake agent `script` in
+/// `tests/fixtures/agent_view`, answering at once: `delay_var` is the
+/// environment variable that fake waits by. The fakes are Python scripts;
+/// CI has python3, so its absence fails the test rather than skipping it.
+pub(crate) fn fake_agent(
+    config: &mut crate::config::Config,
+    id: &str,
+    script: &str,
+    delay_var: &str,
+) {
+    assert!(
+        crate::agents::find_executable("python3").is_some(),
+        "python3 is required by this test"
+    );
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/agent_view")
+        .join(script);
+    config.agents.insert(
+        id.into(),
+        crate::agents::AgentConfig {
+            program: Some(script.display().to_string()),
+            env: [(delay_var.to_owned(), "0".to_owned())].into(),
+            ..Default::default()
+        },
+    );
+}
+
 /// `/bin/sh` running [`sleeping_args`].
 pub(crate) fn sleeping_shell() -> ShellConfig {
     ShellConfig {

@@ -1395,10 +1395,6 @@ fn the_supervisor_hears_about_agents_and_sends_only_as_its_mode_allows() {
     use crate::control::protocol::AgentEventKind;
     use crate::ui::command_palette::palette::AgentPlacement;
     use std::os::unix::fs::PermissionsExt;
-    assert!(
-        crate::agents::find_executable("python3").is_some(),
-        "python3 is required by this test"
-    );
     let temp = tempfile::tempdir().unwrap();
     let log = temp.path().join("agents.log");
     // The worker is an agent in a terminal that logs what it is typed.
@@ -1420,16 +1416,12 @@ done
     std::fs::set_permissions(&worker_program, std::fs::Permissions::from_mode(0o755)).unwrap();
     // The supervisor runs in the agent view, here as the fake stream-json
     // agent.
-    let fake_claude = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/agent_view/fake_claude.py");
     let mut config = Config::default();
-    config.agents.insert(
-        "claude-code".into(),
-        crate::agents::AgentConfig {
-            program: Some(fake_claude.display().to_string()),
-            env: std::collections::BTreeMap::from([("FAKE_CLAUDE_DELAY".into(), "0".into())]),
-            ..Default::default()
-        },
+    crate::test_support::fake_agent(
+        &mut config,
+        "claude-code",
+        "fake_claude.py",
+        "FAKE_CLAUDE_DELAY",
     );
     config.agents.insert(
         "codex".into(),
@@ -1716,22 +1708,9 @@ fn codex_supervises_as_an_agent_view_conversation() {
     use crate::agent_view::transcript::{Activity, Item};
     use crate::agents::supervisor::SupervisorMode;
 
-    assert!(
-        crate::agents::find_executable("python3").is_some(),
-        "python3 is required by this test"
-    );
     let temp = tempfile::tempdir().unwrap();
-    let fake_codex = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/agent_view/fake_codex.py");
     let mut config = Config::default();
-    config.agents.insert(
-        "codex".into(),
-        crate::agents::AgentConfig {
-            program: Some(fake_codex.display().to_string()),
-            env: std::collections::BTreeMap::from([("FAKE_CODEX_DELAY".into(), "0".into())]),
-            ..Default::default()
-        },
-    );
+    crate::test_support::fake_agent(&mut config, "codex", "fake_codex.py", "FAKE_CODEX_DELAY");
     config.supervisor.agent = "codex".into();
     config.supervisor.mode = SupervisorMode::Watch;
     let mut app = App::new_headless(config).unwrap();

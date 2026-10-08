@@ -1060,15 +1060,21 @@ mod tests {
         crate::agents::find_executable("python3").expect("python3 is required by this test")
     }
 
-    fn fake() -> AgentProgram {
-        let python = python3();
+    /// The fake agent `script`, answering at once: `delay_var` is the
+    /// environment variable it waits by.
+    fn fake_program(script: &str, delay_var: &str) -> AgentProgram {
         let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/agent_view/fake_claude.py");
+            .join("tests/fixtures/agent_view")
+            .join(script);
         AgentProgram {
-            program: python.display().to_string(),
+            program: python3().display().to_string(),
             args: vec![script.display().to_string()],
-            env: vec![("FAKE_CLAUDE_DELAY".into(), "0".into())],
+            env: vec![(delay_var.into(), "0".into())],
         }
+    }
+
+    fn fake() -> AgentProgram {
+        fake_program("fake_claude.py", "FAKE_CLAUDE_DELAY")
     }
 
     fn start(program: AgentProgram) -> AgentSession {
@@ -1424,14 +1430,7 @@ mod tests {
     }
 
     fn fake_codex() -> AgentProgram {
-        let python = python3();
-        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/agent_view/fake_codex.py");
-        AgentProgram {
-            program: python.display().to_string(),
-            args: vec![script.display().to_string()],
-            env: vec![("FAKE_CODEX_DELAY".into(), "0".into())],
-        }
+        fake_program("fake_codex.py", "FAKE_CODEX_DELAY")
     }
 
     fn start_codex(program: AgentProgram, resume: Option<(String, String)>) -> AgentSession {
@@ -1895,14 +1894,7 @@ mod tests {
     }
 
     fn fake_opencode() -> AgentProgram {
-        let python = python3();
-        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/agent_view/fake_opencode.py");
-        AgentProgram {
-            program: python.display().to_string(),
-            args: vec![script.display().to_string()],
-            env: vec![("FAKE_OPENCODE_DELAY".into(), "0".into())],
-        }
+        fake_program("fake_opencode.py", "FAKE_OPENCODE_DELAY")
     }
 
     fn turn_ends(session: &AgentSession) -> usize {
