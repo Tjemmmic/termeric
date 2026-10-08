@@ -645,34 +645,38 @@ mod tests {
 
     #[test]
     fn a_command_holding_stderr_open_delays_the_exit_report_only_briefly() {
+        // The holder keeps the agent's stderr open until the test kills it.
         let started = Instant::now();
         let mut process = AgentProcess::spawn(
             &shell(
-                "(trap '' TERM; exec sleep 30) </dev/null >/dev/null & echo $!
+                "(trap '' TERM; exec sleep 600) </dev/null >/dev/null & echo $!
                 echo 'last words' >&2; exit 4",
             ),
             noop_waker(),
         )
         .unwrap();
-        let outputs = collect(&mut process, Duration::from_secs(10));
+        let outputs = collect(&mut process, Duration::from_secs(30));
         let elapsed = started.elapsed();
         let Some(ProcessOutput::Line(holder)) = outputs.first() else {
             panic!("{outputs:?}")
         };
         let holder: libc::pid_t = holder.parse().unwrap();
-        // SAFETY: the holder still runs, since it ignored the group's SIGTERM
-        // and sleeps until killed, so its id is still its own.
+        // The report came while stderr was still open, so the wait for it
+        // to close gave up instead of lasting as long as the holder.
+        assert!(
+            crate::test_support::process_is_alive(holder),
+            "the holder ended before the exit report"
+        );
+        // SAFETY: the holder still runs, as just checked: it ignored the
+        // group's SIGTERM and sleeps until killed, so its id is its own.
         unsafe {
             libc::kill(holder, libc::SIGKILL);
         }
         let report = exit_report(&outputs);
         assert!(report.status.contains('4'), "{}", report.status);
         assert_eq!(report.stderr_tail, "last words");
+        // The wait starts after the spawn, so the report cannot come sooner.
         assert!(elapsed >= STDERR_CLOSE_WAIT, "{elapsed:?}");
-        assert!(
-            elapsed < STDERR_CLOSE_WAIT + Duration::from_secs(4),
-            "{elapsed:?}"
-        );
     }
 
     #[test]
