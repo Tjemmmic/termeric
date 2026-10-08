@@ -1724,14 +1724,14 @@ impl App {
 
         let tab_bar_hover_progress = self.tab_bar_hover_progress();
 
-        // While the agent view has the keyboard, the terminal cursor rests
-        // dim and steady, so typing clearly goes to the panel.
-        let terminal_keyboard = !self.agent_view.state.has_keyboard();
+        // While anything above the terminals holds the keyboard, their
+        // cursors rest dim and steady, so typing clearly goes there.
+        let terminal_keyboard = self.terminal_has_keyboard();
         let resting_cursor = |opacity: f32| {
             if terminal_keyboard {
                 opacity
             } else {
-                AGENT_VIEW_RESTING_CURSOR
+                RESTING_CURSOR_OPACITY
             }
         };
         let cursor_elapsed = self.cursor_blink_start.elapsed();
@@ -2055,6 +2055,10 @@ impl App {
     /// is hidden and can exist in unfocused panes, so focused-terminal state
     /// alone is insufficient here.
     fn cursor_blink_required(&self) -> bool {
+        // A resting cursor holds still.
+        if !self.terminal_has_keyboard() {
+            return false;
+        }
         let configured_style = self.config.cursor.style;
         let configured_blink = self.config.cursor.blink;
         let requires = |terminal: &termeric_core::Terminal, main_cursor: bool| {
@@ -3351,8 +3355,9 @@ fn update_visible_url_cache(
     }
 }
 
-/// The terminal cursor's opacity while the agent view has the keyboard.
-const AGENT_VIEW_RESTING_CURSOR: f32 = 0.35;
+/// The terminal cursor's opacity while something above the terminals holds
+/// the keyboard.
+const RESTING_CURSOR_OPACITY: f32 = 0.35;
 
 /// How often a running animation is drawn, and how soon pending background
 /// work is polled again.
