@@ -573,7 +573,6 @@ pub struct PaneManager {
     next_id: u32,
     /// The tab's terminal area, which the tree divides.
     area: TerminalArea,
-    event_overflow_reported: bool,
     /// Shells spawned by this manager (the tab's first terminal is excluded).
     spawned_shells: usize,
     cwd_mode: crate::config::PaneCwdMode,
@@ -601,7 +600,6 @@ impl PaneManager {
             policy,
             next_id: id.0.saturating_add(1),
             area,
-            event_overflow_reported: false,
             spawned_shells: 0,
             cwd_mode: crate::config::PaneCwdMode::Focused,
         }
@@ -1276,29 +1274,12 @@ impl PaneManager {
     /// event path.
     pub fn poll_events(&mut self) -> PanePoll {
         let mut poll = PanePoll::default();
-        let mut dropped_events = 0usize;
         for pane in self.panes.values_mut() {
             let pane_poll = pane.poll_events(self.policy.agent_features);
             poll.changed |= pane_poll.changed;
             poll.saw_output |= pane_poll.saw_output;
-            for event in pane_poll.events {
-                if poll.events.len() < MAX_FORWARDED_TERMINAL_EVENTS_PER_POLL {
-                    poll.events.push(event);
-                } else {
-                    dropped_events += 1;
-                }
-            }
+            poll.events.extend(pane_poll.events);
         }
-
-        if dropped_events > 0 && !self.event_overflow_reported {
-            self.event_overflow_reported = true;
-            log::warn!(
-                "Pane manager dropped {} app-facing terminal events after reaching the per-poll limit of {}",
-                dropped_events,
-                MAX_FORWARDED_TERMINAL_EVENTS_PER_POLL
-            );
-        }
-        poll.changed |= !poll.events.is_empty();
         poll
     }
 
