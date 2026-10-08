@@ -212,9 +212,7 @@ impl WorkspaceLaunch {
                     .context("invalid workspace terminal profile")?;
             }
             Self::Plugin { plugin_id, profile } => {
-                if !is_safe_identifier(plugin_id) {
-                    anyhow::bail!("invalid workspace plugin id {plugin_id:?}");
-                }
+                crate::plugin::validate_plugin_id("workspace plugin id", plugin_id)?;
                 if profile
                     .as_ref()
                     .is_some_and(|profile| profile.is_empty() || profile.chars().count() > 128)
