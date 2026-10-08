@@ -70,6 +70,8 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `ui/text_layout.rs`, `ui/text_area.rs` | Measured, wrapped UI text (`TextMeasure`) and the multi-line editor buffer |
 | `ui/constants.rs` | Shared UI constants (corner radii, border width, filter-field insets) |
 | `ui/request_scope.rs` | `RequestScope`, the request a modal card (info overlay, diff review, context picker) answers, so an action aimed at an earlier or dismissed showing does nothing |
+| `ui/list_dialog.rs`, `ui/side_panel.rs` | The layouts the filtered-list dialogs (command palette and its pickers, Keyboard Shortcuts) and the right-edge side panels (workspaces, Commands, Agents) share |
+| `ui/filter_field.rs`, `ui/focus_step.rs`, `ui/text.rs` | Filter-field text placement, keyboard focus steps through a panel's controls, and shared wording (`plural`) |
 | `ui/geometry.rs`, `ui/color.rs`, `ui/icon.rs` | `Bounds`, the one rectangle type (half-open `contains`) for layout, hit tests, drawing, and accessibility; color alpha/mix/brightness helpers; the icon set drawn from `renderer/icons.rs` |
 | `config/` | TOML config loading, theme definitions |
 | `input/` | Shortcut registry, focused mode-aware keyboard encoder, mouse state |
