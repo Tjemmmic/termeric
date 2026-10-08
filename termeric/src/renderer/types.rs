@@ -255,6 +255,9 @@ pub struct PanePlacement {
     /// Bottom edge of the window.
     pub bottom: f32,
     pub padding: f32,
+    /// The display scale, for the logical lengths of the chrome it places
+    /// over panes (their scrollbars).
+    pub scale_factor: f32,
 }
 
 impl PanePlacement {
@@ -339,6 +342,7 @@ impl PanePlacement {
                 rows as f32 * cell_size.1,
             ),
             grid.scrollback_len() > 0,
+            self.scale_factor,
         )
     }
 }
@@ -354,6 +358,7 @@ pub struct PaneScrollbar {
 }
 
 impl PaneScrollbar {
+    // Logical pixels, scaled to the display.
     const WIDTH: f32 = 6.0;
     /// The gap between the track and the pane's right edge.
     const MARGIN: f32 = 2.0;
@@ -362,26 +367,24 @@ impl PaneScrollbar {
     const MIN_HEIGHT: f32 = 20.0;
 
     /// The scrollbar of a pane whose shown rows cover `rows_area`, when it
-    /// has scrollback and room to draw one. Callers go through
-    /// [`PanePlacement::pane_scrollbar`], so drawing, hits, and drags agree.
-    fn of_pane(rows_area: Bounds, has_scrollback: bool) -> Option<Self> {
-        if !has_scrollback || rows_area.height <= Self::MIN_HEIGHT {
+    /// has scrollback and room to draw one, at `scale_factor`. Callers go
+    /// through [`PanePlacement::pane_scrollbar`], so drawing, hits, and
+    /// drags agree.
+    fn of_pane(rows_area: Bounds, has_scrollback: bool, scale_factor: f32) -> Option<Self> {
+        let px = |logical| super::physical_px(logical, scale_factor);
+        if !has_scrollback || rows_area.height <= px(Self::MIN_HEIGHT) {
             return None;
         }
         let right = rows_area.right();
+        let (width, hit_width) = (px(Self::WIDTH), px(Self::HIT_WIDTH));
         Some(Self {
             track: Bounds::new(
-                right - Self::WIDTH - Self::MARGIN,
+                right - width - px(Self::MARGIN),
                 rows_area.y,
-                Self::WIDTH,
+                width,
                 rows_area.height,
             ),
-            hit: Bounds::new(
-                right - Self::HIT_WIDTH,
-                rows_area.y,
-                Self::HIT_WIDTH,
-                rows_area.height,
-            ),
+            hit: Bounds::new(right - hit_width, rows_area.y, hit_width, rows_area.height),
         })
     }
 }
@@ -516,6 +519,7 @@ mod tests {
             right: 840.0,
             bottom: 630.0,
             padding: 8.0,
+            scale_factor: 1.0,
         };
         let rect = Bounds {
             x: 100.0,
@@ -553,6 +557,7 @@ mod tests {
             right: 840.0,
             bottom: 630.0,
             padding: 12.0,
+            scale_factor: 1.0,
         };
         let cell = (10.0, 20.0);
         let left = Bounds::new(0.0, 0.0, 398.0, 600.0);
@@ -595,6 +600,7 @@ mod tests {
             right: 840.0,
             bottom: 630.0,
             padding: 8.0,
+            scale_factor: 1.0,
         };
         let rect = Bounds::new(100.0, 50.0, 305.0, 210.0);
         let cell = (10.0, 20.0);
@@ -629,5 +635,22 @@ mod tests {
         // Too short a pane draws none.
         let short = Bounds::new(100.0, 50.0, 305.0, 20.0);
         assert_eq!(placement.pane_scrollbar(short, false, &grid, cell), None);
+
+        // Its lengths are logical: at twice the scale the track, its margin,
+        // the hit strip, and the shortest pane that draws one all double.
+        let doubled = PanePlacement {
+            scale_factor: 2.0,
+            ..placement
+        };
+        let scrollbar = doubled.pane_scrollbar(rect, false, &grid, cell).unwrap();
+        assert_eq!(scrollbar.track, Bounds::new(437.0, 80.0, 12.0, 200.0));
+        assert_eq!(scrollbar.hit, Bounds::new(421.0, 80.0, 32.0, 200.0));
+        let shortish = Bounds::new(100.0, 50.0, 305.0, 40.0);
+        assert!(
+            placement
+                .pane_scrollbar(shortish, false, &grid, cell)
+                .is_some()
+        );
+        assert_eq!(doubled.pane_scrollbar(shortish, false, &grid, cell), None);
     }
 }

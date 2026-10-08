@@ -2000,6 +2000,7 @@ mod tests {
             right: 800.0,
             bottom: 480.0,
             padding: 0.0,
+            scale_factor: 1.0,
         },
         cell_size: (10.0, 20.0),
     };
@@ -2167,6 +2168,7 @@ mod tests {
             right: 900.0,
             bottom: 700.0,
             padding: 6.0,
+            scale_factor: 1.0,
         };
         let rect = Bounds {
             x: 100.0,
@@ -2224,6 +2226,7 @@ mod tests {
             right: 840.0,
             bottom: 530.0,
             padding: 6.0,
+            scale_factor: 1.0,
         };
         let left = Bounds::new(0.0, 0.0, 400.0, 500.0);
         let right = Bounds::new(400.0, 0.0, 394.0, 500.0);
@@ -2481,6 +2484,7 @@ mod tests {
             right: 800.0,
             bottom: 600.0,
             padding: 12.0,
+            scale_factor: 1.0,
         };
         let metrics = PointerMetrics {
             placement,
@@ -2528,6 +2532,7 @@ mod tests {
             right: 800.0,
             bottom: 600.0,
             padding: 12.0,
+            scale_factor: 1.0,
         };
         let metrics = PointerMetrics {
             placement,

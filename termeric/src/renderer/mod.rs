@@ -103,6 +103,12 @@ const TAB_BAR_HEIGHT: f32 = 34.0;
 const PIXELS_PER_POINT: f32 = 96.0 / 72.0;
 
 /// Physical rasterization size for a configured `font.size` in points.
+/// A logical chrome length at `scale_factor`, in whole physical pixels and
+/// never below one: [`Renderer::px`], for geometry computed without one.
+fn physical_px(logical: f32, scale_factor: f32) -> f32 {
+    (logical * scale_factor).round().max(1.0)
+}
+
 fn physical_font_size(points: f32, scale_factor: f32) -> f32 {
     (points * PIXELS_PER_POINT * scale_factor).max(1.0)
 }
@@ -373,7 +379,7 @@ impl Renderer {
     /// A logical chrome length in whole physical pixels, never below one, so
     /// chrome geometry lands on the pixel grid at every display scale.
     pub(super) fn px(&self, logical: f32) -> f32 {
-        (logical * self.scale_factor).round().max(1.0)
+        physical_px(logical, self.scale_factor)
     }
 
     /// Cell width and height in physical pixels.
@@ -421,6 +427,7 @@ impl Renderer {
             right: self.content_right(),
             bottom: self.size.1 as f32,
             padding: self.padding,
+            scale_factor: self.scale_factor,
         }
     }
 

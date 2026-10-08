@@ -377,6 +377,7 @@ mod tests {
             right: origin.0 + 1_000.0,
             bottom: origin.1 + 1_000.0,
             padding,
+            scale_factor: 1.0,
         }
     }
 

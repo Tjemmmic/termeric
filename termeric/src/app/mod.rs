@@ -1665,6 +1665,7 @@ impl App {
                     right: metrics.width,
                     bottom: metrics.height,
                     padding: self.config.window.padding as f32,
+                    scale_factor: 1.0,
                 }
             },
             crate::renderer::Renderer::pane_placement,

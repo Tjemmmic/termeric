@@ -20,7 +20,6 @@ pub struct TextCard {
     pub footer_height: f32,
     pub rows_that_fit: usize,
     pub columns_that_fit: usize,
-    pub scrollbar_x: f32,
     /// Top of the button row under the content.
     pub button_y: f32,
     pub button_height: f32,
@@ -82,7 +81,6 @@ impl TextCard {
             footer_height,
             rows_that_fit,
             columns_that_fit,
-            scrollbar_x: card_x + card_width - padding - 4.0,
             button_y: content_y + content_height + cell_height * 1.3,
             button_height: cell_height * 1.8,
             button_gap: cell_width * 1.5,
@@ -289,7 +287,7 @@ mod tests {
         let open = TextCard::calculate(300.0, 200.0, 10.0, 20.0, 1.0, 400, 20, 380.0, 1_000);
         assert!(open.card.x >= 0.0 && open.card.right() <= 300.0);
         assert!(open.card.y >= 0.0 && open.card.bottom() <= 200.0);
-        assert!(open.content.right() <= open.scrollbar_x);
+        assert!(open.content.right() < open.card.right() - open.padding);
         assert_eq!(open.rows_that_fit, 1);
         let closed =
             TextCard::calculate(300.0, 200.0, 10.0, 20.0, 1.0 - 0.5, 400, 20, 380.0, 1_000);

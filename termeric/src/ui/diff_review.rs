@@ -113,7 +113,6 @@ pub struct DiffReviewLayout {
     pub footer_height: f32,
     pub rows_that_fit: usize,
     pub columns_that_fit: usize,
-    pub scrollbar_x: f32,
 }
 
 impl DiffReviewLayout {
@@ -177,7 +176,6 @@ impl DiffReviewLayout {
             footer_height: text.footer_height,
             rows_that_fit: text.rows_that_fit,
             columns_that_fit: text.columns_that_fit,
-            scrollbar_x: text.scrollbar_x,
         }
     }
 

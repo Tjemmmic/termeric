@@ -689,6 +689,7 @@ fn growth_indicators_sit_beside_their_row_of_the_focused_split_pane() {
         right: 800.0,
         bottom: 510.0,
         padding: 8.0,
+        scale_factor: 1.0,
     };
     let cell = (10.0, 20.0);
 
@@ -729,6 +730,7 @@ fn growth_indicators_follow_their_row_into_scrollback() {
         right: 800.0,
         bottom: 510.0,
         padding: 8.0,
+        scale_factor: 1.0,
     };
     let cell = (10.0, 20.0);
     let scroll_to = |app: &mut App, offset: usize| {

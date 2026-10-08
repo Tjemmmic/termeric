@@ -133,7 +133,6 @@ pub struct ContextPickerLayout {
     pub footer_height: f32,
     pub visible_count: usize,
     pub char_scale: f32,
-    pub scrollbar_x: f32,
 }
 
 impl ContextPickerLayout {
@@ -220,7 +219,6 @@ impl ContextPickerLayout {
             footer_height,
             visible_count,
             char_scale,
-            scrollbar_x: card_x + card_width - padding - 4.0,
         }
     }
 

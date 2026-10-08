@@ -13,6 +13,9 @@ use crate::ui::constants::*;
 use crate::ui::geometry::Bounds;
 use crate::ui::icon::Icon;
 
+/// How wide a card's scrollbar track is, in logical pixels.
+const CARD_SCROLLBAR_WIDTH: f32 = 4.0;
+
 impl Renderer {
     /// A one-pixel rule across `width` whose outer sixths fade out.
     fn draw_faded_separator(&mut self, x: f32, y: f32, width: f32, anim: f32) {
@@ -178,7 +181,12 @@ impl Renderer {
         }
 
         self.draw_scrollbar(
-            card_scrollbar_track(layout.scrollbar_x, layout.content),
+            card_scrollbar_track(
+                layout.card,
+                layout.padding,
+                layout.content,
+                self.px(CARD_SCROLLBAR_WIDTH),
+            ),
             layout.rows_that_fit,
             info.total_lines,
             info.scroll_offset,
@@ -368,7 +376,12 @@ impl Renderer {
         let copy_hovered = info.awaiting && layout.copy_button.contains(mouse_x, mouse_y);
         let done_hovered = info.awaiting && layout.done_button.contains(mouse_x, mouse_y);
         self.draw_scrollbar(
-            card_scrollbar_track(layout.scrollbar_x, layout.content),
+            card_scrollbar_track(
+                layout.card,
+                layout.padding,
+                layout.content,
+                self.px(CARD_SCROLLBAR_WIDTH),
+            ),
             layout.rows_that_fit,
             info.total_rows,
             info.scroll_offset,
@@ -613,7 +626,12 @@ impl Renderer {
         let primary_hovered = primary_enabled && layout.primary_button.contains(mouse_x, mouse_y);
         if snapshot.phase == ContextPickerPhase::Sources {
             self.draw_scrollbar(
-                card_scrollbar_track(layout.scrollbar_x, layout.content),
+                card_scrollbar_track(
+                    layout.card,
+                    layout.padding,
+                    layout.content,
+                    self.px(CARD_SCROLLBAR_WIDTH),
+                ),
                 layout.visible_count,
                 snapshot.sources.len(),
                 snapshot.scroll_offset,
@@ -787,8 +805,63 @@ impl Renderer {
     }
 }
 
-/// A card's scrollbar track: the 4px strip its layout reserves at
-/// `scrollbar_x`, beside its content rows.
-fn card_scrollbar_track(scrollbar_x: f32, content: Bounds) -> Bounds {
-    Bounds::new(scrollbar_x, content.y, 4.0, content.height)
+/// A card's scrollbar track, `width` physical pixels wide: beside its
+/// content rows, against the padding inside the card's right edge, in the
+/// gutter its layout leaves between the two.
+fn card_scrollbar_track(card: Bounds, padding: f32, content: Bounds, width: f32) -> Bounds {
+    Bounds::new(
+        card.right() - padding - width,
+        content.y,
+        width,
+        content.height,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::context_picker::{ContextPickerLayout, ContextPickerPhase};
+    use crate::ui::text_card::TextCard;
+
+    #[test]
+    fn a_cards_scrollbar_track_scales_within_the_gutter_beside_its_content() {
+        for scale in [1.0_f32, 1.5, 2.0, 3.0] {
+            // The smallest font's cells, at this scale.
+            let (cell_width, cell_height) = (6.4 * scale, 13.0 * scale);
+            let width = super::super::physical_px(CARD_SCROLLBAR_WIDTH, scale);
+            let text = TextCard::calculate(
+                2_000.0 * scale,
+                1_200.0 * scale,
+                cell_width,
+                cell_height,
+                1.0,
+                80,
+                20,
+                380.0,
+                1_000,
+            );
+            let picker = ContextPickerLayout::calculate(
+                2_000.0 * scale,
+                1_200.0 * scale,
+                cell_width,
+                cell_height,
+                1.0,
+                ContextPickerPhase::Sources,
+                40,
+            );
+            for (card, padding, content) in [
+                (text.card, text.padding, text.content),
+                (picker.card, picker.padding, picker.content),
+            ] {
+                let track = card_scrollbar_track(card, padding, content, width);
+                assert_eq!(track.width, (4.0 * scale).round());
+                assert_eq!(track.right(), card.right() - padding);
+                assert!(
+                    track.x >= content.right(),
+                    "{scale}: {track:?} over {content:?}"
+                );
+                assert_eq!((track.y, track.height), (content.y, content.height));
+            }
+        }
+    }
 }
