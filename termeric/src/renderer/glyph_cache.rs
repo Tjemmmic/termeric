@@ -1925,7 +1925,8 @@ pub(crate) fn deterministic_test_font_data() -> Vec<u8> {
 
 /// One of the fonts tests shape with, built into the test binary from
 /// `tests/fixtures/fonts/` (each beside its SIL Open Font License), so
-/// they shape the same text the same way on every machine and build.
+/// they shape the same text the same way on every machine and build. Two
+/// are subsets: that directory's README says what each keeps.
 #[cfg(test)]
 fn deterministic_test_font_data_named(filename: &str) -> Vec<u8> {
     macro_rules! fixture {
