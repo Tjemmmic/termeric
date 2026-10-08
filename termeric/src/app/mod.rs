@@ -2458,6 +2458,19 @@ impl App {
         }
     }
 
+    /// Change the active tab with `select`. When another tab now shows,
+    /// everything describing the focused terminal follows it.
+    pub(super) fn switch_tab(&mut self, select: impl FnOnce(&mut TabManager)) {
+        let Some(tabs) = &mut self.tabs else {
+            return;
+        };
+        let before = tabs.active_tab_id();
+        select(tabs);
+        if tabs.active_tab_id() != before {
+            self.refresh_focused_terminal_surfaces();
+        }
+    }
+
     /// Scroll the focused terminal to the nearest earlier or later command
     /// that exited non-zero, as recorded by shell integration.
     fn jump_to_failed_command(&mut self, previous: bool) {
@@ -2564,36 +2577,9 @@ impl App {
                     self.request_close_tab(active);
                 }
             }
-            Action::NextTab => {
-                let from = self.tabs.as_ref().map(|t| t.active_index()).unwrap_or(0);
-                if let Some(tabs) = &mut self.tabs {
-                    tabs.next_tab();
-                }
-                let to = self.tabs.as_ref().map(|t| t.active_index()).unwrap_or(0);
-                if from != to {
-                    self.refresh_focused_terminal_surfaces();
-                }
-            }
-            Action::PrevTab => {
-                let from = self.tabs.as_ref().map(|t| t.active_index()).unwrap_or(0);
-                if let Some(tabs) = &mut self.tabs {
-                    tabs.prev_tab();
-                }
-                let to = self.tabs.as_ref().map(|t| t.active_index()).unwrap_or(0);
-                if from != to {
-                    self.refresh_focused_terminal_surfaces();
-                }
-            }
-            Action::SwitchToTab(index) => {
-                let from = self.tabs.as_ref().map(|t| t.active_index()).unwrap_or(0);
-                if let Some(tabs) = &mut self.tabs {
-                    tabs.switch_to(index);
-                }
-                let to = self.tabs.as_ref().map(|t| t.active_index()).unwrap_or(0);
-                if from != to {
-                    self.refresh_focused_terminal_surfaces();
-                }
-            }
+            Action::NextTab => self.switch_tab(TabManager::next_tab),
+            Action::PrevTab => self.switch_tab(TabManager::prev_tab),
+            Action::SwitchToTab(index) => self.switch_tab(|tabs| tabs.switch_to(index)),
             Action::ToggleSearch => {
                 if self.search.is_active() {
                     self.search.cancel();

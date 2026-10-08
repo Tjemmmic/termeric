@@ -631,9 +631,8 @@ impl App {
     /// A primary press on tab `idx` selects it and may start dragging it.
     /// The second press of a double-click renames it instead.
     pub(super) fn press_tab(&mut self, idx: usize) {
-        let from = self.tabs.as_ref().map(|t| t.active_index()).unwrap_or(0);
-        if let Some(tabs) = &mut self.tabs {
-            tabs.switch_to(idx);
+        self.switch_tab(|tabs| tabs.switch_to(idx));
+        if let Some(tabs) = &self.tabs {
             self.tab_dragging = tabs.active_tab().and_then(|tab| {
                 let live = match tab.live_domain_tab_route() {
                     Some((domain_id, remote_tab_id)) => {
@@ -667,9 +666,6 @@ impl App {
             self.tab_dragging = None;
             self.toasts
                 .info("Wait for the pending live-domain change before reordering");
-        }
-        if from != idx {
-            self.refresh_focused_terminal_surfaces();
         }
         let Some(tab_id) = self.tabs.as_ref().and_then(TabManager::active_tab_id) else {
             return;
