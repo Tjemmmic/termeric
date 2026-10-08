@@ -155,10 +155,7 @@ impl App {
         {
             return;
         }
-        let scale = self
-            .renderer
-            .as_ref()
-            .map_or(1.0, crate::renderer::Renderer::scale_factor);
+        let scale = self.ui_metrics().scale_factor;
         let Some((spans, along)) = self.tab_bar_geometry(position) else {
             return;
         };

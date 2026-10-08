@@ -15,6 +15,7 @@ impl App {
             tab_bar_height: top,
             cell_width,
             cell_height,
+            ..
         } = self.ui_metrics();
         // Read only panel state, without copying command/form strings on wheel events.
         self.commands_panel.layout(

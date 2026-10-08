@@ -16,10 +16,7 @@ impl App {
     /// its body scrolls, so keyboard focus scrolls into view.
     pub(super) fn dialog_layout(&mut self) -> Option<DialogLayout> {
         let metrics = self.ui_metrics();
-        let scale = self
-            .renderer
-            .as_ref()
-            .map_or(1.0, |renderer| renderer.scale_factor());
+        let scale = metrics.scale_factor;
         let dialog_metrics = DialogMetrics {
             window_width: metrics.width,
             window_height: metrics.height,

@@ -1425,10 +1425,7 @@ impl App {
         let Some(scene) = self.agent_view.scene.clone() else {
             return true;
         };
-        let scale = self
-            .renderer
-            .as_ref()
-            .map_or(1.0, |renderer| renderer.scale_factor());
+        let scale = self.ui_metrics().scale_factor;
         let pixels = match delta {
             winit::event::MouseScrollDelta::LineDelta(_, lines) => -lines * WHEEL_LINE * scale,
             winit::event::MouseScrollDelta::PixelDelta(position) => -(position.y as f32),

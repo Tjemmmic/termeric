@@ -13,10 +13,7 @@ impl App {
     /// accessibility.
     pub(super) fn context_picker_layout(&self) -> crate::ui::context_picker::ContextPickerLayout {
         let metrics = self.ui_metrics();
-        let scale = self
-            .renderer
-            .as_ref()
-            .map_or(1.0, |renderer| renderer.scale_factor());
+        let scale = metrics.scale_factor;
         crate::ui::context_picker::ContextPickerLayout::calculate(
             metrics.width,
             metrics.height,

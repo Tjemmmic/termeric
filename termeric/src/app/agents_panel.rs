@@ -95,6 +95,7 @@ impl App {
             tab_bar_height: top,
             cell_width,
             cell_height,
+            ..
         } = self.ui_metrics();
         AgentsPanelLayout::calculate(
             width,

@@ -141,6 +141,8 @@ pub(super) struct UiMetrics {
     pub tab_bar_height: f32,
     pub cell_width: f32,
     pub cell_height: f32,
+    /// Physical pixels per logical pixel, for lengths given in logical px.
+    pub scale_factor: f32,
 }
 
 impl UiMetrics {
@@ -151,6 +153,7 @@ impl UiMetrics {
         tab_bar_height: 0.0,
         cell_width: 8.0,
         cell_height: 16.0,
+        scale_factor: 1.0,
     };
 }
 
@@ -1649,6 +1652,7 @@ impl App {
             tab_bar_height: renderer.tab_bar_height(),
             cell_width: renderer.cell_width(),
             cell_height: renderer.cell_height(),
+            scale_factor: renderer.scale_factor(),
         }
     }
 

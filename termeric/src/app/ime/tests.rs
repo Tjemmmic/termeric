@@ -17,6 +17,7 @@ fn ime_viewport_of(
         tab_bar_height: 0.0,
         cell_width,
         cell_height,
+        scale_factor: 1.0,
     };
     (app.text_target() == field)
         .then(|| app.field_ime_viewport(field))
