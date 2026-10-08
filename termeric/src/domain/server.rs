@@ -509,15 +509,11 @@ pub fn run_foreground(
         |stream, slot| {
             let state = Arc::clone(&state);
             let token = token.clone();
-            thread::Builder::new()
-                .name("termeric-domain-client".into())
-                .spawn(move || {
-                    let _slot = slot;
-                    if let Err(error) = handle_client(stream, &token, state) {
-                        log::debug!("Domain client disconnected: {error:#}");
-                    }
-                })?;
-            Ok(())
+            local_socket::serve_on_thread("termeric-domain-client", slot, move || {
+                if let Err(error) = handle_client(stream, &token, state) {
+                    log::debug!("Domain client disconnected: {error:#}");
+                }
+            });
         },
     )?;
 

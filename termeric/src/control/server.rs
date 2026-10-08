@@ -108,18 +108,11 @@ fn run(
         |stream, slot| {
             let token = token.clone();
             let proxy = proxy.clone();
-            if let Err(error) = thread::Builder::new()
-                .name("termeric-gui-control-client".into())
-                .spawn(move || {
-                    let _slot = slot;
-                    if let Err(error) = handle_client(stream, &token, &proxy) {
-                        log::debug!("GUI control client disconnected: {error:#}");
-                    }
-                })
-            {
-                log::warn!("Could not start GUI control client worker: {error}");
-            }
-            Ok(())
+            local_socket::serve_on_thread("termeric-gui-control-client", slot, move || {
+                if let Err(error) = handle_client(stream, &token, &proxy) {
+                    log::debug!("GUI control client disconnected: {error:#}");
+                }
+            });
         },
     );
     if let Err(error) = served

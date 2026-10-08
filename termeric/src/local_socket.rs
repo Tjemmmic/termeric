@@ -331,14 +331,14 @@ impl Drop for ClientSlot {
 /// Accepts clients on `listener` until `shutdown` is set, handing each to
 /// `admit` with a slot from `slots`, or to `refuse` once every slot is taken.
 /// A connection accepted once `shutdown` is set is the server being woken
-/// (see [`wake`]) and is dropped unserved. An error from `admit` ends the
-/// loop with it.
+/// (see [`wake`]) and is dropped unserved. Only a failed accept ends the
+/// loop: what one client needs says nothing about serving the next.
 pub(crate) fn accept_clients(
     listener: &UnixListener,
     shutdown: &AtomicBool,
     slots: &ClientSlots,
     mut refuse: impl FnMut(UnixStream),
-    mut admit: impl FnMut(UnixStream, ClientSlot) -> anyhow::Result<()>,
+    mut admit: impl FnMut(UnixStream, ClientSlot),
 ) -> anyhow::Result<()> {
     while !shutdown.load(Ordering::Acquire) {
         let (stream, _) = listener.accept().context("accept a local socket client")?;
@@ -346,11 +346,27 @@ pub(crate) fn accept_clients(
             break;
         }
         match slots.claim() {
-            Some(slot) => admit(stream, slot)?,
+            Some(slot) => admit(stream, slot),
             None => refuse(stream),
         }
     }
     Ok(())
+}
+
+/// Serves an admitted client with `serve` on a thread called `name`, which
+/// holds the client's `slot` until it returns. A thread that cannot start is
+/// logged and its client dropped, which gives the slot back; the server
+/// goes on accepting, as the next thread may well start.
+pub(crate) fn serve_on_thread(name: &str, slot: ClientSlot, serve: impl FnOnce() + Send + 'static) {
+    if let Err(error) = std::thread::Builder::new()
+        .name(name.into())
+        .spawn(move || {
+            let _slot = slot;
+            serve();
+        })
+    {
+        log::warn!("Could not start {name}: {error}");
+    }
 }
 
 /// Wakes a server blocked accepting on `socket` once its shutdown flag is
@@ -618,7 +634,6 @@ mod tests {
                     |stream, slot| {
                         held.push((stream, slot));
                         events.send("admitted").unwrap();
-                        Ok(())
                     },
                 )
                 .unwrap();
