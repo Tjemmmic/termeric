@@ -3,6 +3,18 @@
 use super::*;
 use anyhow::Context;
 
+/// `path` as a new terminal's working directory: it must be an existing
+/// directory, and valid UTF-8 because the PTY takes it as a string. `what`
+/// names it in the error.
+fn existing_utf8_dir(path: &std::path::Path, what: &str) -> Result<String> {
+    if !path.is_dir() {
+        anyhow::bail!("{what} {} does not exist", path.display());
+    }
+    path.to_str()
+        .map(String::from)
+        .with_context(|| format!("{what} must be valid UTF-8"))
+}
+
 impl App {
     /// Initialize this window from explicit CLI controls, the referenced last
     /// workspace, or one default shell (in that precedence order).
@@ -36,39 +48,8 @@ impl App {
         let explicit_launch = self.launch != crate::cli::WindowLaunch::default();
         let mut restored = false;
         if let Some(target) = self.launch.domain.clone() {
-            let domain_id = target.domain_id;
-            let domain = if let Some(domain) = self.launch.domain_snapshot.take() {
-                if domain.id != domain_id {
-                    anyhow::bail!("prepared domain snapshot does not match its launch target");
-                }
-                domain
-            } else {
-                target.authority.client()?.describe(domain_id.clone())?
-            };
-            let executable = crate::paths::executable_text()?;
-            let relay_command = target.authority.relay_command(executable);
-            self.tabs
-                .as_mut()
-                .context("tab manager was lost during domain attachment")?
-                .attach_domain(&domain, &relay_command)?;
-            self.live_domain_topologies.insert(
-                domain_id.clone(),
-                crate::domain::model::DomainTopology::from(&domain),
-            );
-            self.live_domain_authority = Some(target.authority.clone());
-            self.live_domain_relay_command = Some(relay_command);
-            self.start_live_domain_topology_subscription(
-                target.authority.clone(),
-                domain_id.clone(),
-            )?;
-            // A live domain is not a snapshot workspace. Never auto-save relay
-            // processes as if they were relaunchable shell sessions.
-            self.automatic_persistence = false;
+            self.attach_live_domain_window(target)?;
             restored = true;
-            log::info!(
-                "Attached window to persistent domain {domain_id} via {:?}",
-                target.authority
-            );
         } else if let Some(workspace_id) = self.launch.workspace.clone() {
             match self.restore_workspace_archive(&workspace_id) {
                 Ok(_) => restored = true,
@@ -112,87 +93,13 @@ impl App {
         Ok(())
     }
 
-    fn start_live_domain_topology_subscription(
-        &mut self,
-        authority: crate::domain::DomainAuthority,
-        domain_id: String,
-    ) -> Result<()> {
-        if self.window.is_none() {
-            anyhow::bail!("live-domain topology requires a native window");
-        }
-        let window_key = self.window_key();
-        let proxy = EVENT_LOOP_PROXY
-            .get()
-            .cloned()
-            .context("live-domain topology event channel is unavailable")?;
-        let alive = Arc::clone(&self.live_domain_topology_alive);
-        std::thread::Builder::new()
-            .name("termeric-domain-topology".into())
-            .spawn(move || {
-                let mut failure_reported = false;
-                let mut retry_delay = std::time::Duration::from_millis(250);
-                while alive.load(Ordering::Acquire) {
-                    let mut window_open = true;
-                    let mut domain_closed = false;
-                    let result = authority.client().and_then(|client| {
-                        client.subscribe_topology(domain_id.clone(), &alive, |event| {
-                            domain_closed =
-                                matches!(event, crate::domain::DomainTopologyEvent::Closed { .. });
-                            failure_reported = false;
-                            retry_delay = std::time::Duration::from_millis(250);
-                            window_open = proxy
-                                .send_event(AppEvent::WindowResult {
-                                    window: window_key,
-                                    result: WindowResult::LiveDomainTopology {
-                                        domain_id: domain_id.clone(),
-                                        result: Ok(event),
-                                    },
-                                })
-                                .is_ok();
-                            window_open && !domain_closed
-                        })
-                    });
-                    if !alive.load(Ordering::Acquire) || !window_open || domain_closed {
-                        return;
-                    }
-                    if let Err(error) = result
-                        && !failure_reported
-                    {
-                        failure_reported = proxy
-                            .send_event(AppEvent::WindowResult {
-                                window: window_key,
-                                result: WindowResult::LiveDomainTopology {
-                                    domain_id: domain_id.clone(),
-                                    result: Err(format!("{error:#}")),
-                                },
-                            })
-                            .is_ok();
-                        if !failure_reported {
-                            return;
-                        }
-                    }
-                    std::thread::sleep(retry_delay);
-                    retry_delay = (retry_delay * 2).min(std::time::Duration::from_secs(5));
-                }
-            })
-            .context("start live-domain topology subscriber")?;
-        Ok(())
-    }
-
     fn launch_cli_tabs(&mut self) -> Result<()> {
         let tab_specs = self.launch.tabs.clone();
         for (tab_index, spec) in tab_specs.iter().enumerate() {
             let cwd = spec
                 .working_directory
                 .as_deref()
-                .map(|path| {
-                    if !path.is_dir() {
-                        anyhow::bail!("working directory {} does not exist", path.display());
-                    }
-                    path.to_str()
-                        .map(String::from)
-                        .context("working directory must be valid UTF-8")
-                })
+                .map(|path| existing_utf8_dir(path, "working directory"))
                 .transpose()?;
             match &spec.target {
                 crate::cli::LaunchTarget::Shell => {
@@ -232,14 +139,9 @@ impl App {
                             .cwd
                             .as_deref()
                             .map(|path| {
-                                if !path.is_dir() {
-                                    anyhow::bail!(
-                                        "terminal profile {name:?} working directory {} does not exist",
-                                        path.display()
-                                    );
-                                }
-                                path.to_str().map(String::from).context(
-                                    "terminal profile working directory must be valid UTF-8",
+                                existing_utf8_dir(
+                                    path,
+                                    &format!("terminal profile {name:?} working directory"),
                                 )
                             })
                             .transpose()?
@@ -315,14 +217,7 @@ impl App {
             let cwd = profile
                 .cwd
                 .as_deref()
-                .map(|path| {
-                    if !path.is_dir() {
-                        anyhow::bail!("working directory {} does not exist", path.display());
-                    }
-                    path.to_str()
-                        .map(String::from)
-                        .context("working directory must be valid UTF-8")
-                })
+                .map(|path| existing_utf8_dir(path, "working directory"))
                 .transpose()?;
             self.tabs
                 .as_mut()
@@ -460,5 +355,38 @@ impl App {
         let (_, mut warnings) = restored?;
         warnings.extend(report.warnings);
         Ok((workspace.name, warnings))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::ffi::OsStrExt;
+
+    #[test]
+    fn a_working_directory_must_be_an_existing_utf8_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = temp.path().join("roots");
+        let what = "terminal profile \"dev\" working directory";
+        let missing = existing_utf8_dir(&directory, what).unwrap_err();
+        assert!(missing.to_string().starts_with(what), "{missing}");
+
+        std::fs::write(&directory, b"").unwrap();
+        assert!(
+            existing_utf8_dir(&directory, what).is_err(),
+            "a file is not a directory"
+        );
+        std::fs::remove_file(&directory).unwrap();
+
+        std::fs::create_dir(&directory).unwrap();
+        assert_eq!(
+            existing_utf8_dir(&directory, what).unwrap(),
+            directory.to_str().unwrap()
+        );
+
+        let not_utf8 = temp.path().join(std::ffi::OsStr::from_bytes(b"r\xffot"));
+        std::fs::create_dir(&not_utf8).unwrap();
+        let error = existing_utf8_dir(&not_utf8, what).unwrap_err();
+        assert_eq!(error.to_string(), format!("{what} must be valid UTF-8"));
     }
 }

@@ -1,10 +1,11 @@
-//! Live-domain topology from the GUI side: queued control round trips to the
-//! daemon, their completions, and reconciling the window to topology
-//! updates.
+//! Live-domain topology from the GUI side: attaching a window and following
+//! its domain, queued control round trips to the daemon, their completions,
+//! and reconciling the window to topology updates.
 
 use super::control_actions::{control_pane, control_running_pane, control_tab_id};
 use super::redraw_scheduler::RedrawReason;
 use super::*;
+use anyhow::Context;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum LiveDomainControl {
@@ -258,6 +259,111 @@ fn live_domain_control_message(control: &LiveDomainControl) -> String {
 }
 
 impl App {
+    /// Attach this window to the live domain `target` at startup: its tabs
+    /// become relay tabs, and the window follows the domain's topology.
+    pub(super) fn attach_live_domain_window(
+        &mut self,
+        target: crate::domain::DomainTarget,
+    ) -> Result<()> {
+        let domain_id = target.domain_id;
+        let domain = if let Some(domain) = self.launch.domain_snapshot.take() {
+            if domain.id != domain_id {
+                anyhow::bail!("prepared domain snapshot does not match its launch target");
+            }
+            domain
+        } else {
+            target.authority.client()?.describe(domain_id.clone())?
+        };
+        let executable = crate::paths::executable_text()?;
+        let relay_command = target.authority.relay_command(executable);
+        self.tabs
+            .as_mut()
+            .context("tab manager was lost during domain attachment")?
+            .attach_domain(&domain, &relay_command)?;
+        self.live_domain_topologies.insert(
+            domain_id.clone(),
+            crate::domain::model::DomainTopology::from(&domain),
+        );
+        self.live_domain_authority = Some(target.authority.clone());
+        self.live_domain_relay_command = Some(relay_command);
+        self.start_live_domain_topology_subscription(target.authority.clone(), domain_id.clone())?;
+        // A live domain is not a snapshot workspace. Never auto-save relay
+        // processes as if they were relaunchable shell sessions.
+        self.automatic_persistence = false;
+        log::info!(
+            "Attached window to persistent domain {domain_id} via {:?}",
+            target.authority
+        );
+        Ok(())
+    }
+
+    fn start_live_domain_topology_subscription(
+        &mut self,
+        authority: crate::domain::DomainAuthority,
+        domain_id: String,
+    ) -> Result<()> {
+        if self.window.is_none() {
+            anyhow::bail!("live-domain topology requires a native window");
+        }
+        let window_key = self.window_key();
+        let proxy = EVENT_LOOP_PROXY
+            .get()
+            .cloned()
+            .context("live-domain topology event channel is unavailable")?;
+        let alive = Arc::clone(&self.live_domain_topology_alive);
+        std::thread::Builder::new()
+            .name("termeric-domain-topology".into())
+            .spawn(move || {
+                let mut failure_reported = false;
+                let mut retry_delay = std::time::Duration::from_millis(250);
+                while alive.load(Ordering::Acquire) {
+                    let mut window_open = true;
+                    let mut domain_closed = false;
+                    let result = authority.client().and_then(|client| {
+                        client.subscribe_topology(domain_id.clone(), &alive, |event| {
+                            domain_closed =
+                                matches!(event, crate::domain::DomainTopologyEvent::Closed { .. });
+                            failure_reported = false;
+                            retry_delay = std::time::Duration::from_millis(250);
+                            window_open = proxy
+                                .send_event(AppEvent::WindowResult {
+                                    window: window_key,
+                                    result: WindowResult::LiveDomainTopology {
+                                        domain_id: domain_id.clone(),
+                                        result: Ok(event),
+                                    },
+                                })
+                                .is_ok();
+                            window_open && !domain_closed
+                        })
+                    });
+                    if !alive.load(Ordering::Acquire) || !window_open || domain_closed {
+                        return;
+                    }
+                    if let Err(error) = result
+                        && !failure_reported
+                    {
+                        failure_reported = proxy
+                            .send_event(AppEvent::WindowResult {
+                                window: window_key,
+                                result: WindowResult::LiveDomainTopology {
+                                    domain_id: domain_id.clone(),
+                                    result: Err(format!("{error:#}")),
+                                },
+                            })
+                            .is_ok();
+                        if !failure_reported {
+                            return;
+                        }
+                    }
+                    std::thread::sleep(retry_delay);
+                    retry_delay = (retry_delay * 2).min(std::time::Duration::from_secs(5));
+                }
+            })
+            .context("start live-domain topology subscriber")?;
+        Ok(())
+    }
+
     pub(super) fn persist_live_domain_focus(&self) {
         let route = self
             .tabs
