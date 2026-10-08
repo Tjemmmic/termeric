@@ -1678,7 +1678,14 @@ impl SettingsPanel {
                     action: SettingsAction::SetUpAgentStatus,
                 },
             });
-            let supervisor_agents = ["Claude Code", "Codex"];
+            let supervisor_agents: Vec<&str> = crate::agents::supervisor::SUPERVISOR_AGENTS
+                .iter()
+                .map(|id| {
+                    crate::agents::builtin_agent_names()
+                        .find(|(builtin, _)| builtin == id)
+                        .map_or(*id, |(_, name)| name)
+                })
+                .collect();
             let supervisor_index = crate::agents::supervisor::SUPERVISOR_AGENTS
                 .iter()
                 .position(|id| *id == config.supervisor.agent)

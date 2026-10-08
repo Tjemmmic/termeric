@@ -533,6 +533,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn every_supervisor_agent_is_a_built_in_one() {
+        // Settings names each choice by its built-in agent's name.
+        for id in SUPERVISOR_AGENTS {
+            assert!(
+                crate::agents::builtin_agent_names().any(|(builtin, _)| builtin == id),
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
     fn session_messages_name_the_session_and_how_to_answer() {
         let approval = session_message(
             2,

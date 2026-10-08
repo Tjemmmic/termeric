@@ -572,10 +572,7 @@ impl App {
         let Some(status) = status.filter(|status| before != Some(status.activity)) else {
             return;
         };
-        let name = self
-            .agents
-            .get(&status.agent_id)
-            .map_or_else(|| status.agent_id.clone(), |agent| agent.name.clone());
+        let name = self.agent_display_name(&status.agent_id);
         let where_ = format!(
             "window {}, tab {}, pane {}",
             self.control_window_id, identity.tab_id, identity.pane_id.0
@@ -625,10 +622,7 @@ impl App {
                 .map_err(|_| "Target tab ID does not fit this platform".to_string())?,
             pane_id: crate::panes::PaneId(pane_id),
         };
-        let agent_name = self
-            .agents
-            .get(agent_id)
-            .map_or_else(|| agent_id.to_string(), |agent| agent.name.clone());
+        let agent_name = self.agent_display_name(agent_id);
         let target = AgentTarget {
             identity,
             agent_id: agent_id.to_string(),

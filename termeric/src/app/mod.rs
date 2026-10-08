@@ -4039,7 +4039,10 @@ fn next_blink_boundary(start: Instant, now: Instant, half_period: std::time::Dur
 }
 
 /// The agent terminal to send to: the focused one, else the only one open.
-fn select_agent_target<T: Clone>(focused: Option<T>, open: &[T]) -> std::result::Result<T, String> {
+fn select_agent_target(
+    focused: Option<crate::agents::AgentTarget>,
+    open: &[crate::agents::AgentTarget],
+) -> std::result::Result<crate::agents::AgentTarget, String> {
     if let Some(focused) = focused {
         return Ok(focused);
     }
@@ -4210,11 +4213,19 @@ mod helper_tests {
 
     #[test]
     fn agent_target_prefers_focus_then_the_only_open_agent() {
-        let open = [1, 2];
-        assert_eq!(select_agent_target(Some(2), &open).unwrap(), 2);
-        assert_eq!(select_agent_target(None, &[7]).unwrap(), 7);
+        let target = |tab_id| crate::agents::AgentTarget {
+            identity: crate::tabs::TerminalIdentity {
+                tab_id,
+                pane_id: crate::panes::PaneId(0),
+            },
+            agent_id: "codex".into(),
+            agent_name: "Codex".into(),
+        };
+        let open = [target(1), target(2)];
+        assert_eq!(select_agent_target(Some(target(2)), &open), Ok(target(2)));
+        assert_eq!(select_agent_target(None, &[target(7)]), Ok(target(7)));
         assert!(select_agent_target(None, &open).is_err());
-        assert!(select_agent_target::<u8>(None, &[]).is_err());
+        assert!(select_agent_target(None, &[]).is_err());
     }
 
     #[test]

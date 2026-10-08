@@ -111,6 +111,14 @@ impl App {
         })
     }
 
+    /// Agent `id`'s name in the catalog, else the ID itself, as for an
+    /// agent since removed from the configuration.
+    pub(super) fn agent_display_name(&self, id: &str) -> String {
+        self.agents
+            .get(id)
+            .map_or_else(|| id.to_owned(), |agent| agent.name.clone())
+    }
+
     /// Every terminal in this window running an agent, most urgent first.
     pub(super) fn agent_terminals(&self) -> Vec<AgentTerminal> {
         let mut terminals: Vec<AgentTerminal> = self
@@ -128,10 +136,7 @@ impl App {
                             pane_id,
                         },
                         agent_id: agent.agent_id.clone(),
-                        name: self
-                            .agents
-                            .get(&agent.agent_id)
-                            .map_or_else(|| agent.agent_id.clone(), |agent| agent.name.clone()),
+                        name: self.agent_display_name(&agent.agent_id),
                         status: state.agent_status.clone(),
                         tab_title: tab.title.clone(),
                     })
@@ -296,10 +301,7 @@ impl App {
                 .map_err(|_| "Target tab ID does not fit this platform".to_string())?,
             pane_id: crate::panes::PaneId(pane_id),
         };
-        let agent_name = self
-            .agents
-            .get(agent_id)
-            .map_or_else(|| agent_id.to_string(), |agent| agent.name.clone());
+        let agent_name = self.agent_display_name(agent_id);
         crate::agents::supervisor::check_message(text).map_err(|refusal| refusal.to_string())?;
         let target = AgentTarget {
             identity,
@@ -314,11 +316,7 @@ impl App {
     /// into it.
     pub(super) fn refuse_while_person_types(&self, target: &AgentTarget) -> Result<(), String> {
         let typing = self
-            .tabs
-            .as_ref()
-            .and_then(|tabs| tabs.tab_by_id(target.identity.tab_id))
-            .and_then(|tab| tab.pane_integration(target.identity.pane_id))
-            .and_then(|session| session.last_person_input)
+            .last_person_input(target.identity)
             .is_some_and(|typed| typed.elapsed() < PERSON_TYPING_GRACE);
         if typing {
             return Err(format!(
@@ -750,11 +748,8 @@ impl App {
         ) {
             return;
         }
-        let name = self
-            .agents
-            .get(&status.agent_id)
-            .map_or(status.agent_id.as_str(), |agent| agent.name.as_str());
-        let request = attention_notification(name, identity, status);
+        let name = self.agent_display_name(&status.agent_id);
+        let request = attention_notification(&name, identity, status);
         if let Some(error) = self.notifications.notify_terminal(identity, request) {
             self.toasts.warning(error);
         }
@@ -798,33 +793,18 @@ fn attention_notification(
 impl App {
     /// The focused agent terminal, else the only agent terminal open.
     pub(super) fn preferred_agent_target(&self) -> Result<AgentTarget, String> {
-        let target = |identity: TerminalIdentity, session: &AgentSession| AgentTarget {
-            identity,
-            agent_id: session.agent_id.clone(),
-            agent_name: self
-                .agents
-                .get(&session.agent_id)
-                .map_or_else(|| session.agent_id.clone(), |agent| agent.name.clone()),
-        };
-        let focused = self
-            .focused_agent()
-            .map(|agent| target(agent.identity, &agent.session));
+        let focused = self.focused_agent().map(|agent| AgentTarget {
+            identity: agent.identity,
+            agent_id: agent.session.agent_id,
+            agent_name: agent.definition.name,
+        });
         let open: Vec<AgentTarget> = self
-            .tabs
-            .iter()
-            .flat_map(|tabs| tabs.iter())
-            .filter(|(_, tab)| !tab.closed && !tab.is_closing())
-            .flat_map(|(_, tab)| {
-                tab.owned_pane_ids().into_iter().filter_map(move |pane_id| {
-                    let session = tab.pane_integration(pane_id)?.agent.as_ref()?;
-                    Some(target(
-                        TerminalIdentity {
-                            tab_id: tab.id,
-                            pane_id,
-                        },
-                        session,
-                    ))
-                })
+            .agent_terminals()
+            .into_iter()
+            .map(|terminal| AgentTarget {
+                identity: terminal.identity,
+                agent_id: terminal.agent_id,
+                agent_name: terminal.name,
             })
             .collect();
         super::select_agent_target(focused, &open)
