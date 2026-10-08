@@ -471,10 +471,42 @@ impl SessionPanel {
         cell_width: f32,
         cell_height: f32,
     ) -> Option<crate::ui::text_input_viewport::TextInputViewport> {
+        self.renaming_layout(width, height, top, cell_width, cell_height)?
+            .rename_input_viewport(self.rename_input.text(), self.rename_input.cursor())
+    }
+
+    /// Where a press at `(x, y)` lands in the rename field, as a caret
+    /// position: `None` off the field, or while nothing is being renamed.
+    pub fn rename_caret_at(
+        &self,
+        (x, y): (f32, f32),
+        width: f32,
+        height: f32,
+        top: f32,
+        cell_width: f32,
+        cell_height: f32,
+    ) -> Option<usize> {
+        let layout = self.renaming_layout(width, height, top, cell_width, cell_height)?;
+        match layout.rename_input_click(self.rename_input.text(), self.rename_input.cursor(), x, y)
+        {
+            Some(SessionPanelAction::PlaceRenameCaret { cursor }) => Some(cursor),
+            _ => None,
+        }
+    }
+
+    /// The open panel's geometry while it renames a workspace.
+    fn renaming_layout(
+        &self,
+        width: f32,
+        height: f32,
+        top: f32,
+        cell_width: f32,
+        cell_height: f32,
+    ) -> Option<SessionPanelLayout> {
         if !self.is_open() || !self.is_renaming() {
             return None;
         }
-        SessionPanelLayout::calculate(
+        Some(SessionPanelLayout::calculate(
             width,
             height,
             top,
@@ -484,8 +516,7 @@ impl SessionPanel {
             true,
             self.workspaces,
             self.sessions.len(),
-        )
-        .rename_input_viewport(self.rename_input.text(), self.rename_input.cursor())
+        ))
     }
 
     /// Update hover state from mouse position

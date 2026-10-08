@@ -42,6 +42,85 @@ impl App {
             && self.paste_primary_into_field(TextTarget::Search)
     }
 
+    /// A middle press while a palette, the Shortcuts panel, Settings, or the
+    /// session or Commands panel is the top modal layer. On that surface's
+    /// text field it puts the caret where the press landed and pastes the
+    /// primary selection there, as on the find box's query; anywhere else it
+    /// does nothing. Returns false for every other layer, whose own click
+    /// handling takes the press.
+    pub(super) fn middle_press_field(&mut self, x: f32, y: f32) -> bool {
+        use super::modal_layer::ModalLayer;
+        use crate::ui::commands::panel::CommandsPanelAction;
+        let metrics = self.ui_metrics();
+        let (width, height) = (metrics.width, metrics.height);
+        let (cell_width, cell_height) = (metrics.cell_width, metrics.cell_height);
+        let target = match self.top_modal_layer() {
+            Some(
+                ModalLayer::DomainPicker | ModalLayer::UnicodePicker | ModalLayer::CommandPalette,
+            ) => {
+                let Some(modal) = self.open_palette_modal() else {
+                    return true;
+                };
+                if !self.place_palette_caret_at(modal, x, y) {
+                    return true;
+                }
+                self.ime.clear_preedit();
+                TextTarget::Palette(modal)
+            }
+            Some(ModalLayer::ShortcutsPanel) => {
+                let layout = self.shortcuts_panel_layout();
+                if !self.handle_shortcuts_filter_click(x, y, &layout, cell_width, cell_height) {
+                    return true;
+                }
+                TextTarget::ShortcutsFilter
+            }
+            Some(ModalLayer::Settings) => {
+                let Some(cursor) = self.settings_panel.filter_caret_at(
+                    (x, y),
+                    width,
+                    height,
+                    cell_width,
+                    cell_height,
+                ) else {
+                    return true;
+                };
+                self.apply_settings_action(crate::ui::settings::SettingsAction::PlaceFilterCaret(
+                    cursor,
+                ));
+                TextTarget::SettingsFilter
+            }
+            Some(ModalLayer::SessionPanel) => {
+                let Some(cursor) = self.session_panel.rename_caret_at(
+                    (x, y),
+                    width,
+                    height,
+                    metrics.tab_bar_height,
+                    cell_width,
+                    cell_height,
+                ) else {
+                    return true;
+                };
+                self.apply_session_panel_action(
+                    crate::ui::session_panel::SessionPanelAction::PlaceRenameCaret { cursor },
+                );
+                TextTarget::WorkspaceRename
+            }
+            Some(ModalLayer::CommandsPanel) => {
+                let info = self.commands_panel.build_info(&self.config.commands);
+                let Some(place @ CommandsPanelAction::PlaceCaret { .. }) =
+                    self.commands_panel_layout().input_click(&info, x, y)
+                else {
+                    return true;
+                };
+                self.apply_commands_panel_action(place);
+                TextTarget::CommandsForm
+            }
+            _ => return false,
+        };
+        self.paste_primary_into_field(target);
+        true
+    }
+
     /// Pastes the primary selection into `target`, a field a middle click
     /// has just focused, when it is still where text goes.
     pub(super) fn paste_primary_into_field(&mut self, target: TextTarget) -> bool {
@@ -917,5 +996,100 @@ mod tests {
         app.search.cancel();
         assert!(app.paste_clipboard_payload("Z"));
         app.wait_for_screen_text("5a");
+    }
+
+    /// The fields a middle press pastes the primary selection into.
+    #[derive(Clone, Copy, Debug)]
+    enum MiddlePasteField {
+        Palette,
+        Shortcuts,
+        Settings,
+        WorkspaceRename,
+        CommandsForm,
+    }
+
+    impl MiddlePasteField {
+        /// Open the surface with "ab" in its field, the caret at its end.
+        fn open(self, app: &mut App) {
+            match self {
+                Self::Palette => app.command_palette.open(),
+                Self::Shortcuts => app.shortcuts_panel.open(),
+                Self::Settings => app.settings_panel.toggle(),
+                Self::WorkspaceRename => {
+                    open_workspace_rename(app);
+                    assert!(app.session_panel.accessibility_set_rename("ab"));
+                    return;
+                }
+                Self::CommandsForm => {
+                    app.commands_panel.toggle();
+                    app.commands_panel.start_add();
+                }
+            }
+            assert!(app.paste_clipboard_payload("ab"), "{self:?}");
+        }
+
+        fn text(self, app: &mut App) -> String {
+            match self {
+                Self::Palette => app.command_palette.build_info().input,
+                Self::Shortcuts => shortcuts_filter(app),
+                Self::Settings => settings_filter(app),
+                Self::WorkspaceRename => app.session_panel.build_info().rename_text.unwrap(),
+                Self::CommandsForm => app.commands_panel.form_name.text().to_owned(),
+            }
+        }
+    }
+
+    #[test]
+    fn a_middle_press_on_a_field_pastes_the_primary_selection_where_it_landed() {
+        let mut config = Config::default();
+        // Panels at rest, so the press lands where the field is drawn.
+        config.accessibility.reduce_motion = crate::config::AccessibilityPreference::On;
+        for field in [
+            MiddlePasteField::Palette,
+            MiddlePasteField::Shortcuts,
+            MiddlePasteField::Settings,
+            MiddlePasteField::WorkspaceRename,
+            MiddlePasteField::CommandsForm,
+        ] {
+            let mut app = App::new_headless(config.clone()).unwrap();
+            app.sync_accessibility_preferences();
+            let (clipboard, memory) = super::super::clipboard::Clipboard::in_memory();
+            memory.lock().unwrap().primary = Some("ginger".into());
+            app.clipboard = clipboard;
+            field.open(&mut app);
+            let target = app.text_target();
+            let metrics = app.ui_metrics();
+            let viewport = app
+                .field_ime_viewport(
+                    target,
+                    metrics.width,
+                    metrics.height,
+                    metrics.cell_width,
+                    metrics.cell_height,
+                )
+                .unwrap();
+            // Just inside the field's first character: the caret goes before it.
+            let (x, y) = (
+                viewport.text_x + 1.0,
+                viewport.text_y + metrics.cell_height / 2.0,
+            );
+
+            assert!(app.middle_press_field(x, y), "{field:?}");
+            assert_eq!(field.text(&mut app), "gingerab", "{field:?}");
+
+            // Anywhere else, even outside the surface, nothing happens.
+            assert!(app.middle_press_field(1.0, 1.0), "{field:?}");
+            assert_eq!(field.text(&mut app), "gingerab", "{field:?}");
+            assert_eq!(app.text_target(), target, "{field:?} stays open");
+            assert_eq!(memory.lock().unwrap().clipboard, None);
+        }
+    }
+
+    #[test]
+    fn a_middle_press_leaves_surfaces_without_fields_to_their_own_handling() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        assert!(!app.middle_press_field(1.0, 1.0));
+        app.agents_panel.toggle(&[]);
+        assert!(!app.middle_press_field(1.0, 1.0));
     }
 }

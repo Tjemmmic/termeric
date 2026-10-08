@@ -592,8 +592,7 @@ impl CommandPalette {
             self.close();
             return Some(PaletteResult::Cancelled);
         }
-        if let Some(cursor) = layout.input_cursor_at(self.input.text(), self.input.cursor(), x, y) {
-            self.input.place_caret(cursor);
+        if self.place_caret_at(x, y, layout) {
             return None;
         }
         if let Some(row) = layout.visible_row_at(y) {
@@ -604,6 +603,17 @@ impl CommandPalette {
             }
         }
         None
+    }
+
+    /// Put the query's caret where a press at `x, y` lands on the query
+    /// field. Returns whether it landed on the field.
+    pub fn place_caret_at(&mut self, x: f32, y: f32, layout: &PaletteLayout) -> bool {
+        let Some(cursor) = layout.input_cursor_at(self.input.text(), self.input.cursor(), x, y)
+        else {
+            return false;
+        };
+        self.input.place_caret(cursor);
+        true
     }
 
     /// Execute the currently selected command

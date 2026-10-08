@@ -112,7 +112,7 @@ impl App {
 
     /// The input viewport of `target` when it is a field of a palette,
     /// dialog, or panel; `None` for any other target.
-    fn field_ime_viewport(
+    pub(super) fn field_ime_viewport(
         &self,
         target: TextTarget,
         width: f32,

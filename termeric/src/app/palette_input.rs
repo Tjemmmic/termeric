@@ -227,26 +227,38 @@ impl App {
             return false;
         };
         self.ime.clear_preedit();
-        let choice =
-            if let (Some(position), Some(renderer)) = (self.last_cursor_pos, &self.renderer) {
-                let (width, height) = renderer.window_size();
-                let info = self.palette_owner(modal).build_info();
-                let layout = PaletteLayout::calculate(
-                    width as f32,
-                    height as f32,
-                    renderer.cell_width(),
-                    renderer.cell_height(),
-                    info.animation,
-                    info.entries.len(),
-                );
-                self.click_palette_modal(modal, position.0 as f32, position.1 as f32, &layout)
-            } else {
-                self.close_palette_modal(modal);
-                None
-            };
+        let choice = if let Some(position) = self.last_cursor_pos {
+            let layout = self.palette_modal_layout(modal);
+            self.click_palette_modal(modal, position.0 as f32, position.1 as f32, &layout)
+        } else {
+            self.close_palette_modal(modal);
+            None
+        };
         self.finish_palette_input(choice);
         self.request_redraw(RedrawReason::PointerInput);
         true
+    }
+
+    /// A middle press on the open palette-style modal's query puts the caret
+    /// there; returns whether it landed on a query that may change.
+    pub(super) fn place_palette_caret_at(&mut self, modal: PaletteModal, x: f32, y: f32) -> bool {
+        let layout = self.palette_modal_layout(modal);
+        let owner = self.palette_owner_mut(modal);
+        owner.query_editable() && owner.palette_mut().place_caret_at(x, y, &layout)
+    }
+
+    /// The geometry pointer presses on `modal` are resolved against.
+    fn palette_modal_layout(&self, modal: PaletteModal) -> PaletteLayout {
+        let metrics = self.ui_metrics();
+        let info = self.palette_owner(modal).build_info();
+        PaletteLayout::calculate(
+            metrics.width,
+            metrics.height,
+            metrics.cell_width,
+            metrics.cell_height,
+            info.animation,
+            info.entries.len(),
+        )
     }
 }
 

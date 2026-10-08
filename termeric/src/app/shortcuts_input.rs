@@ -58,7 +58,22 @@ impl App {
         }
     }
 
-    /// Called only for primary presses after higher-priority modal routing.
+    /// The geometry pointer presses on the Shortcuts panel are resolved
+    /// against.
+    pub(super) fn shortcuts_panel_layout(&self) -> ShortcutsPanelLayout {
+        let metrics = self.ui_metrics();
+        let info = self.shortcuts_panel.build_info(&self.shortcut_registry);
+        ShortcutsPanelLayout::calculate(
+            metrics.width,
+            metrics.height,
+            metrics.cell_width,
+            metrics.cell_height,
+            info.animation,
+            info.entries.len(),
+        )
+    }
+
+    /// For primary and middle presses after higher-priority modal routing.
     /// Even a collapsed or recording input consumes its own rectangle.
     pub(super) fn handle_shortcuts_filter_click(
         &mut self,

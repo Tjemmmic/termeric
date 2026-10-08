@@ -523,6 +523,17 @@ impl App {
         let pressed = state == winit::event::ElementState::Pressed;
         let left = button == winit::event::MouseButton::Left;
         let pos = self.last_cursor_pos;
+        // On a palette, the Shortcuts panel, Settings, or the session or
+        // Commands panel, a middle press on the text field pastes the
+        // primary selection there; elsewhere on them it does nothing.
+        if pressed
+            && button == winit::event::MouseButton::Middle
+            && let Some(pos) = pos
+            && self.middle_press_field(pos.0 as f32, pos.1 as f32)
+        {
+            self.request_redraw(RedrawReason::PointerInput);
+            return;
+        }
         match self.top_modal_layer() {
             // Settings, the Workspaces menu, and the side panels take the
             // pointer in `handle_mouse_input`, after the global Settings
@@ -670,18 +681,8 @@ impl App {
     /// A primary press at `pos` while the shortcuts panel is on top.
     fn press_shortcuts_panel(&mut self, pos: Option<(f64, f64)>) {
         if let (Some(pos), Some(renderer)) = (pos, &self.renderer) {
-            use crate::ui::shortcuts_panel::ShortcutsPanelLayout;
-            let (sw, sh) = renderer.window_size();
             let (cw, ch) = (renderer.cell_width(), renderer.cell_height());
-            let info = self.shortcuts_panel.build_info(&self.shortcut_registry);
-            let layout = ShortcutsPanelLayout::calculate(
-                sw as f32,
-                sh as f32,
-                cw,
-                ch,
-                info.animation,
-                info.entries.len(),
-            );
+            let layout = self.shortcuts_panel_layout();
             let (mx, my) = (pos.0 as f32, pos.1 as f32);
             if !layout.contains(mx, my) {
                 self.shortcuts_panel.close();

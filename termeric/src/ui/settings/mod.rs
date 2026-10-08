@@ -2005,6 +2005,39 @@ impl SettingsPanel {
         self.is_active() && !self.dropdown_open && self.filter.place_caret(cursor)
     }
 
+    /// Where a press at `x, y` lands in the filter field, as a caret
+    /// position: `None` off the field, or while a dropdown covers the dialog.
+    /// Like [`Self::input_viewport`], it needs no settings list.
+    pub fn filter_caret_at(
+        &self,
+        (x, y): (f32, f32),
+        width: f32,
+        height: f32,
+        cell_width: f32,
+        cell_height: f32,
+    ) -> Option<usize> {
+        if !self.is_active() || self.dropdown_open {
+            return None;
+        }
+        let layout = SettingsModalLayout::calculate(
+            width,
+            height,
+            cell_width,
+            cell_height,
+            self.animation_progress(),
+            0,
+        );
+        if !layout.input.contains(x, y) {
+            return None;
+        }
+        layout.input_cursor_at(
+            self.filter.text(),
+            self.filter.cursor(),
+            (x, y),
+            cell_height,
+        )
+    }
+
     /// Candidate geometry needs only filter state, never a rebuilt settings list.
     pub fn input_viewport(
         &self,
