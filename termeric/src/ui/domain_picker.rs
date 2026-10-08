@@ -173,7 +173,7 @@ impl DomainPicker {
         y: f32,
         layout: &PaletteLayout,
     ) -> Option<DomainPickerCommand> {
-        if !self.can_filter() && layout.input_contains(x, y) {
+        if !self.can_filter() && layout.input().contains(x, y) {
             return None;
         }
         let result = self.palette.handle_click(x, y, layout)?;

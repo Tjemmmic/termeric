@@ -1,25 +1,26 @@
 //! Shared query scroll/caret geometry for painting and native IME positioning.
 
 use super::PaletteLayout;
+use crate::ui::geometry::Bounds;
 use crate::ui::text_input_viewport::TextInputViewport;
 #[cfg(test)]
 use unicode_segmentation::UnicodeSegmentation;
 
 impl PaletteLayout {
-    /// Matches the rounded input background's bounding rectangle in the renderer.
-    pub fn input_contains(&self, x: f32, y: f32) -> bool {
-        x.is_finite()
-            && y.is_finite()
-            && x >= self.panel_x + self.padding
-            && x < self.panel_x + self.panel_width - self.padding
-            && y >= self.panel_y + self.padding
-            && y < self.panel_y + self.padding + self.input_height
+    /// The query field: the rounded input background the renderer draws.
+    pub fn input(&self) -> Bounds {
+        Bounds::new(
+            self.panel_x + self.padding,
+            self.panel_y + self.padding,
+            self.panel_width - self.padding * 2.0,
+            self.input_height,
+        )
     }
 
     /// Resolve the nearest visible grapheme boundary, including scrolled text.
     /// Blank space selects the visible edge, never an off-screen byte position.
     pub fn input_cursor_at(&self, text: &str, cursor: usize, x: f32, y: f32) -> Option<usize> {
-        if !self.input_contains(x, y) {
+        if !self.input().contains(x, y) {
             return None;
         }
         self.input_viewport(text, cursor)?
@@ -29,17 +30,12 @@ impl PaletteLayout {
     /// Keep the caret visible without splitting a grapheme or drawing outside
     /// the field. The full query remains in the model and accessibility tree.
     pub fn input_viewport(&self, text: &str, cursor: usize) -> Option<TextInputViewport> {
-        let text_x = self.panel_x
-            + self.padding
-            + self.cell_width * crate::ui::constants::FILTER_TEXT_INSET_CELLS;
-        let right = self.panel_x + self.panel_width - self.padding - self.cell_width * 0.8;
-        TextInputViewport::calculate(
+        crate::ui::filter_field::text_viewport(
             text,
             cursor,
-            text_x,
-            self.panel_y + self.padding + (self.input_height - self.cell_height) / 2.0,
-            right,
+            self.input(),
             self.cell_width,
+            self.cell_height,
         )
     }
 }

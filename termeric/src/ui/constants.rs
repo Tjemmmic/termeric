@@ -25,6 +25,9 @@ pub const MIN_SCROLL_THUMB_HEIGHT: f32 = 24.0;
 /// of the query text, in terminal cell widths from the field's left edge.
 pub const FILTER_ICON_CENTER_CELLS: f32 = 1.3;
 pub const FILTER_TEXT_INSET_CELLS: f32 = 2.6;
+/// The gap between a filter field's text and its right edge, in cell widths,
+/// so a long query stops short of the rounded corner instead of touching it.
+pub const FILTER_TEXT_END_INSET_CELLS: f32 = 0.8;
 
 /// Character scale factor for content text in overlays (relative to cell_width).
 pub const CONTENT_CHAR_SCALE: f32 = 0.85;

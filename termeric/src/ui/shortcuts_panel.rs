@@ -120,14 +120,7 @@ impl ShortcutsPanelLayout {
         cell_width: f32,
         cell_height: f32,
     ) -> Option<TextInputViewport> {
-        TextInputViewport::calculate(
-            text,
-            cursor,
-            self.input.x + cell_width * crate::ui::constants::FILTER_TEXT_INSET_CELLS,
-            self.input.y + (self.input.height - cell_height) / 2.0,
-            self.input.x + self.input.width - cell_width * 0.8,
-            cell_width,
-        )
+        crate::ui::filter_field::text_viewport(text, cursor, self.input, cell_width, cell_height)
     }
 
     /// Resolve only input clicks, using the exact visible whole-grapheme slice.

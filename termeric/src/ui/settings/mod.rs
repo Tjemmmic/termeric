@@ -92,13 +92,12 @@ impl SettingsModalLayout {
         cursor: usize,
         cell_height: f32,
     ) -> Option<TextInputViewport> {
-        TextInputViewport::calculate(
+        crate::ui::filter_field::text_viewport(
             text,
             cursor,
-            self.input.x + self.cell_width * crate::ui::constants::FILTER_TEXT_INSET_CELLS,
-            self.input.y + (self.input.height - cell_height) / 2.0,
-            self.input.x + self.input.width - self.cell_width * 0.8,
+            self.input,
             self.cell_width,
+            cell_height,
         )
     }
 
@@ -676,7 +675,10 @@ fn choice<T: Copy + PartialEq>(
         label,
         value: value_label(current).into(),
         kind: SettingKind::Dropdown {
-            options: values.iter().map(|value| value_label(*value).into()).collect(),
+            options: values
+                .iter()
+                .map(|value| value_label(*value).into())
+                .collect(),
             selected: values
                 .iter()
                 .position(|value| *value == current)
