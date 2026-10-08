@@ -470,9 +470,6 @@ mod tests {
     fn broadcast_targeting_excludes_and_rejects_read_only_panes() {
         use std::collections::HashMap;
 
-        if !std::path::Path::new("/bin/sh").is_file() {
-            return;
-        }
         let shell = crate::test_support::sleeping_shell();
         let mut tabs = TabManager::new(40, 8, shell.clone(), 100, 1024 * 1024);
         tabs.new_tab_with_command(
@@ -523,9 +520,6 @@ mod tests {
         use std::collections::HashMap;
         use std::time::{Duration, Instant};
 
-        if !std::path::Path::new("/bin/sh").is_file() {
-            return;
-        }
         let shell = crate::config::ShellConfig {
             program: Some("/bin/sh".into()),
             args: vec![
