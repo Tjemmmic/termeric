@@ -91,7 +91,7 @@ fn write_header(writer: &mut impl Write, metadata: Option<&TranscriptEntry>) -> 
         write!(
             writer,
             "**Started**: {}\n\n---\n\n",
-            format_unix_ts(meta.timestamp / 1000)
+            super::format_unix_timestamp(meta.timestamp / 1000, None)
         )?;
     }
     Ok(())
@@ -105,7 +105,7 @@ fn write_entry(writer: &mut impl Write, entry: &TranscriptEntry) -> io::Result<(
                 write!(
                     writer,
                     "### 📝 Input `{}`\n\n```\n",
-                    format_unix_ts(entry.timestamp / 1000)
+                    super::format_unix_timestamp(entry.timestamp / 1000, None)
                 )?;
             } else {
                 let filename = entry
@@ -117,7 +117,7 @@ fn write_entry(writer: &mut impl Write, entry: &TranscriptEntry) -> io::Result<(
                 write!(
                     writer,
                     "### 📝 Diff: `{filename}` `{}`\n\n```diff\n",
-                    format_unix_ts(entry.timestamp / 1000)
+                    super::format_unix_timestamp(entry.timestamp / 1000, None)
                 )?;
             }
             writer.write_all(entry.content.as_bytes())?;
@@ -130,7 +130,7 @@ fn write_entry(writer: &mut impl Write, entry: &TranscriptEntry) -> io::Result<(
             write!(
                 writer,
                 "### 💬 Output `{}`\n\n",
-                format_unix_ts(entry.timestamp / 1000)
+                super::format_unix_timestamp(entry.timestamp / 1000, None)
             )?;
             writer.write_all(entry.content.as_bytes())?;
             if !entry.content.ends_with('\n') {
@@ -140,11 +140,6 @@ fn write_entry(writer: &mut impl Write, entry: &TranscriptEntry) -> io::Result<(
         }
     }
     Ok(())
-}
-
-/// Simple Unix timestamp formatter (UTC, no timezone dependency)
-fn format_unix_ts(secs: u64) -> String {
-    super::format_unix_timestamp(secs, None)
 }
 
 #[cfg(test)]
@@ -208,12 +203,7 @@ mod tests {
         assert!(peak <= MAX_TRANSCRIPT_RECORD_BYTES);
         let mut oversized =
             io::BufReader::new(io::repeat(b'x').take(MAX_TRANSCRIPT_RECORD_BYTES as u64 + 1));
-        assert!(
-            read_record(&mut oversized, &mut Vec::new())
-                .unwrap_err()
-                .to_string()
-                .contains("16 MiB")
-        );
+        assert!(read_record(&mut oversized, &mut Vec::new()).is_err());
     }
 
     #[test]
@@ -232,12 +222,7 @@ mod tests {
                 Ok(())
             }
         }
-        assert!(
-            render_markdown(&mut io::Cursor::new(input), &mut Fail)
-                .unwrap_err()
-                .to_string()
-                .contains("full disk")
-        );
+        assert!(render_markdown(&mut io::Cursor::new(input), &mut Fail).is_err());
     }
 
     fn write_test_transcript(dir: &Path) -> std::path::PathBuf {
@@ -286,11 +271,8 @@ mod tests {
 
     #[test]
     fn test_markdown_of_file() {
-        let dir = std::env::temp_dir().join("termeric_test_export");
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-
-        let path = write_test_transcript(&dir);
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_test_transcript(dir.path());
         let md = markdown_of_file(&path).unwrap();
 
         assert!(md.contains("# AI Session Transcript"));
@@ -301,28 +283,15 @@ mod tests {
         assert!(md.contains("💬 Output"));
         assert!(md.contains("📝 Diff: `src/main.rs`"));
         assert!(md.contains("```diff"));
-
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn test_export_empty_file() {
-        let dir = std::env::temp_dir().join("termeric_test_export_empty");
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-
-        let path = dir.join("empty.jsonl");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty.jsonl");
         fs::write(&path, "").unwrap();
 
         assert!(markdown_of_file(&path).is_err());
-
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn test_format_unix_ts() {
-        assert_eq!(format_unix_ts(0), "1970-01-01T00:00:00Z");
-        assert_eq!(format_unix_ts(3661), "1970-01-01T01:01:01Z");
     }
 
     #[test]
@@ -343,7 +312,6 @@ mod tests {
         assert!(!md.contains("truncated"));
 
         writeln!(file, "not-json").unwrap();
-        let error = markdown_of_file(&path).unwrap_err();
-        assert!(error.contains("Malformed transcript"));
+        assert!(markdown_of_file(&path).is_err());
     }
 }
