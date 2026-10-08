@@ -127,7 +127,7 @@ impl Renderer {
         // Entry list
         for (entry, (_, row)) in cellar.entries.iter().zip(&layout.rows) {
             let entry_y = row.y;
-            let (health_char, health_color) = health_marker(&self.ui, entry.health);
+            let (health_icon, health_color) = health_marker(&self.ui, entry.health);
 
             if cellar.selected_id == Some(entry.id) {
                 self.rect_pipeline.push_rounded_rect(
@@ -140,10 +140,12 @@ impl Renderer {
                 );
             }
 
-            self.text_pipeline.push_char(
-                health_char,
-                row.x + cell_width * 0.5,
-                entry_y,
+            // Centred in the two-cell slot before the command, on the
+            // labels' line.
+            self.push_icon(
+                health_icon,
+                row.x + cell_width,
+                entry_y + cell_height / 2.0,
                 scale_alpha(health_color, anim),
             );
 
@@ -259,14 +261,14 @@ impl Renderer {
     }
 }
 
-/// The marker a cellar row draws for how its command fared, in the theme's
-/// status colors: a filled dot for success, a cross for failure, and a
-/// muted ring while it runs.
-fn health_marker(ui: &UiPalette, health: CommandHealth) -> (char, [f32; 4]) {
+/// The icon a cellar row draws for how its command fared, in the theme's
+/// status colors: a check for success, a cross for failure, and a muted
+/// clock while it runs.
+fn health_marker(ui: &UiPalette, health: CommandHealth) -> (Icon, [f32; 4]) {
     match health {
-        CommandHealth::Healthy => ('\u{25CF}', ui.success),
-        CommandHealth::Wilted => ('\u{2716}', ui.error),
-        CommandHealth::Running => ('\u{25CB}', ui.menu_text_dim),
+        CommandHealth::Healthy => (Icon::Check, ui.success),
+        CommandHealth::Wilted => (Icon::Cross, ui.error),
+        CommandHealth::Running => (Icon::History, ui.menu_text_dim),
     }
 }
 
@@ -313,15 +315,15 @@ mod tests {
         let ui = UiPalette::from_theme_with_contrast(&theme, false);
         assert_eq!(
             health_marker(&ui, CommandHealth::Healthy),
-            ('\u{25CF}', ui.success)
+            (Icon::Check, ui.success)
         );
         assert_eq!(
             health_marker(&ui, CommandHealth::Wilted),
-            ('\u{2716}', ui.error)
+            (Icon::Cross, ui.error)
         );
         assert_eq!(
             health_marker(&ui, CommandHealth::Running),
-            ('\u{25CB}', ui.menu_text_dim)
+            (Icon::History, ui.menu_text_dim)
         );
     }
 }
