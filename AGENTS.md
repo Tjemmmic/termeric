@@ -319,7 +319,7 @@ Colors are `#RRGGBB` or `#RRGGBBAA`. In a root theme, give every color a short c
 To add a root theme:
 
 1. Add `termeric/themes/roots/<name>.toml`.
-2. Add the name to `BUILTIN_THEME_NAMES` and an `include_str!` arm to `Theme::load_builtin`, both in `termeric/src/config/theme.rs`.
+2. Add `builtin_theme!("roots", "<name>")` after the other root themes in `BUILTIN_THEMES` (`termeric/src/config/theme.rs`) and raise the table's length by one; the theme list and `Theme::load_builtin` both read that table.
 3. Bump the root count in `root_theme_palettes_keep_ansi_meaning_and_contrast`.
 4. Add it to the theme list under `[theme]` in `assets/config.example.toml`.
 5. Run `cargo test -p termeric config::theme`.
