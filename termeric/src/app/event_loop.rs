@@ -105,8 +105,7 @@ impl App {
             Ok(window) => {
                 log::info!("Window created");
                 let window = Arc::new(window);
-                // Winit leaves IME disabled by default. This also enables
-                // native dead-key composition on platforms such as macOS.
+                // Winit leaves IME disabled by default.
                 window.set_ime_allowed(true);
                 self.accessibility_adapter = Some(accesskit_winit::Adapter::with_event_loop_proxy(
                     event_loop,

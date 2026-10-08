@@ -1093,8 +1093,7 @@ pub struct App {
     /// The desktop's activation token for a window opened for a launch
     /// that joined this process, so it takes focus.
     activation_token: Option<String>,
-    /// True when the process-level application owns event-loop exit policy.
-    /// Set by the New Window command and drained by the process controller.
+    /// Set by New Window; Application opens the window and clears it.
     request_new_window: bool,
     /// Set by the cross-window pane command and drained atomically by the
     /// process-level controller after the originating window event.
@@ -1120,9 +1119,11 @@ pub struct App {
     /// `renderer.backend` without ever entering the configuration.
     renderer_backend_override: Option<crate::config::RendererBackend>,
     /// Archive identity owned by this native window, independent of global
-    /// most-recent state used for startup compatibility.
+    /// most-recent state used for automatic restore.
     current_workspace_id: Option<String>,
-    /// Headless integration controllers never perform implicit disk writes.
+    /// Whether this window saves its workspace on its own. Headless
+    /// controllers, the quick-access window, and live-domain windows (whose
+    /// relays cannot be relaunched) never do.
     automatic_persistence: bool,
     /// Application configuration
     config: Config,
@@ -1342,13 +1343,12 @@ pub struct App {
     agent_view: agent_view::AgentViewWindow,
     /// Buffer tracking what the user has typed on the current line (for alias expansion)
     input_line_buffer: String,
-    /// Git repository watcher (tracks branch, dirty status per tab)
+    /// Watches the active tab's repository for its branch and branch completions.
     git_watcher: crate::git::GitWatcher,
     /// The Git branch completion popup, while it is shown
     git_completion: Option<git_completion::GitCompletionPopup>,
     /// Which tab bar element is currently hovered (for icon animations)
     tab_bar_hover: Option<crate::renderer::TabBarClick>,
-    /// Smooth hover animation progress (0.0 = not hovered, 1.0 = fully hovered)
     /// When the current tab bar hover target began, for its fade-in.
     tab_bar_hover_since: Instant,
     /// Plugin manager
@@ -1724,8 +1724,8 @@ impl App {
 
     /// Load window icon from embedded PNG data
     ///
-    /// The icon is embedded directly in the binary at compile time,
-    /// so it works on all platforms without requiring external files.
+    /// The icon is embedded directly in the binary at compile time, so it
+    /// needs no external files.
     /// Wayland compositors ignore it and resolve the icon from the desktop
     /// entry matching the app ID instead.
     fn load_icon() -> Option<Icon> {
@@ -2709,19 +2709,13 @@ impl App {
         deadlines.into_iter().min()
     }
 
-    fn cursor_position_animation_active(&self) -> bool {
-        // Only the presented cursor may sustain a transition. A synchronized
-        // output snapshot can intentionally differ from the live grid.
-        self.cursor_motion.is_active()
-    }
-
     fn has_deadline_animation(&self) -> bool {
         !self.reduced_motion_enabled()
             && (self
                 .tabs
                 .as_ref()
                 .is_some_and(TabManager::has_active_animation)
-                || self.cursor_position_animation_active()
+                || self.cursor_motion.is_active()
                 || !self.tab_slides.is_empty()
                 || self
                     .copy_flash_start

@@ -56,14 +56,14 @@ fn cursor_motion_preserves_new_tab_snaps_and_animates_existing_tab_switches() {
         app.update_cursor_animation_at(5, 6, true, cursor_terminal(1, 0), now),
         (5.0, 6.0)
     );
-    assert!(!app.cursor_position_animation_active());
+    assert!(!app.cursor_motion.is_active());
     let moved = now + Duration::from_secs(1);
     // An old frame gap no longer accidentally disables the transition.
     assert_eq!(
         app.update_cursor_animation_at(50, 20, true, cursor_terminal(1, 0), moved),
         (5.0, 6.0)
     );
-    assert!(app.cursor_position_animation_active());
+    assert!(app.cursor_motion.is_active());
     assert_eq!(
         app.update_cursor_animation_at(
             50,
@@ -74,18 +74,18 @@ fn cursor_motion_preserves_new_tab_snaps_and_animates_existing_tab_switches() {
         ),
         (50.0, 20.0)
     );
-    assert!(!app.cursor_position_animation_active());
+    assert!(!app.cursor_motion.is_active());
     let switched = moved + Duration::from_secs(1);
     assert_eq!(
         app.update_cursor_animation_at(100, 50, true, cursor_terminal(2, 0), switched),
         (100.0, 50.0)
     );
-    assert!(!app.cursor_position_animation_active());
+    assert!(!app.cursor_motion.is_active());
     assert_eq!(
         app.update_cursor_animation_at(5, 6, true, cursor_terminal(1, 0), switched),
         (100.0, 50.0)
     );
-    assert!(app.cursor_position_animation_active());
+    assert!(app.cursor_motion.is_active());
     assert_eq!(
         app.update_cursor_animation_at(
             5,
@@ -96,7 +96,7 @@ fn cursor_motion_preserves_new_tab_snaps_and_animates_existing_tab_switches() {
         ),
         (5.0, 6.0)
     );
-    assert!(!app.cursor_position_animation_active());
+    assert!(!app.cursor_motion.is_active());
 }
 
 #[test]
@@ -105,7 +105,7 @@ fn cursor_motion_cancels_for_hidden_cursors_reappearance_reduced_motion_and_no_t
     let now = Instant::now();
     app.update_cursor_animation_at(0, 0, true, cursor_terminal(1, 0), now);
     app.update_cursor_animation_at(20, 29, true, cursor_terminal(1, 0), now);
-    assert!(app.cursor_position_animation_active());
+    assert!(app.cursor_motion.is_active());
     for (step, col, visible) in [(1, 30, false), (2, 40, false), (3, 50, true)] {
         assert_eq!(
             app.update_cursor_animation_at(
@@ -117,7 +117,7 @@ fn cursor_motion_cancels_for_hidden_cursors_reappearance_reduced_motion_and_no_t
             ),
             (col as f32, 29.0)
         );
-        assert!(!app.cursor_position_animation_active());
+        assert!(!app.cursor_motion.is_active());
     }
     app.update_cursor_animation_at(
         60,
@@ -126,7 +126,7 @@ fn cursor_motion_cancels_for_hidden_cursors_reappearance_reduced_motion_and_no_t
         cursor_terminal(1, 0),
         now + Duration::from_millis(4),
     );
-    assert!(app.cursor_position_animation_active());
+    assert!(app.cursor_motion.is_active());
     app.config.accessibility.reduce_motion = crate::config::AccessibilityPreference::On;
     assert_eq!(
         app.update_cursor_animation_at(
@@ -138,7 +138,7 @@ fn cursor_motion_cancels_for_hidden_cursors_reappearance_reduced_motion_and_no_t
         ),
         (70.0, 29.0)
     );
-    assert!(!app.cursor_position_animation_active());
+    assert!(!app.cursor_motion.is_active());
     app.config.accessibility.reduce_motion = crate::config::AccessibilityPreference::Off;
     app.update_cursor_animation_at(
         80,
@@ -147,12 +147,12 @@ fn cursor_motion_cancels_for_hidden_cursors_reappearance_reduced_motion_and_no_t
         cursor_terminal(1, 0),
         now + Duration::from_millis(6),
     );
-    assert!(app.cursor_position_animation_active());
+    assert!(app.cursor_motion.is_active());
     assert_eq!(
         app.update_cursor_animation_at(0, 0, false, None, now + Duration::from_millis(7)),
         (0.0, 0.0)
     );
-    assert!(!app.cursor_position_animation_active());
+    assert!(!app.cursor_motion.is_active());
 }
 
 #[test]
@@ -164,10 +164,10 @@ fn cursor_motion_snaps_when_focus_moves_to_another_pane_of_the_tab() {
         app.update_cursor_animation_at(30, 2, true, cursor_terminal(1, 1), now),
         (30.0, 2.0)
     );
-    assert!(!app.cursor_position_animation_active());
+    assert!(!app.cursor_motion.is_active());
     // Moving within the newly focused pane still glides.
     app.update_cursor_animation_at(31, 2, true, cursor_terminal(1, 1), now);
-    assert!(app.cursor_position_animation_active());
+    assert!(app.cursor_motion.is_active());
 }
 
 #[test]
@@ -184,14 +184,14 @@ fn cursor_motion_scheduler_follows_presented_state_during_synchronized_output() 
     assert_ne!(app.active_terminal().unwrap().grid().cursor().col, col);
     app.update_cursor_animation_at(col, row, visible, cursor_terminal(id, 0), now);
     assert!(
-        !app.cursor_position_animation_active(),
+        !app.cursor_motion.is_active(),
         "unpresented live-grid movement must not sustain redraws"
     );
     app.active_terminal_mut().unwrap().process(b"\x1b[?2026l");
     let presented = app.active_terminal().unwrap().presentation_grid().cursor();
     let (col, row, visible) = (presented.col, presented.row, presented.visible);
     app.update_cursor_animation_at(col, row, visible, cursor_terminal(id, 0), now);
-    assert!(app.cursor_position_animation_active());
+    assert!(app.cursor_motion.is_active());
     assert_eq!(
         app.update_cursor_animation_at(
             col,
@@ -202,7 +202,7 @@ fn cursor_motion_scheduler_follows_presented_state_during_synchronized_output() 
         ),
         (39.0, 4.0)
     );
-    assert!(!app.cursor_position_animation_active());
+    assert!(!app.cursor_motion.is_active());
 }
 
 #[test]
