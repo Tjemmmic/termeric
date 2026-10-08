@@ -14,7 +14,7 @@ use winit::{
 
 use super::App;
 use super::redraw_scheduler::RedrawReason;
-use crate::ui::text_card::OverlayScroll;
+use crate::ui::diff_review::DiffReviewScroll;
 
 impl App {
     pub(super) fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -721,12 +721,12 @@ impl App {
                 self.apply_diff_review_action(if sideways {
                     DiffReviewAction::Scroll {
                         request_id,
-                        by: OverlayScroll::Columns(two_axis_columns),
+                        by: DiffReviewScroll::Columns(two_axis_columns),
                     }
                 } else {
                     DiffReviewAction::Scroll {
                         request_id,
-                        by: OverlayScroll::Rows(two_axis_rows),
+                        by: DiffReviewScroll::Rows(two_axis_rows),
                     }
                 });
             }

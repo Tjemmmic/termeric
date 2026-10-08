@@ -35,7 +35,6 @@ mod live_domain_control;
 mod modal_layer;
 mod mouse;
 mod mouse_selection;
-mod overlay_scroll;
 mod palette_input;
 mod plugin_actions;
 mod plugin_launch;

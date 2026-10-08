@@ -502,7 +502,7 @@ fn card_scrollbar_track(card: Bounds, padding: f32, content: Bounds, width: f32)
 mod tests {
     use super::*;
     use crate::ui::context_picker::{ContextPickerLayout, ContextPickerPhase};
-    use crate::ui::text_card::TextCard;
+    use crate::ui::diff_review::DiffReviewLayout;
 
     #[test]
     fn a_cards_scrollbar_track_scales_within_the_gutter_beside_its_content() {
@@ -510,17 +510,16 @@ mod tests {
             // The smallest font's cells, at this scale.
             let (cell_width, cell_height) = (6.4 * scale, 13.0 * scale);
             let width = super::super::physical_px(CARD_SCROLLBAR_WIDTH, scale);
-            let text = TextCard::calculate(
+            let diff = DiffReviewLayout::calculate(
                 2_000.0 * scale,
                 1_200.0 * scale,
                 cell_width,
                 cell_height,
                 1.0,
-                TextCard::text_line_height(cell_height),
-                80,
-                20,
-                380.0,
+                "fixture.rs",
                 1_000,
+                80,
+                true,
             );
             let picker = ContextPickerLayout::calculate(
                 2_000.0 * scale,
@@ -532,7 +531,7 @@ mod tests {
                 40,
             );
             for (card, padding, content) in [
-                (text.card, text.padding, text.content),
+                (diff.card, diff.padding, diff.content),
                 (picker.card, picker.padding, picker.content),
             ] {
                 let track = card_scrollbar_track(card, padding, content, width);

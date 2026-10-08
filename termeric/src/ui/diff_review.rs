@@ -3,8 +3,8 @@
 //! staged or reverted from here.
 
 use super::animation::OverlayAnimation;
+use super::constants::CONTENT_CHAR_SCALE;
 use super::request_scope::RequestScope;
-use super::text_card::{OverlayScroll, TextCard, TextViewport};
 use crate::terminal::diff_detector::{DetectedDiff, DiffLine};
 use crate::ui::geometry::Bounds;
 
@@ -146,9 +146,116 @@ pub enum DiffReviewAction {
     },
     Scroll {
         request_id: u64,
-        by: OverlayScroll,
+        by: DiffReviewScroll,
     },
     None,
+}
+
+/// One scroll of the diff: by rows or columns, or to an edge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiffReviewScroll {
+    Rows(isize),
+    Columns(isize),
+    Top,
+    Bottom,
+    LineStart,
+    LineEnd,
+}
+
+/// The part of the diff in view: `rows` × `columns` cells scrolled over
+/// `content_rows` lines at most `content_columns` wide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiffViewport {
+    row: usize,
+    column: usize,
+    rows: usize,
+    columns: usize,
+    content_rows: usize,
+    content_columns: usize,
+}
+
+impl Default for DiffViewport {
+    fn default() -> Self {
+        Self {
+            row: 0,
+            column: 0,
+            rows: 1,
+            columns: 1,
+            content_rows: 0,
+            content_columns: 0,
+        }
+    }
+}
+
+impl DiffViewport {
+    /// Show a new diff from its top-left corner.
+    pub fn reset(&mut self, content_rows: usize, content_columns: usize) {
+        self.row = 0;
+        self.column = 0;
+        self.content_rows = content_rows;
+        self.content_columns = content_columns;
+        self.clamp();
+    }
+
+    /// The card now shows `rows` × `columns` cells.
+    pub fn resize(&mut self, rows: usize, columns: usize) {
+        self.rows = rows.max(1);
+        self.columns = columns.max(1);
+        self.clamp();
+    }
+
+    /// Apply one scroll; whether anything moved.
+    pub fn apply(&mut self, scroll: DiffReviewScroll) -> bool {
+        let before = (self.row, self.column);
+        match scroll {
+            DiffReviewScroll::Rows(delta) => self.row = self.row.saturating_add_signed(delta),
+            DiffReviewScroll::Columns(delta) => {
+                self.column = self.column.saturating_add_signed(delta);
+            }
+            DiffReviewScroll::Top => self.row = 0,
+            DiffReviewScroll::Bottom => self.row = self.max_row(),
+            DiffReviewScroll::LineStart => self.column = 0,
+            DiffReviewScroll::LineEnd => self.column = self.max_column(),
+        }
+        self.clamp();
+        before != (self.row, self.column)
+    }
+
+    /// The first row in view.
+    pub fn row(&self) -> usize {
+        self.row
+    }
+
+    /// The first column in view.
+    pub fn column(&self) -> usize {
+        self.column
+    }
+
+    pub fn rows(&self) -> usize {
+        self.rows
+    }
+
+    pub fn columns(&self) -> usize {
+        self.columns
+    }
+
+    pub fn max_row(&self) -> usize {
+        self.content_rows.saturating_sub(self.rows)
+    }
+
+    pub fn max_column(&self) -> usize {
+        self.content_columns.saturating_sub(self.columns)
+    }
+
+    /// The content columns the widest line spans.
+    pub fn content_columns(&self) -> usize {
+        self.content_columns
+    }
+
+    fn clamp(&mut self) {
+        self.row = self.row.min(self.max_row());
+        self.column = self.column.min(self.max_column());
+    }
 }
 
 /// Exact geometry shared by rendering, pointer input, viewport sizing, and
@@ -165,13 +272,18 @@ pub struct DiffReviewLayout {
     pub padding: f32,
     pub title_height: f32,
     pub line_height: f32,
+    /// Horizontal advance of one diff column.
     pub char_scale: f32,
-    pub footer_height: f32,
     pub rows_that_fit: usize,
     pub columns_that_fit: usize,
 }
 
 impl DiffReviewLayout {
+    /// Lay out a centred card showing `total_rows` diff rows under a title
+    /// naming `filename` and above the button row. It is wide enough for
+    /// the title and for 50 to 100 columns of diff where the window allows,
+    /// and never narrower than 500 pixels; `animation` slides it down into
+    /// place as it opens.
     pub fn calculate(
         window_width: f32,
         window_height: f32,
@@ -183,56 +295,88 @@ impl DiffReviewLayout {
         max_line_chars: usize,
         change_actions: bool,
     ) -> Self {
-        let text = TextCard::calculate(
-            window_width,
-            window_height,
-            cell_width,
-            cell_height,
-            animation,
-            TextCard::text_line_height(cell_height),
-            max_line_chars.clamp(50, 100),
-            "Changes in ".chars().count() + filename.chars().count(),
-            500.0,
-            total_rows,
+        let line_height = (cell_height * 1.5).max(1.0);
+        let char_scale = (cell_width * CONTENT_CHAR_SCALE).max(1.0);
+        let padding = (cell_width * 2.0).max(12.0);
+        let title_height = cell_height * 2.5;
+        // The button row and the space below it.
+        let footer_height = cell_height * 4.5;
+        let outer_margin = (cell_width * 2.0).max(12.0);
+        let scrollbar_gutter = cell_width.max(6.0);
+
+        let columns = max_line_chars
+            .clamp(50, 100)
+            .max("Changes in ".chars().count() + filename.chars().count());
+        let preferred_width = columns as f32 * char_scale + padding * 2.0 + scrollbar_gutter;
+        let available_width = (window_width - outer_margin * 2.0).max(1.0);
+        let card_width = preferred_width.max(500.0).min(available_width);
+
+        let fixed_height = padding + title_height + footer_height + padding * 0.5;
+        let available_height = (window_height - outer_margin * 2.0).max(line_height);
+        let content_budget = (available_height - fixed_height).max(line_height);
+        let rows_that_fit = ((content_budget / line_height).floor() as usize).max(1);
+        let content_height = total_rows.max(1).min(rows_that_fit) as f32 * line_height;
+        let card_height = fixed_height + content_height;
+        let card = Bounds::new(
+            (window_width - card_width) / 2.0,
+            (window_height - card_height) / 2.0 + (1.0 - animation) * -20.0,
+            card_width,
+            card_height,
         );
-        let row_x = text.card.x + text.padding;
+
+        let content_width = (card_width - padding * 2.0 - scrollbar_gutter).max(char_scale);
+        let content = Bounds::new(
+            card.x + padding,
+            card.y + padding + title_height,
+            content_width,
+            content_height,
+        );
+
+        let button_y = content.bottom() + cell_height * 1.3;
+        let button_height = cell_height * 1.8;
+        let button_gap = cell_width * 1.5;
+        let button = |x: f32, width: f32| Bounds::new(x, button_y, width.max(1.0), button_height);
+        // The row inside the padding, less the gaps between `buttons` buttons.
+        let row_width = |buttons: usize| {
+            card_width - padding * 2.0 - button_gap * buttons.saturating_sub(1) as f32
+        };
+        let row_x = card.x + padding;
         let (stage_button, revert_button, copy_button, done_button) = if change_actions {
             // Stage, Revert, and Copy share the row equally with a wider Done.
-            let available = text.button_row_width(3).max(4.0);
+            let available = row_width(4).max(4.0);
             let small = available * 0.22;
             let done = available - small * 3.0;
-            let step = small + text.button_gap;
+            let step = small + button_gap;
             (
-                Some(text.button(row_x, small)),
-                Some(text.button(row_x + step, small)),
-                text.button(row_x + step * 2.0, small),
-                text.button(row_x + step * 3.0, done),
+                Some(button(row_x, small)),
+                Some(button(row_x + step, small)),
+                button(row_x + step * 2.0, small),
+                button(row_x + step * 3.0, done),
             )
         } else {
-            let available = text.button_row_width(1).max(2.0);
+            let available = row_width(2).max(2.0);
             let copy = available * 0.38;
             (
                 None,
                 None,
-                text.button(row_x, copy),
-                text.button(row_x + copy + text.button_gap, available - copy),
+                button(row_x, copy),
+                button(row_x + copy + button_gap, available - copy),
             )
         };
 
         Self {
-            card: text.card,
-            content: text.content,
+            card,
+            content,
             copy_button,
             done_button,
             stage_button,
             revert_button,
-            padding: text.padding,
-            title_height: text.title_height,
-            line_height: text.line_height,
-            char_scale: text.char_scale,
-            footer_height: text.footer_height,
-            rows_that_fit: text.rows_that_fit,
-            columns_that_fit: text.columns_that_fit,
+            padding,
+            title_height,
+            line_height,
+            char_scale,
+            rows_that_fit,
+            columns_that_fit: ((content_width / char_scale).floor() as usize).max(1),
         }
     }
 
@@ -275,7 +419,7 @@ pub struct DiffReviewOverlay {
     /// The complete unified diff of that change, for Copy.
     change_text: String,
     request: RequestScope,
-    viewport: TextViewport,
+    viewport: DiffViewport,
     focus: DiffReviewFocus,
 }
 
@@ -289,7 +433,7 @@ impl DiffReviewOverlay {
             change: None,
             change_text: String::new(),
             request: RequestScope::default(),
-            viewport: TextViewport::default(),
+            viewport: DiffViewport::default(),
             focus: DiffReviewFocus::Button(DiffReviewButton::Done),
         }
     }
@@ -451,12 +595,12 @@ impl DiffReviewOverlay {
     }
 
     /// Scroll for the current request; whether anything moved.
-    pub fn scroll(&mut self, request_id: u64, by: OverlayScroll) -> bool {
+    pub fn scroll(&mut self, request_id: u64, by: DiffReviewScroll) -> bool {
         self.is_awaiting(request_id) && self.viewport.apply(by)
     }
 
     /// The part of the diff in view.
-    pub fn viewport(&self) -> &TextViewport {
+    pub fn viewport(&self) -> &DiffViewport {
         &self.viewport
     }
 
@@ -666,6 +810,68 @@ mod tests {
     }
 
     #[test]
+    fn each_scroll_moves_its_axis_within_the_diff_to_the_step_or_edge() {
+        let mut viewport = DiffViewport::default();
+        viewport.reset(100, 40);
+        viewport.resize(10, 30);
+        let at = |viewport: &DiffViewport| (viewport.row(), viewport.column());
+        assert!(viewport.apply(DiffReviewScroll::Rows(3)));
+        assert!(viewport.apply(DiffReviewScroll::Columns(2)));
+        assert_eq!(at(&viewport), (3, 2));
+        assert!(viewport.apply(DiffReviewScroll::Rows(1_000)));
+        assert!(viewport.apply(DiffReviewScroll::Columns(1_000)));
+        assert_eq!(at(&viewport), (90, 10));
+        assert!(
+            !viewport.apply(DiffReviewScroll::Bottom),
+            "already at the bottom"
+        );
+        assert!(!viewport.apply(DiffReviewScroll::LineEnd));
+        assert!(viewport.apply(DiffReviewScroll::Top));
+        assert!(viewport.apply(DiffReviewScroll::LineStart));
+        assert_eq!(at(&viewport), (0, 0));
+        assert!(viewport.apply(DiffReviewScroll::Bottom));
+        assert!(viewport.apply(DiffReviewScroll::LineEnd));
+        assert_eq!(at(&viewport), (90, 10));
+        viewport.resize(95, 38);
+        assert_eq!(at(&viewport), (5, 2), "a taller card pulls the scroll back");
+        viewport.reset(3, 3);
+        assert_eq!((viewport.max_row(), viewport.max_column()), (0, 0));
+    }
+
+    #[test]
+    fn the_card_stays_in_small_windows_and_slides_with_its_animation() {
+        let open = DiffReviewLayout::calculate(
+            300.0,
+            200.0,
+            10.0,
+            20.0,
+            1.0,
+            "fixture.rs",
+            1_000,
+            400,
+            true,
+        );
+        assert!(open.card.x >= 0.0 && open.card.right() <= 300.0);
+        assert!(open.card.y >= 0.0 && open.card.bottom() <= 200.0);
+        assert!(open.content.right() < open.card.right() - open.padding);
+        assert!(open.done_button.right() <= open.card.right() - open.padding + 0.001);
+        assert_eq!(open.rows_that_fit, 1);
+        let opening = DiffReviewLayout::calculate(
+            300.0,
+            200.0,
+            10.0,
+            20.0,
+            0.5,
+            "fixture.rs",
+            1_000,
+            400,
+            true,
+        );
+        assert_eq!(opening.card.y, open.card.y - 10.0);
+        assert_eq!(opening.done_button.y, open.done_button.y - 10.0);
+    }
+
+    #[test]
     fn rows_land_on_whole_pixels_and_tile_the_content() {
         // A 20-pixel cell gives 30-pixel lines; an odd window height puts
         // the centred card, and so its content, between pixels.
@@ -808,9 +1014,9 @@ mod tests {
         let first_diff = fixture(1, 20, 100);
         let first = overlay.show(&first_diff, 9, crate::panes::PaneId(0));
         overlay.set_viewport(4, 10);
-        assert!(overlay.scroll(first, OverlayScroll::Rows(100)));
+        assert!(overlay.scroll(first, DiffReviewScroll::Rows(100)));
         assert_eq!(overlay.viewport().row(), overlay.viewport().max_row());
-        assert!(overlay.scroll(first, OverlayScroll::Columns(100)));
+        assert!(overlay.scroll(first, DiffReviewScroll::Columns(100)));
         assert_eq!(overlay.viewport().column(), overlay.viewport().max_column());
 
         let current_diff = fixture(2, 1, 1);

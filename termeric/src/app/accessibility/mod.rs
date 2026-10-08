@@ -21,8 +21,8 @@ use crate::ui::commands::navigation::{
     CommandControl, CommandKey as CustomCommandSemanticKey, command_index as custom_command_index,
     command_keys as custom_command_keys,
 };
+use crate::ui::diff_review::DiffReviewScroll;
 use crate::ui::geometry::Bounds;
-use crate::ui::text_card::OverlayScroll;
 
 mod chrome;
 mod dialogs;

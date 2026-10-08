@@ -4,8 +4,8 @@
 use std::path::PathBuf;
 
 use super::animation::OverlayAnimation;
+use super::constants::CONTENT_CHAR_SCALE;
 use super::request_scope::RequestScope;
-use super::text_card::TextCard;
 use super::text_input::{TextInput, TextInputEdit, TextLimit};
 use crate::agents::AgentTarget;
 use crate::agents::context::{
@@ -137,6 +137,9 @@ pub struct ContextPickerLayout {
 }
 
 impl ContextPickerLayout {
+    /// Lay out the centred card: a title, the phase's rows, the button row,
+    /// and the status line under it. `animation` slides it down into place
+    /// as it opens.
     pub fn calculate(
         window_width: f32,
         window_height: f32,
@@ -151,43 +154,74 @@ impl ContextPickerLayout {
         } else {
             source_count.max(1)
         };
+        let row_height = cell_height * 2.2;
+        let padding = (cell_width * 2.0).max(12.0);
+        let title_height = cell_height * 2.5;
+        // The button row and the status line under it.
+        let footer_height = cell_height * 4.5;
+        let outer_margin = (cell_width * 2.0).max(12.0);
+        let scrollbar_gutter = cell_width.max(6.0);
+
         // A fixed width: the rows are labels and checkboxes, not text that
         // asks for columns.
-        let text = TextCard::calculate(
-            window_width,
-            window_height,
-            cell_width,
-            cell_height,
-            animation,
-            cell_height * 2.2,
-            0,
-            0,
-            (cell_width * 58.0).max(440.0),
-            desired_rows,
+        let available_width = (window_width - outer_margin * 2.0).max(1.0);
+        let card_width = (cell_width * 58.0).max(440.0).min(available_width);
+
+        let fixed_height = padding + title_height + footer_height + padding * 0.5;
+        let available_height = (window_height - outer_margin * 2.0).max(row_height);
+        let content_budget = (available_height - fixed_height).max(row_height);
+        let rows_that_fit = ((content_budget / row_height).floor() as usize).max(1);
+        let visible_count = desired_rows.min(rows_that_fit);
+        let content_height = visible_count as f32 * row_height;
+        let card_height = fixed_height + content_height;
+        let card = Bounds::new(
+            (window_width - card_width) / 2.0,
+            (window_height - card_height) / 2.0 + (1.0 - animation) * -20.0,
+            card_width,
+            card_height,
         );
-        let available_button_width = text.button_row_width(1).max(2.0);
+        let char_scale = (cell_width * CONTENT_CHAR_SCALE).max(1.0);
+        let content = Bounds::new(
+            card.x + padding,
+            card.y + padding + title_height,
+            (card_width - padding * 2.0 - scrollbar_gutter).max(char_scale),
+            content_height,
+        );
+
+        let button_y = content.bottom() + cell_height * 1.3;
+        let button_height = cell_height * 1.8;
+        let button_gap = cell_width * 1.5;
+        let button = |x: f32, width: f32| Bounds::new(x, button_y, width.max(1.0), button_height);
+        let available_button_width = (card_width - padding * 2.0 - button_gap).max(2.0);
         let cancel_width = (available_button_width * 0.38).max(1.0);
         let primary_width = (available_button_width - cancel_width).max(1.0);
-        let cancel_x = text.card.x + text.padding;
-        let primary_x = cancel_x + cancel_width + text.button_gap;
+        let cancel_x = card.x + padding;
+        let primary_x = cancel_x + cancel_width + button_gap;
 
         Self {
-            card: text.card,
-            content: text.content,
+            card,
+            content,
             file_input: Bounds {
-                x: text.content.x,
-                y: text.content.y + text.line_height * 0.75,
-                width: text.content.width,
-                height: text.line_height,
+                x: content.x,
+                y: content.y + row_height * 0.75,
+                width: content.width,
+                height: row_height,
             },
-            cancel_button: text.button(cancel_x, cancel_width),
-            primary_button: text.button(primary_x, primary_width),
-            status: text.status,
-            padding: text.padding,
-            title_height: text.title_height,
-            row_height: text.line_height,
-            visible_count: desired_rows.min(text.rows_that_fit),
-            char_scale: text.char_scale,
+            cancel_button: button(cancel_x, cancel_width),
+            primary_button: button(primary_x, primary_width),
+            // Half a cell below the buttons, inside the padding; its text is
+            // centred in it.
+            status: Bounds::new(
+                content.x,
+                button_y + button_height + cell_height * 0.5,
+                card_width - padding * 2.0,
+                cell_height,
+            ),
+            padding,
+            title_height,
+            row_height,
+            visible_count,
+            char_scale,
         }
     }
 
@@ -704,6 +738,29 @@ mod tests {
             picker.snapshot().scroll_offset,
             picker.sources().len() - layout.visible_count
         );
+    }
+
+    #[test]
+    fn the_card_fits_small_windows_and_its_status_line_sits_half_a_cell_below_the_buttons() {
+        for (window_width, window_height) in [(480.0, 300.0), (1_600.0, 1_000.0)] {
+            let layout = ContextPickerLayout::calculate(
+                window_width,
+                window_height,
+                10.0,
+                20.0,
+                1.0,
+                ContextPickerPhase::Sources,
+                MAX_CONTEXT_SOURCES,
+            );
+            assert!(layout.card.x >= 0.0 && layout.card.right() <= window_width);
+            assert!(layout.card.y >= 0.0 && layout.card.bottom() <= window_height);
+            assert!(layout.content.right() < layout.card.right() - layout.padding);
+            assert_eq!(layout.status.y, layout.cancel_button.bottom() + 10.0);
+            assert_eq!(layout.status.height, 20.0);
+            assert_eq!(layout.status.x, layout.card.x + layout.padding);
+            assert_eq!(layout.status.right(), layout.card.right() - layout.padding);
+            assert!(layout.status.bottom() <= layout.card.bottom());
+        }
     }
 
     #[test]

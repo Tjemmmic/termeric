@@ -2,6 +2,38 @@
 //! terminal.
 
 use super::*;
+use crate::ui::diff_review::DiffReviewScroll;
+use winit::keyboard::{Key, ModifiersState, NamedKey};
+
+/// Columns one horizontal arrow press scrolls.
+const COLUMN_STEP: isize = 4;
+
+/// Arrows scroll one row or a few columns, Page Up/Down a viewport of rows,
+/// Ctrl+Home/End to the first or last row, and Home/End to the start or end
+/// of the lines.
+fn scroll_for_key(
+    key: &Key,
+    modifiers: ModifiersState,
+    viewport_rows: usize,
+) -> Option<DiffReviewScroll> {
+    let Key::Named(named) = key else {
+        return None;
+    };
+    let page = viewport_rows as isize;
+    Some(match named {
+        NamedKey::ArrowUp => DiffReviewScroll::Rows(-1),
+        NamedKey::ArrowDown => DiffReviewScroll::Rows(1),
+        NamedKey::PageUp => DiffReviewScroll::Rows(-page),
+        NamedKey::PageDown => DiffReviewScroll::Rows(page),
+        NamedKey::ArrowLeft => DiffReviewScroll::Columns(-COLUMN_STEP),
+        NamedKey::ArrowRight => DiffReviewScroll::Columns(COLUMN_STEP),
+        NamedKey::Home if modifiers.control_key() => DiffReviewScroll::Top,
+        NamedKey::End if modifiers.control_key() => DiffReviewScroll::Bottom,
+        NamedKey::Home => DiffReviewScroll::LineStart,
+        NamedKey::End => DiffReviewScroll::LineEnd,
+        _ => return None,
+    })
+}
 
 impl App {
     /// Diff review's geometry, shared by drawing, pointer hits, and
@@ -24,10 +56,8 @@ impl App {
     /// Keys for diff review: Tab and Shift+Tab move between its buttons,
     /// Enter and Space press the focused one, Escape is Done, and the
     /// arrows, Page Up/Down, and Home/End scroll the diff.
-    pub(super) fn handle_diff_review_key(&mut self, key: &winit::keyboard::Key, repeat: bool) {
-        use super::overlay_scroll::overlay_scroll_for_key;
+    pub(super) fn handle_diff_review_key(&mut self, key: &Key, repeat: bool) {
         use crate::ui::diff_review::DiffReviewAction;
-        use winit::keyboard::{Key, NamedKey};
         let request_id = self.diff_review.request_id();
         let action = match key {
             Key::Named(NamedKey::Tab) => {
@@ -41,11 +71,10 @@ impl App {
             Key::Named(NamedKey::Enter | NamedKey::Space) => {
                 self.diff_review.activate_focused(request_id)
             }
-            _ => overlay_scroll_for_key(key, self.modifiers, self.diff_review.viewport().rows())
-                .map_or(DiffReviewAction::None, |by| DiffReviewAction::Scroll {
-                    request_id,
-                    by,
-                }),
+            _ => scroll_for_key(key, self.modifiers, self.diff_review.viewport().rows()).map_or(
+                DiffReviewAction::None,
+                |by| DiffReviewAction::Scroll { request_id, by },
+            ),
         };
         self.apply_diff_review_action(action);
         self.request_redraw(RedrawReason::KeyboardInput);
@@ -162,7 +191,40 @@ mod tests {
     use super::*;
     use crate::terminal::diff_detector::{DetectedDiff, DiffHunk, DiffLine};
     use crate::ui::diff_review::DiffReviewButton;
-    use winit::keyboard::{Key, ModifiersState, NamedKey};
+
+    #[test]
+    fn keys_map_to_rows_columns_and_ends() {
+        let plain = ModifiersState::empty();
+        let ctrl = ModifiersState::CONTROL;
+        for (key, modifiers, scroll) in [
+            (NamedKey::ArrowUp, plain, Some(DiffReviewScroll::Rows(-1))),
+            (NamedKey::ArrowDown, plain, Some(DiffReviewScroll::Rows(1))),
+            (NamedKey::PageUp, plain, Some(DiffReviewScroll::Rows(-7))),
+            (NamedKey::PageDown, plain, Some(DiffReviewScroll::Rows(7))),
+            (
+                NamedKey::ArrowLeft,
+                plain,
+                Some(DiffReviewScroll::Columns(-4)),
+            ),
+            (
+                NamedKey::ArrowRight,
+                plain,
+                Some(DiffReviewScroll::Columns(4)),
+            ),
+            (NamedKey::Home, ctrl, Some(DiffReviewScroll::Top)),
+            (NamedKey::End, ctrl, Some(DiffReviewScroll::Bottom)),
+            (NamedKey::Home, plain, Some(DiffReviewScroll::LineStart)),
+            (NamedKey::End, plain, Some(DiffReviewScroll::LineEnd)),
+            (NamedKey::Enter, plain, None),
+        ] {
+            assert_eq!(
+                scroll_for_key(&Key::Named(key), modifiers, 7),
+                scroll,
+                "{key:?} {modifiers:?}"
+            );
+        }
+        assert_eq!(scroll_for_key(&Key::Character("j".into()), plain, 7), None);
+    }
 
     fn show_wide_diff(app: &mut App) -> u64 {
         app.diff_review.set_reduced_motion(true);

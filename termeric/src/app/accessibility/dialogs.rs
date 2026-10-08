@@ -513,25 +513,27 @@ impl App {
             (Action::ScrollUp, DiffSemanticTarget::Content(request_id)) => {
                 DiffReviewAction::Scroll {
                     request_id,
-                    by: OverlayScroll::Rows(-(self.diff_review.viewport().rows() as isize)),
+                    by: DiffReviewScroll::Rows(-(self.diff_review.viewport().rows() as isize)),
                 }
             }
             (Action::ScrollDown, DiffSemanticTarget::Content(request_id)) => {
                 DiffReviewAction::Scroll {
                     request_id,
-                    by: OverlayScroll::Rows(self.diff_review.viewport().rows() as isize),
+                    by: DiffReviewScroll::Rows(self.diff_review.viewport().rows() as isize),
                 }
             }
             (Action::ScrollLeft, DiffSemanticTarget::Content(request_id)) => {
                 DiffReviewAction::Scroll {
                     request_id,
-                    by: OverlayScroll::Columns(-(self.diff_review.viewport().columns() as isize)),
+                    by: DiffReviewScroll::Columns(
+                        -(self.diff_review.viewport().columns() as isize),
+                    ),
                 }
             }
             (Action::ScrollRight, DiffSemanticTarget::Content(request_id)) => {
                 DiffReviewAction::Scroll {
                     request_id,
-                    by: OverlayScroll::Columns(self.diff_review.viewport().columns() as isize),
+                    by: DiffReviewScroll::Columns(self.diff_review.viewport().columns() as isize),
                 }
             }
             _ => DiffReviewAction::None,
