@@ -2004,7 +2004,7 @@ impl App {
 
     /// Get the active tab's focused live terminal mutably.
     fn active_terminal_mut(&mut self) -> Option<&mut termeric_core::Terminal> {
-        self.tabs.as_mut()?.active_tab_mut()?.focused_terminal_mut()
+        copy_mode::focused_terminal_mut(&mut self.tabs)
     }
 
     /// Return whether user input is locked for the exact focused pane.

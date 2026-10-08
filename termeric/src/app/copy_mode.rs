@@ -10,6 +10,15 @@ use crate::terminal::copy_mode::{CopyMotion, HintAction};
 
 use super::{App, CopyOutcome};
 
+/// The focused terminal of the active tab. It takes the tabs field rather
+/// than the app so a caller can borrow another field, such as copy mode,
+/// beside it.
+pub(super) fn focused_terminal_mut(
+    tabs: &mut Option<crate::tabs::TabManager>,
+) -> Option<&mut termeric_core::Terminal> {
+    tabs.as_mut()?.active_tab_mut()?.focused_terminal_mut()
+}
+
 impl App {
     pub(super) fn copy_mode_render_info(&self) -> Option<crate::renderer::CopyModeRenderInfo> {
         if !self.copy_mode.is_active() || self.copy_mode_target != self.active_copy_target() {
@@ -95,11 +104,7 @@ impl App {
         self.search.cancel();
         let target = self.active_copy_target();
         let (copy_mode, tabs) = (&mut self.copy_mode, &mut self.tabs);
-        let Some(terminal) = tabs
-            .as_mut()
-            .and_then(crate::tabs::TabManager::active_tab_mut)
-            .and_then(crate::tabs::Tab::focused_terminal_mut)
-        else {
+        let Some(terminal) = focused_terminal_mut(tabs) else {
             return;
         };
         copy_mode.enter_presentation(terminal);
@@ -185,11 +190,7 @@ impl App {
     fn sync_copy_mode_selection(&mut self) {
         let selection = self.copy_mode.selection();
         let (copy_mode, tabs) = (&mut self.copy_mode, &mut self.tabs);
-        if let Some(terminal) = tabs
-            .as_mut()
-            .and_then(crate::tabs::TabManager::active_tab_mut)
-            .and_then(crate::tabs::Tab::focused_terminal_mut)
-        {
+        if let Some(terminal) = focused_terminal_mut(tabs) {
             // Frozen viewport coordinates must never be installed on the live
             // grid. The copy-mode overlay owns this selection until release.
             terminal.set_selection(if terminal.synchronized_output_deadline().is_some() {
@@ -233,11 +234,7 @@ impl App {
             .is_some_and(|term| self.copy_mode.presentation_matches(term))
         {
             let (copy_mode, tabs) = (&mut self.copy_mode, &mut self.tabs);
-            if let Some(terminal) = tabs
-                .as_mut()
-                .and_then(crate::tabs::TabManager::active_tab_mut)
-                .and_then(crate::tabs::Tab::focused_terminal_mut)
-            {
+            if let Some(terminal) = focused_terminal_mut(tabs) {
                 copy_mode.reconcile_live_output(terminal);
             }
             return false;
@@ -261,11 +258,8 @@ impl App {
     pub(super) fn prepare_copy_mode_reflow(&mut self) {
         self.reconcile_copy_mode_presentation();
         let (copy_mode, tabs) = (&mut self.copy_mode, &mut self.tabs);
-        if let Some(grid) = tabs
-            .as_mut()
-            .and_then(crate::tabs::TabManager::active_tab_mut)
-            .and_then(crate::tabs::Tab::focused_terminal_mut)
-            .map(termeric_core::Terminal::presentation_grid_mut)
+        if let Some(grid) =
+            focused_terminal_mut(tabs).map(termeric_core::Terminal::presentation_grid_mut)
         {
             copy_mode.prepare_reflow(grid);
         }
@@ -284,11 +278,7 @@ impl App {
             &self.compiled_copy_patterns,
         );
         let mut targets_remain = true;
-        if let Some(terminal) = tabs
-            .as_mut()
-            .and_then(crate::tabs::TabManager::active_tab_mut)
-            .and_then(crate::tabs::Tab::focused_terminal_mut)
-        {
+        if let Some(terminal) = focused_terminal_mut(tabs) {
             copy_mode.finish_reflow(terminal.presentation_grid_mut());
             targets_remain = copy_mode.refresh_quick_select(terminal, patterns);
         }
@@ -306,11 +296,8 @@ impl App {
             return;
         }
         let (copy_mode, tabs) = (&mut self.copy_mode, &mut self.tabs);
-        if let Some(grid) = tabs
-            .as_mut()
-            .and_then(crate::tabs::TabManager::active_tab_mut)
-            .and_then(crate::tabs::Tab::focused_terminal_mut)
-            .map(termeric_core::Terminal::presentation_grid_mut)
+        if let Some(grid) =
+            focused_terminal_mut(tabs).map(termeric_core::Terminal::presentation_grid_mut)
         {
             copy_mode.move_cursor(motion, grid);
         }
@@ -327,11 +314,8 @@ impl App {
             .map(|found| Point::new(found.row, found.start_col));
         let Some(point) = point else { return };
         let (copy_mode, tabs) = (&mut self.copy_mode, &mut self.tabs);
-        if let Some(grid) = tabs
-            .as_mut()
-            .and_then(crate::tabs::TabManager::active_tab_mut)
-            .and_then(crate::tabs::Tab::focused_terminal_mut)
-            .map(termeric_core::Terminal::presentation_grid_mut)
+        if let Some(grid) =
+            focused_terminal_mut(tabs).map(termeric_core::Terminal::presentation_grid_mut)
         {
             copy_mode.jump_to(point, grid);
         }
