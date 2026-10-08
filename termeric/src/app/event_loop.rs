@@ -36,11 +36,7 @@ impl App {
             quick_access_geometry(monitor.position(), monitor.size(), self.launch.pixel_size)
         });
         let mut window_attrs = Window::default_attributes()
-            .with_title(if self.launch.quick_access {
-                "Termeric Quick Access"
-            } else {
-                "Termeric"
-            })
+            .with_title(self.desired_native_window_title())
             .with_visible(false)
             .with_inner_size(LogicalSize::new(
                 self.config.window.width,
