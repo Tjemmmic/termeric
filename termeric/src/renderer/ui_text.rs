@@ -1,5 +1,6 @@
 //! Application-chrome text in the desktop's sans-serif UI face.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use super::glyph_cache::GlyphCache;
@@ -35,14 +36,10 @@ impl Renderer {
         size_px: f32,
         color: [f32; 4],
     ) -> f32 {
-        let glyphs = &mut self.glyph_cache;
-        let fitted = fit_with_ellipsis(text, max_width, |candidate| {
-            glyphs.ui_text_width(candidate, size_px)
-        });
+        let (fitted, width) = self.fit_ui_label(text, max_width, size_px);
         if fitted.is_empty() {
             return 0.0;
         }
-        let width = self.glyph_cache.ui_text_width(&fitted, size_px);
         let baseline = self
             .glyph_cache
             .ui_font_metrics(size_px)
@@ -50,6 +47,26 @@ impl Renderer {
         self.text_pipeline
             .push_ui_text(&fitted, x.round(), baseline, size_px, color, None);
         width
+    }
+
+    /// `text` as [`Renderer::push_ui_label`] draws it in `max_width`, and the
+    /// width it takes, so a caret after a label lands where the label ends.
+    pub(super) fn fit_ui_label<'a>(
+        &mut self,
+        text: &'a str,
+        max_width: f32,
+        size_px: f32,
+    ) -> (Cow<'a, str>, f32) {
+        let glyphs = &mut self.glyph_cache;
+        let fitted = fit_with_ellipsis(text, max_width, |candidate| {
+            glyphs.ui_text_width(candidate, size_px)
+        });
+        let width = if fitted.is_empty() {
+            0.0
+        } else {
+            self.glyph_cache.ui_text_width(&fitted, size_px)
+        };
+        (fitted, width)
     }
 
     /// [`Renderer::push_ui_label`] centred on `center_x`.

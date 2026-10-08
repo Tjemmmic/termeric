@@ -1806,6 +1806,7 @@ impl TabManager {
                     0
                 },
                 agent_badge: tab.agent_badge(),
+                renaming: false,
             })
             .collect()
     }
@@ -1904,6 +1905,8 @@ pub struct TabInfo {
     pub unreviewed_diff_count: usize,
     /// The most urgent state reported by an agent in this tab.
     pub agent_badge: Option<crate::agents::AgentBadge>,
+    /// Whether this tab's title is being renamed, so it shows a caret.
+    pub renaming: bool,
 }
 
 #[cfg(test)]

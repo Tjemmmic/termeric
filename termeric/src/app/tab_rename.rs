@@ -4,6 +4,20 @@
 use super::redraw_scheduler::RedrawReason;
 use super::*;
 
+impl TabRenameState {
+    /// Mark the tab being renamed in `tab_info`, the tab bar's view of
+    /// `tabs`, so it is drawn with its caret.
+    pub(super) fn mark(&self, tabs: &TabManager, tab_info: &mut [crate::tabs::TabInfo]) {
+        if let Some(info) = tabs
+            .iter()
+            .position(|(_, tab)| tab.id == self.tab_id)
+            .and_then(|index| tab_info.get_mut(index))
+        {
+            info.renaming = true;
+        }
+    }
+}
+
 impl App {
     pub(super) fn begin_tab_rename(&mut self) {
         let Some(tab) = self.tabs.as_ref().and_then(TabManager::active_tab) else {
@@ -169,6 +183,27 @@ mod tests {
         assert_eq!(rename.input.text(), "xxx界🙂");
         assert!(!rename.input.insert("ignored"));
         assert_eq!(rename.input.text(), "xxx界🙂");
+    }
+
+    /// The tab drawn with the caret is the one being renamed, wherever it
+    /// sits and whichever tab is active.
+    #[test]
+    fn only_the_tab_being_renamed_is_marked_for_its_caret() {
+        let mut tabs = TabManager::for_test(crate::test_support::sleeping_shell());
+        let first = tabs.new_tab().unwrap();
+        let second = tabs.new_tab().unwrap();
+        tabs.switch_to(0);
+        let renamed = |tab_id| {
+            let mut tab_info = tabs.tab_info();
+            TabRenameState::new(tab_id, None, "Roots", 64).mark(&tabs, &mut tab_info);
+            tab_info
+                .iter()
+                .map(|info| info.renaming)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(renamed(first), [true, false]);
+        assert_eq!(renamed(second), [false, true]);
+        assert_eq!(renamed(usize::MAX), [false, false]);
     }
 
     #[test]

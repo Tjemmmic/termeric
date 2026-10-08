@@ -1,6 +1,7 @@
 //! Tab bar rendering and hit-testing
 
 use super::Renderer;
+use super::glyph_cache::UiFontMetrics;
 use super::icons::draw_icon;
 use super::types::*;
 use crate::agents::AgentBadge;
@@ -425,6 +426,87 @@ impl TabChrome {
             size,
         )
     }
+
+    /// Where `tab`'s markers and title sit in `surface`, before the close
+    /// button and an unreviewed-diff badge `badge_width` pixels wide (0 for
+    /// none).
+    fn label(self, tab: &TabInfo, surface: Bounds, badge_width: f32) -> TabLabelLayout {
+        let center_y = surface.y + surface.height / 2.0;
+        let mut text_x = surface.x + self.px(10.0);
+        let mut plugin_dot = None;
+        if matches!(&tab.tab_type, TabType::Plugin { .. }) {
+            let dot = self.px(6.0);
+            plugin_dot = Some(Bounds::new(
+                text_x,
+                (center_y - dot / 2.0).round(),
+                dot,
+                dot,
+            ));
+            text_x += dot + self.px(6.0);
+        }
+        let mut status = None;
+        if let Some(marker) = tab_status(tab) {
+            let size = self.px(12.0);
+            status = Some((
+                marker,
+                Bounds::new(text_x, center_y - size / 2.0, size, size),
+            ));
+            text_x += size + self.px(5.0);
+        }
+        let badge_reserve = if badge_width > 0.0 {
+            badge_width + self.px(6.0)
+        } else {
+            0.0
+        };
+        TabLabelLayout {
+            plugin_dot,
+            status,
+            text_x,
+            text_right: self.close_rect(surface).x - self.px(6.0) - badge_reserve,
+            badge_width,
+        }
+    }
+
+    /// The caret after a title `title_width` pixels wide laid out in
+    /// `label`: as tall as the UI face's `metrics`, centred in `surface`
+    /// as the title is.
+    fn rename_caret(
+        self,
+        label: &TabLabelLayout,
+        title_width: f32,
+        surface: Bounds,
+        metrics: UiFontMetrics,
+    ) -> Bounds {
+        let top = metrics.centered_baseline(surface.y, surface.height) - metrics.ascent.round();
+        let height = (metrics.ascent + metrics.descent)
+            .round()
+            .min(surface.bottom() - top)
+            .max(1.0);
+        Bounds::new(
+            (label.text_x + title_width).round(),
+            top,
+            self.px(2.0),
+            height,
+        )
+    }
+}
+
+/// Where a tab's plugin dot, status marker, and title sit in its surface.
+/// Drawing the tab and placing its rename caret, which the input method
+/// opens at, both start from here.
+struct TabLabelLayout {
+    plugin_dot: Option<Bounds>,
+    status: Option<(TabStatus, Bounds)>,
+    /// The title starts at `text_x` and may run up to `text_right`.
+    text_x: f32,
+    text_right: f32,
+    badge_width: f32,
+}
+
+/// Whether `tab`, drawn in `surface`, shows its markers and title: it has
+/// room, and it is not just starting to slide in or nearly closed.
+fn tab_label_drawn(tab: &TabInfo, surface: Bounds) -> bool {
+    surface.width > 2.0 && surface.height > 2.0 && tab_animation_multiplier(tab) > 0.3
 }
 
 /// Which edge of the active tab carries the accent indicator.
@@ -630,18 +712,7 @@ impl Renderer {
         self.rect_pipeline
             .push_rect(0.0, 0.0, window_width, tab_bar_height, self.ui.tab_bar_bg);
         let layout = self.tab_bar_layout(tabs, window_width);
-        let spans: Vec<TabSpan> = layout
-            .tabs
-            .iter()
-            .map(|slot| (slot.index, slot.x, slot.width))
-            .collect();
-        for (index, start, length) in self.tab_drag_placement(&spans) {
-            let slot = TabSlot {
-                index,
-                x: start,
-                width: length,
-            };
-            let surface = chrome.horizontal_surface(&slot, tab_bar_height);
+        for (index, surface) in self.placed_tab_surfaces(tabs, window_width, window_height) {
             if self.is_dragged_tab(index) {
                 self.lift_dragged_tab(surface);
             }
@@ -728,7 +799,7 @@ impl Renderer {
                 radius,
             );
         }
-        if animation <= 0.3 {
+        if !tab_label_drawn(tab, surface) {
             return;
         }
 
@@ -741,58 +812,52 @@ impl Renderer {
         let text_color = scale_alpha(base_text, text_alpha);
         let center_y = y + height / 2.0;
         let close = chrome.close_rect(surface);
-        let mut text_x = x + chrome.px(10.0);
+        let label = self.tab_label_layout(tab, surface);
 
-        if matches!(&tab.tab_type, TabType::Plugin { .. }) {
-            let dot = chrome.px(6.0);
+        if let Some(dot) = label.plugin_dot {
             self.rect_pipeline.push_rounded_rect(
-                text_x,
-                (center_y - dot / 2.0).round(),
-                dot,
-                dot,
+                dot.x,
+                dot.y,
+                dot.width,
+                dot.height,
                 with_alpha(self.ui.palette_accent, text_alpha),
-                dot / 2.0,
+                dot.width / 2.0,
             );
-            text_x += dot + chrome.px(6.0);
         }
-        if let Some(status) = tab_status(tab) {
-            let size = chrome.px(12.0);
+        if let Some((status, bounds)) = label.status {
             let surface_color = if tab.is_active {
                 self.ui.tab_active
             } else {
                 mix(self.ui.tab_bar_bg, self.ui.tab_inactive, hover)
             };
-            self.build_status_icon(
-                status,
-                Bounds::new(text_x, center_y - size / 2.0, size, size),
-                text_color,
-                surface_color,
-            );
-            text_x += size + chrome.px(5.0);
+            self.build_status_icon(status, bounds, text_color, surface_color);
         }
 
         let size_px = self.ui_label_px();
-        let badge_text =
-            (tab.unreviewed_diff_count > 0).then(|| tab.unreviewed_diff_count.to_string());
-        let badge_width = badge_text.as_deref().map_or(0.0, |count| {
-            (self.ui_text_width(count, size_px * 0.85) + chrome.px(12.0)).max(chrome.px(18.0))
-        });
-        let badge_reserve = if badge_width > 0.0 {
-            badge_width + chrome.px(6.0)
-        } else {
-            0.0
-        };
-        let label_right = close.x - chrome.px(6.0) - badge_reserve;
+        let text_x = label.text_x;
         let drawn = self.push_ui_label(
             &tab.title,
             text_x,
             y,
             height,
-            label_right - text_x,
+            label.text_right - text_x,
             size_px,
             text_color,
         );
+        if tab.renaming {
+            let caret = self.tab_rename_caret_in(tab, &label, surface);
+            self.rect_pipeline.push_rect(
+                caret.x,
+                caret.y,
+                caret.width,
+                caret.height,
+                with_alpha(self.ui.palette_accent, 0.9 * text_alpha),
+            );
+        }
 
+        let badge_width = label.badge_width;
+        let badge_text =
+            (tab.unreviewed_diff_count > 0).then(|| tab.unreviewed_diff_count.to_string());
         if let Some(count) = badge_text {
             let badge_height = chrome.px(16.0).min(height);
             let badge_x = (text_x + drawn + chrome.px(6.0)).round();
@@ -1022,18 +1087,7 @@ impl Renderer {
         );
 
         let layout = self.vertical_tab_bar_layout(tabs, window_height);
-        let spans: Vec<TabSpan> = layout
-            .tabs
-            .iter()
-            .map(|slot| (slot.index, slot.y, slot.height))
-            .collect();
-        for (index, start, length) in self.tab_drag_placement(&spans) {
-            let slot = VerticalTabSlot {
-                index,
-                y: start,
-                height: length,
-            };
-            let surface = chrome.vertical_surface(&slot, rail_width);
+        for (index, surface) in self.placed_tab_surfaces(tabs, window_width, window_height) {
             if self.is_dragged_tab(index) {
                 self.lift_dragged_tab(surface);
             }
@@ -1170,6 +1224,92 @@ impl Renderer {
     /// dragged tab last, following the pointer within the strip.
     fn tab_drag_placement(&self, spans: &[TabSpan]) -> Vec<TabSpan> {
         place_tabs(spans, &self.tab_drag)
+    }
+
+    /// Each visible tab's surface where it is drawn, in drawing order: at
+    /// its slot, or wherever sliding or dragging has moved it.
+    fn placed_tab_surfaces(
+        &self,
+        tabs: &[TabInfo],
+        window_width: f32,
+        window_height: f32,
+    ) -> Vec<(usize, Bounds)> {
+        let chrome = self.tab_chrome();
+        let vertical = self.tab_bar_is_vertical();
+        let rail_width = self.tab_bar_width_for(window_width);
+        let bar_height = self.tab_bar_height();
+        let spans = self.tab_slot_spans(tabs, window_width, window_height);
+        self.tab_drag_placement(&spans)
+            .into_iter()
+            .map(|(index, start, length)| {
+                let surface = if vertical {
+                    let slot = VerticalTabSlot {
+                        index,
+                        y: start,
+                        height: length,
+                    };
+                    chrome.vertical_surface(&slot, rail_width)
+                } else {
+                    let slot = TabSlot {
+                        index,
+                        x: start,
+                        width: length,
+                    };
+                    chrome.horizontal_surface(&slot, bar_height)
+                };
+                (index, surface)
+            })
+            .collect()
+    }
+
+    /// [`TabChrome::label`] for `tab` in `surface`, measuring its badge.
+    fn tab_label_layout(&mut self, tab: &TabInfo, surface: Bounds) -> TabLabelLayout {
+        let chrome = self.tab_chrome();
+        let badge_width = if tab.unreviewed_diff_count > 0 {
+            let count = tab.unreviewed_diff_count.to_string();
+            let count_px = self.ui_label_px() * 0.85;
+            (self.ui_text_width(&count, count_px) + chrome.px(12.0)).max(chrome.px(18.0))
+        } else {
+            0.0
+        };
+        chrome.label(tab, surface, badge_width)
+    }
+
+    /// The caret at the end of `tab`'s title as it is drawn in `label`.
+    fn tab_rename_caret_in(
+        &mut self,
+        tab: &TabInfo,
+        label: &TabLabelLayout,
+        surface: Bounds,
+    ) -> Bounds {
+        let size_px = self.ui_label_px();
+        let (_, title_width) =
+            self.fit_ui_label(&tab.title, label.text_right - label.text_x, size_px);
+        let metrics = self.glyph_cache.ui_font_metrics(size_px);
+        self.tab_chrome()
+            .rename_caret(label, title_width, surface, metrics)
+    }
+
+    /// The caret of the tab being renamed (the one marked `renaming`) where
+    /// the tab bar draws it, in a window `window_width` by `window_height`
+    /// pixels; `None` while that tab is out of view or shows no title.
+    pub fn tab_rename_caret(
+        &mut self,
+        tabs: &[TabInfo],
+        window_width: f32,
+        window_height: f32,
+    ) -> Option<Bounds> {
+        let index = tabs.iter().position(|tab| tab.renaming)?;
+        let tab = &tabs[index];
+        let (_, surface) = self
+            .placed_tab_surfaces(tabs, window_width, window_height)
+            .into_iter()
+            .find(|(placed, _)| *placed == index)?;
+        if !tab_label_drawn(tab, surface) {
+            return None;
+        }
+        let label = self.tab_label_layout(tab, surface);
+        Some(self.tab_rename_caret_in(tab, &label, surface))
     }
 
     fn is_dragged_tab(&self, index: usize) -> bool {
@@ -1319,6 +1459,7 @@ mod tests {
                 tab_type: TabType::Shell,
                 unreviewed_diff_count: 0,
                 agent_badge: None,
+                renaming: false,
             })
             .collect()
     }
@@ -1663,6 +1804,45 @@ mod tests {
             // The first tabs hide nothing before them, the last nothing after.
             let first = tab_bar_layout(&tabs, width, height, 0, scale);
             assert!(!first.previous.unwrap().enabled && first.next.unwrap().enabled);
+        }
+    }
+
+    #[test]
+    fn the_rename_caret_follows_the_markers_and_title_inside_the_tab() {
+        let metrics = UiFontMetrics {
+            ascent: 10.6,
+            descent: 3.2,
+        };
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let chrome = TabChrome::new(scale);
+            let height = (34.0_f32 * scale).round();
+            let mut tab = tabs(1, 0).remove(0);
+            tab.tab_type = TabType::Plugin {
+                plugin_id: "fake".into(),
+            };
+            tab.pinned = true;
+            tab.renaming = true;
+            let layout = tab_bar_layout(&[tab.clone()], 1000.0 * scale, height, 0, scale);
+            let surface = chrome.horizontal_surface(&layout.tabs[0], height);
+            let plain = chrome.label(&tabs(1, 0)[0], surface, 0.0);
+            let label = chrome.label(&tab, surface, chrome.px(18.0));
+            let (dot, status) = (label.plugin_dot.unwrap(), label.status.unwrap().1);
+            assert_eq!(status.x, dot.right() + chrome.px(6.0));
+            assert_eq!(label.text_x, status.right() + chrome.px(5.0));
+            // The badge's room comes off the title's, not its start.
+            assert_eq!(
+                label.text_right,
+                plain.text_right - chrome.px(18.0) - chrome.px(6.0)
+            );
+
+            let title_width = 40.5 * scale;
+            let caret = chrome.rename_caret(&label, title_width, surface, metrics);
+            assert_eq!(caret.x, (label.text_x + title_width).round());
+            assert!(caret.x < label.text_right);
+            assert!(caret.y >= surface.y && caret.bottom() <= surface.bottom());
+            for value in [caret.x, caret.y, caret.width, caret.height] {
+                assert_eq!(value.fract(), 0.0, "scale={scale} caret={caret:?}");
+            }
         }
     }
 

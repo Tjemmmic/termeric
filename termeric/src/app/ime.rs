@@ -212,10 +212,15 @@ impl App {
 
     /// Keep the native candidate window and preedit decoration on the focused
     /// input's shared geometry, not the terminal cursor behind a palette.
-    pub(super) fn ime_preedit_render_info(&self) -> Option<crate::renderer::ImePreeditRenderInfo> {
+    pub(super) fn ime_preedit_render_info(
+        &mut self,
+    ) -> Option<crate::renderer::ImePreeditRenderInfo> {
         let target = self.text_target();
         if target == TextTarget::Blocked {
             return None;
+        }
+        if target == TextTarget::TabRename {
+            return self.tab_rename_ime_target();
         }
         let renderer = self.renderer.as_ref()?;
         if target == TextTarget::InfoOverlayInput {
@@ -256,11 +261,7 @@ impl App {
                 // terminal position or overlap the neighboring search controls.
                 layout.input_viewport(&info, cell_width)?
             }
-            // A tab title being renamed has no caret of its own; the input
-            // method opens at the terminal cursor beneath the tab bar.
-            TextTarget::TabRename | TextTarget::Terminal => {
-                return self.terminal_ime_target(renderer);
-            }
+            TextTarget::Terminal => return self.terminal_ime_target(renderer),
             field => self.field_ime_viewport(
                 field,
                 width as f32,
@@ -273,6 +274,22 @@ impl App {
             [view.cursor_x, view.text_y, cell_width, cell_height],
             view.right - view.cursor_x,
         )
+    }
+
+    /// The input method's caret at the caret the tab bar draws after the
+    /// title being renamed. A tab scrolled out of the strip has none, and
+    /// the input method is never sent to the terminal cursor instead.
+    fn tab_rename_ime_target(&mut self) -> Option<crate::renderer::ImePreeditRenderInfo> {
+        let rename = self.tab_rename.as_ref()?;
+        let mut tab_info = self.tabs.as_ref()?.tab_info();
+        rename.mark(self.tabs.as_ref()?, &mut tab_info);
+        let renderer = self.renderer.as_mut()?;
+        let (width, height) = renderer.window_size();
+        let caret = renderer.tab_rename_caret(&tab_info, width as f32, height as f32)?;
+        // The preedit floats over the tab bar from the caret, with the rest
+        // of the window's width to show the composed text in.
+        let max_width = (width as f32 - caret.x).max(renderer.cell_width());
+        self.ime_target([caret.x, caret.y, caret.width, caret.height], max_width)
     }
 
     /// The input method's caret at the focused pane's drawn cursor.

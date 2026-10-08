@@ -378,8 +378,8 @@ fn clear_wake_pending(pending: &AtomicBool) {
 struct TabRenameState {
     tab_id: usize,
     original: Option<String>,
-    /// The draft title. The tab shows it in place with no caret, so typing
-    /// and Backspace always work at its end.
+    /// The draft title. The tab shows it in place with a caret at its end,
+    /// where typing and Backspace always work.
     input: crate::ui::text_input::TextInput,
 }
 
@@ -1770,11 +1770,16 @@ impl App {
             && self
                 .active_terminal()
                 .is_some_and(|term| term.synchronized_output_deadline().is_some());
-        // The IME places its window at the panel's caret, so the scene comes
-        // first.
+        // The IME places its window at the panel's caret, or at a renamed
+        // tab's, so the scene and this frame's tab bar come first.
         self.prepare_agent_view_frame();
-        let ime_preedit_info = self.ime_preedit_render_info();
         let chrome_focus_target = self.chrome_focus_render_target();
+        let tab_drag = self.tab_drag_visual(Instant::now());
+        if let Some(renderer) = &mut self.renderer {
+            renderer.set_tab_drag(tab_drag);
+            renderer.set_tab_bar_keyboard_focus(chrome_focus_target);
+        }
+        let ime_preedit_info = self.ime_preedit_render_info();
         let broadcast_render = self.broadcast_render_targets();
         // Before the frame borrows the renderer: a picker preview may change
         // the theme it draws with.
@@ -1786,12 +1791,9 @@ impl App {
         let (chrome, animating) = self.build_chrome(&metrics, reduced_motion);
         let harvest_render_info = self.harvest_frame_info(reduced_motion);
 
-        let tab_drag = self.tab_drag_visual(Instant::now());
         let Some(renderer) = &mut self.renderer else {
             return;
         };
-        renderer.set_tab_drag(tab_drag);
-        renderer.set_tab_bar_keyboard_focus(chrome_focus_target);
         let Some(tabs) = &self.tabs else { return };
         let Some(tab) = tabs.active_tab() else {
             return;
@@ -1800,6 +1802,9 @@ impl App {
             return;
         };
         let mut tab_info = tabs.tab_info();
+        if let Some(rename) = &self.tab_rename {
+            rename.mark(tabs, &mut tab_info);
+        }
         if let Some((tab_id, _, state)) = &broadcast_render
             && tab.id == *tab_id
             && let Some(active) = tab_info.iter_mut().find(|info| info.is_active)
