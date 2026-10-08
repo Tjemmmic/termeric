@@ -263,18 +263,15 @@ pub struct ActionMeta {
 // ── KeyChord ────────────────────────────────────────────────────────────────
 
 /// A key + modifier combination. Used as both the binding value and the
-/// reverse-lookup key in the registry.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// reverse-lookup key in the registry. Every one is built by
+/// [`KeyChord::new`], which normalizes it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct KeyChord {
     /// Lowercased key name: "c", "tab", "pageup", "f1", etc.
     pub key: String,
-    #[serde(default)]
     pub ctrl: bool,
-    #[serde(default)]
     pub alt: bool,
-    #[serde(default)]
     pub shift: bool,
-    #[serde(default, rename = "super")]
     pub super_key: bool,
 }
 
