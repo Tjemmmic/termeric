@@ -17,16 +17,23 @@ use crate::ui::icon::Icon;
 const CARD_SCROLLBAR_WIDTH: f32 = 4.0;
 
 impl Renderer {
-    /// A one-pixel rule across `width` whose outer sixths fade out.
+    /// A border-width rule across `width` whose outer sixths fade out.
     fn draw_faded_separator(&mut self, x: f32, y: f32, width: f32, anim: f32) {
         let fade_width = width * 0.15;
+        let thickness = self.px(BORDER_WIDTH);
         let center = with_alpha(self.ui.palette_border, 0.25 * anim);
         let faded = with_alpha(self.ui.palette_border, 0.08 * anim);
+        self.rect_pipeline.push_rect(
+            x + fade_width,
+            y,
+            width - fade_width * 2.0,
+            thickness,
+            center,
+        );
         self.rect_pipeline
-            .push_rect(x + fade_width, y, width - fade_width * 2.0, 1.0, center);
-        self.rect_pipeline.push_rect(x, y, fade_width, 1.0, faded);
+            .push_rect(x, y, fade_width, thickness, faded);
         self.rect_pipeline
-            .push_rect(x + width - fade_width, y, fade_width, 1.0, faded);
+            .push_rect(x + width - fade_width, y, fade_width, thickness, faded);
     }
 
     /// Build the info overlay (error/info centered card with Copy/Continue buttons)
