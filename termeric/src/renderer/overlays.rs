@@ -242,7 +242,7 @@ impl Renderer {
             if let Some(bounds) = bounds {
                 self.draw_focus_ring(
                     bounds,
-                    with_alpha(self.ui.palette_accent, anim),
+                    with_alpha(self.ui.focus_ring, anim),
                     BUTTON_CORNER_RADIUS,
                 );
             }

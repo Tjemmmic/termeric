@@ -259,7 +259,7 @@ impl Renderer {
             .browse_focus
             .and_then(|control| layout.control_rect(control))
         {
-            self.draw_focus_ring(rect, self.ui.palette_accent, BUTTON_CORNER_RADIUS);
+            self.draw_focus_ring(rect, self.ui.focus_ring, BUTTON_CORNER_RADIUS);
         }
     }
 
@@ -462,7 +462,7 @@ impl Renderer {
             .filter(|control| !matches!(control, AgentsControl::Agent(_)))
             .and_then(|control| layout.control_rect(control))
         {
-            self.draw_focus_ring(rect, self.ui.palette_accent, BUTTON_CORNER_RADIUS);
+            self.draw_focus_ring(rect, self.ui.focus_ring, BUTTON_CORNER_RADIUS);
         }
     }
 

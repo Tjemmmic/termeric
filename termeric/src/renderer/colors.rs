@@ -55,6 +55,9 @@ pub(crate) struct UiPalette {
     pub(crate) palette_text_dim: [f32; 4],
     pub(crate) palette_match_highlight: [f32; 4],
     pub(crate) palette_border: [f32; 4],
+    /// The keyboard focus ring around chrome controls, on the tab bar,
+    /// menus, panels, and cards alike.
+    pub(crate) focus_ring: [f32; 4],
 }
 
 impl UiPalette {
@@ -117,6 +120,7 @@ impl UiPalette {
             palette_text_dim: with_alpha(fg.to_f32_array(), 0.50),
             palette_match_highlight: cursor.to_f32_array(),
             palette_border: with_alpha(tab_border.to_f32_array(), 0.5),
+            focus_ring: cursor.to_f32_array(),
         };
         if high_contrast {
             palette.enforce_high_contrast();
@@ -171,6 +175,16 @@ impl UiPalette {
         {
             self.palette_match_highlight = palette_text;
         }
+        // Focus rings surround controls on the tab bar as well as on menus,
+        // panels, and cards.
+        self.focus_ring = high_contrast_text_on(&[
+            self.tab_bar_bg,
+            self.tab_active,
+            self.tab_inactive,
+            self.menu_bg,
+            self.menu_highlight,
+            self.palette_bg,
+        ]);
         self.scrim[3] = self.scrim[3].max(0.65);
         self.palette_scrim[3] = self.palette_scrim[3].max(0.72);
 
@@ -479,6 +493,13 @@ mod ui_palette_accessibility_tests {
                 // Command palette matches, on plain and selected rows.
                 (palette.palette_match_highlight, palette.menu_bg),
                 (palette.palette_match_highlight, palette.menu_highlight),
+                // Focus rings, wherever a focusable control sits.
+                (palette.focus_ring, palette.tab_bar_bg),
+                (palette.focus_ring, palette.tab_active),
+                (palette.focus_ring, palette.tab_inactive),
+                (palette.focus_ring, palette.menu_bg),
+                (palette.focus_ring, palette.menu_highlight),
+                (palette.focus_ring, palette.palette_bg),
             ]
             .into_iter()
             .chain(status_on_surfaces(&palette, terminal_background))

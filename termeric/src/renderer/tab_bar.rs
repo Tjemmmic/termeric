@@ -1071,8 +1071,8 @@ impl Renderer {
         );
     }
 
-    /// Draw a high-contrast focus ring around a tab-bar control, inside
-    /// its bounds so it never covers a neighbour.
+    /// Draw the focus ring around a tab-bar control, inside its bounds so
+    /// it never covers a neighbour.
     pub(super) fn build_tab_bar_keyboard_focus(
         &mut self,
         target: TabBarClick,
@@ -1084,8 +1084,7 @@ impl Renderer {
         else {
             return;
         };
-        let color = with_alpha(high_contrast_text(self.ui.tab_bar_bg), 0.98);
-        self.draw_focus_ring(bounds, color, BUTTON_CORNER_RADIUS);
+        self.draw_focus_ring(bounds, self.ui.focus_ring, BUTTON_CORNER_RADIUS);
     }
 
     /// Exact rendered bounds for a tab-bar control. Accessibility and focus
