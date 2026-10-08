@@ -35,12 +35,9 @@ impl App {
             .and_then(TabManager::active_tab)
             .is_some_and(|tab| {
                 drag.owns_tab(tab)
-                    && tab.live_domain_tab_route().is_none_or(|(domain, _)| {
-                        !self
-                            .pending_live_domain_controls
-                            .iter()
-                            .any(|pending| pending.domain_id() == domain)
-                    })
+                    && tab
+                        .live_domain_tab_route()
+                        .is_none_or(|(domain, _)| !self.live_domain_busy(domain))
                     && tab
                         .panes
                         .get_dividers()
@@ -251,12 +248,7 @@ impl App {
             return false;
         };
         let route = tab.live_domain_tab_route();
-        let pending = route.is_some_and(|(domain, _)| {
-            self.pending_live_domain_controls
-                .iter()
-                .any(|pending| pending.domain_id() == domain)
-        });
-        if pending {
+        if route.is_some_and(|(domain, _)| self.live_domain_busy(domain)) {
             self.toasts
                 .info("Wait for the pending live-domain change before resizing");
             return true;
@@ -670,11 +662,7 @@ impl App {
             .tab_dragging
             .as_ref()
             .and_then(|drag| drag.live.as_ref())
-            .is_some_and(|live| {
-                self.pending_live_domain_controls
-                    .iter()
-                    .any(|pending| pending.domain_id() == live.domain_id)
-            });
+            .is_some_and(|live| self.live_domain_busy(&live.domain_id));
         if live_drag_blocked {
             self.tab_dragging = None;
             self.toasts

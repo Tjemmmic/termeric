@@ -10,11 +10,10 @@ impl App {
             self.toasts.warning("No tab is available to rename");
             return;
         };
-        if tab.live_domain_tab_route().is_some_and(|(domain, _)| {
-            self.pending_live_domain_controls
-                .iter()
-                .any(|pending| pending.domain_id() == domain)
-        }) {
+        if tab
+            .live_domain_tab_route()
+            .is_some_and(|(domain, _)| self.live_domain_busy(domain))
+        {
             self.toasts
                 .info("Wait for the pending live-domain change before renaming");
             return;

@@ -479,10 +479,7 @@ impl App {
                 if target
                     .live_domain_tab_route()
                     .is_none_or(|(domain, _)| domain != live.domain_id)
-                    || self
-                        .pending_live_domain_controls
-                        .iter()
-                        .any(|pending| pending.domain_id() == live.domain_id)
+                    || self.live_domain_busy(&live.domain_id)
                 {
                     return None;
                 }

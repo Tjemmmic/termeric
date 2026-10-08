@@ -271,6 +271,15 @@ impl App {
         }
     }
 
+    /// Whether a change to live domain `domain` awaits the daemon. Each
+    /// domain has at most one in flight, so its changes reach the daemon in
+    /// the order the person made them.
+    pub(super) fn live_domain_busy(&self, domain: &str) -> bool {
+        self.pending_live_domain_controls
+            .iter()
+            .any(|pending| pending.domain_id() == domain)
+    }
+
     pub(super) fn queue_live_domain_control(&mut self, control: LiveDomainControl) {
         if let Err(error) = self.start_live_domain_control(control) {
             self.toasts.error(error);
@@ -281,11 +290,7 @@ impl App {
         &mut self,
         control: LiveDomainControl,
     ) -> std::result::Result<(), String> {
-        if self
-            .pending_live_domain_controls
-            .iter()
-            .any(|pending| pending.domain_id() == control.domain_id())
-        {
+        if self.live_domain_busy(control.domain_id()) {
             self.restore_live_domain_preview(&control);
             return Err("Another change for this live domain is already pending".into());
         }
