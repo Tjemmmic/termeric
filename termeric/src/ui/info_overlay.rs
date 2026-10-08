@@ -258,7 +258,7 @@ impl InfoOverlay {
             vec![
                 format!("Version {}", env!("CARGO_PKG_VERSION")),
                 String::new(),
-                "A GPU-accelerated terminal emulator".into(),
+                env!("CARGO_PKG_DESCRIPTION").into(),
                 String::new(),
                 env!("CARGO_PKG_REPOSITORY")
                     .trim_start_matches("https://")

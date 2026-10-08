@@ -1,6 +1,7 @@
 //! Workspace and closed-tab snapshot management panel
 //!
-//! A slide-in panel for listing, loading, and deleting saved sessions.
+//! A slide-in panel for listing, loading, renaming, and deleting saved
+//! workspaces, and for the closed-tab snapshots offered beside them.
 
 use crate::session::listing::SessionListing;
 use crate::ui::animation::PanelAnimation;
@@ -10,10 +11,10 @@ use crate::ui::text_input::{TextInput, TextInputEdit, TextLimit};
 
 const MAX_RENAME_CHARACTERS: usize = 128;
 
-/// Information about a single session for display
+/// One saved workspace or closed-tab snapshot, as the panel lists it.
 #[derive(Debug, Clone)]
 pub struct SessionEntry {
-    /// Session directory name (used for load/delete operations)
+    /// The archive's id, which loading, renaming, and deleting name it by.
     pub id: String,
     /// Display name shown to the user
     pub display_name: String,
@@ -23,12 +24,12 @@ pub struct SessionEntry {
     pub last_modified: String,
 }
 
-/// Click result from the session panel
+/// Click result from the workspace panel
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionPanelAction {
-    /// Load a session by its id
+    /// Load a workspace or snapshot by its id
     Load(String),
-    /// Delete a session by its id
+    /// Delete a workspace or snapshot by its id
     Delete(String),
     /// Start renaming a workspace by its id.
     Rename(String),
@@ -63,9 +64,9 @@ pub enum SessionPanelControl {
 pub struct SessionPanelInfo {
     /// Animation progress (0.0 = hidden, 1.0 = fully visible)
     pub animation: f32,
-    /// List of sessions to display
+    /// The workspaces or snapshots to display
     pub sessions: Vec<SessionEntry>,
-    /// Mouse-hovered session index (None if not hovering any session)
+    /// Mouse-hovered entry index (None if not hovering any entry)
     pub hovered_index: Option<usize>,
     /// Header or footer control under the pointer.
     pub hovered_control: Option<SessionPanelControl>,
@@ -98,7 +99,7 @@ pub struct SessionEntryLayout {
     pub delete_button: Bounds,
 }
 
-/// Shared workspace/session geometry for rendering, hit testing, hover, and
+/// Shared workspace panel geometry for rendering, hit testing, hover, and
 /// accessibility bounds.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SessionPanelLayout {
@@ -352,15 +353,15 @@ impl SessionPanelLayout {
     }
 }
 
-/// Session management panel state
+/// Workspace panel state
 pub struct SessionPanel {
     /// Animation state
     animation: PanelAnimation,
-    /// Currently highlighted session index
+    /// Currently highlighted entry index
     selected_index: usize,
-    /// Cached session entries
+    /// Cached workspace or snapshot entries
     sessions: Vec<SessionEntry>,
-    /// Mouse-hovered session index
+    /// Mouse-hovered entry index
     hovered_index: Option<usize>,
     hovered_control: Option<SessionPanelControl>,
     rename_target: Option<String>,
@@ -524,7 +525,7 @@ impl SessionPanel {
         self.hovered_control = control;
     }
 
-    /// Get the sessions list
+    /// The listed entries
     #[cfg(test)]
     pub fn sessions(&self) -> &[SessionEntry] {
         &self.sessions

@@ -82,8 +82,6 @@ pub struct Layer {
     pub prims: Vec<Prim>,
 }
 
-impl Layer {}
-
 /// Something a hit target expands or collapses.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ExpandKey {
