@@ -395,29 +395,22 @@ fn plugin_pane_moves_to_next_tab_without_relaunching_primary_or_sibling_owner() 
 
 #[test]
 fn focused_moves_reject_exhausted_collapsed_destinations_before_detaching() {
-    for divider in [false, true] {
-        let (mut app, _dir, source, destination, owner) = fixture(true);
-        let tabs = app.tabs.as_mut().unwrap();
-        let tab = tabs.tab_mut_by_id(destination).unwrap();
-        let next_pane = if divider { 1 } else { u32::MAX };
-        let next_divider = if divider { u64::MAX } else { 1 };
-        tab.panes.set_next_ids_for_test(next_pane, next_divider);
-        let observer = tab.panes.lone_pane().unwrap().pty.child_observer();
-        let error = tabs
-            .move_focused_pane_to_next_tab()
-            .unwrap_err()
-            .to_string();
-        assert!(
-            error.contains(if divider { "divider ID" } else { "pane ID" }),
-            "{error}"
-        );
-        assert_eq!(tabs.active_tab().unwrap().id, source);
-        assert!(tabs.origin_for_pane(source, owner).is_some());
-        assert_eq!(tabs.tab_by_id(source).unwrap().panes.pane_count(), 5);
-        assert!(tabs.tab_by_id(destination).unwrap().panes.pane_count() == 1);
-        tabs.switch_to(1);
-        assert!(tabs.validate_window_pane_transfer_destination().is_err());
-        assert!(tabs.tab_by_id(destination).unwrap().panes.pane_count() == 1);
-        assert!(!observer.poll().unwrap().terminal_closed);
-    }
+    let (mut app, _dir, source, destination, owner) = fixture(true);
+    let tabs = app.tabs.as_mut().unwrap();
+    let tab = tabs.tab_mut_by_id(destination).unwrap();
+    tab.panes.set_next_pane_id_for_test(u32::MAX);
+    let observer = tab.panes.lone_pane().unwrap().pty.child_observer();
+    let error = tabs
+        .move_focused_pane_to_next_tab()
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("pane ID"), "{error}");
+    assert_eq!(tabs.active_tab().unwrap().id, source);
+    assert!(tabs.origin_for_pane(source, owner).is_some());
+    assert_eq!(tabs.tab_by_id(source).unwrap().panes.pane_count(), 5);
+    assert!(tabs.tab_by_id(destination).unwrap().panes.pane_count() == 1);
+    tabs.switch_to(1);
+    assert!(tabs.validate_window_pane_transfer_destination().is_err());
+    assert!(tabs.tab_by_id(destination).unwrap().panes.pane_count() == 1);
+    assert!(!observer.poll().unwrap().terminal_closed);
 }

@@ -633,12 +633,11 @@ impl PaneManager {
         ))
     }
 
-    /// Continue the tab's ID allocation history from `next_pane` and
-    /// `next_divider`, as a long-lived tab would.
+    /// Continue the tab's pane ID history from `next_pane`, as a restored
+    /// snapshot carrying large pane IDs would.
     #[cfg(test)]
-    pub(crate) fn set_next_ids_for_test(&mut self, next_pane: u32, next_divider: u64) {
+    pub(crate) fn set_next_pane_id_for_test(&mut self, next_pane: u32) {
         self.next_id = next_pane;
-        self.tree.set_next_local_split_id(next_divider);
     }
 
     #[cfg(test)]
@@ -1067,9 +1066,6 @@ impl PaneManager {
         launch: SplitLaunch<'_>,
     ) -> anyhow::Result<PaneId> {
         self.ensure_room_for_pane()?;
-        if !self.tree.has_split_capacity() {
-            anyhow::bail!("divider ID space exhausted");
-        }
         let next_id = self
             .next_id
             .checked_add(1)
@@ -1493,9 +1489,10 @@ impl PaneManager {
         preset: PaneLayoutPreset,
     ) -> anyhow::Result<()> {
         self.validate_complete_live_layout()?;
-        if !self.rebuild_with_preset(preset) {
-            anyhow::bail!("Pane layout split ID space is exhausted");
-        }
+        assert!(
+            self.rebuild_with_preset(preset),
+            "a preset applies to a validated layout of two or more panes"
+        );
         Ok(())
     }
 
@@ -1623,9 +1620,6 @@ impl PaneManager {
         if self.next_id.checked_add(1).is_none() || self.panes.contains_key(&PaneId(self.next_id)) {
             anyhow::bail!("destination tab exhausted its stable pane ID space");
         }
-        if !self.tree.has_split_capacity() {
-            anyhow::bail!("destination tab exhausted its stable divider ID space");
-        }
         Ok(())
     }
 
@@ -1648,7 +1642,7 @@ impl PaneManager {
         self.panes.insert(id, pane);
         assert!(
             self.tree.split(target, id, direction),
-            "validated target pane and divider ID remain splittable"
+            "a validated target pane is splittable"
         );
         self.focused = id;
         self.zoomed = None;

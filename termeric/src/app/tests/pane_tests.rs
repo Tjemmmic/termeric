@@ -740,11 +740,7 @@ fn collapsed_tab_rejects_retired_pane_and_divider_requests_after_resplit() {
 
 #[test]
 fn pane_allocation_history_survives_failed_split_and_exhaustion() {
-    for (next_pane, next_divider, expected_error) in [
-        (u32::MAX, 7, "pane ID space exhausted"),
-        (7, u64::MAX, "divider ID space exhausted"),
-        (u32::MAX - 1, u64::MAX - 1, "divider ID space exhausted"),
-    ] {
+    for next_pane in [u32::MAX, u32::MAX - 1] {
         let (mut app, _directory, _, _) = harvest_rerun_capture_fixture_in(false);
         let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
         let original_pid = tab.panes.lone_pane().and_then(|pane| pane.pty.child_id());
@@ -754,7 +750,7 @@ fn pane_allocation_history_survives_failed_split_and_exhaustion() {
             env: Default::default(),
         };
         let panes = tab.panes_for_test(shell.clone(), 800.0, 480.0, 10.0, 20.0);
-        panes.set_next_ids_for_test(next_pane, next_divider);
+        panes.set_next_pane_id_for_test(next_pane);
         assert!(
             panes
                 .split(
@@ -775,10 +771,6 @@ fn pane_allocation_history_survives_failed_split_and_exhaustion() {
                 )
                 .unwrap();
             assert_eq!(last, PaneId(u32::MAX - 1));
-            assert_eq!(
-                panes.get_dividers()[0].target,
-                crate::panes::DividerTarget::Local(u64::MAX - 1)
-            );
             assert!(panes.close(last));
         }
         assert_eq!(
@@ -794,7 +786,7 @@ fn pane_allocation_history_survives_failed_split_and_exhaustion() {
                 )
                 .unwrap_err()
                 .to_string()
-                .contains(expected_error)
+                .contains("pane ID space exhausted")
         );
         assert_eq!(panes.pane_count(), 1);
     }

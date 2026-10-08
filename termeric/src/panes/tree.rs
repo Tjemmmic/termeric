@@ -81,10 +81,10 @@ impl PaneNode {
     }
 
     /// The node for a preset's layout, numbering its splits from
-    /// `next_split_id`; `None` when the numbers run out.
-    fn from_shape(shape: LayoutShape<PaneId>, next_split_id: &mut u64) -> Option<Self> {
+    /// `next_split_id`.
+    fn from_shape(shape: LayoutShape<PaneId>, next_split_id: &mut u64) -> Self {
         match shape {
-            LayoutShape::Pane(id) => Some(Self::Leaf(id)),
+            LayoutShape::Pane(id) => Self::Leaf(id),
             LayoutShape::Split {
                 direction,
                 ratio_millis,
@@ -92,15 +92,15 @@ impl PaneNode {
                 second,
             } => {
                 let local_split_id = *next_split_id;
-                *next_split_id = next_split_id.checked_add(1)?;
-                Some(Self::Split {
+                *next_split_id += 1;
+                Self::Split {
                     local_split_id,
                     domain_split_id: None,
                     direction,
                     ratio: f32::from(ratio_millis) / 1000.0,
-                    first: Box::new(Self::from_shape(*first, next_split_id)?),
-                    second: Box::new(Self::from_shape(*second, next_split_id)?),
-                })
+                    first: Box::new(Self::from_shape(*first, next_split_id)),
+                    second: Box::new(Self::from_shape(*second, next_split_id)),
+                }
             }
         }
     }
@@ -145,9 +145,7 @@ impl PaneNode {
         } = self
         {
             *local_split_id = *next_split_id;
-            *next_split_id = next_split_id
-                .checked_add(1)
-                .expect("bounded pane tree cannot exhaust u64 divider IDs during restore");
+            *next_split_id += 1;
             first.assign_local_split_ids(next_split_id);
             second.assign_local_split_ids(next_split_id);
         }
@@ -383,6 +381,9 @@ fn divider_target(local_split_id: u64, domain_split_id: Option<u32>) -> DividerT
 #[derive(Debug)]
 pub struct PaneTree {
     root: PaneNode,
+    /// The next split's tab-local ID. IDs are never reused within a tab, and
+    /// each split, restore, or preset takes at most a tab's pane count of
+    /// them, so a u64 cannot run out.
     next_local_split_id: u64,
 }
 
@@ -395,17 +396,8 @@ impl PaneTree {
         }
     }
 
-    #[cfg(test)]
-    pub(super) fn set_next_local_split_id(&mut self, next_local_split_id: u64) {
-        self.next_local_split_id = next_local_split_id;
-    }
-
     pub(crate) fn root(&self) -> &PaneNode {
         &self.root
-    }
-
-    pub(crate) fn has_split_capacity(&self) -> bool {
-        self.next_local_split_id.checked_add(1).is_some()
     }
 
     pub(crate) fn from_root(mut root: PaneNode) -> Self {
@@ -419,16 +411,13 @@ impl PaneTree {
 
     /// Split a pane
     pub fn split(&mut self, target: PaneId, new_id: PaneId, direction: SplitDirection) -> bool {
-        let Some(next) = self.next_local_split_id.checked_add(1) else {
-            return false;
-        };
         if !self
             .root
             .split_leaf(target, new_id, direction, self.next_local_split_id)
         {
             return false;
         }
-        self.next_local_split_id = next;
+        self.next_local_split_id += 1;
         true
     }
 
@@ -479,18 +468,13 @@ impl PaneTree {
 
     /// Rebuild the tree from the same stable pane IDs in a preset's
     /// layout, `focused` being the master of Tall and Fat. False, leaving
-    /// the tree as it was, when the preset does not apply or split
-    /// identities run out.
+    /// the tree as it was, when the preset does not apply: to fewer than
+    /// two panes, or to a `focused` pane the tree lacks.
     pub fn apply_layout_preset(&mut self, preset: PaneLayoutPreset, focused: PaneId) -> bool {
-        let mut next = self.next_local_split_id;
-        let Some(root) = preset
-            .shape(&self.get_all_ids(), focused)
-            .and_then(|shape| PaneNode::from_shape(shape, &mut next))
-        else {
+        let Some(shape) = preset.shape(&self.get_all_ids(), focused) else {
             return false;
         };
-        self.root = root;
-        self.next_local_split_id = next;
+        self.root = PaneNode::from_shape(shape, &mut self.next_local_split_id);
         true
     }
 
