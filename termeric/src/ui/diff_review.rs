@@ -133,6 +133,7 @@ impl DiffReviewLayout {
             cell_width,
             cell_height,
             animation,
+            TextCard::text_line_height(cell_height),
             max_line_chars.clamp(50, 100),
             "Diff: ".chars().count() + filename.chars().count(),
             500.0,

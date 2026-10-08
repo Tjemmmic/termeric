@@ -4,8 +4,8 @@
 use std::path::PathBuf;
 
 use super::animation::OverlayAnimation;
-use super::constants::CONTENT_CHAR_SCALE;
 use super::request_scope::RequestScope;
+use super::text_card::TextCard;
 use super::text_input::{TextInput, TextInputEdit, TextLimit};
 use crate::agents::AgentTarget;
 use crate::agents::context::{
@@ -130,7 +130,6 @@ pub struct ContextPickerLayout {
     pub padding: f32,
     pub title_height: f32,
     pub row_height: f32,
-    pub footer_height: f32,
     pub visible_count: usize,
     pub char_scale: f32,
 }
@@ -145,80 +144,47 @@ impl ContextPickerLayout {
         phase: ContextPickerPhase,
         source_count: usize,
     ) -> Self {
-        let char_scale = (cell_width * CONTENT_CHAR_SCALE).max(1.0);
-        let padding = (cell_width * 2.0).max(12.0);
-        let title_height = cell_height * 2.5;
-        let row_height = cell_height * 2.2;
-        let footer_height = cell_height * 5.2;
-        let outer_margin = (cell_width * 2.0).max(12.0);
-        let available_width = (window_width - outer_margin * 2.0).max(1.0);
-        let card_width = (cell_width * 58.0).max(440.0).min(available_width);
-
-        let fixed_height = padding + title_height + footer_height + padding * 0.5;
-        let available_height = (window_height - outer_margin * 2.0).max(row_height);
-        let content_budget = (available_height - fixed_height).max(row_height);
-        let rows_that_fit = ((content_budget / row_height).floor() as usize).max(1);
         let desired_rows = if phase == ContextPickerPhase::FilePaths {
             3
         } else {
             source_count.max(1)
         };
-        let visible_count = desired_rows.min(rows_that_fit);
-        let content_height = visible_count as f32 * row_height;
-        let card_height = fixed_height + content_height;
-        let card_x = (window_width - card_width) / 2.0;
-        let card_y = (window_height - card_height) / 2.0 + (1.0 - animation) * -20.0;
-        let content_x = card_x + padding;
-        let content_y = card_y + padding + title_height;
-        let scrollbar_gutter = cell_width.max(6.0);
-        let content_width = (card_width - padding * 2.0 - scrollbar_gutter).max(char_scale);
-
-        let button_height = cell_height * 1.8;
-        let button_gap = cell_width * 1.5;
-        let button_y = content_y + content_height + cell_height * 1.15;
-        let available_button_width = (card_width - padding * 2.0 - button_gap).max(2.0);
+        // A fixed width: the rows are labels and checkboxes, not text that
+        // asks for columns.
+        let text = TextCard::calculate(
+            window_width,
+            window_height,
+            cell_width,
+            cell_height,
+            animation,
+            cell_height * 2.2,
+            0,
+            0,
+            (cell_width * 58.0).max(440.0),
+            desired_rows,
+        );
+        let available_button_width = text.button_row_width(1).max(2.0);
         let cancel_width = (available_button_width * 0.38).max(1.0);
         let primary_width = (available_button_width - cancel_width).max(1.0);
-        let cancel_x = card_x + padding;
-        let primary_x = cancel_x + cancel_width + button_gap;
+        let cancel_x = text.card.x + text.padding;
+        let primary_x = cancel_x + cancel_width + text.button_gap;
 
         Self {
-            card: Bounds {
-                x: card_x,
-                y: card_y,
-                width: card_width,
-                height: card_height,
-            },
-            content: Bounds {
-                x: content_x,
-                y: content_y,
-                width: content_width,
-                height: content_height,
-            },
+            card: text.card,
+            content: text.content,
             file_input: Bounds {
-                x: content_x,
-                y: content_y + row_height * 0.75,
-                width: content_width,
-                height: row_height,
+                x: text.content.x,
+                y: text.content.y + text.line_height * 0.75,
+                width: text.content.width,
+                height: text.line_height,
             },
-            cancel_button: Bounds {
-                x: cancel_x,
-                y: button_y,
-                width: cancel_width,
-                height: button_height,
-            },
-            primary_button: Bounds {
-                x: primary_x,
-                y: button_y,
-                width: primary_width,
-                height: button_height,
-            },
-            padding,
-            title_height,
-            row_height,
-            footer_height,
-            visible_count,
-            char_scale,
+            cancel_button: text.button(cancel_x, cancel_width),
+            primary_button: text.button(primary_x, primary_width),
+            padding: text.padding,
+            title_height: text.title_height,
+            row_height: text.line_height,
+            visible_count: desired_rows.min(text.rows_that_fit),
+            char_scale: text.char_scale,
         }
     }
 

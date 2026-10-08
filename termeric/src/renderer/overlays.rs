@@ -672,7 +672,7 @@ impl Renderer {
         self.push_ui_label_centered(
             hint,
             card_x + card_width / 2.0,
-            layout.cancel_button.bottom() + cell_height * 0.45,
+            layout.cancel_button.bottom() + cell_height * 0.5,
             cell_height,
             card_width - padding * 2.0,
             label_size,
@@ -842,6 +842,7 @@ mod tests {
                 cell_width,
                 cell_height,
                 1.0,
+                TextCard::text_line_height(cell_height),
                 80,
                 20,
                 380.0,

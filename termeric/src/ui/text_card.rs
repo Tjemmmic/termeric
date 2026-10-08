@@ -1,13 +1,14 @@
-//! What the scrolling text cards (the info overlay and diff review) share:
-//! the card geometry around their content and the two-axis viewport over it.
+//! What the centred content cards (the info overlay, diff review, and the
+//! context picker) share: the card geometry around their content and the
+//! two-axis viewport over scrolled text.
 
 use super::constants::CONTENT_CHAR_SCALE;
 use super::geometry::Bounds;
 use super::scroll::reveal_row;
 
-/// Geometry of a centred card showing scrolled monospace text under a title
-/// and above a row of buttons. Rendering, hit testing, viewport sizing, and
-/// accessibility all read it, so what is drawn is what answers.
+/// Geometry of a centred card showing rows of content under a title and
+/// above a row of buttons with a hint line. Rendering, hit testing, viewport
+/// sizing, and accessibility all read it, so what is drawn is what answers.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextCard {
     pub card: Bounds,
@@ -27,7 +28,12 @@ pub struct TextCard {
 }
 
 impl TextCard {
-    /// Lay out a card for `total_rows` rows of content, sized to show
+    /// The height of one line of a card's monospace text.
+    pub fn text_line_height(cell_height: f32) -> f32 {
+        (cell_height * 1.5).max(1.0)
+    }
+
+    /// Lay out a card for `total_rows` rows `line_height` tall, sized to show
     /// `content_columns` columns and a title `title_columns` long where the
     /// window allows, and never narrower than `min_width`. `animation`
     /// slides the card down into place as it opens.
@@ -37,6 +43,7 @@ impl TextCard {
         cell_width: f32,
         cell_height: f32,
         animation: f32,
+        line_height: f32,
         content_columns: usize,
         title_columns: usize,
         min_width: f32,
@@ -44,7 +51,6 @@ impl TextCard {
     ) -> Self {
         let char_scale = (cell_width * CONTENT_CHAR_SCALE).max(1.0);
         let padding = (cell_width * 2.0).max(12.0);
-        let line_height = (cell_height * 1.5).max(1.0);
         let title_height = cell_height * 2.5;
         let footer_height = cell_height * 4.5;
         let outer_margin = (cell_width * 2.0).max(12.0);
@@ -284,13 +290,13 @@ mod tests {
 
     #[test]
     fn cards_stay_in_small_windows_and_slide_with_their_animation() {
-        let open = TextCard::calculate(300.0, 200.0, 10.0, 20.0, 1.0, 400, 20, 380.0, 1_000);
+        let open = TextCard::calculate(300.0, 200.0, 10.0, 20.0, 1.0, 30.0, 400, 20, 380.0, 1_000);
         assert!(open.card.x >= 0.0 && open.card.right() <= 300.0);
         assert!(open.card.y >= 0.0 && open.card.bottom() <= 200.0);
         assert!(open.content.right() < open.card.right() - open.padding);
         assert_eq!(open.rows_that_fit, 1);
         let closed =
-            TextCard::calculate(300.0, 200.0, 10.0, 20.0, 1.0 - 0.5, 400, 20, 380.0, 1_000);
+            TextCard::calculate(300.0, 200.0, 10.0, 20.0, 0.5, 30.0, 400, 20, 380.0, 1_000);
         assert_eq!(closed.card.y, open.card.y - 10.0);
         assert_eq!(closed.button_y, open.button_y - 10.0);
     }
