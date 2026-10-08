@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::input::keybindings::{BindableAction, KeyChord};
+use crate::ui::info_overlay::push_keyless_choice;
 
 const CONFIG_RESET_CHOICE: &str = "config-reset";
 const CONFIG_KEEP_CHOICE: &str = "config-keep";
@@ -19,32 +20,18 @@ impl App {
                 return;
             }
         };
-        let lines = vec![
+        let mut lines = vec![
             format!("Replace {path} with a file that sets nothing?"),
             "Every setting returns to its default. The current file is kept".into(),
             "beside it as a .bak copy.".into(),
             String::new(),
-            "  Reset".into(),
-            "  Cancel".into(),
         ];
-        let request_id = self.info_overlay.show_choices(
-            "Reset Configuration",
-            lines,
-            vec![
-                crate::ui::info_overlay::InfoOverlayChoice::new(
-                    CONFIG_RESET_CHOICE,
-                    "Reset",
-                    4,
-                    None,
-                ),
-                crate::ui::info_overlay::InfoOverlayChoice::new(
-                    CONFIG_KEEP_CHOICE,
-                    "Cancel",
-                    5,
-                    None,
-                ),
-            ],
-        );
+        let mut choices = Vec::new();
+        push_keyless_choice(&mut lines, &mut choices, CONFIG_RESET_CHOICE, "Reset");
+        push_keyless_choice(&mut lines, &mut choices, CONFIG_KEEP_CHOICE, "Cancel");
+        let request_id = self
+            .info_overlay
+            .show_choices("Reset Configuration", lines, choices);
         self.overlay_flow = Some(OverlayFlow::ConfigReset { request_id });
     }
 
@@ -929,31 +916,22 @@ impl App {
         holder: BindableAction,
     ) {
         let (label, holder_label) = (action.meta().label, holder.meta().label);
-        let lines = vec![
+        let mut lines = vec![
             format!("{chord} is the shortcut for {holder_label}."),
             format!("Use it for {label} and leave {holder_label} without a shortcut?"),
             String::new(),
-            "  Reassign".into(),
-            "  Cancel".into(),
         ];
-        let request_id = self.info_overlay.show_choices(
-            "Reassign Shortcut",
-            lines,
-            vec![
-                crate::ui::info_overlay::InfoOverlayChoice::new(
-                    SHORTCUT_REASSIGN_CHOICE,
-                    "Reassign",
-                    3,
-                    None,
-                ),
-                crate::ui::info_overlay::InfoOverlayChoice::new(
-                    SHORTCUT_KEEP_CHOICE,
-                    "Cancel",
-                    4,
-                    None,
-                ),
-            ],
+        let mut choices = Vec::new();
+        push_keyless_choice(
+            &mut lines,
+            &mut choices,
+            SHORTCUT_REASSIGN_CHOICE,
+            "Reassign",
         );
+        push_keyless_choice(&mut lines, &mut choices, SHORTCUT_KEEP_CHOICE, "Cancel");
+        let request_id = self
+            .info_overlay
+            .show_choices("Reassign Shortcut", lines, choices);
         self.overlay_flow = Some(OverlayFlow::ShortcutReassign {
             request_id,
             action,
