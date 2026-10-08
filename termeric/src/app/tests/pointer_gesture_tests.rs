@@ -724,7 +724,7 @@ fn geometry_changes_finish_all_native_gestures_without_a_button_release() {
     let changes: [fn(&mut App); 3] = [
         |app| app.handle_resize(960, 720),
         |app| app.handle_scale_factor_change(1.5, winit::dpi::PhysicalSize::new(1440, 1080)),
-        |app| app.sync_terminal_geometry(960, 720),
+        |app| app.sync_terminal_geometry(),
     ];
     for change in changes {
         let mut app = App::new_headless(Config::default()).unwrap();

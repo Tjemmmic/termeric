@@ -83,15 +83,9 @@ impl App {
         let Some(renderer) = &mut self.renderer else {
             return;
         };
-        let Some(window) = self.window.clone() else {
-            return;
-        };
 
         renderer.set_font_size(size);
-
-        // Recalculate grid size after font change
-        let window_size = window.inner_size();
-        self.sync_terminal_geometry(window_size.width, window_size.height);
+        self.sync_terminal_geometry();
         log::info!(
             "Font size set to {}, grid resized to {}x{}",
             size,
@@ -397,10 +391,7 @@ impl App {
             self.apply_agent_dock_width();
         }
         // Every geometry input is in place: resize the terminals once.
-        if let Some(window) = self.window.clone() {
-            let size = window.inner_size();
-            self.sync_terminal_geometry(size.width, size.height);
-        }
+        self.sync_terminal_geometry();
         self.sync_agent_view_config();
         if let Some(renderer) = &mut self.renderer {
             renderer.set_ligatures(self.config.font.ligatures);

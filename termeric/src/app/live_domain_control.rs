@@ -939,9 +939,7 @@ impl App {
     /// panes without changing which tabs exist.
     fn sync_after_live_domain_topology(&mut self) {
         self.reconcile_broadcast_state();
-        if let Some(size) = self.window.as_ref().map(|window| window.inner_size()) {
-            self.sync_terminal_geometry(size.width, size.height);
-        }
+        self.sync_terminal_geometry();
         self.refresh_focused_terminal_surfaces();
     }
 
@@ -1186,7 +1184,7 @@ mod tests {
             |app| app.handle_window_focus_change(false),
             |app| app.handle_resize(960, 720),
             |app| app.handle_scale_factor_change(1.5, winit::dpi::PhysicalSize::new(1440, 1080)),
-            |app| app.sync_terminal_geometry(960, 720),
+            |app| app.sync_terminal_geometry(),
         ];
         for interrupt in interruptions {
             assert!(app.tabs.as_mut().unwrap().move_active_to(0));

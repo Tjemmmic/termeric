@@ -22,11 +22,7 @@ impl App {
         let area = self
             .renderer
             .as_ref()
-            .zip(self.window.as_ref())
-            .map(|(renderer, window)| {
-                let size = window.inner_size();
-                renderer.terminal_area(size.width, size.height)
-            })
+            .map(crate::renderer::Renderer::terminal_area)
             .unwrap_or_else(|| {
                 crate::terminal::geometry::TerminalArea::new(
                     crate::terminal::geometry::TerminalGeometry::from_cells(

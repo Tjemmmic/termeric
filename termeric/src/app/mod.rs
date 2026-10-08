@@ -1250,9 +1250,8 @@ impl App {
         log::info!("Discovered {} monospace fonts", fonts.len());
         self.settings_panel.set_available_fonts(fonts);
 
-        // Calculate grid size from renderer's cell size
-        let size = window.inner_size();
-        let (cols, rows) = renderer.calculate_grid_size(size.width, size.height);
+        let geometry = renderer.terminal_area().geometry;
+        let (cols, rows) = (geometry.cols, geometry.rows);
         self.cols = cols;
         self.rows = rows;
 
@@ -1550,7 +1549,7 @@ impl App {
         // The dock's width depends on the window's; settle it first so the
         // terminals are sized once.
         self.apply_agent_dock_width();
-        self.sync_terminal_geometry(width, height);
+        self.sync_terminal_geometry();
     }
 
     fn handle_scale_factor_change(
@@ -1563,13 +1562,14 @@ impl App {
             renderer.resize(new_inner_size.width, new_inner_size.height);
         }
         self.apply_agent_dock_width();
-        self.sync_terminal_geometry(new_inner_size.width, new_inner_size.height);
+        self.sync_terminal_geometry();
     }
 
-    /// Synchronize every PTY from the renderer's physical grid geometry. This
+    /// Synchronize every PTY from the renderer's physical grid geometry
+    /// (`Renderer::terminal_area`, the surface the panes are drawn in). This
     /// runs even when rows/columns are unchanged so scale/font pixel changes
     /// reach the kernel; Tab and Pane deduplicate exact four-field repeats.
-    fn sync_terminal_geometry(&mut self, width: u32, height: u32) {
+    fn sync_terminal_geometry(&mut self) {
         // Every geometry entry point (resize, scale, font/configuration, and
         // topology) invalidates native drag coordinates. Finalize the last
         // preview through the normal domain acknowledgment/rollback path
@@ -1578,7 +1578,7 @@ impl App {
         let Some(renderer) = &self.renderer else {
             return;
         };
-        let area = renderer.terminal_area(width, height);
+        let area = renderer.terminal_area();
         let geometry = area.geometry;
         self.cols = geometry.cols;
         self.rows = geometry.rows;
@@ -1602,11 +1602,10 @@ impl App {
     /// differs between tabs. Every other geometry change resizes all tabs
     /// through `sync_terminal_geometry`.
     pub(super) fn sync_active_terminal_geometry(&mut self) {
-        let (Some(window), Some(renderer)) = (&self.window, &self.renderer) else {
+        let Some(renderer) = &self.renderer else {
             return;
         };
-        let size = window.inner_size();
-        let area = renderer.terminal_area(size.width, size.height);
+        let area = renderer.terminal_area();
         if self
             .tabs
             .as_ref()

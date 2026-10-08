@@ -388,33 +388,25 @@ impl Renderer {
         self.glyph_cache.cell_size()
     }
 
-    /// Calculate terminal dimensions from the physical window viewport.
-    pub(crate) fn calculate_grid_geometry(
-        &self,
-        width: u32,
-        height: u32,
-    ) -> crate::terminal::geometry::TerminalGeometry {
-        crate::terminal::geometry::TerminalGeometry::from_window_pixels(
+    /// The terminal area of the surface this renderer draws at: its grid
+    /// geometry and the cell size it was measured with. Terminals are sized
+    /// from it, not from the window, because [`Self::pane_placement`] places
+    /// and draws their panes in this surface; the two differ while a resize
+    /// has not reached the renderer, and the surface keeps its last size
+    /// when the window reports none (it is never configured at zero).
+    pub(crate) fn terminal_area(&self) -> crate::terminal::geometry::TerminalArea {
+        let (width, height) = self.size;
+        let geometry = crate::terminal::geometry::TerminalGeometry::from_window_pixels(
             width,
             height,
             self.padding,
-            self.tab_bar_width_for(width as f32)
-                + (width as f32 - self.content_right_for(width as f32)),
+            self.tab_bar_width() + (width as f32 - self.content_right()),
             self.tab_bar_height(),
             self.cell_width(),
             self.cell_height(),
-        )
-    }
-
-    /// The terminal area of a `width` by `height` window: its grid geometry
-    /// and the cell size it was measured with.
-    pub(crate) fn terminal_area(
-        &self,
-        width: u32,
-        height: u32,
-    ) -> crate::terminal::geometry::TerminalArea {
+        );
         crate::terminal::geometry::TerminalArea::new(
-            self.calculate_grid_geometry(width, height),
+            geometry,
             self.cell_width(),
             self.cell_height(),
         )
@@ -430,12 +422,6 @@ impl Renderer {
             padding: self.padding,
             scale_factor: self.scale_factor,
         }
-    }
-
-    /// Calculate terminal cell dimensions from window size.
-    pub fn calculate_grid_size(&self, width: u32, height: u32) -> (usize, usize) {
-        let geometry = self.calculate_grid_geometry(width, height);
-        (geometry.cols, geometry.rows)
     }
 
     /// Get the tab bar height
