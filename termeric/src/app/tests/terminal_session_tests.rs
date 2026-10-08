@@ -4,7 +4,7 @@ use crate::session::terminal_state::DiffWatch;
 
 #[test]
 fn transcript_utf8_carry_follows_owner_through_split_collapse_and_sibling_close() {
-    use crate::session::transcript::{EntryKind, TranscriptEntry, TranscriptRecorder};
+    use crate::session::transcript::{EntryKind, TranscriptRecorder};
     use termeric_core::pty::PtyEvent;
     let (mut app, directory, entry, _) = harvest_rerun_capture_fixture_in(false);
     let owner = PaneId(entry.source.pane_id);
@@ -72,13 +72,7 @@ fn transcript_utf8_carry_follows_owner_through_split_collapse_and_sibling_close(
     app.close_pane_for(Requester::Control, entry.source.tab_id as u64, sibling.0)
         .unwrap();
     let read = |path: &std::path::Path, kind: EntryKind| -> String {
-        std::fs::read_to_string(path)
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str::<TranscriptEntry>(line).unwrap())
-            .filter(|entry| entry.kind == kind)
-            .map(|entry| entry.content)
-            .collect()
+        crate::test_support::transcript_text(&crate::test_support::transcript_entries(path), kind)
     };
     assert_eq!(read(&sibling_path, EntryKind::Output), "sibling �");
     assert_eq!(read(&sibling_path, EntryKind::Input), "sibling input �");

@@ -1,21 +1,10 @@
 use super::*;
+use crate::test_support::{transcript_entries, transcript_text as text};
 use std::fs;
 
 fn entries(recorder: &mut TranscriptRecorder) -> Vec<TranscriptEntry> {
     recorder.finish(Duration::from_secs(2)).unwrap();
-    fs::read_to_string(recorder.path())
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect()
-}
-
-fn text(entries: &[TranscriptEntry], kind: EntryKind) -> String {
-    entries
-        .iter()
-        .filter(|entry| entry.kind == kind)
-        .map(|entry| entry.content.as_str())
-        .collect()
+    transcript_entries(recorder.path())
 }
 
 #[test]
@@ -144,11 +133,7 @@ fn stop_and_drop_finalize_unfinished_input_and_output_once() {
             recorder.finish(Duration::from_secs(2)).unwrap();
         }
         drop(recorder);
-        let recorded: Vec<TranscriptEntry> = fs::read_to_string(path)
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect();
+        let recorded = transcript_entries(&path);
         assert_eq!(text(&recorded, EntryKind::Input), "input �");
         assert_eq!(text(&recorded, EntryKind::Output), "output �");
     }

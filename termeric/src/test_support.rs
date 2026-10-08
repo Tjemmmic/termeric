@@ -3,6 +3,7 @@
 
 use crate::config::ShellConfig;
 use crate::harvest::{HarvestMode, HarvestSource, HarvestTerminalState};
+use crate::session::transcript::{EntryKind, TranscriptEntry};
 use crate::tabs::{TabManager, TabType};
 use crate::ui::geometry::Bounds;
 use serde::Serialize;
@@ -172,6 +173,24 @@ pub(crate) fn unread_bytes(socket: &impl std::os::fd::AsRawFd) -> usize {
     let result = unsafe { libc::ioctl(socket.as_raw_fd(), libc::FIONREAD, &mut available) };
     assert_eq!(result, 0, "{}", std::io::Error::last_os_error());
     usize::try_from(available).expect("FIONREAD reports a count")
+}
+
+/// Every entry of the finished transcript at `path`, one JSON line each.
+pub(crate) fn transcript_entries(path: &std::path::Path) -> Vec<TranscriptEntry> {
+    std::fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+/// The contents of `entries` of `kind`, joined in order.
+pub(crate) fn transcript_text(entries: &[TranscriptEntry], kind: EntryKind) -> String {
+    entries
+        .iter()
+        .filter(|entry| entry.kind == kind)
+        .map(|entry| entry.content.as_str())
+        .collect()
 }
 
 /// Run `step` until it returns true or `timeout` passes, pausing briefly

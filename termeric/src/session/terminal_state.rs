@@ -204,24 +204,17 @@ impl TerminalIntegration {
 
 #[cfg(test)]
 mod tests {
+    use super::super::transcript::EntryKind;
     use super::*;
+    use crate::test_support::{transcript_entries, transcript_text};
 
     fn recorded_text(path: &std::path::Path, input: bool) -> String {
-        use super::super::transcript::{EntryKind, TranscriptEntry};
-        std::fs::read_to_string(path)
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str::<TranscriptEntry>(line).unwrap())
-            .filter(|entry| {
-                entry.kind
-                    == if input {
-                        EntryKind::Input
-                    } else {
-                        EntryKind::Output
-                    }
-            })
-            .map(|entry| entry.content)
-            .collect()
+        let kind = if input {
+            EntryKind::Input
+        } else {
+            EntryKind::Output
+        };
+        transcript_text(&transcript_entries(path), kind)
     }
 
     #[test]
@@ -319,7 +312,6 @@ mod tests {
 
     #[test]
     fn diff_entries_use_completion_epoch_without_replaying_pre_recording_raw_output() {
-        use super::super::transcript::{EntryKind, TranscriptEntry};
         let directory = tempfile::tempdir().unwrap();
         let mut session = TerminalIntegration::default();
         let patch = b"--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new\n";
@@ -331,10 +323,8 @@ mod tests {
         let mut recorder = session.stop_transcript().unwrap();
         recorder.finish(std::time::Duration::from_secs(2)).unwrap();
         assert_eq!(recorded_text(recorder.path(), false), "finished\n");
-        let diffs: Vec<_> = std::fs::read_to_string(recorder.path())
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str::<TranscriptEntry>(line).unwrap())
+        let diffs: Vec<_> = transcript_entries(recorder.path())
+            .into_iter()
             .filter(|entry| entry.kind == EntryKind::Diff)
             .collect();
         assert_eq!(diffs.len(), 1);
@@ -343,7 +333,6 @@ mod tests {
 
     #[test]
     fn raw_transcript_preserves_split_utf8_in_both_directions() {
-        use super::super::transcript::{EntryKind, TranscriptEntry};
         let directory = tempfile::tempdir().unwrap();
         let mut session = TerminalIntegration::default();
         session.start_transcript(
@@ -355,30 +344,14 @@ mod tests {
         }
         let mut recorder = session.stop_transcript().unwrap();
         recorder.finish(std::time::Duration::from_secs(2)).unwrap();
-        let entries: Vec<TranscriptEntry> = std::fs::read_to_string(recorder.path())
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect();
-        for input in [false, true] {
-            let text: String = entries
-                .iter()
-                .filter(|entry| {
-                    if input {
-                        matches!(entry.kind, EntryKind::Input)
-                    } else {
-                        matches!(entry.kind, EntryKind::Output)
-                    }
-                })
-                .map(|entry| entry.content.as_str())
-                .collect();
-            assert_eq!(text, "before 🌱 after");
+        let entries = transcript_entries(recorder.path());
+        for kind in [EntryKind::Output, EntryKind::Input] {
+            assert_eq!(transcript_text(&entries, kind), "before 🌱 after");
         }
     }
 
     #[test]
     fn completed_diffs_are_recorded_once_at_boundaries_and_eof_even_after_eviction() {
-        use super::super::transcript::{EntryKind, TranscriptEntry};
         let directory = tempfile::tempdir().unwrap();
         let mut session = TerminalIntegration::default();
         session.start_transcript(
@@ -400,11 +373,7 @@ mod tests {
         session.finish_stream();
         let mut recorder = session.stop_transcript().unwrap();
         recorder.finish(std::time::Duration::from_secs(2)).unwrap();
-        let entries: Vec<TranscriptEntry> = std::fs::read_to_string(recorder.path())
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect();
+        let entries = transcript_entries(recorder.path());
         let diffs: Vec<_> = entries
             .iter()
             .filter(|entry| matches!(entry.kind, EntryKind::Diff))

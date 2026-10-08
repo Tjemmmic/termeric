@@ -615,17 +615,13 @@ fn harvest_rerun_records_exact_user_input_once_but_not_protocol_fences_or_refusa
             .stop_transcript()
             .unwrap();
         recorder.finish(std::time::Duration::from_secs(3)).unwrap();
-        let entries = std::fs::read_to_string(recorder.path())
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
-            .collect::<Vec<_>>();
+        let entries = crate::test_support::transcript_entries(recorder.path());
         let input = entries
             .iter()
-            .filter(|entry| entry["kind"] == "input")
+            .filter(|entry| entry.kind == crate::session::transcript::EntryKind::Input)
             .collect::<Vec<_>>();
         assert_eq!(input.len(), 1, "{entries:?}");
-        assert_eq!(input[0]["content"], "\x15echo harvest\r");
+        assert_eq!(input[0].content, "\x15echo harvest\r");
     }
 }
 

@@ -1061,10 +1061,7 @@ mod tests {
         recorder.record_output("safe subsequent output 界").unwrap();
         let contents = finish_and_read(&mut recorder);
         assert!(recorder.poll_notices().is_empty());
-        let entries: Vec<TranscriptEntry> = contents
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect();
+        let entries = crate::test_support::transcript_entries(recorder.path());
         assert_eq!(entries.len(), 5);
         assert_eq!(
             entries[0].metadata.as_ref().unwrap()["repo"],
@@ -1126,11 +1123,8 @@ mod tests {
             .record_diff("src/main.rs", "+new line\n-old line")
             .unwrap();
 
-        let contents = finish_and_read(&mut recorder);
-        let entries: Vec<TranscriptEntry> = contents
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect();
+        recorder.finish(Duration::from_secs(2)).unwrap();
+        let entries = crate::test_support::transcript_entries(recorder.path());
         assert_eq!(entries.len(), 4);
         assert_eq!(entries[0].kind, EntryKind::Meta);
         assert_eq!(entries[1].kind, EntryKind::Input);

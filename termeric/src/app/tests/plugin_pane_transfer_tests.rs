@@ -1,6 +1,6 @@
 //! Movement preserves live local owners; no installed/provider CLI is run.
 use super::*;
-use crate::session::transcript::{EntryKind, TranscriptEntry, TranscriptRecorder};
+use crate::session::transcript::{EntryKind, TranscriptRecorder};
 use crate::tabs::TerminalIdentity;
 use crate::workspace::WorkspaceLaunch;
 use termeric_core::pty::PtyEvent;
@@ -289,18 +289,8 @@ fn plugin_transfer_keeps_streaming_transcript_diff_and_read_only_state_with_one_
         assert_eq!(state.diff_detector.unreviewed_count(), 1);
         let mut recorder = state.stop_transcript().unwrap();
         recorder.finish(Duration::from_secs(2)).unwrap();
-        let entries: Vec<TranscriptEntry> = std::fs::read_to_string(path)
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect();
-        let text = |kind| {
-            entries
-                .iter()
-                .filter(|entry| entry.kind == kind)
-                .map(|entry| entry.content.as_str())
-                .collect::<String>()
-        };
+        let entries = crate::test_support::transcript_entries(&path);
+        let text = |kind| crate::test_support::transcript_text(&entries, kind);
         assert_eq!(text(EntryKind::Input), "input ¢ moved");
         assert!(text(EntryKind::Output).contains("+new 🌱\nfinished\n"));
         assert_eq!(
