@@ -177,7 +177,10 @@ mod tests {
         app.apply_session_panel_action(SessionPanelAction::PlaceRenameCaret { cursor: 3 });
         assert_draft(&app, text, 3);
         assert!(app.ime.preedit().is_none());
-        assert_eq!(app.redraw_scheduler.begin_frame(), "pointer-input");
+        assert_eq!(
+            app.redraw_scheduler.begin_frame().to_string(),
+            "pointer-input"
+        );
         app.handle_ime_event(Ime::Commit("Q".into()));
         assert_draft(&app, "界Qe\u{301}👩\u{200d}💻🇺🇸z", 4);
         app.session_panel.close();
@@ -208,7 +211,10 @@ mod tests {
             assert!(app.handle_session_rename_key(&Key::Named(key)));
             assert_draft(&app, expected, cursor);
             assert!(app.ime.preedit().is_none());
-            assert_eq!(app.redraw_scheduler.begin_frame(), "keyboard-input");
+            assert_eq!(
+                app.redraw_scheduler.begin_frame().to_string(),
+                "keyboard-input"
+            );
         }
         assert!(app.handle_session_rename_key(&Key::Character("界e\u{301}".into())));
         assert_draft(&app, "a界e\u{301}z", 7);

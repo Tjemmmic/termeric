@@ -286,7 +286,10 @@ mod tests {
             app.redraw_scheduler.begin_frame();
             assert!(app.paste_clipboard_payload("界e\u{301}👩\u{200d}💻"));
             assert!(app.ime.preedit().is_none());
-            assert_eq!(app.redraw_scheduler.begin_frame(), "keyboard-input");
+            assert_eq!(
+                app.redraw_scheduler.begin_frame().to_string(),
+                "keyboard-input"
+            );
             let draft = app.tab_rename.as_ref().unwrap().input.text().to_owned();
             assert_eq!(draft, "Roots界e\u{301}👩\u{200d}💻");
             assert!(
@@ -404,7 +407,10 @@ mod tests {
         assert_eq!(text, "a界e\u{301}👩\u{200d}💻z");
         assert_eq!(before.rename_cursor, text.len() - 1);
         assert!(app.ime.preedit().is_none());
-        assert_eq!(app.redraw_scheduler.begin_frame(), "keyboard-input");
+        assert_eq!(
+            app.redraw_scheduler.begin_frame().to_string(),
+            "keyboard-input"
+        );
         assert!(app.paste_clipboard_payload(&"🫚".repeat(127 - text.chars().count())));
         let almost = app.session_panel.build_info();
         app.handle_ime_event(winit::event::Ime::Preedit("keep".into(), None));

@@ -2,7 +2,8 @@
 //!
 //! Winit already coalesces native redraw requests. This scheduler adds the
 //! missing application-level policy: collect why a frame is dirty, keep idle
-//! wakeups deadline-driven, and retain lightweight counters for diagnostics.
+//! wakeups deadline-driven, and count frames and coalesced requests for the
+//! window's closing diagnostics.
 
 use std::time::Instant;
 
@@ -81,9 +82,36 @@ impl RedrawReason {
 #[derive(Debug, Default)]
 pub(super) struct RedrawScheduler {
     pending: u32,
-    requested_frames: u64,
-    rendered_frames: u64,
+    frames: u64,
     coalesced_requests: u64,
+}
+
+/// Why a frame was drawn. It is spelled out only when shown, so a frame
+/// pays nothing for it while trace logging is off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct RedrawReasons(u32);
+
+impl RedrawReasons {
+    #[cfg(test)]
+    pub(super) fn contains(self, reason: RedrawReason) -> bool {
+        self.0 & reason.bit() != 0
+    }
+}
+
+impl std::fmt::Display for RedrawReasons {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0 == 0 {
+            return formatter.write_str("native");
+        }
+        let mut labels = RedrawReason::ALL
+            .into_iter()
+            .filter(|reason| self.0 & reason.bit() != 0)
+            .map(RedrawReason::label);
+        if let Some(first) = labels.next() {
+            formatter.write_str(first)?;
+        }
+        labels.try_for_each(|label| write!(formatter, ",{label}"))
+    }
 }
 
 impl RedrawScheduler {
@@ -99,14 +127,10 @@ impl RedrawScheduler {
         self.pending != 0
     }
 
-    pub(super) fn begin_frame(&mut self) -> String {
-        self.requested_frames += 1;
-        let pending = std::mem::take(&mut self.pending);
-        Self::format_reasons(pending)
-    }
-
-    pub(super) fn finish_frame(&mut self) {
-        self.rendered_frames += 1;
+    /// Start a frame: every pending reason is now being drawn.
+    pub(super) fn begin_frame(&mut self) -> RedrawReasons {
+        self.frames += 1;
+        RedrawReasons(std::mem::take(&mut self.pending))
     }
 
     pub(super) fn next_deadline(
@@ -119,24 +143,10 @@ impl RedrawScheduler {
             .map(|deadline| deadline.max(now))
     }
 
-    fn format_reasons(bits: u32) -> String {
-        let mut labels = Vec::new();
-        for reason in RedrawReason::ALL {
-            if bits & reason.bit() != 0 {
-                labels.push(reason.label());
-            }
-        }
-        if labels.is_empty() {
-            "native".to_string()
-        } else {
-            labels.join(",")
-        }
-    }
-
     pub(super) fn diagnostic_summary(&self) -> String {
         format!(
-            "requested={} rendered={} coalesced={}",
-            self.requested_frames, self.rendered_frames, self.coalesced_requests
+            "frames={} coalesced={}",
+            self.frames, self.coalesced_requests
         )
     }
 }
@@ -156,7 +166,7 @@ mod tests {
 
         assert!(scheduler.has_pending());
         assert_eq!(
-            scheduler.begin_frame(),
+            scheduler.begin_frame().to_string(),
             "terminal-output,cursor-blink,background-task,accessibility"
         );
         assert!(!scheduler.has_pending());
@@ -167,9 +177,9 @@ mod tests {
     fn idle_scheduler_does_not_invent_frames() {
         let mut scheduler = RedrawScheduler::default();
         assert!(!scheduler.has_pending());
-        assert_eq!(scheduler.begin_frame(), "native");
-        scheduler.finish_frame();
+        assert_eq!(scheduler.begin_frame().to_string(), "native");
         assert!(!scheduler.has_pending());
+        assert!(scheduler.diagnostic_summary().contains("frames=1"));
     }
 
     #[test]

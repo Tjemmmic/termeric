@@ -136,18 +136,21 @@ impl App {
                 }
                 self.warn_about_outdated_agent_hooks();
 
-                // Initial render
                 self.redraw_scheduler.request(RedrawReason::Startup);
-                let reasons = self.redraw_scheduler.begin_frame();
-                log::trace!("Rendering frame: reasons={reasons}");
-                self.render();
-                self.redraw_scheduler.finish_frame();
+                self.render_frame();
             }
             Err(e) => self.fail_startup(
                 format!("Failed to create window: {e:#}"),
                 "native window creation",
             ),
         }
+    }
+
+    /// Draw a frame for every reason requested since the last one.
+    fn render_frame(&mut self) {
+        let reasons = self.redraw_scheduler.begin_frame();
+        log::trace!("Rendering frame: reasons={reasons}");
+        self.render();
     }
 
     /// End a window that could not start, keeping `error` for the requester.
@@ -306,10 +309,7 @@ impl App {
                     return;
                 }
 
-                let reasons = self.redraw_scheduler.begin_frame();
-                log::trace!("Rendering frame: reasons={reasons}");
-                self.render();
-                self.redraw_scheduler.finish_frame();
+                self.render_frame();
             }
 
             _ => {}

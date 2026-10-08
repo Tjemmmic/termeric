@@ -230,7 +230,10 @@ mod tests {
             app.commands_panel.browse_focus(&app.config.commands),
             Some(CommandControl::Run(0))
         );
-        assert_eq!(app.redraw_scheduler.begin_frame(), "keyboard-input");
+        assert_eq!(
+            app.redraw_scheduler.begin_frame().to_string(),
+            "keyboard-input"
+        );
         assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::ArrowRight)));
         assert_eq!(
             app.commands_panel.browse_focus(&app.config.commands),
@@ -327,7 +330,10 @@ mod tests {
         app.redraw_scheduler.begin_frame();
         app.handle_mouse_wheel(MouseScrollDelta::LineDelta(0.0, -3.0));
         assert_eq!(app.commands_panel_layout().scroll_offset, 3);
-        assert_eq!(app.redraw_scheduler.begin_frame(), "pointer-input");
+        assert_eq!(
+            app.redraw_scheduler.begin_frame().to_string(),
+            "pointer-input"
+        );
         app.handle_mouse_wheel(MouseScrollDelta::PixelDelta(PhysicalPosition::new(
             0.0, 21.0,
         )));

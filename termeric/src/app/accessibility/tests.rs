@@ -2584,7 +2584,11 @@ fn custom_command_semantic_replacement_rejects_controls_without_changing_focus()
                 data: Some(ActionData::Value(value.into())),
             });
             assert!(app.ime.preedit().is_none());
-            assert!(app.redraw_scheduler.begin_frame().contains("accessibility"));
+            assert!(
+                app.redraw_scheduler
+                    .begin_frame()
+                    .contains(RedrawReason::Accessibility)
+            );
             let snapshot = app.accessibility_snapshot();
             assert_eq!(snapshot.focus, target);
             let node = &snapshot
