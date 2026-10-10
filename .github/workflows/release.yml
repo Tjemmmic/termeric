@@ -127,20 +127,22 @@ jobs:
           if-no-files-found: error
 
   srcinfo:
-    name: Check the PKGBUILD's .SRCINFO
+    name: Check the AUR recipes' .SRCINFO
     runs-on: ubuntu-24.04
     container: archlinux:base-devel
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       # makepkg refuses to run as root.
-      - name: Compare .SRCINFO with makepkg --printsrcinfo
+      - name: Compare each .SRCINFO with makepkg --printsrcinfo
         run: |
           useradd --create-home builder
-          install -d -o builder /home/builder/recipe
-          install -o builder packaging/arch/PKGBUILD /home/builder/recipe/PKGBUILD
-          (cd /home/builder/recipe && runuser -u builder -- makepkg --printsrcinfo) > /tmp/SRCINFO
-          diff -u packaging/arch/.SRCINFO /tmp/SRCINFO
+          for package in termeric termeric-git; do
+            install -d -o builder "/home/builder/$package"
+            install -o builder "packaging/arch/$package/PKGBUILD" "/home/builder/$package/PKGBUILD"
+            (cd "/home/builder/$package" && runuser -u builder -- makepkg --printsrcinfo) > "/tmp/$package.SRCINFO"
+            diff -u "packaging/arch/$package/.SRCINFO" "/tmp/$package.SRCINFO"
+          done
 
   publish:
     name: Draft the GitHub release

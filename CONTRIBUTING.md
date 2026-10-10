@@ -113,9 +113,13 @@ cargo install cargo-deb --locked
 cargo deb -p termeric --no-build
 python3 scripts/check_debian_package.py target/debian/termeric_*.deb
 
-python3 scripts/build_arch_package.py --output target/arch
+python3 scripts/build_arch_package.py --package termeric --output target/arch
+python3 scripts/build_arch_package.py --package termeric-git --output target/arch
+python3 scripts/check_arch_package.py target/arch/termeric-[0-9]*.pkg.tar.zst
 python3 scripts/check_arch_package.py target/arch/termeric-git-*.pkg.tar.zst
 ```
+
+The `termeric` Arch package is built from an archive of the committed `HEAD`, like the release tag it stands for; `termeric-git` from the working tree, uncommitted changes included.
 
 The checkers inspect a package without installing it. Their `--system-lifecycle` mode, which needs root, installs the package, checks the installed files and `termeric --version`, and removes it again, so only use it on a disposable machine or container.
 

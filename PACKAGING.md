@@ -1,6 +1,6 @@
 # Packaging Termeric
 
-Notes for people packaging Termeric for a Linux distribution. Termeric's own packages (the release tarball, the `.deb`, and the `termeric-git` PKGBUILD in `packaging/arch/`) are built exactly as described here; use them as references.
+Notes for people packaging Termeric for a Linux distribution. Termeric's own packages (the release tarball, the `.deb`, and the two AUR recipes in `packaging/arch/`: `termeric`, built from a release's source, and `termeric-git`, built from the latest commit) are built exactly as described here; use them as references.
 
 ## Identity
 
@@ -26,7 +26,7 @@ cargo build --release --locked
 
 `Cargo.lock` is committed; build with `--locked`. libgit2 is always built from the source bundled in `libgit2-sys`, without network transports, so no system libgit2, OpenSSL, or libssh2 is involved.
 
-Don't let your build system inject cross-language LTO flags (`-flto` in `CFLAGS`). The x86_64 Rust toolchain links with rust-lld, which can't read the GCC LTO objects the bundled libgit2 would then contain. The PKGBUILD turns off makepkg's LTO with `options=('!lto')` for this reason; Cargo's own release optimization still applies.
+Don't let your build system inject cross-language LTO flags (`-flto` in `CFLAGS`). The x86_64 Rust toolchain links with rust-lld, which can't read the GCC LTO objects the bundled libgit2 would then contain. The PKGBUILDs turn off makepkg's LTO with `options=('!lto')` for this reason; Cargo's own release optimization still applies.
 
 ## Tests
 
@@ -85,7 +85,7 @@ The binary links only libc, libm, libgcc_s, and libz. Everything else is loaded 
 
 Termeric doesn't load libXrandr. It reads the fontconfig configuration files itself, without libfontconfig, so it needs the configuration (`fontconfig` on Arch, `fontconfig-config` on Debian) and at least one monospace font; it bundles no font. On Arch that is the `ttf-font` dependency; on Debian, `fontconfig-config` pulls in a font.
 
-For rendering it also needs a Vulkan driver for the GPU, or Mesa: Mesa's llvmpipe and lavapipe are the software fallback Termeric uses when no GPU can be used. Termeric's packages make these optional (the PKGBUILD's `optdepends` on `vulkan-driver` and `mesa`; the `.deb` recommends `mesa-vulkan-drivers`).
+For rendering it also needs a Vulkan driver for the GPU, or Mesa: Mesa's llvmpipe and lavapipe are the software fallback Termeric uses when no GPU can be used. Termeric's packages make these optional (the PKGBUILDs' `optdepends` on `vulkan-driver` and `mesa`; the `.deb` recommends `mesa-vulkan-drivers`).
 
 The Debian and Ubuntu names in `termeric/Cargo.toml` were chosen for Ubuntu 22.04, the oldest release Termeric is built on, but haven't been checked there yet. Confirm that each one exists and installs before relying on them, for example with:
 
@@ -101,7 +101,7 @@ docker run --rm ubuntu:22.04 sh -c 'apt-get update && apt-get install -y --no-in
 
 ```bash
 python3 scripts/check_debian_package.py target/debian/termeric_*.deb
-python3 scripts/check_arch_package.py target/arch/termeric-git-*.pkg.tar.zst
+python3 scripts/check_arch_package.py target/arch/termeric-*.pkg.tar.zst
 ```
 
 Both compare the package with the staged tree's file list and modes (with the manual page gzipped, as cargo-deb and makepkg's default `zipman` option ship it), validate the desktop entries and icons, check the terminfo entry with `infocmp`, and check the declared dependencies. `--system-lifecycle` also installs and removes the package; it needs root, so use a disposable container. [Packages](CONTRIBUTING.md#packages) has the build commands.
@@ -114,6 +114,22 @@ The manual page and completions under `assets/man/` and `assets/completions/` ar
 
 ## Releases
 
-Pushing a `v*` tag runs `.github/workflows/release.yml`. It checks that the tag is `v` plus the workspace version, that `CHANGELOG.md` has a dated section for that version and the AppStream metadata a `<release>` with the same version and date, and that CI passed on the tagged commit. It then builds on Ubuntu 22.04 for x86_64 and arm64, so the binaries need glibc 2.35 or newer, and produces for each architecture a tarball of the install tree and a `.deb` that `check_debian_package.py` has passed. Finally it writes `SHA256SUMS`, attests the build provenance of each file, and drafts a GitHub pre-release with the changelog section as its notes. It also checks that `packaging/arch/.SRCINFO` matches the PKGBUILD.
+Pushing a `v*` tag runs `.github/workflows/release.yml`. It checks that the tag is `v` plus the workspace version, that `CHANGELOG.md` has a dated section for that version, the AppStream metadata a `<release>` with the same version and date, and the `termeric` PKGBUILD the same `pkgver`, and that CI passed on the tagged commit. It then builds for x86_64 and arm64 inside an Ubuntu 22.04 container, so the binaries need glibc 2.35 or newer, and produces for each architecture a tarball of the install tree and a `.deb` that `check_debian_package.py` has passed. It also checks that each PKGBUILD's `.SRCINFO` matches it. Finally it writes `SHA256SUMS`, attests the build provenance of each file, and drafts a GitHub pre-release with the changelog section as its notes.
 
-To cut a release: set the version in `Cargo.toml` (with its `CHANGELOG.md` section and AppStream `<release>` entry in place), run `python3 scripts/check_release.py --stamp today` to date both with the same day, commit, wait for CI on that commit, then tag it. Running the workflow by hand without `publish` builds and checks everything without drafting a release.
+To cut a release: set the version in `Cargo.toml` and as `pkgver` in `packaging/arch/termeric/PKGBUILD` and its `.SRCINFO` (with the version's `CHANGELOG.md` section and AppStream `<release>` entry in place), run `python3 scripts/check_release.py --stamp today` to date both with the same day, commit, wait for CI on that commit, then tag it. Running the workflow by hand without `publish` builds and checks everything without drafting a release. Attestations need a public repository.
+
+### The AUR
+
+Each directory in `packaging/arch/` holds what one AUR repository holds: a `PKGBUILD` and its `.SRCINFO`. `termeric-git` always builds the newest commit, so it only needs publishing when its recipe changes. `termeric` downloads GitHub's archive of the release tag, whose checksum can't be in the tag itself, so it is pinned after the release is published. Until then its checksum is a placeholder that makepkg rejects, so an unpinned recipe can't be installed by mistake. From the repository root, with an AUR account and its SSH key:
+
+```bash
+git clone ssh://aur@aur.archlinux.org/termeric.git ../aur-termeric
+cp packaging/arch/termeric/PKGBUILD ../aur-termeric/
+(cd ../aur-termeric && updpkgsums && makepkg --printsrcinfo > .SRCINFO && makepkg --force)
+python3 scripts/check_arch_package.py ../aur-termeric/termeric-*.pkg.tar.zst
+cp ../aur-termeric/PKGBUILD ../aur-termeric/.SRCINFO packaging/arch/termeric/
+```
+
+`makepkg` there downloads the tag's archive, checks it against the pinned checksum, builds, and runs the tests. Commit the pinned recipe here, then commit `PKGBUILD` and `.SRCINFO` in `../aur-termeric` and push. `termeric-git` is published the same way from `ssh://aur@aur.archlinux.org/termeric-git.git`, without `updpkgsums`.
+
+To package a checkout that isn't on GitHub yet, `scripts/build_arch_package.py --package termeric` (or `termeric-git`) builds a recipe from the local checkout: for `termeric`, an archive of the committed `HEAD`, without checking its checksum; for `termeric-git`, the working tree. [Packages](CONTRIBUTING.md#packages) has the commands.

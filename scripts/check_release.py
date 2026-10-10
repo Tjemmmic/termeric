@@ -3,7 +3,8 @@
 
 Prints the version. The release workflow runs it before building anything:
 the tag must be v plus the workspace version, CHANGELOG.md needs that
-version's section, and the AppStream metadata a matching release entry. A
+version's section, the AppStream metadata a matching release entry, and the
+AUR recipe for releases (packaging/arch/termeric/PKGBUILD) that pkgver. A
 release that will be published (--publish) also needs the section's date set,
 and the same date in the metadata. --notes writes the section's text, for the
 GitHub release. --stamp DATE (or "today") dates the version's changelog section
@@ -23,6 +24,7 @@ import xml.etree.ElementTree as ElementTree
 
 ROOT = Path(__file__).resolve().parent.parent
 METAINFO = ROOT / "assets/org.termeric.Termeric.metainfo.xml"
+RELEASE_PKGBUILD = ROOT / "packaging/arch/termeric/PKGBUILD"
 CHANGELOG_HEADING = re.compile(
     r"^## \[(?P<version>[^\]]+)\] - (?P<date>\d{4}-\d{2}-\d{2}|Unreleased)$", re.MULTILINE
 )
@@ -75,6 +77,13 @@ def metainfo_release_date(metainfo: str, version: str) -> str:
     raise ReleaseError(f"AppStream metadata has no release entry for {version}")
 
 
+def pkgbuild_version(pkgbuild: str) -> str:
+    versions = re.findall(r"^pkgver=(\S+)$", pkgbuild, flags=re.MULTILINE)
+    if len(versions) != 1:
+        raise ReleaseError("the release PKGBUILD must assign pkgver exactly once")
+    return versions[0]
+
+
 def stamp_release(changelog: str, metainfo: str, version: str, date: str) -> tuple[str, str]:
     """`changelog` and `metainfo` with `version`'s section and release entry
     dated `date` (YYYY-MM-DD)."""
@@ -100,12 +109,19 @@ def check_release(
     cargo_toml: str,
     changelog: str,
     metainfo: str,
+    pkgbuild: str,
     *,
     tag: str | None,
     publish: bool,
 ) -> tuple[str, str]:
     """The version and its release notes, once everything agrees."""
     version = workspace_package(cargo_toml, "version")
+    recipe_version = pkgbuild_version(pkgbuild)
+    if recipe_version != version:
+        raise ReleaseError(
+            f"the release PKGBUILD's pkgver is {recipe_version}, "
+            f"but the workspace version is {version}"
+        )
     if publish and tag is None:
         raise ReleaseError("publishing needs the release tag")
     if tag is not None and tag != f"v{version}":
@@ -146,6 +162,7 @@ def main(argv: list[str] | None = None) -> int:
             (ROOT / "Cargo.toml").read_text(encoding="utf-8"),
             (ROOT / "CHANGELOG.md").read_text(encoding="utf-8"),
             METAINFO.read_text(encoding="utf-8"),
+            RELEASE_PKGBUILD.read_text(encoding="utf-8"),
             tag=arguments.tag,
             publish=arguments.publish,
         )

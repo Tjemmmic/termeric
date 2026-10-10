@@ -7,8 +7,8 @@ import unittest
 from scripts.test_check_debian_package import write_package_tree
 from scripts.check_arch_package import (
     CheckError,
-    EXPECTED_FILES,
     METADATA_FILES,
+    PACKAGE_NAMES,
     REQUIRED_DEPENDENCIES,
     REQUIRED_LICENSES,
     normalize_member_name,
@@ -16,21 +16,36 @@ from scripts.check_arch_package import (
     parse_os_release,
     parse_verbose_types,
     SUPPORTED_ARCHITECTURES,
+    expected_files,
     validate_archive_inventory,
     validate_archive_modes,
     validate_layout,
     validate_package_metadata,
 )
 
+REPOSITORY = Path(__file__).resolve().parent.parent
+# The development package; the tests that differ by package say so.
+PACKAGE = "termeric-git"
+EXPECTED_FILES = expected_files(PACKAGE)
 
-def valid_inventory() -> tuple[list[str], list[str]]:
+
+def recipe_srcinfos() -> dict[str, dict[str, list[str]]]:
+    """Each AUR recipe's .SRCINFO, by package name."""
+    return {
+        name: parse_pkginfo((REPOSITORY / "packaging/arch" / name / ".SRCINFO").read_text(encoding="utf-8"))
+        for name in PACKAGE_NAMES
+    }
+
+
+def valid_inventory(package: str = PACKAGE) -> tuple[list[str], list[str]]:
+    files = expected_files(package)
     directories = {
         str(parent)
-        for name in EXPECTED_FILES
+        for name in files
         for parent in Path(name).parents
         if str(parent) != "."
     }
-    names = sorted(set(EXPECTED_FILES) | METADATA_FILES | directories)
+    names = sorted(set(files) | METADATA_FILES | directories)
     return names, ["d" if name in directories else "-" for name in names]
 
 
@@ -48,34 +63,42 @@ def valid_metadata() -> dict[str, list[str]]:
 
 class ArchPackageCheckTests(unittest.TestCase):
     def test_inventory_accepts_only_expected_regular_files(self):
-        names, types = valid_inventory()
-        self.assertEqual(validate_archive_inventory(names, types), names)
+        for package in PACKAGE_NAMES:
+            with self.subTest(package=package):
+                names, types = valid_inventory(package)
+                self.assertIn(f"usr/share/licenses/{package}/LICENSE", names)
+                self.assertEqual(validate_archive_inventory(names, types, package), names)
+
+    def test_inventory_rejects_another_packages_license_path(self):
+        names, types = valid_inventory("termeric")
+        with self.assertRaisesRegex(CheckError, "unexpected package directory: usr/share/licenses/termeric$"):
+            validate_archive_inventory(names, types, "termeric-git")
 
     def test_inventory_expects_the_manual_page_that_zipman_compressed(self):
         names, types = valid_inventory()
         self.assertIn("usr/share/man/man1/termeric.1.gz", names)
         self.assertNotIn("usr/share/man/man1/termeric.1", EXPECTED_FILES)
-        self.assertEqual(validate_archive_inventory(names, types), names)
+        self.assertEqual(validate_archive_inventory(names, types, PACKAGE), names)
         uncompressed = [
             name.removesuffix(".gz") if name.startswith("usr/share/man/") else name
             for name in names
         ]
         with self.assertRaisesRegex(CheckError, "unexpected package file: usr/share/man/man1/termeric.1"):
-            validate_archive_inventory(uncompressed, types)
+            validate_archive_inventory(uncompressed, types, PACKAGE)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             write_package_tree(root, EXPECTED_FILES)
             self.assertTrue((root / "usr/share/man/man1/termeric.1.gz").is_file())
-            validate_layout(root, exercise_native_tools=False)
+            validate_layout(root, PACKAGE, exercise_native_tools=False)
 
     def test_inventory_rejects_missing_duplicate_and_unexpected_members(self):
         names, types = valid_inventory()
         with self.assertRaisesRegex(CheckError, "missing members"):
-            validate_archive_inventory(names[:-1], types[:-1])
+            validate_archive_inventory(names[:-1], types[:-1], PACKAGE)
         with self.assertRaisesRegex(CheckError, "duplicate package member"):
-            validate_archive_inventory(names + [names[0]], types + ["-"])
+            validate_archive_inventory(names + [names[0]], types + ["-"], PACKAGE)
         with self.assertRaisesRegex(CheckError, "unexpected package file"):
-            validate_archive_inventory(names + ["usr/bin/surprise"], types + ["-"])
+            validate_archive_inventory(names + ["usr/bin/surprise"], types + ["-"], PACKAGE)
 
     def test_inventory_rejects_traversal_absolute_and_symlink_members(self):
         for name in ["../escape", "/usr/bin/termeric", "usr/../escape", "usr\\escape"]:
@@ -84,7 +107,7 @@ class ArchPackageCheckTests(unittest.TestCase):
         names, types = valid_inventory()
         types[names.index("usr/bin/termeric")] = "l"
         with self.assertRaisesRegex(CheckError, "unsafe type"):
-            validate_archive_inventory(names, types)
+            validate_archive_inventory(names, types, PACKAGE)
 
     def test_verbose_type_parser_fails_closed(self):
         self.assertEqual(
@@ -124,9 +147,25 @@ class ArchPackageCheckTests(unittest.TestCase):
             validate_package_metadata(fields)
         fields = valid_metadata()
         fields["pkgname"] = ["wrong"]
-        with self.assertRaisesRegex(CheckError, "expected 'termeric-git'"):
+        with self.assertRaisesRegex(CheckError, "expected 'termeric' or 'termeric-git'"):
             validate_package_metadata(fields)
+
+    def test_release_package_needs_no_provides_or_conflicts(self):
         fields = valid_metadata()
+        fields["pkgname"] = ["termeric"]
+        fields["pkgver"] = ["0.1.0-1"]
+        del fields["provides"], fields["conflict"]
+        self.assertEqual(validate_package_metadata(fields)["name"], "termeric")
+
+    def test_development_package_must_stand_in_for_the_release_package(self):
+        for field, message in [("provides", "does not provide termeric"), ("conflict", "does not conflict with termeric")]:
+            fields = valid_metadata()
+            del fields[field]
+            with self.subTest(field=field), self.assertRaisesRegex(CheckError, message):
+                validate_package_metadata(fields)
+        fields = valid_metadata()
+        fields["provides"] = ["termeric=0.1.0"]
+        self.assertEqual(validate_package_metadata(fields)["name"], "termeric-git")
         fields["license"].remove("Unicode-3.0")
         with self.assertRaisesRegex(CheckError, "Unicode-3.0"):
             validate_package_metadata(fields)
@@ -141,20 +180,25 @@ class ArchPackageCheckTests(unittest.TestCase):
         with self.assertRaisesRegex(CheckError, "expected 'x86_64' or 'aarch64'"):
             validate_package_metadata(fields)
 
-    def test_srcinfo_declares_the_architectures_the_checker_accepts(self):
-        srcinfo = Path(__file__).resolve().parent.parent / "packaging/arch/.SRCINFO"
-        fields = parse_pkginfo(srcinfo.read_text(encoding="utf-8"))
-        self.assertEqual(fields["arch"], list(SUPPORTED_ARCHITECTURES))
+    def test_each_srcinfo_names_its_own_package(self):
+        for package, fields in recipe_srcinfos().items():
+            with self.subTest(package=package):
+                self.assertEqual(fields["pkgname"], [package])
 
-    def test_srcinfo_declares_the_licenses_the_checker_requires(self):
-        srcinfo = Path(__file__).resolve().parent.parent / "packaging/arch/.SRCINFO"
-        fields = parse_pkginfo(srcinfo.read_text(encoding="utf-8"))
-        self.assertEqual(sorted(fields["license"]), sorted(REQUIRED_LICENSES))
+    def test_each_srcinfo_declares_the_architectures_the_checker_accepts(self):
+        for package, fields in recipe_srcinfos().items():
+            with self.subTest(package=package):
+                self.assertEqual(fields["arch"], list(SUPPORTED_ARCHITECTURES))
 
-    def test_srcinfo_declares_the_dependencies_the_checker_requires(self):
-        srcinfo = Path(__file__).resolve().parent.parent / "packaging/arch/.SRCINFO"
-        fields = parse_pkginfo(srcinfo.read_text(encoding="utf-8"))
-        self.assertEqual(sorted(fields["depends"]), sorted(REQUIRED_DEPENDENCIES))
+    def test_each_srcinfo_declares_the_licenses_the_checker_requires(self):
+        for package, fields in recipe_srcinfos().items():
+            with self.subTest(package=package):
+                self.assertEqual(sorted(fields["license"]), sorted(REQUIRED_LICENSES))
+
+    def test_each_srcinfo_declares_the_dependencies_the_checker_requires(self):
+        for package, fields in recipe_srcinfos().items():
+            with self.subTest(package=package):
+                self.assertEqual(sorted(fields["depends"]), sorted(REQUIRED_DEPENDENCIES))
 
     def test_metadata_rejects_pacman_invalid_tilde_version(self):
         fields = valid_metadata()
@@ -172,12 +216,12 @@ class ArchPackageCheckTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             write_package_tree(root, EXPECTED_FILES)
-            validate_layout(root, exercise_native_tools=False)
+            validate_layout(root, PACKAGE, exercise_native_tools=False)
 
             notice = root / "usr/share/doc/termeric/THIRD_PARTY_NOTICES.md"
             notice.write_text("missing license")
             with self.assertRaisesRegex(CheckError, "Unicode License v3"):
-                validate_layout(root, exercise_native_tools=False)
+                validate_layout(root, PACKAGE, exercise_native_tools=False)
 
     def test_layout_rejects_mode_and_file_type_regressions(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -185,7 +229,7 @@ class ArchPackageCheckTests(unittest.TestCase):
             write_package_tree(root, EXPECTED_FILES)
             (root / "usr/bin/termeric").chmod(0o777)
             with self.assertRaisesRegex(CheckError, "mode 777, expected 755"):
-                validate_layout(root, exercise_native_tools=False)
+                validate_layout(root, PACKAGE, exercise_native_tools=False)
 
     def test_expected_modes_are_not_group_or_world_writable(self):
         for mode in EXPECTED_FILES.values():
@@ -206,10 +250,10 @@ class ArchPackageCheckTests(unittest.TestCase):
             for name in METADATA_FILES:
                 (root / name).write_text("metadata")
                 (root / name).chmod(0o644)
-            validate_archive_modes(root)
+            validate_archive_modes(root, PACKAGE)
             (root / ".PKGINFO").chmod(0o666)
             with self.assertRaisesRegex(CheckError, "mode 666, expected 644"):
-                validate_archive_modes(root)
+                validate_archive_modes(root, PACKAGE)
 
 
 if __name__ == "__main__":

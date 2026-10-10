@@ -2,12 +2,14 @@ import unittest
 
 from scripts.check_release import (
     METAINFO,
+    RELEASE_PKGBUILD,
     ROOT,
     ReleaseError,
     absolute_links,
     changelog_section,
     check_release,
     metainfo_release_date,
+    pkgbuild_version,
     stamp_release,
 )
 
@@ -49,6 +51,12 @@ METAINFO_XML = """\
 </component>
 """
 
+PKGBUILD = """\
+pkgname=termeric
+pkgver=1.2.0
+pkgrel=1
+"""
+
 
 class ReleaseCheckTests(unittest.TestCase):
     def test_section_ends_at_the_next_version(self):
@@ -66,7 +74,9 @@ class ReleaseCheckTests(unittest.TestCase):
         self.assertIsNone(date)
 
     def test_release_passes_with_absolute_links_in_its_notes(self):
-        version, notes = check_release(CARGO_TOML, CHANGELOG, METAINFO_XML, tag="v1.2.0", publish=True)
+        version, notes = check_release(
+            CARGO_TOML, CHANGELOG, METAINFO_XML, PKGBUILD, tag="v1.2.0", publish=True
+        )
         self.assertEqual(version, "1.2.0")
         self.assertIn("[Status](https://example.org/termeric/blob/v1.2.0/docs/src/status.md)", notes)
         self.assertIn("[the site](https://example.org/#x)", notes)
@@ -78,21 +88,31 @@ class ReleaseCheckTests(unittest.TestCase):
             ({"changelog": CHANGELOG.replace("[1.2.0] - 2026-11-02", "[1.2.0] - Unreleased")}, "still Unreleased"),
             ({"metainfo": METAINFO_XML.replace('date="2026-11-02"', 'date="2026-11-03"')}, "dated 2026-11-03"),
             ({"metainfo": METAINFO_XML.replace('version="1.2.0" ', "")}, "no release entry for 1.2.0"),
+            ({"pkgbuild": PKGBUILD.replace("pkgver=1.2.0", "pkgver=1.1.0")}, "pkgver is 1.1.0"),
         ]
         for change, message in cases:
-            arguments = {"changelog": CHANGELOG, "metainfo": METAINFO_XML, "tag": "v1.2.0", **change}
+            arguments = {
+                "changelog": CHANGELOG,
+                "metainfo": METAINFO_XML,
+                "pkgbuild": PKGBUILD,
+                "tag": "v1.2.0",
+                **change,
+            }
             with self.subTest(message=message), self.assertRaisesRegex(ReleaseError, message):
                 check_release(
                     CARGO_TOML,
                     arguments["changelog"],
                     arguments["metainfo"],
+                    arguments["pkgbuild"],
                     tag=arguments["tag"],
                     publish=True,
                 )
 
     def test_dry_run_accepts_an_unreleased_section_without_a_tag(self):
         changelog = CHANGELOG.replace("[1.2.0] - 2026-11-02", "[1.2.0] - Unreleased")
-        version, notes = check_release(CARGO_TOML, changelog, METAINFO_XML, tag=None, publish=False)
+        version, notes = check_release(
+            CARGO_TOML, changelog, METAINFO_XML, PKGBUILD, tag=None, publish=False
+        )
         self.assertEqual(version, "1.2.0")
         self.assertIn("/blob/main/docs/src/status.md", notes)
 
@@ -108,10 +128,17 @@ class ReleaseCheckTests(unittest.TestCase):
             cargo_toml,
             (ROOT / "CHANGELOG.md").read_text(encoding="utf-8"),
             METAINFO.read_text(encoding="utf-8"),
+            RELEASE_PKGBUILD.read_text(encoding="utf-8"),
             tag=None,
             publish=False,
         )
         self.assertRegex(metainfo_release_date(METAINFO.read_text(encoding="utf-8"), version), r"^\d{4}-\d{2}-\d{2}$")
+
+    def test_pkgbuild_must_assign_its_version_once(self):
+        self.assertEqual(pkgbuild_version(PKGBUILD), "1.2.0")
+        for recipe in ["pkgname=termeric\n", PKGBUILD + "pkgver=1.2.1\n"]:
+            with self.subTest(recipe=recipe), self.assertRaisesRegex(ReleaseError, "exactly once"):
+                pkgbuild_version(recipe)
 
 
 class ReleaseStampTests(unittest.TestCase):

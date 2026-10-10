@@ -2,7 +2,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from scripts.build_arch_package import BuildError, copy_checkout
+from scripts.build_arch_package import BuildError, copy_checkout, recipe_version
 
 
 class ArchPackageBuildTests(unittest.TestCase):
@@ -35,6 +35,12 @@ class ArchPackageBuildTests(unittest.TestCase):
             (source / "Cargo.toml").write_text("[workspace]\n")
             with self.assertRaisesRegex(BuildError, "Git-backed"):
                 copy_checkout(source, source / "output")
+
+    def test_release_recipe_version_is_read_from_its_one_pkgver(self):
+        self.assertEqual(recipe_version("pkgname=termeric\npkgver=0.1.0\npkgrel=1\n"), "0.1.0")
+        for recipe in ["pkgname=termeric\n", "pkgver=0.1.0\npkgver=0.2.0\n"]:
+            with self.subTest(recipe=recipe), self.assertRaisesRegex(BuildError, "exactly once"):
+                recipe_version(recipe)
 
 
 if __name__ == "__main__":
