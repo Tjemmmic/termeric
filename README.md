@@ -19,7 +19,7 @@ Termeric keeps your shells in tabs, panes, and windows, draws them with your GPU
 
 ## Status
 
-Termeric is a **developer preview for Linux**, on Wayland and X11. Expect rough edges. macOS and Windows aren't supported yet, and neither are right-to-left text and printing.
+Termeric is a **developer preview for Linux**, on Wayland and X11. Expect rough edges. macOS and Windows aren't supported yet, and neither are right-to-left text and printing. Configuration and saved workspaces may change between previews without migration, and only the latest preview receives fixes. Please report problems in [GitHub issues](https://github.com/Tjemmmic/termeric/issues).
 
 These features are experimental, may change between releases, and are labelled so in the interface:
 
@@ -31,7 +31,42 @@ These features are experimental, may change between releases, and are labelled s
 
 ## Install
 
-Packages for Debian/Ubuntu and Arch Linux come with the first release. Until then, build from source as below, or build the Arch package with `makepkg -si` in [`packaging/arch`](packaging/arch).
+Each [release](https://github.com/Tjemmmic/termeric/releases) has a `.deb` package and a tarball for x86_64 and arm64, and Arch Linux has two AUR packages. Each one installs the program, its desktop entry and icons, the `xterm-termeric` terminfo entry, the manual page, and Bash, Zsh, and Fish completions. Termeric also needs a Vulkan driver for your GPU, or Mesa, whose software renderer it uses when the GPU can't be used.
+
+### Debian and Ubuntu
+
+For Ubuntu 22.04, Debian 12, and later. Download the `.deb` for your machine from the [releases page](https://github.com/Tjemmmic/termeric/releases) and install it with apt, which also installs the libraries it needs:
+
+```bash
+sudo apt install ./termeric_*_amd64.deb
+```
+
+To upgrade, install a newer `.deb` the same way. To uninstall, run `sudo apt remove termeric`.
+
+### Arch Linux
+
+Install [`termeric`](https://aur.archlinux.org/packages/termeric) (the latest release) or [`termeric-git`](https://aur.archlinux.org/packages/termeric-git) (the latest commit) from the AUR, with an AUR helper or by hand:
+
+```bash
+git clone https://aur.archlinux.org/termeric.git
+cd termeric
+makepkg -si
+```
+
+Also install the Vulkan driver for your GPU (`vulkan-radeon`, `vulkan-intel`, or `nvidia-utils`) if you don't have it. To uninstall, run `sudo pacman -R termeric`.
+
+### Other distributions
+
+The tarball needs glibc 2.35 or newer. Download it and `SHA256SUMS` from the [releases page](https://github.com/Tjemmmic/termeric/releases), check them (`gh attestation verify`, from the [GitHub CLI](https://cli.github.com), confirms the release workflow built the file from the tagged source), and run its `install.sh`, which installs for your user under `~/.local`:
+
+```bash
+sha256sum --check --ignore-missing SHA256SUMS
+gh attestation verify termeric-*-x86_64-linux.tar.gz --repo Tjemmmic/termeric
+tar -xzf termeric-*-x86_64-linux.tar.gz
+termeric-*-x86_64-linux/install.sh
+```
+
+On arm64, the file names say `aarch64` instead of `x86_64`, and the `.deb` says `arm64` instead of `amd64`. To install for everyone instead, run `sudo termeric-*-x86_64-linux/install.sh --prefix /usr/local`. To upgrade, run a newer tarball's `install.sh` with the same `--prefix`; it removes the previous version's files first. To uninstall, run `install.sh --uninstall` with the same `--prefix`.
 
 ### Build from source
 
