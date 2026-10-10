@@ -160,6 +160,19 @@ fn shape_signature(font_data: Vec<u8>, text: &str, ligatures: bool) -> Vec<(u16,
     shape_signature_with_overrides(font_data, text, ligatures, &BTreeMap::new())
 }
 
+/// A font system with only `sources` in it. `FontSystem::new_with_fonts` also
+/// loads the machine's fonts, so which font draws a glyph would depend on
+/// what happens to be installed.
+fn fixture_font_system(
+    sources: impl IntoIterator<Item = cosmic_text::fontdb::Source>,
+) -> FontSystem {
+    let mut database = cosmic_text::fontdb::Database::new();
+    for source in sources {
+        database.load_font_source(source);
+    }
+    FontSystem::new_with_locale_and_db("en-US".into(), database)
+}
+
 fn shape_signature_with_overrides(
     font_data: Vec<u8>,
     text: &str,
@@ -167,7 +180,7 @@ fn shape_signature_with_overrides(
     overrides: &BTreeMap<String, u32>,
 ) -> Vec<(u16, usize, usize)> {
     let source = cosmic_text::fontdb::Source::Binary(Arc::new(font_data));
-    let mut font_system = FontSystem::new_with_fonts([source]);
+    let mut font_system = fixture_font_system([source]);
     let mut buffer = Buffer::new(&mut font_system, Metrics::new(16.0, 20.0));
     let overrides = compile_font_feature_overrides(overrides);
     let attrs = Attrs::new()
@@ -365,7 +378,7 @@ fn configured_fallback_order_selects_complete_grapheme_coverage() {
             "NotoSansArabic.ttf",
         ))),
     ];
-    let mut font_system = FontSystem::new_with_fonts(sources);
+    let mut font_system = fixture_font_system(sources);
     let fallbacks = vec![
         "Definitely Missing".to_string(),
         "Noto Sans Arabic".to_string(),
@@ -399,7 +412,7 @@ fn range_overrides_precede_global_fallback_without_splitting_graphemes() {
             "NotoSansArabic.ttf",
         ))),
     ];
-    let mut font_system = FontSystem::new_with_fonts(sources);
+    let mut font_system = fixture_font_system(sources);
     let fallbacks = vec!["Noto Sans Arabic".to_string()];
     let families = collect_configured_families(&font_system, "Fira Mono", &fallbacks);
     let rules = collect_configured_range_overrides(
@@ -456,9 +469,9 @@ fn range_overrides_precede_global_fallback_without_splitting_graphemes() {
 
 #[test]
 fn missing_range_family_and_unmatched_boundaries_fall_through() {
-    let mut font_system = FontSystem::new_with_fonts([cosmic_text::fontdb::Source::Binary(
-        Arc::new(deterministic_test_font_data_named("FiraMono-Medium.ttf")),
-    )]);
+    let mut font_system = fixture_font_system([cosmic_text::fontdb::Source::Binary(Arc::new(
+        deterministic_test_font_data_named("FiraMono-Medium.ttf"),
+    ))]);
     let rules = collect_configured_range_overrides(
         &font_system,
         &[FontRangeOverride {
@@ -491,7 +504,7 @@ fn coverage_report_matches_range_and_ordered_fallback_precedence() {
             "NotoSansArabic.ttf",
         ))),
     ];
-    let mut font_system = FontSystem::new_with_fonts(sources);
+    let mut font_system = fixture_font_system(sources);
     let rules = collect_configured_range_overrides(
         &font_system,
         &[
@@ -567,7 +580,7 @@ fn a_character_no_configured_font_has_falls_back_by_script() {
             "NotoSansArabic.ttf",
         ))),
     ];
-    let mut font_system = FontSystem::new_with_fonts(sources);
+    let mut font_system = fixture_font_system(sources);
     let metrics = Metrics::new(14.0, 16.8);
     let attrs = Attrs::new().family(Family::Name("Fira Mono"));
     let arabic = |font_system: &mut FontSystem, shaping| {
@@ -595,7 +608,7 @@ fn coverage_report_names_platform_fallback_and_missing_results() {
             "NotoSansArabic.ttf",
         ))),
     ];
-    let mut font_system = FontSystem::new_with_fonts(sources);
+    let mut font_system = fixture_font_system(sources);
     let metrics = Metrics::new(14.0, 16.8);
     let platform = diagnose_font_coverage(
         &mut font_system,
@@ -695,9 +708,9 @@ fn font_default_ignorable_predicate_matches_shaping_semantics() {
 
 #[test]
 fn coverage_report_bounds_input_without_splitting_the_retained_graphemes() {
-    let mut font_system = FontSystem::new_with_fonts([cosmic_text::fontdb::Source::Binary(
-        Arc::new(deterministic_test_font_data_named("FiraMono-Medium.ttf")),
-    )]);
+    let mut font_system = fixture_font_system([cosmic_text::fontdb::Source::Binary(Arc::new(
+        deterministic_test_font_data_named("FiraMono-Medium.ttf"),
+    ))]);
     let text = "a".repeat(MAX_FONT_COVERAGE_GRAPHEMES + 1);
     let report = diagnose_font_coverage(
         &mut font_system,
@@ -744,9 +757,9 @@ fn coverage_report_bounds_input_without_splitting_the_retained_graphemes() {
 #[test]
 fn cell_height_uses_configured_line_height() {
     // A bundled face, so the test doesn't depend on the machine's fonts.
-    let mut font_system = FontSystem::new_with_fonts([cosmic_text::fontdb::Source::Binary(
-        Arc::new(deterministic_test_font_data_named("FiraMono-Medium.ttf")),
-    )]);
+    let mut font_system = fixture_font_system([cosmic_text::fontdb::Source::Binary(Arc::new(
+        deterministic_test_font_data_named("FiraMono-Medium.ttf"),
+    ))]);
     let metrics = Metrics::new(14.0, 21.0);
     let cell = measure_cell(&mut font_system, &metrics, "Fira Mono", Weight::NORMAL);
     assert_eq!(cell.height, 21.0);
@@ -1021,7 +1034,7 @@ fn cell_grid_placement_gives_wide_characters_two_cells() {
 
 fn fira_mono_layout(text: &str) -> Vec<cosmic_text::LayoutGlyph> {
     let source = cosmic_text::fontdb::Source::Binary(Arc::new(deterministic_test_font_data()));
-    let mut font_system = FontSystem::new_with_fonts([source]);
+    let mut font_system = fixture_font_system([source]);
     let mut buffer = Buffer::new(&mut font_system, Metrics::new(16.0, 20.0));
     buffer.set_text(
         text,
