@@ -87,13 +87,7 @@ Termeric doesn't load libXrandr. It reads the fontconfig configuration files its
 
 For rendering it also needs a Vulkan driver for the GPU, or Mesa: Mesa's llvmpipe and lavapipe are the software fallback Termeric uses when no GPU can be used. Termeric's packages make these optional (the PKGBUILDs' `optdepends` on `vulkan-driver` and `mesa`; the `.deb` recommends `mesa-vulkan-drivers`).
 
-The Debian and Ubuntu names in `termeric/Cargo.toml` were chosen for Ubuntu 22.04, the oldest release Termeric is built on, but haven't been checked there yet. Confirm that each one exists and installs before relying on them, for example with:
-
-```bash
-docker run --rm ubuntu:22.04 sh -c 'apt-get update && apt-get install -y --no-install-recommends \
-  fontconfig-config libegl1 libvulkan1 libwayland-client0 libwayland-cursor0 libwayland-egl1 \
-  libx11-6 libx11-xcb1 libxcb1 libxcursor1 libxi6 libxkbcommon0 libxkbcommon-x11-0'
-```
+The Debian and Ubuntu names in `termeric/Cargo.toml` exist on Ubuntu 22.04 and 24.04 and Debian 12 and 13: the release `.deb` installs and removes cleanly on each (checked 2026-10-10 with `check_debian_package.py --system-lifecycle`). cargo-deb's `$auto` adds `libc6 (>= 2.35)` and `zlib1g`; `libgcc-s1` comes with `libc6`, which depends on it.
 
 `scripts/check_debian_package.py` and `scripts/check_arch_package.py` fail a package that misses any of them.
 
@@ -104,7 +98,7 @@ python3 scripts/check_debian_package.py target/debian/termeric_*.deb
 python3 scripts/check_arch_package.py target/arch/termeric-*.pkg.tar.zst
 ```
 
-Both compare the package with the staged tree's file list and modes (with the manual page gzipped, as cargo-deb and makepkg's default `zipman` option ship it), validate the desktop entries and icons, check the terminfo entry with `infocmp`, and check the declared dependencies. `--system-lifecycle` also installs and removes the package; it needs root, so use a disposable container. [Packages](CONTRIBUTING.md#packages) has the build commands.
+Both compare the package with the staged tree's file list and modes (with the manual page gzipped, as cargo-deb and makepkg's default `zipman` option ship it), validate the desktop entries and icons, check the terminfo entry with `infocmp`, and check the declared dependencies. `--system-lifecycle` also installs and removes the package; it needs root, so use a disposable container. Docker's Ubuntu and Arch images skip installing documentation (Ubuntu's `/etc/dpkg/dpkg.cfg.d/excludes`, and the `NoExtract` lines in Arch's `/etc/pacman.conf`, which also skip manual pages), so remove those first, or the check reports those files missing. [Packages](CONTRIBUTING.md#packages) has the build commands.
 
 The AppStream metadata validates with `appstreamcli validate --no-net assets/org.termeric.Termeric.metainfo.xml`, and the desktop entries with `desktop-file-validate`; CI runs both. The metadata has no screenshots yet: they need stable URLs, which come once screenshots are committed to the repository and can be linked at a release tag.
 
