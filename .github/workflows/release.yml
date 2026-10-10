@@ -34,7 +34,7 @@ jobs:
       version: ${{ steps.release.outputs.version }}
       publish: ${{ steps.release.outputs.publish }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check the tag, CHANGELOG.md, and the AppStream release
         id: release
         env:
@@ -87,7 +87,7 @@ jobs:
     env:
       DIST_NAME: termeric-${{ needs.verify.outputs.version }}-${{ matrix.arch }}-linux
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Install build and packaging dependencies
         run: |
@@ -113,7 +113,7 @@ jobs:
           cargo deb -p termeric --no-build
           python3 scripts/check_debian_package.py target/debian/termeric_*.deb
           cp target/debian/termeric_*.deb target/dist/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.arch }}
           path: |
@@ -127,7 +127,7 @@ jobs:
     container: archlinux:base-devel
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # makepkg refuses to run as root.
       - name: Compare .SRCINFO with makepkg --printsrcinfo
         run: |
@@ -148,8 +148,8 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: dist-*
           merge-multiple: true
@@ -159,7 +159,7 @@ jobs:
           cd dist
           sha256sum -- *.tar.gz *.deb > SHA256SUMS
           cat SHA256SUMS
-      - uses: actions/attest-build-provenance@v2
+      - uses: actions/attest@v4
         with:
           subject-path: |
             dist/*.tar.gz

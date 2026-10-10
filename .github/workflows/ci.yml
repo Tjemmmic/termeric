@@ -24,7 +24,7 @@ jobs:
     # A run without a warm cache compiles everything twice (Clippy, then tests) and takes about 25 minutes.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy

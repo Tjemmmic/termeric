@@ -24,7 +24,7 @@ jobs:
     # cargo-fuzz install, the build, and minimizing any crash.
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
       - run: cargo install cargo-fuzz --locked --version 0.13.2
       - name: Build the parser seed corpus
@@ -51,7 +51,7 @@ jobs:
               cargo fuzz tmin "$target" "$artifact" -- -max_total_time=60 || true
             done
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: fuzz-crashes
