@@ -77,24 +77,29 @@ jobs:
     strategy:
       matrix:
         include:
-          # The oldest supported Ubuntu sets the glibc the binaries need.
-          - runner: ubuntu-22.04
+          - runner: ubuntu-24.04
             arch: x86_64
-          - runner: ubuntu-22.04-arm
+          - runner: ubuntu-24.04-arm
             arch: aarch64
     runs-on: ${{ matrix.runner }}
+    # Building in the oldest supported Ubuntu sets the glibc the binaries need
+    # (2.35), independent of which runner images GitHub still offers.
+    container: ubuntu:22.04
     timeout-minutes: 60
     env:
+      DEBIAN_FRONTEND: noninteractive
       DIST_NAME: termeric-${{ needs.verify.outputs.version }}-${{ matrix.arch }}-linux
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      # Before the checkout, which uses Git when the container has it.
       - name: Install build and packaging dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libfontconfig1-dev libwayland-dev \
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git \
+            build-essential pkg-config libfontconfig1-dev libwayland-dev \
             libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev libvulkan-dev \
-            ncurses-bin desktop-file-utils dpkg-dev
+            ncurses-bin desktop-file-utils dpkg-dev python3
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --release --locked
       - name: Stage the install tree
         run: python3 scripts/stage_install_tree.py --binary target/release/termeric --out target/install-tree
