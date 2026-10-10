@@ -5,7 +5,7 @@ members = ["termeric", "termeric-core"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.89"
+rust-version = "1.95"
 authors = ["Termeric Contributors"]
 license = "MIT"
 repository = "https://github.com/Tjemmmic/termeric"

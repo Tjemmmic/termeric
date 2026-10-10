@@ -18,7 +18,7 @@ Desktops match a window to the desktop entry and icon of the same name as its ap
 
 ## Building
 
-Termeric needs Rust 1.89 or newer, a C compiler (for the bundled libgit2), `pkg-config`, Python 3 (for `scripts/stage_install_tree.py`), and the development files for fontconfig, Wayland, xkbcommon, XCB, and Vulkan. [Build from source](README.md#build-from-source) lists the Debian and Arch package names.
+Termeric needs Rust 1.95 or newer, a C compiler (for the bundled libgit2), `pkg-config`, Python 3 (for `scripts/stage_install_tree.py`), and the development files for fontconfig, Wayland, xkbcommon, XCB, and Vulkan. [Build from source](README.md#build-from-source) lists the Debian and Arch package names.
 
 ```bash
 cargo build --release --locked

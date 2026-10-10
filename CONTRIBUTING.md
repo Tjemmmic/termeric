@@ -4,7 +4,7 @@ Thanks for your interest in Termeric. This page covers building from source, the
 
 ## Building
 
-You need a stable Rust toolchain (1.89 or newer) and the development packages for fontconfig, Wayland, xkbcommon, XCB, and Vulkan; [Build from source](README.md#build-from-source) lists them for Debian, Ubuntu, and Arch Linux. Then:
+You need a stable Rust toolchain (1.95 or newer, the `rust-version` in `Cargo.toml`) and the development packages for fontconfig, Wayland, xkbcommon, XCB, and Vulkan; [Build from source](README.md#build-from-source) lists them for Debian, Ubuntu, and Arch Linux. Then:
 
 ```bash
 cargo build --locked

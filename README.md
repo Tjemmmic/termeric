@@ -35,7 +35,7 @@ Packages for Debian/Ubuntu and Arch Linux come with the first release. Until the
 
 ### Build from source
 
-You need Rust 1.89 or newer, a C compiler, Python 3 (to stage the install tree), and the development files for fontconfig, Wayland, xkbcommon, XCB, and Vulkan. On Debian or Ubuntu, install Rust with [rustup](https://rustup.rs) if the distribution's is older, then:
+You need Rust 1.95 or newer, a C compiler, Python 3 (to stage the install tree), and the development files for fontconfig, Wayland, xkbcommon, XCB, and Vulkan. On Debian or Ubuntu, install Rust with [rustup](https://rustup.rs) if the distribution's is older, then:
 
 ```bash
 sudo apt install build-essential git pkg-config libfontconfig1-dev libwayland-dev \
