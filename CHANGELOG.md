@@ -4,7 +4,7 @@ Notable changes to Termeric, by release. The project follows [Keep a Changelog](
 
 ## [0.1.0] - Unreleased
 
-The first release: a developer preview for Linux, on Wayland and X11. Features still taking shape are marked experimental; the README's [Status](README.md#status) section lists them. Configuration and saved workspaces may change between previews without migration, and only the latest preview receives fixes. Please report problems in [GitHub issues](https://github.com/Tjemmmic/termeric/issues).
+The first release: a developer preview for Linux, on Wayland and X11. Features still taking shape are marked experimental; [FEATURES.md](FEATURES.md) lists them with everything else that works, partly works, or is planned. Configuration and saved workspaces may change between previews without migration, and only the latest preview receives fixes. Please report problems in [GitHub issues](https://github.com/Tjemmmic/termeric/issues).
 
 ### Added
 

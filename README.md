@@ -19,19 +19,27 @@ Termeric keeps your shells in tabs, panes, and windows, draws them with your GPU
 
 ## Status
 
-Termeric is a **developer preview for Linux**, on Wayland and X11. Expect rough edges. macOS and Windows aren't supported yet, and neither are right-to-left text and printing. Configuration and saved workspaces may change between previews without migration, and only the latest preview receives fixes. Please report problems in [GitHub issues](https://github.com/Tjemmmic/termeric/issues).
+Termeric is a **developer preview for Linux**, on Wayland and X11. Expect rough edges. Configuration and saved workspaces may change between previews without migration, and only the latest preview receives fixes. Please report problems in [GitHub issues](https://github.com/Tjemmmic/termeric/issues).
 
-These features are experimental, may change between releases, and are labelled so in the interface:
-
-- **Coding agents**: recognizing agents in terminals, their status, change review, the docked agent view, and the supervisor. Everything agent-related is off until you turn on **Agent Features** on the **Agents** page of Settings.
-- **Harvest**, a visual history of your commands. Off until you turn it on under **Experimental** in Settings.
-- **`termeric control`**, for scripting a running Termeric. Typing into panes stays off until you set `allow_gui_control_input = true` under `[security]`.
-- **`termeric domain`**, live domains: terminals kept running by a background daemon, here or over SSH, that you can detach from and attach to again.
-- **Third-party [plugins](examples/plugins/README.md)** (`termeric plugin`, or the **Plugins** page of Settings). The manifest format, the permissions, and the handler protocol may change between releases.
+Some features are experimental and off until you turn them on: coding agents, Harvest, scripting a running Termeric, live domains, and third-party plugins. [FEATURES.md](FEATURES.md) lists what works, what partly works, and what is planned.
 
 ## Install
 
-Each [release](https://github.com/Tjemmmic/termeric/releases) has a `.deb` package and a tarball for x86_64 and arm64, and Arch Linux has two AUR packages. Each one installs the program, its desktop entry and icons, the `xterm-termeric` terminfo entry, the manual page, and Bash, Zsh, and Fish completions. Termeric also needs a Vulkan driver for your GPU, or Mesa, whose software renderer it uses when the GPU can't be used.
+Termeric has one install method for each platform it supports, and you can always [build from source](#build-from-source).
+
+| Platform | Architectures | Install with | Status |
+| --- | --- | --- | --- |
+| Debian 12 and later, Ubuntu 22.04 and later | x86_64, arm64 | [`.deb` package](#debian-and-ubuntu) | Developer preview |
+| Arch Linux | x86_64, arm64 | [AUR package](#arch-linux) | Developer preview |
+| Other Linux with glibc 2.35 or later | x86_64, arm64 | [Tarball](#other-linux) | Developer preview |
+| Windows Subsystem for Linux | x86_64, arm64 | The Linux packages, under WSLg | Planned |
+| macOS | — | Chosen with the port | Planned |
+| Windows | — | Chosen with the port | Planned |
+| FreeBSD and other BSDs | — | Chosen with the port | Planned |
+
+Wayland and X11 both work; [FEATURES.md](FEATURES.md) notes where they differ. The arm64 packages are built by the release workflow but haven't been tested on arm64 hardware yet.
+
+Every package installs the program, its desktop entry and icons, the `xterm-termeric` terminfo entry, the manual page, and Bash, Zsh, and Fish completions. Termeric also needs a Vulkan driver for your GPU, or Mesa, whose software renderer it uses when the GPU can't be used.
 
 ### Debian and Ubuntu
 
@@ -55,7 +63,7 @@ makepkg -si
 
 Also install the Vulkan driver for your GPU (`vulkan-radeon`, `vulkan-intel`, or `nvidia-utils`) if you don't have it. To uninstall, run `sudo pacman -R termeric`.
 
-### Other distributions
+### Other Linux
 
 The tarball needs glibc 2.35 or newer. Download it and `SHA256SUMS` from the [releases page](https://github.com/Tjemmmic/termeric/releases), check them (`gh attestation verify`, from the [GitHub CLI](https://cli.github.com), confirms the release workflow built the file from the tagged source), and run its `install.sh`, which installs for your user under `~/.local`:
 
