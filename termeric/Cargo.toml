@@ -101,7 +101,7 @@ clap_mangen = "0.2"
 roff = "1"
 
 [package.metadata.deb]
-maintainer = "Termeric Contributors <Tjemmmic@users.noreply.github.com>"
+maintainer = "Donovan Tjemmes <mdtjemmes@proton.me>"
 copyright = "2026, Termeric Contributors"
 license-file = ["../LICENSE", "4"]
 extended-description = """\
