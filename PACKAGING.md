@@ -87,7 +87,7 @@ Termeric doesn't load libXrandr. It reads the fontconfig configuration files its
 
 For rendering it also needs a Vulkan driver for the GPU, or Mesa: Mesa's llvmpipe and lavapipe are the software fallback Termeric uses when no GPU can be used. Termeric's packages make these optional (the PKGBUILDs' `optdepends` on `vulkan-driver` and `mesa`; the `.deb` recommends `mesa-vulkan-drivers`).
 
-The Debian and Ubuntu names in `termeric/Cargo.toml` exist on Ubuntu 22.04 and 24.04 and Debian 12 and 13: the release `.deb` installs and removes cleanly on each (checked 2026-10-10 with `check_debian_package.py --system-lifecycle`). cargo-deb's `$auto` adds `libc6 (>= 2.35)` and `zlib1g`; `libgcc-s1` comes with `libc6`, which depends on it.
+The Debian and Ubuntu names in `termeric/Cargo.toml` exist on Ubuntu 22.04 and 24.04 and Debian 12 and 13: the release `.deb` installs and removes cleanly on each with `check_debian_package.py --system-lifecycle`. cargo-deb's `$auto` adds `libc6 (>= 2.35)` and `zlib1g`; `libgcc-s1` comes with `libc6`, which depends on it.
 
 `scripts/check_debian_package.py` and `scripts/check_arch_package.py` fail a package that misses any of them.
 
@@ -110,11 +110,11 @@ The manual page and completions under `assets/man/` and `assets/completions/` ar
 
 Pushing a `v*` tag runs `.github/workflows/release.yml`. It checks that the tag is `v` plus the workspace version, that `CHANGELOG.md` has a dated section for that version, the AppStream metadata a `<release>` with the same version and date, and the `termeric` PKGBUILD the same `pkgver`, and that CI passed on the tagged commit. It then builds for x86_64 and arm64 inside an Ubuntu 22.04 container, so the binaries need glibc 2.35 or newer, and produces for each architecture a tarball of the install tree and a `.deb` that `check_debian_package.py` has passed. It also checks that each PKGBUILD's `.SRCINFO` matches it. Finally it writes `SHA256SUMS`, attests the build provenance of each file, and drafts a GitHub pre-release with the changelog section as its notes.
 
-To cut a release: set the version in `Cargo.toml` and as `pkgver` in `packaging/arch/termeric/PKGBUILD` and its `.SRCINFO` (with the version's `CHANGELOG.md` section and AppStream `<release>` entry in place), run `python3 scripts/check_release.py --stamp today` to date both with the same day, commit, wait for CI on that commit, then tag it. Running the workflow by hand without `publish` builds and checks everything without drafting a release. Attestations need a public repository.
+To cut a release: set the version in `Cargo.toml` and as `pkgver` in `packaging/arch/termeric/PKGBUILD` and its `.SRCINFO` (with the version's `CHANGELOG.md` section and AppStream `<release>` entry in place), run `python3 scripts/check_release.py --stamp today` to give the changelog section and the AppStream release the same date, commit, wait for CI on that commit, then tag it. Running the workflow by hand without `publish` builds and checks everything without drafting a release. Attestations need a public repository.
 
 ### The AUR
 
-Each directory in `packaging/arch/` holds what one AUR repository holds: a `PKGBUILD` and its `.SRCINFO`. `termeric-git` always builds the newest commit, so it only needs publishing when its recipe changes. `termeric` downloads GitHub's archive of the release tag, whose checksum can't be in the tag itself, so it is pinned after the release is published. Until then its checksum is a placeholder that makepkg rejects, so an unpinned recipe can't be installed by mistake. From the repository root, with an AUR account and its SSH key:
+Each directory in `packaging/arch/` holds what one AUR repository holds: a `PKGBUILD` and its `.SRCINFO`. `termeric-git` always builds the newest commit, so it only needs publishing when its recipe changes. `termeric` downloads GitHub's archive of the release tag, whose checksum can't be in the tag itself, so it is pinned after the release is published. Until then the recipe carries a checksum that doesn't match (a placeholder before the first release, then the previous release's), which makepkg rejects, so an unpinned recipe can't be installed by mistake. From the repository root, with an AUR account and its SSH key:
 
 ```bash
 git clone ssh://aur@aur.archlinux.org/termeric.git ../aur-termeric

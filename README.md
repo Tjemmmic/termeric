@@ -21,7 +21,7 @@ Termeric keeps your shells in tabs, panes, and windows, draws them with your GPU
 
 Termeric is a **developer preview for Linux**, on Wayland and X11. Expect rough edges. Configuration and saved workspaces may change between previews without migration, and only the latest preview receives fixes. Please report problems in [GitHub issues](https://github.com/Tjemmmic/termeric/issues).
 
-Some features are experimental and off until you turn them on: coding agents, Harvest, scripting a running Termeric, live domains, and third-party plugins. [FEATURES.md](FEATURES.md) lists what works, what partly works, and what is planned.
+Some features are experimental and may change between previews: coding agents and Harvest, which stay off until you turn them on in Settings, and scripting a running Termeric, live domains, and third-party plugins. [FEATURES.md](FEATURES.md) lists what works, what partly works, and what is planned.
 
 ## Install
 
@@ -49,7 +49,7 @@ For Ubuntu 22.04, Debian 12, and later. Download the `.deb` for your machine fro
 sudo apt install ./termeric_*_amd64.deb
 ```
 
-To upgrade, install a newer `.deb` the same way. To uninstall, run `sudo apt remove termeric`.
+On arm64, the file name ends in `_arm64.deb`. To upgrade, install a newer `.deb` the same way. To uninstall, run `sudo apt remove termeric`.
 
 ### Arch Linux
 
@@ -61,7 +61,7 @@ cd termeric
 makepkg -si
 ```
 
-Also install the Vulkan driver for your GPU (`vulkan-radeon`, `vulkan-intel`, or `nvidia-utils`) if you don't have it. To uninstall, run `sudo pacman -R termeric`.
+Also install the Vulkan driver for your GPU (`vulkan-radeon`, `vulkan-intel`, or `nvidia-utils`) if you don't have it. To uninstall, run `sudo pacman -R termeric` (or `termeric-git`).
 
 ### Other Linux
 
@@ -74,7 +74,7 @@ tar -xzf termeric-*-x86_64-linux.tar.gz
 termeric-*-x86_64-linux/install.sh
 ```
 
-On arm64, the file names say `aarch64` instead of `x86_64`, and the `.deb` says `arm64` instead of `amd64`. To install for everyone instead, run `sudo termeric-*-x86_64-linux/install.sh --prefix /usr/local`. To upgrade, run a newer tarball's `install.sh` with the same `--prefix`; it removes the previous version's files first. To uninstall, run `install.sh --uninstall` with the same `--prefix`.
+On arm64, the file names say `aarch64` instead of `x86_64`. To install for everyone instead, run `sudo termeric-*-x86_64-linux/install.sh --prefix /usr/local`. To upgrade, run a newer tarball's `install.sh` with the same `--prefix`; it removes the previous version's files first. To uninstall, run `install.sh --uninstall` with the same `--prefix`.
 
 ### Build from source
 
