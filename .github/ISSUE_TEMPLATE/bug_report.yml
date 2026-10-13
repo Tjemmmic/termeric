@@ -1,0 +1,88 @@
+name: Bug report
+description: Something in Termeric doesn't work as it should
+title: "[BUG] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. Please search the [existing issues](https://github.com/Tjemmmic/termeric/issues?q=is%3Aissue) first. A security problem belongs in a [private report](https://github.com/Tjemmmic/termeric/security), not here.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The shortest sequence that shows the problem, starting from launching Termeric.
+      placeholder: |
+        1. Open a new tab
+        2. Run `vim`
+        3. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Termeric version
+      description: The output of `termeric --version`.
+      placeholder: termeric 0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How you installed it
+      options:
+        - .deb package
+        - AUR (termeric)
+        - AUR (termeric-git)
+        - Release tarball
+        - Built from source
+    validations:
+      required: true
+  - type: input
+    id: distribution
+    attributes:
+      label: Distribution
+      placeholder: Ubuntu 24.04, Arch Linux, Fedora 44, …
+    validations:
+      required: true
+  - type: dropdown
+    id: display
+    attributes:
+      label: Display server
+      options:
+        - Wayland
+        - X11
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: desktop
+    attributes:
+      label: Desktop, compositor, or window manager
+      placeholder: GNOME 49, KDE Plasma 6.5, Sway, Hyprland, i3, …
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and driver
+      description: Only if the problem is with drawing, or Termeric won't start. `vulkaninfo --summary` shows what Vulkan sees.
+      placeholder: AMD Radeon RX 7800 XT with Mesa 25.2, NVIDIA RTX 4070 with 580.x, …
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: |
+        If it helps, start Termeric from another terminal with `RUST_LOG=warn,termeric=debug termeric --separate-process 2> termeric.log` and attach or paste the relevant part. Read it through first: it can contain text from your terminal.
+      render: text
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: The parts of `~/.config/termeric/config.toml` that seem related, if you changed any settings.
+      render: toml

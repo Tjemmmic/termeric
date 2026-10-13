@@ -1,0 +1,28 @@
+name: Feature request
+description: Suggest something Termeric should do
+title: "[FEAT] "
+labels: [feature]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please check [FEATURES.md](https://github.com/Tjemmmic/termeric/blob/main/FEATURES.md) and the [existing issues](https://github.com/Tjemmmic/termeric/issues?q=is%3Aissue) first: it may be supported already, partly supported, or planned.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you're trying to do
+      description: The task or problem, rather than a particular solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would help
+      description: How you'd like Termeric to handle it.
+    validations:
+      required: true
+  - type: textarea
+    id: elsewhere
+    attributes:
+      label: How you do it today
+      description: A workaround, or another terminal that does this well, and how it behaves there.

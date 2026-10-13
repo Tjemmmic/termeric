@@ -156,4 +156,4 @@ A dependency under a license that isn't in `packaging/notices/about.toml` fails 
 
 ## Reporting bugs
 
-Open an issue with your distribution, desktop (Wayland compositor or X11 window manager), GPU and driver, and the steps to reproduce. Logs help: run `RUST_LOG=warn,termeric=debug termeric --separate-process 2> termeric.log` and attach the relevant output. Review terminal transcripts and logs for private data before attaching them.
+Open a [bug report](https://github.com/Tjemmmic/termeric/issues/new?template=bug_report.yml) or a [feature request](https://github.com/Tjemmmic/termeric/issues/new?template=feature_request.yml); the forms ask for what helps, such as your distribution, Wayland or X11, desktop, GPU and driver, and the steps to reproduce. Logs help: run `RUST_LOG=warn,termeric=debug termeric --separate-process 2> termeric.log` and attach the relevant output. Review terminal transcripts and logs for private data before attaching them. Report security problems privately, as [SECURITY.md](SECURITY.md) describes.
