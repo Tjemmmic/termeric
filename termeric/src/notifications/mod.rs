@@ -602,10 +602,12 @@ mod tests {
     }
 
     /// A fake player: it appends its PID and where its stdin, stdout, and
-    /// stderr lead to the log in `$1`, then plays until `$2` exists.
+    /// stderr lead to the log in `$1`, then plays until `$2` exists. Each link
+    /// is read before it is written: dash applies `>&3` to the shell itself
+    /// while the command runs, so its own stdout would read as the log.
     const FAKE_PLAYER: &str = r#"exec 3>>"$1"
 echo "$$" >&3
-for fd in 0 1 2; do readlink "/proc/$$/fd/$fd" >&3; done
+for fd in 0 1 2; do target=$(readlink "/proc/$$/fd/$fd"); echo "$target" >&3; done
 exec 3>&-
 while [ ! -e "$2" ]; do sleep 0.01; done"#;
 
