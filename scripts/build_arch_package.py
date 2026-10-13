@@ -14,11 +14,15 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import sys
 import tempfile
+
+if __package__:
+    from scripts.check_release import ReleaseError, pkgbuild_version
+else:
+    from check_release import ReleaseError, pkgbuild_version
 
 
 class BuildError(RuntimeError):
@@ -52,22 +56,12 @@ def copy_checkout(source: Path, destination: Path) -> None:
     shutil.copytree(source, destination, symlinks=True, ignore=ignore)
 
 
-def recipe_version(recipe: str) -> str:
-    """The pkgver a PKGBUILD assigns."""
-    versions = re.findall(r"^pkgver=([0-9A-Za-z._+]+)$", recipe, flags=re.MULTILINE)
-    if len(versions) != 1:
-        raise BuildError("PKGBUILD must assign pkgver exactly once")
-    return versions[0]
-
-
 def archive_head(source: Path, destination: Path, prefix: str) -> None:
     """Write a gzipped archive of `source`'s HEAD whose files sit under `prefix`/."""
     git = require_tool("git")
-    result = subprocess.run(
-        [git, "-C", str(source), "archive", "--format=tar.gz", f"--prefix={prefix}/",
-         "--output", str(destination), "HEAD"],
-        text=True,
-    )
+    command = [git, "-C", str(source), "archive", "--format=tar.gz"]
+    command += [f"--prefix={prefix}/", "--output", str(destination), "HEAD"]
+    result = subprocess.run(command, text=True)
     if result.returncode != 0:
         raise BuildError(f"git archive failed with exit status {result.returncode}")
 
@@ -94,7 +88,10 @@ def build_package(source: Path, output: Path, *, package: str, run_check: bool) 
         else:
             # makepkg uses a source file already beside the recipe instead of
             # downloading it.
-            version = recipe_version(recipe.read_text(encoding="utf-8"))
+            try:
+                version = pkgbuild_version(recipe.read_text(encoding="utf-8"))
+            except ReleaseError as error:
+                raise BuildError(str(error)) from error
             name = f"{RELEASE_PACKAGE}-{version}"
             archive_head(source, staging / f"{name}.tar.gz", name)
             command.append("--skipchecksums")
