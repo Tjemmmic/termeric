@@ -757,6 +757,9 @@ enum CoreCategory {
     Tabs,
     Panes,
     Appearance,
+    /// Experimental features that are available without being turned on,
+    /// labelled so on their rows.
+    Experimental,
 }
 
 impl CoreCategory {
@@ -775,6 +778,7 @@ impl CoreCategory {
             Self::Tabs => "Tabs",
             Self::Panes => "Panes",
             Self::Appearance => "Appearance",
+            Self::Experimental => "Experimental",
         }
     }
 }
@@ -836,7 +840,7 @@ fn core_command_table() -> Vec<CoreCommand> {
     vec![
         command("core.new-window", "New Window", Core, Unbound(Action::NewWindow)),
         command("core.toggle-fullscreen", "Toggle Fullscreen", Core, Bound(Key::ToggleFullscreen)),
-        command("core.attach-domain", "Attach Live Domain…", Core, Unbound(Action::AttachDomain)),
+        command("core.attach-domain", "Attach Live Domain…", Experimental, Unbound(Action::AttachDomain)),
         destructive("core.cancel-file-upload", "Cancel Upload", Core, Unbound(Action::CancelFileUpload)),
         command("core.new-tab", "New Tab", Core, Bound(Key::NewTab)),
         destructive("core.close-tab", "Close Tab", Core, Bound(Key::CloseTab)),
@@ -1143,6 +1147,27 @@ mod tests {
         assert!(disabled.iter().all(|command| command.category != "Harvest"));
         let enabled = core_commands(true, true, &registry);
         assert!(enabled.iter().any(|command| command.category == "Harvest"));
+    }
+
+    #[test]
+    fn live_domains_are_offered_and_labelled_experimental() {
+        let commands = core_commands(false, false, &ShortcutRegistry::new());
+        let attach = commands
+            .iter()
+            .find(|command| command.id == "core.attach-domain")
+            .expect("live domains are available without being turned on");
+        assert_eq!(attach.category, "Experimental");
+
+        let mut palette = CommandPalette::new();
+        palette.replace_core_commands(commands);
+        palette.open();
+        palette.insert_query_text("experimental");
+        let info = palette.build_info();
+        assert!(
+            info.entries
+                .iter()
+                .any(|entry| entry.title == "Attach Live Domain…")
+        );
     }
 
     #[test]

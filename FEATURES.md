@@ -92,7 +92,7 @@ What Termeric supports today, and what is planned. Termeric runs on Linux only f
 | --- | --- | --- |
 | Scripting a running Termeric (`termeric control`) | Experimental | List, open, split, focus, move, resize, and close windows, tabs, and panes, wait for programs, and read pane text. Typing into panes needs `allow_gui_control_input = true` under `[security]`. On Wayland, focusing another window is refused. |
 | Third-party plugins (`termeric plugin`) | Experimental | Each plugin gets only the permissions you grant. The manifest format, the permissions, and the handler protocol may change. |
-| Live domains (`termeric domain`) | Experimental | Terminals kept running by a background daemon, here or over SSH, that you can detach from and attach to again. |
+| Live domains (`termeric domain`) | Experimental | Terminals kept running by a background daemon, here or over SSH, that you can detach from and attach to again. Nothing runs until you create one, with `termeric domain create` or **Attach Live Domain…** in the command palette. |
 | Harvest | Experimental | A visual history of your commands. Off until you turn it on under **Experimental** in Settings. |
 
 ## Coding agents
