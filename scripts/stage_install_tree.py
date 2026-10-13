@@ -51,6 +51,7 @@ def tree_sources() -> dict[str, str]:
         "share/fish/vendor_completions.d/termeric.fish": "assets/completions/termeric.fish",
         "share/doc/termeric/README.md": "README.md",
         "share/doc/termeric/CHANGELOG.md": "CHANGELOG.md",
+        "share/doc/termeric/FEATURES.md": "FEATURES.md",
         "share/doc/termeric/LICENSE": "LICENSE",
         "share/doc/termeric/THIRD_PARTY_NOTICES.md": "termeric/THIRD_PARTY_NOTICES.md",
         "share/doc/termeric/config.example.toml": "assets/config.example.toml",

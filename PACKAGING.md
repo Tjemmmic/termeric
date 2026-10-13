@@ -53,7 +53,7 @@ python3 scripts/stage_install_tree.py --binary target/release/termeric --out DIR
 | `share/terminfo/x/xterm-termeric` | The compiled terminfo entry |
 | `share/man/man1/termeric.1` | The manual page |
 | `share/bash-completion/completions/termeric`, `share/zsh/site-functions/_termeric`, `share/fish/vendor_completions.d/termeric.fish` | Shell completions |
-| `share/doc/termeric/` | `README.md`, `CHANGELOG.md`, `LICENSE`, `THIRD_PARTY_NOTICES.md`, and `config.example.toml` |
+| `share/doc/termeric/` | `README.md`, `CHANGELOG.md`, `FEATURES.md`, `LICENSE`, `THIRD_PARTY_NOTICES.md`, and `config.example.toml` |
 
 `DIR` also gets `install.sh` and `MANIFEST`, which lists each file to install with its mode. To install the tree into a package root:
 
