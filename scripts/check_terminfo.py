@@ -112,6 +112,8 @@ def check_database(compiled: Path, env: dict[str, str]) -> None:
         "Tc",
         "setrgbf=",
         "setrgbb=",
+        # Showing the cursor must leave its blinking to the configuration.
+        "cnorm=\\E[?25h,",
         "smcup=\\E[?1049h",
         "rmcup=\\E[?1049l",
         "cbt=\\E[Z",

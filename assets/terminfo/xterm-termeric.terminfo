@@ -3,6 +3,10 @@
 # Keep this entry in sync with the parser's device-attribute replies and the
 # conformance suite.
 # Compile extended capabilities with `tic -x`.
+#
+# cnorm only shows the cursor. xterm's also resets cursor blinking (DEC mode
+# 12), so every ncurses program that hides and restores the cursor would stop
+# the blinking [cursor] blink asks for.
 xterm-termeric|Termeric terminal emulator,
 	am,
 	bce,
@@ -29,7 +33,7 @@ xterm-termeric|Termeric terminal emulator,
 	Cmg=\E[%i%p1%d;%p2%ds,
 	civis=\E[?25l,
 	clear=\E[H\E[2J,
-	cnorm=\E[?12l\E[?25h,
+	cnorm=\E[?25h,
 	cr=\r,
 	csr=\E[%i%p1%d;%p2%dr,
 	cub=\E[%p1%dD,
