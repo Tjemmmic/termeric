@@ -278,13 +278,18 @@ pub struct KeyChord {
 impl KeyChord {
     /// Construct from parts. Every chord is built here, so recorded,
     /// configured, and pressed keys normalize the same way: lowercase, `+`
-    /// as `=`, which share a physical key on most layouts, and no Shift on a
+    /// as `=` and `_` as `-`, which share a physical key on most layouts (so
+    /// zooming in and out works with Shift held or not), and no Shift on a
     /// character without case. Shift there is already part of the character
     /// the layout produced (`?`, or `1` on AZERTY), so counting it again
     /// would make the chord depend on the layout; on a letter it is the only
     /// thing telling Ctrl+Shift+C from Ctrl+C.
     pub fn new(key: &str, ctrl: bool, alt: bool, shift: bool, super_key: bool) -> Self {
-        let key = if key == "+" { "=" } else { key };
+        let key = match key {
+            "+" => "=",
+            "_" => "-",
+            key => key,
+        };
         let shift = shift && !is_caseless_character(key);
         Self {
             key: key.to_lowercase(),
@@ -854,10 +859,19 @@ mod tests {
         let ctrl = ModifiersState::CONTROL;
         let ctrl_shift = ModifiersState::CONTROL | ModifiersState::SHIFT;
 
-        // US layout: Ctrl+Shift+= arrives as "+" with Shift still held.
+        // US layout: Ctrl+Shift+= arrives as "+" with Shift still held, and
+        // Ctrl+Shift+- as "_", so zooming out works like zooming in.
         assert_eq!(
             reg.check(&Key::Character("+".into()), ctrl_shift),
             Some(BindableAction::IncreaseFontSize)
+        );
+        assert_eq!(
+            reg.check(&Key::Character("_".into()), ctrl_shift),
+            Some(BindableAction::DecreaseFontSize)
+        );
+        assert_eq!(
+            reg.check(&Key::Character("-".into()), ctrl),
+            Some(BindableAction::DecreaseFontSize)
         );
         // AZERTY: the digit row needs Shift to type "1".
         assert_eq!(
