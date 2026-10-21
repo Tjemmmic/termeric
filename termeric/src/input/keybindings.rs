@@ -83,7 +83,7 @@ bindable_actions! {
     ToggleCopyMode => "toggle_copy_mode", "Keyboard Copy Mode", Navigation,
         chord("x", CTRL | SHIFT), Action::ToggleCopyMode;
     QuickSelect => "quick_select", "Quick Select Links and Matches", Navigation,
-        chord("u", CTRL | SHIFT), Action::QuickSelect;
+        chord("o", CTRL | SHIFT), Action::QuickSelect;
     OpenUnicodePicker => "open_unicode_picker", "Insert Unicode Character", General,
         None, Action::OpenUnicodePicker;
     ToggleCommandPalette => "toggle_command_palette", "Command Palette", General,
@@ -1004,6 +1004,32 @@ mod tests {
                 chord.display_string()
             );
         }
+    }
+
+    #[test]
+    fn default_bindings_avoid_keys_input_methods_take_first() {
+        // IBus and fcitx5 take Ctrl+Shift+U (Unicode by code point) and
+        // fcitx5 Ctrl+Space (switching input methods) before the window sees
+        // them, so a default there is unreachable for anyone using one.
+        let reserved = [
+            KeyChord::new("u", true, false, true, false),
+            KeyChord::new(" ", true, false, false, false),
+            KeyChord::new("space", true, false, false, false),
+        ];
+        for &action in BindableAction::all() {
+            if let Some(chord) = action.meta().default_binding {
+                assert!(
+                    !reserved.contains(&chord),
+                    "{} defaults to {}, which input methods take first",
+                    action.meta().id,
+                    chord.display_string()
+                );
+            }
+        }
+        assert_eq!(
+            BindableAction::QuickSelect.meta().default_binding,
+            Some(KeyChord::new("o", true, false, true, false))
+        );
     }
 
     #[test]

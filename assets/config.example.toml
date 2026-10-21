@@ -104,7 +104,7 @@ xterm_type = "normal"     # normal, legacy, vt220; programs can switch it
 [copy_mode]
 bindings = "vi"           # keys in keyboard copy mode (Ctrl+Shift+X): vi, emacs
 
-# What quick select (Ctrl+Shift+U) labels: up to 32 Rust regular expressions.
+# What quick select (Ctrl+Shift+O) labels: up to 32 Rust regular expressions.
 # Setting any replaces the built-in URL, path, and commit-hash patterns, so
 # list the ones you want to keep. OSC 8 links are always included.
 # [[copy_mode.patterns]]
@@ -250,7 +250,7 @@ save_scrollback = true
 #   Scrolling: scroll_page_up (Shift+PageUp), scroll_page_down
 #     (Shift+PageDown), scroll_to_top (Ctrl+Shift+Home), scroll_to_bottom
 #     (Ctrl+Shift+End)
-#   Navigation: toggle_copy_mode (Ctrl+Shift+X), quick_select (Ctrl+Shift+U),
+#   Navigation: toggle_copy_mode (Ctrl+Shift+X), quick_select (Ctrl+Shift+O),
 #     previous_prompt (Ctrl+Shift+Up), next_prompt (Ctrl+Shift+Down),
 #     previous_failed_command, next_failed_command
 #   Terminal: clear_scrollback, reset_terminal
