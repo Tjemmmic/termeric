@@ -828,6 +828,9 @@ pub struct SettingEntry {
     pub is_header: bool,
     /// Which section this belongs to
     pub section: SettingsSection,
+    /// Dim text after the label about this window rather than the setting,
+    /// such as a zoomed font size; the label stays the row's identity.
+    pub note: Option<String>,
 }
 
 /// Result of a user action in the settings panel
@@ -993,6 +996,9 @@ pub struct SettingsPanel {
     /// themes are files in the themes directory and rows are rebuilt every
     /// frame Settings is open.
     theme_names: Vec<String>,
+    /// The size this window's text is zoomed to, if it is (Ctrl+= and
+    /// Ctrl+-), shown beside Size so a zoom never looks like the setting.
+    window_font_size: Option<f32>,
     /// Mouse-hovered entry index (None if not hovering any item)
     hovered_item: Option<usize>,
     /// Mouse-hovered dropdown option index (None if not hovering any dropdown option)
@@ -1045,6 +1051,7 @@ impl SettingsPanel {
                 .iter()
                 .map(|name| (*name).to_string())
                 .collect(),
+            window_font_size: None,
             hovered_item: None,
             dropdown_hovered: None,
             theme_meta: None,
@@ -1073,6 +1080,12 @@ impl SettingsPanel {
     /// Set the themes the Theme dropdown offers.
     pub fn set_theme_names(&mut self, names: Vec<String>) {
         self.theme_names = names;
+    }
+
+    /// Set the size the window's text is zoomed to, or `None` when it shows
+    /// the configured size.
+    pub fn set_window_font_size(&mut self, size: Option<f32>) {
+        self.window_font_size = size;
     }
 
     /// Update the stored theme metadata (call when the theme changes)
@@ -1917,12 +1930,14 @@ impl SettingsPanel {
                     kind: SettingKind::ReadOnly,
                     is_header: true,
                     section: *section,
+                    note: None,
                 });
             }
 
             // Add matching items
             for (_, item) in matching {
                 entries.push(SettingEntry {
+                    note: self.row_note(*section, &item.label),
                     label: item.label.clone(),
                     value: item.value.clone(),
                     kind: item.kind.clone(),
@@ -1933,6 +1948,16 @@ impl SettingsPanel {
         }
 
         entries
+    }
+
+    /// The note a row shows after its label, by the row's identity.
+    fn row_note(&self, section: SettingsSection, label: &str) -> Option<String> {
+        match (section, label) {
+            (SettingsSection::Font, "Size") => self
+                .window_font_size
+                .map(|size| format!("{size:.1} in this window")),
+            _ => None,
+        }
     }
 
     /// Count selectable (non-header) entries

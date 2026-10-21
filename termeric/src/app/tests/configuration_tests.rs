@@ -674,6 +674,39 @@ fn zoom_changes_only_the_window_and_is_never_saved() {
     assert_eq!(app.effective_font_size(), 72.0);
 }
 
+/// The note Settings shows after Font → Size, if any.
+fn font_size_note(app: &mut App) -> Option<String> {
+    use crate::ui::settings::{SettingsPage, SettingsSection};
+    app.settings_panel.select_page(SettingsPage::Font);
+    app.settings_panel
+        .build_entries(&app.config, &app.shortcut_registry)
+        .into_iter()
+        .find(|entry| entry.section == SettingsSection::Font && entry.label == "Size")
+        .expect("Font → Size")
+        .note
+}
+
+#[test]
+fn settings_shows_the_size_a_window_is_zoomed_to() {
+    let mut app = App::new_headless(Config::default()).unwrap();
+    assert_eq!(font_size_note(&mut app), None);
+    app.zoom_font(2.0);
+    assert_eq!(
+        font_size_note(&mut app).as_deref(),
+        Some("14.0 in this window")
+    );
+    // Zooming back to the configured size is no zoom.
+    app.zoom_font(-2.0);
+    assert_eq!(font_size_note(&mut app), None);
+    app.zoom_font(-2.0);
+    app.reset_font_zoom();
+    assert_eq!(font_size_note(&mut app), None);
+    // A new configured size ends the zoom, and the note with it.
+    app.zoom_font(2.0);
+    app.apply_settings_action(SettingsAction::SetFontSize(16.0));
+    assert_eq!(font_size_note(&mut app), None);
+}
+
 #[test]
 fn changing_the_configured_size_ends_a_zoom() {
     let mut app = App::new_headless(Config::default()).unwrap();

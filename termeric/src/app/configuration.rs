@@ -78,7 +78,7 @@ impl App {
         if zoom == self.font_zoom {
             return;
         }
-        self.font_zoom = zoom;
+        self.store_font_zoom(zoom);
         let size = self.effective_font_size();
         let Some(renderer) = &mut self.renderer else {
             return;
@@ -94,6 +94,12 @@ impl App {
         );
 
         self.request_redraw(RedrawReason::ConfigReload);
+    }
+
+    /// The one place the zoom changes, so Settings always shows it.
+    fn store_font_zoom(&mut self, zoom: Option<f32>) {
+        self.font_zoom = zoom;
+        self.settings_panel.set_window_font_size(zoom);
     }
 
     /// Apply layout changes immediately and schedule at most one bounded
@@ -356,7 +362,7 @@ impl App {
         // A new configured size is what the person now wants to see, so it
         // ends a zoom; other changes keep it.
         if config.font.size != self.config.font.size {
-            self.font_zoom = None;
+            self.store_font_zoom(None);
         }
         self.config = config;
         self.agent_features_held = hold_agent_features;

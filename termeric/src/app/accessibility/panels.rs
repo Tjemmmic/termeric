@@ -275,7 +275,7 @@ impl App {
                 } => {
                     let mut node = Node::new(Role::SpinButton);
                     node.set_label(entry.label.as_ref());
-                    node.set_description(format!("{} setting", entry.section.label()));
+                    node.set_description(setting_description(entry, "setting"));
                     node.set_value(entry.value.clone());
                     node.set_numeric_value(f64::from(*value));
                     node.set_min_numeric_value(f64::from(*min));
@@ -289,7 +289,7 @@ impl App {
                 SettingKind::Dropdown { options, .. } => {
                     let mut node = Node::new(Role::ComboBox);
                     node.set_label(entry.label.as_ref());
-                    node.set_description(format!("{} setting", entry.section.label()));
+                    node.set_description(setting_description(entry, "setting"));
                     node.set_value(entry.value.clone());
                     node.set_expanded(is_selected && info.dropdown_open);
                     node.add_action(Action::Click);
@@ -305,7 +305,7 @@ impl App {
                 SettingKind::SteppedList { values, .. } => {
                     let mut node = Node::new(Role::ComboBox);
                     node.set_label(entry.label.as_ref());
-                    node.set_description(format!("{} setting", entry.section.label()));
+                    node.set_description(setting_description(entry, "setting"));
                     node.set_value(entry.value.clone());
                     node.set_expanded(is_selected && info.dropdown_open);
                     node.add_action(Action::Click);
@@ -322,7 +322,7 @@ impl App {
                 SettingKind::Action { .. } => {
                     let mut node = Node::new(Role::Button);
                     node.set_label(entry.label.as_ref());
-                    node.set_description(format!("{} action", entry.section.label()));
+                    node.set_description(setting_description(entry, "action"));
                     node.set_value(entry.value.clone());
                     node.add_action(Action::Click);
                     node.add_action(Action::Focus);
@@ -356,7 +356,7 @@ impl App {
                     nodes.push((switch_id, switch));
                     let mut node = Node::new(Role::Button);
                     node.set_label(entry.label.as_ref());
-                    node.set_description(format!("{} action", entry.section.label()));
+                    node.set_description(setting_description(entry, "action"));
                     node.set_value(entry.value.clone());
                     node.add_action(Action::Click);
                     node.add_action(Action::Focus);
@@ -366,7 +366,7 @@ impl App {
                 SettingKind::ReadOnly => {
                     let mut node = Node::new(Role::Label);
                     node.set_label(entry.label.as_ref());
-                    node.set_description(format!("{} setting", entry.section.label()));
+                    node.set_description(setting_description(entry, "setting"));
                     node.set_value(entry.value.clone());
                     node.set_read_only();
                     node.add_action(Action::Focus);
@@ -1763,6 +1763,16 @@ impl App {
             nodes,
             focus,
         }
+    }
+}
+
+/// A Settings row's description: its section and kind, and its note, which
+/// is shown after the label rather than read as part of it.
+fn setting_description(entry: &crate::ui::settings::SettingEntry, kind: &str) -> String {
+    let section = entry.section.label();
+    match &entry.note {
+        Some(note) => format!("{section} {kind}, {note}"),
+        None => format!("{section} {kind}"),
     }
 }
 

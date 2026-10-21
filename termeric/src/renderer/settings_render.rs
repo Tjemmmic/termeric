@@ -221,15 +221,28 @@ impl Renderer {
                     self.px(BUTTON_CORNER_RADIUS),
                 );
             }
-            self.push_ui_label(
+            let label_width = layout.value_x - layout.content_x - padding;
+            let drawn = self.push_ui_label(
                 &entry.label,
                 layout.content_x,
                 row.y,
                 row.height,
-                layout.value_x - layout.content_x - padding,
+                label_width,
                 size,
                 text,
             );
+            if let Some(note) = &entry.note {
+                let gap = self.px(8.0);
+                self.push_ui_label(
+                    note,
+                    layout.content_x + drawn + gap,
+                    row.y,
+                    row.height,
+                    (label_width - drawn - gap).max(0.0),
+                    size,
+                    dim,
+                );
+            }
             let value_width = value_right - layout.value_x;
             let center_y = row.y + row.height / 2.0;
             match &entry.kind {
