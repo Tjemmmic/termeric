@@ -327,6 +327,8 @@ impl Renderer {
 
         // ── Render terminal grids, each in its own viewport ──
         let placement = self.pane_placement();
+        // Drawn after the grids, in a layer of their own (see below).
+        let mut copy_mode_overlays = Vec::new();
         for pane in panes {
             let bounds = placement.pane_bounds(pane.rect, lone_pane);
             let (pane_cols, pane_rows) = PanePlacement::pane_cells(
@@ -366,15 +368,14 @@ impl Renderer {
                 scrollbar,
             );
             if let Some(copy_mode) = pane.copy_mode {
-                self.build_copy_mode_overlay(
+                copy_mode_overlays.push((
                     copy_mode,
                     pane.grid.scroll_offset(),
                     bounds.x,
                     bounds.y,
                     pane_width,
                     pane_rows,
-                    window_height,
-                );
+                ));
             }
 
             // Broadcast is deliberately unmistakable; zoom and focus use
@@ -418,6 +419,23 @@ impl Renderer {
             let flash_color = bell_flash_color(&self.ui, self.bell_intensity);
             self.rect_pipeline
                 .push_rect(0.0, 0.0, window_width, window_height, flash_color);
+        }
+
+        // ── Copy mode and quick select, over the panes' text: a layer draws
+        // its rectangles before its text, so hint labels drawn with the grid
+        // would sit under the very characters they label ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        for (copy_mode, scroll_offset, x, y, width, rows) in copy_mode_overlays {
+            self.build_copy_mode_overlay(
+                copy_mode,
+                scroll_offset,
+                x,
+                y,
+                width,
+                rows,
+                window_height,
+            );
         }
 
         // ── Agent view: the docked panel right of the terminals, then its
