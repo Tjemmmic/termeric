@@ -3402,7 +3402,7 @@ fn a_broken_automatic_workspace_opens_a_shell_in_a_separate_process() {
         std::fs::create_dir_all(&archive).unwrap();
         std::fs::write(archive.join("workspace.toml"), "not an archive").unwrap();
         let mut state = super::super::state::AppState::default();
-        state.remember_workspace(workspace_id).unwrap();
+        state.remember_workspace(workspace_id, &[]).unwrap();
         let mut config = Config::default();
         config.session.auto_restore = true;
         config.shell.program = Some("/bin/sh".into());

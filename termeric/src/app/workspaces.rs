@@ -209,7 +209,8 @@ impl App {
                 "Could not remove replaced workspace {previous:?} from startup state: {error:#}"
             );
         }
-        self.app_state.remember_workspace(id)
+        let ended = self.earlier_sessions.take();
+        self.app_state.remember_workspace(id, &ended)
     }
 
     pub(super) fn restore_saved_workspace(&mut self, id: &str) -> bool {

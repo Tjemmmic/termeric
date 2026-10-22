@@ -52,6 +52,9 @@ pub struct Application {
     fatal_startup_error: Option<String>,
     /// The one plugin handler host every window shares.
     plugin_host: Arc<crate::plugin::structured::StructuredPluginHost>,
+    /// The restore list the sessions before this process left; every window
+    /// shares it (see [`super::state::EarlierSessions`]).
+    earlier_sessions: super::state::EarlierSessions,
     /// The plugin generation every window was last brought to.
     plugin_generation_seen: u64,
     /// The plugin registry, polled once for the whole process.
@@ -332,7 +335,18 @@ impl Application {
         if pruned > 0 {
             log::info!("Pruned {pruned} automatic workspace archives no longer restorable");
         }
-        Self::for_startup(config, warning, &state, launch)
+        let mut application = Self::for_startup(config, warning, &state, launch)?;
+        application.continue_after(super::state::EarlierSessions::from_startup(&state));
+        Ok(application)
+    }
+
+    /// Make this process the one that ends `earlier`'s sessions: its windows,
+    /// and those it opens later, share what they left for restoring.
+    fn continue_after(&mut self, earlier: super::state::EarlierSessions) {
+        for window in &mut self.pending {
+            window.earlier_sessions = earlier.clone();
+        }
+        self.earlier_sessions = earlier;
     }
 
     /// The process `launch` starts with `config` and the startup `state`:
@@ -401,6 +415,7 @@ impl Application {
             fatal_startup_error: None,
             plugin_generation_seen: plugin_host.generation(),
             plugin_host,
+            earlier_sessions: super::state::EarlierSessions::default(),
             last_plugin_registry_mtime: plugin_paths
                 .as_ref()
                 .and_then(crate::plugin::runtime::PluginPaths::registry_mtime),
@@ -488,6 +503,7 @@ impl Application {
         window.set_system_accessibility_preferences(self.system_accessibility);
         window.launch = launch;
         window.allow_auto_restore = false;
+        window.earlier_sessions = self.earlier_sessions.clone();
         self.pending.push(window);
         Ok(())
     }

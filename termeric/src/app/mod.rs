@@ -768,6 +768,9 @@ pub struct App {
     keybinding_manager: KeyBindingManager,
     /// Application runtime state (for first boot tracking, etc.)
     app_state: AppState,
+    /// The restore list earlier sessions left, shared with this process's
+    /// other windows; whichever window is kept for restoring first drops it.
+    earlier_sessions: state::EarlierSessions,
     /// Last workspace-manager row click, for double-click opening.
     workspace_row_click: crate::input::DoubleClick<String>,
     /// Presses on tabs, by tab ID, for double-click renaming.
@@ -1102,6 +1105,7 @@ impl App {
             } else {
                 AppState::default()
             },
+            earlier_sessions: state::EarlierSessions::default(),
             workspace_menu: None,
             workspace_row_click: Default::default(),
             tab_click: Default::default(),

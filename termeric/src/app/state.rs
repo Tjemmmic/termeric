@@ -6,6 +6,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 /// More than the state ever holds; a larger file is not this state.
 const MAX_STATE_BYTES: usize = 64 * 1024;
@@ -28,6 +29,31 @@ pub struct AppState {
     /// timestamps.
     #[serde(default)]
     pub last_workspace_ids: Vec<String>,
+}
+
+/// The workspaces the sessions before this process left for restoring, read
+/// when it started and shared by its windows. The first window the process
+/// keeps for restoring takes them and drops them from the list, so the list
+/// names only the windows open at the latest exit, never every earlier one.
+/// A Termeric running beside this one adds its windows after this process
+/// started, so they are not among these and stay.
+#[derive(Debug, Clone, Default)]
+pub struct EarlierSessions(Arc<Mutex<Option<Vec<String>>>>);
+
+impl EarlierSessions {
+    /// What `state`, read at startup, says the earlier sessions left.
+    pub fn from_startup(state: &AppState) -> Self {
+        Self(Arc::new(Mutex::new(Some(state.last_workspace_ids.clone()))))
+    }
+
+    /// The earlier sessions' workspaces, the first time only.
+    pub fn take(&self) -> Vec<String> {
+        self.0
+            .lock()
+            .ok()
+            .and_then(|mut earlier| earlier.take())
+            .unwrap_or_default()
+    }
 }
 
 impl AppState {
@@ -87,10 +113,11 @@ impl AppState {
         self.save()
     }
 
-    /// Make `id` the workspace restored last.
-    pub fn remember_workspace(&mut self, id: &str) -> Result<()> {
+    /// Make `id` the workspace restored last, dropping `ended`, the
+    /// workspaces of sessions that ended before this one began.
+    pub fn remember_workspace(&mut self, id: &str, ended: &[String]) -> Result<()> {
         self.update_workspace_ids(|ids| {
-            ids.retain(|candidate| candidate != id);
+            ids.retain(|candidate| candidate != id && !ended.contains(candidate));
             ids.push(id.to_string());
         })
     }
@@ -149,14 +176,41 @@ mod tests {
     }
 
     #[test]
+    fn a_session_replaces_the_restore_list_the_ended_ones_left() {
+        let temp = tempfile::tempdir().unwrap();
+        AppState::set_test_state_path(Some(temp.path().join("state.json")));
+        let result = std::panic::catch_unwind(|| {
+            // Two earlier sessions each left their last window.
+            let mut earlier = AppState::default();
+            earlier.remember_workspace("ended-a", &[]).unwrap();
+            earlier.remember_workspace("ended-b", &[]).unwrap();
+            // This process starts; a Termeric started after it keeps its
+            // own window, which this process must not drop.
+            let ended = EarlierSessions::from_startup(&AppState::load());
+            AppState::load().remember_workspace("beside", &[]).unwrap();
+            // The first window this process keeps drops the ended sessions'
+            // windows; its next one keeps the first.
+            let mut window = AppState::load();
+            window.remember_workspace("this-1", &ended.take()).unwrap();
+            window.remember_workspace("this-2", &ended.take()).unwrap();
+            assert_eq!(
+                AppState::load().last_workspace_ids,
+                ["beside", "this-1", "this-2"]
+            );
+        });
+        AppState::set_test_state_path(None);
+        result.unwrap();
+    }
+
+    #[test]
     fn concurrent_window_state_merges_and_forgets_workspace_ids() {
         let temp = tempfile::tempdir().unwrap();
         AppState::set_test_state_path(Some(temp.path().join("state/state.json")));
         let result = std::panic::catch_unwind(|| {
             let mut first = AppState::default();
             let mut second = AppState::default();
-            first.remember_workspace("workspace-a").unwrap();
-            second.remember_workspace("workspace-b").unwrap();
+            first.remember_workspace("workspace-a", &[]).unwrap();
+            second.remember_workspace("workspace-b", &[]).unwrap();
             assert_eq!(
                 AppState::load().last_workspace_ids,
                 ["workspace-a", "workspace-b"]
@@ -176,7 +230,7 @@ mod tests {
             assert!(!AppState::load().first_boot_complete);
             let mut state = AppState::default();
             assert!(state.mark_first_boot_complete().is_err());
-            assert!(state.remember_workspace("workspace-a").is_err());
+            assert!(state.remember_workspace("workspace-a", &[]).is_err());
         });
     }
 }
