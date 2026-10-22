@@ -16,6 +16,7 @@ pub mod shell;
 pub mod split;
 pub mod term;
 pub mod unicode;
+pub mod uri;
 
 pub use event::{
     ClipboardRequest, DynamicColorOperation, DynamicColorTarget, NotificationExpiry,

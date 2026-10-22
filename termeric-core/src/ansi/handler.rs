@@ -107,20 +107,7 @@ fn parse_osc_directory(params: &[&[u8]]) -> Option<ReportedWorkingDirectory> {
         return None;
     }
 
-    let encoded_path = &location.as_bytes()[slash..];
-    let mut decoded = Vec::with_capacity(encoded_path.len());
-    let mut index = 0;
-    while index < encoded_path.len() {
-        if encoded_path[index] == b'%' {
-            let high = ascii_hex_value(*encoded_path.get(index + 1)?)?;
-            let low = ascii_hex_value(*encoded_path.get(index + 2)?)?;
-            decoded.push(((high << 4) | low) as u8);
-            index += 3;
-        } else {
-            decoded.push(encoded_path[index]);
-            index += 1;
-        }
-    }
+    let decoded = crate::uri::percent_decode(&location.as_bytes()[slash..])?;
     if decoded.len() > MAX_OSC_DIRECTORY_BYTES
         || decoded
             .iter()
@@ -138,15 +125,6 @@ fn parse_osc_directory(params: &[&[u8]]) -> Option<ReportedWorkingDirectory> {
         (!host.is_empty()).then(|| host.to_string()),
         path,
     ))
-}
-
-fn ascii_hex_value(byte: u8) -> Option<u32> {
-    match byte {
-        b'0'..=b'9' => Some(u32::from(byte - b'0')),
-        b'a'..=b'f' => Some(u32::from(byte - b'a' + 10)),
-        b'A'..=b'F' => Some(u32::from(byte - b'A' + 10)),
-        _ => None,
-    }
 }
 
 fn parse_clipboard_selection(value: &[u8]) -> Option<ClipboardRequest> {
