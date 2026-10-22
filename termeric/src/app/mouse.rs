@@ -482,7 +482,7 @@ impl App {
             }
             ElementState::Released => {
                 if self.try_report_mouse_release(button, position, metrics) {
-                    self.refresh_terminal_pointer_cursor();
+                    self.refresh_pointer_cursor();
                     return;
                 }
                 if button == MouseButton::Left {
@@ -494,7 +494,7 @@ impl App {
             }
         }
 
-        self.refresh_terminal_pointer_cursor();
+        self.refresh_pointer_cursor();
 
         // Request redraw to show selection changes
         self.request_redraw(RedrawReason::PointerInput);
@@ -765,7 +765,11 @@ impl App {
 
         // A panel layer on top tracks hover for its highlights, an overlay
         // above the panels takes no hover of its own here, and the terminal
-        // beneath sees no motion: no selection, no reports.
+        // beneath sees no motion: no selection, no reports. Any of them
+        // takes the pointer's shape too.
+        if self.top_modal_layer().is_some() {
+            self.refresh_pointer_cursor();
+        }
         match self.top_modal_layer() {
             Some(ModalLayer::Settings) => {
                 self.hover_settings_panel(position.0 as f32, position.1 as f32);
@@ -834,7 +838,7 @@ impl App {
             }
         }
 
-        self.refresh_terminal_pointer_cursor();
+        self.refresh_pointer_cursor();
 
         let chrome = self.floating_chrome_at(position);
         if self.try_report_mouse_motion(position, chrome, metrics) {
@@ -1224,21 +1228,30 @@ impl App {
         true
     }
 
-    /// Restore the protocol-selected cursor when no Termeric-owned pointer
-    /// interaction currently has precedence.
-    pub(super) fn refresh_terminal_pointer_cursor(&self) {
+    /// Give the pointer the shape [`Self::pointer_icon`] says.
+    pub(super) fn refresh_pointer_cursor(&self) {
+        if let (Some(icon), Some(window)) = (self.pointer_icon(), &self.window) {
+            window.set_cursor(icon);
+        }
+    }
+
+    /// The pointer's shape where it rests, or `None` while a drag or a file
+    /// being dropped owns it: the plain arrow over a modal layer, so the
+    /// terminal's shape beneath (an I-beam, usually) never shows over its
+    /// buttons, and over the panes the arrow on chrome, else the shape the
+    /// terminal asks for.
+    pub(super) fn pointer_icon(&self) -> Option<winit::window::CursorIcon> {
         if self.file_drop_hovered
             || self.divider_dragging.is_some()
             || self.scrollbar_dragging.is_some()
             || self.tab_dragging.is_some()
-            || self.top_modal_layer().is_some()
         {
-            return;
+            return None;
         }
-        let Some(window) = &self.window else {
-            return;
-        };
-        let icon = self.last_cursor_pos.zip(self.renderer.as_ref()).map_or(
+        if self.top_modal_layer().is_some() {
+            return Some(winit::window::CursorIcon::Default);
+        }
+        Some(self.last_cursor_pos.zip(self.renderer.as_ref()).map_or(
             winit::window::CursorIcon::Default,
             |(position, _)| {
                 if self.floating_chrome_at(position).is_some() {
@@ -1246,8 +1259,7 @@ impl App {
                 }
                 self.terminal_pointer_icon_at(position, self.pointer_metrics())
             },
-        );
-        window.set_cursor(icon);
+        ))
     }
 
     /// The chrome drawn over the panes at `position`, frontmost first: a
@@ -1293,7 +1305,7 @@ impl App {
             .and_then(|tab| tab.split_panes())
             .is_some_and(|panes| panes.divider_at(area_x, area_y).is_some());
         if !on_divider && self.pane_at_pointer(position, metrics).is_some() {
-            self.refresh_terminal_pointer_cursor();
+            self.refresh_pointer_cursor();
         }
     }
 
@@ -1566,7 +1578,7 @@ impl App {
         // The agent view follows the tab: each tab has its own.
         self.bind_agent_view_to_active_tab();
         self.reset_cursor_blink();
-        self.refresh_terminal_pointer_cursor();
+        self.refresh_pointer_cursor();
         self.request_redraw(RedrawReason::Focus);
     }
 

@@ -298,7 +298,7 @@ impl App {
         }
         self.tab_drag_pointer.shown = wanted;
         if wanted == DragPointer::Usual {
-            self.refresh_terminal_pointer_cursor();
+            self.refresh_pointer_cursor();
         }
     }
 

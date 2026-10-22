@@ -1139,3 +1139,22 @@ fn ctrl_alt_shift_t_renames_the_active_tab() {
     let active = app.tabs.as_ref().unwrap().active_tab_id();
     assert_eq!(app.tab_rename.as_ref().map(|rename| rename.tab_id), active);
 }
+
+#[test]
+fn a_modal_layer_gives_the_pointer_an_arrow_unless_a_drag_owns_it() {
+    use winit::window::CursorIcon;
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.last_cursor_pos = Some((40.0, 40.0));
+    app.command_palette.open();
+    assert!(app.top_modal_layer().is_some());
+    // The terminal's own shape beneath, usually an I-beam, never shows here.
+    assert_eq!(app.pointer_icon(), Some(CursorIcon::Default));
+
+    // A drag still owns the pointer's shape over a modal layer.
+    app.tab_dragging = Some(TabDrag {
+        tab_id: 42,
+        grab: None,
+        live: None,
+    });
+    assert_eq!(app.pointer_icon(), None);
+}

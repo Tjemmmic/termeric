@@ -206,7 +206,7 @@ impl App {
             }
             TerminalEvent::PointerShapeChanged => {
                 if self.active_terminal_origin() == Some(origin) {
-                    self.refresh_terminal_pointer_cursor();
+                    self.refresh_pointer_cursor();
                 }
             }
             TerminalEvent::PtyWrite(_) => {

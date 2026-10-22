@@ -246,12 +246,12 @@ impl App {
 
             WindowEvent::HoveredFileCancelled => {
                 self.file_drop_hovered = false;
-                self.refresh_terminal_pointer_cursor();
+                self.refresh_pointer_cursor();
             }
 
             WindowEvent::DroppedFile(path) => {
                 self.file_drop_hovered = false;
-                self.refresh_terminal_pointer_cursor();
+                self.refresh_pointer_cursor();
                 self.handle_dropped_path(&path);
             }
 
