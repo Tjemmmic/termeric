@@ -699,13 +699,11 @@ fn growth_indicators_sit_beside_their_row_of_the_focused_split_pane() {
     assert_eq!(indicators.len(), 1);
     let marker = indicators[0].cell;
     assert_eq!(marker, placement.row_marker(rect, false, 2, cell));
-    // On the pane's third row, ending inside its left edge.
+    // On the pane's third row, in the margin up to where its text begins.
     let pane = placement.pane_bounds(rect, false);
     assert_eq!(marker.y, pane.y + 2.0 * cell.1);
-    assert!(
-        marker.x < pane.x && pane.x < marker.right(),
-        "{marker:?} {pane:?}"
-    );
+    assert!(marker.x < pane.x, "{marker:?} {pane:?}");
+    assert_eq!(marker.right(), pane.x, "never over the text");
     assert_eq!(indicators[0].opacity, 1.0);
 
     app.config.harvest.show_indicators = false;

@@ -18,13 +18,30 @@ impl Renderer {
     ///
     /// Each indicator is a single character (seedling, sprout, flower, etc.)
     /// in the cell its pane's placement gives it, colored by growth phase.
+    /// Each growth marker, as large as its margin allows and right against
+    /// the text it marks, never over it. A margin too narrow to show a plant
+    /// shows none.
     pub(super) fn build_harvest_indicators(&mut self, indicators: &[IndicatorRenderInfo]) {
         for indicator in indicators {
+            let marker = indicator.cell;
+            let plant = indicator.phase.character().to_string();
+            let mut size = marker.height * 0.75;
+            let mut width = self.ui_text_width(&plant, size);
+            if width > marker.width && width > 0.0 {
+                size *= marker.width / width;
+                width = marker.width;
+            }
+            if size < self.px(5.0) {
+                continue;
+            }
             let color = scale_alpha(growth_color(&self.ui, indicator.phase), indicator.opacity);
-            self.text_pipeline.push_char(
-                indicator.phase.character(),
-                indicator.cell.x,
-                indicator.cell.y,
+            self.push_ui_label(
+                &plant,
+                marker.right() - width,
+                marker.y,
+                marker.height,
+                width,
+                size,
                 color,
             );
         }

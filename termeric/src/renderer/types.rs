@@ -304,11 +304,11 @@ impl PanePlacement {
         }
     }
 
-    /// The cell where Harvest marks row `row` of the pane laid out at
-    /// `rect`: just left of the pane's grid, in the margin there (the
-    /// padding at the terminal area's left edge, a divider elsewhere). A
-    /// margin narrower than a cell pushes the marker over the pane's own
-    /// first column rather than onto its neighbour.
+    /// The box where Harvest marks row `row` of the pane laid out at
+    /// `rect`: the margin just left of the pane's grid (the padding at the
+    /// terminal area's left edge, a divider elsewhere), one row tall. It ends
+    /// where the text begins, so a marker never covers a character; a narrow
+    /// margin holds a small one.
     pub fn row_marker(self, rect: Bounds, lone: bool, row: usize, cell_size: (f32, f32)) -> Bounds {
         let pane = self.pane_bounds(rect, lone);
         let margin = if lone || rect.x <= 0.0 {
@@ -317,9 +317,9 @@ impl PanePlacement {
             crate::panes::PANE_DIVIDER_THICKNESS
         };
         Bounds::new(
-            pane.x - cell_size.0.min(margin),
+            pane.x - margin,
             pane.y + row as f32 * cell_size.1,
-            cell_size.0,
+            margin,
             cell_size.1,
         )
     }
@@ -456,7 +456,7 @@ pub struct HarvestRenderInfo {
 /// A single growth indicator beside the row its command started on
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct IndicatorRenderInfo {
-    /// The cell it is drawn in, from [`PanePlacement::row_marker`].
+    /// The margin it is drawn in, from [`PanePlacement::row_marker`].
     pub cell: Bounds,
     /// Its phase, which picks its character and color.
     pub phase: crate::harvest::GrowthPhase,
@@ -563,23 +563,29 @@ mod tests {
         let left = Bounds::new(0.0, 0.0, 398.0, 600.0);
         let right = Bounds::new(402.0, 0.0, 386.0, 290.0);
         let lower_right = Bounds::new(402.0, 294.0, 386.0, 306.0);
-        // A lone pane's marker sits in the left padding, a cell left of its
-        // grid, which starts one padding below the tab bar.
+        // A lone pane's marker fills its left padding up to where its grid
+        // begins, one padding below the tab bar.
         assert_eq!(
             placement.row_marker(left, true, 3, cell),
-            Bounds::new(42.0, 102.0, 10.0, 20.0)
+            Bounds::new(40.0, 102.0, 12.0, 20.0)
         );
         // Split panes are marked beside their own rows: at the area's left
-        // edge in the padding, elsewhere as far into the divider as it
-        // reaches.
+        // edge in the padding, elsewhere in the divider, never over text.
         assert_eq!(
             placement.row_marker(left, false, 3, cell),
-            Bounds::new(42.0, 90.0, 10.0, 20.0)
+            Bounds::new(40.0, 90.0, 12.0, 20.0)
         );
         assert_eq!(
             placement.row_marker(lower_right, false, 2, cell),
-            Bounds::new(450.0, 364.0, 10.0, 20.0)
+            Bounds::new(450.0, 364.0, 4.0, 20.0)
         );
+        for (rect, lone) in [(left, true), (left, false), (lower_right, false)] {
+            assert_eq!(
+                placement.row_marker(rect, lone, 0, cell).right(),
+                placement.pane_bounds(rect, lone).x,
+                "ends where the text begins"
+            );
+        }
         assert_eq!(
             placement.row_marker(right, false, 0, cell).y,
             placement.pane_bounds(right, false).y

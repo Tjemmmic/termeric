@@ -279,7 +279,9 @@ save_scrollback = true
 # integration, and its history isn't kept when you quit.
 [harvest]
 enabled = false
-show_indicators = true    # the growth indicators beside running commands
+# The growth indicators beside running commands sit in the left padding
+# ([window] padding), never over text: more padding shows them larger.
+show_indicators = true
 max_history = 100         # commands kept, 1 to 10000
 
 # Coding agents (experimental). One switch turns on everything agent-related:
