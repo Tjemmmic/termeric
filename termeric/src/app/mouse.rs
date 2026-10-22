@@ -807,11 +807,23 @@ impl App {
                 | ModalLayer::ContextPicker
                 | ModalLayer::SproutMenu
                 | ModalLayer::Cellar
-                | ModalLayer::DomainPicker
-                | ModalLayer::UnicodePicker
-                | ModalLayer::CommandPalette
                 | ModalLayer::ShortcutsPanel,
             ) => return,
+            Some(
+                ModalLayer::DomainPicker | ModalLayer::UnicodePicker | ModalLayer::CommandPalette,
+            ) => {
+                if let Some(modal) = self.open_palette_modal() {
+                    let info = self.palette_owner(modal).build_info();
+                    let layout = self.palette_layout(&info);
+                    self.palette_owner_mut(modal).palette_mut().hover_at(
+                        position.0 as f32,
+                        position.1 as f32,
+                        &layout,
+                    );
+                    self.request_redraw(RedrawReason::PointerInput);
+                }
+                return;
+            }
             None => {}
         }
 

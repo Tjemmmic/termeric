@@ -204,6 +204,8 @@ pub struct CommandPalette {
     entries: Vec<PaletteEntry>,
     /// Currently selected entry index
     selected: usize,
+    /// The entry under the pointer, so moving onto another one selects it.
+    hovered: Option<usize>,
     /// Scroll offset for long lists
     scroll_offset: usize,
     /// Recently used command IDs (most recent first)
@@ -228,6 +230,7 @@ impl CommandPalette {
             registry: Vec::new(),
             entries: Vec::new(),
             selected: 0,
+            hovered: None,
             scroll_offset: 0,
             recently_used: Vec::new(),
             max_visible: 9,
@@ -514,6 +517,22 @@ impl CommandPalette {
         }
     }
 
+    /// The pointer moved to `x, y`. As in a menu, an entry it moves onto
+    /// becomes the selected one, so the pointer and the keyboard share one
+    /// current row; resting on it leaves the keyboard free to move on.
+    pub fn hover_at(&mut self, x: f32, y: f32, layout: &ListDialogLayout) {
+        let entry = layout
+            .row_at(x, y)
+            .map(|row| self.scroll_offset + row)
+            .filter(|index| *index < self.entries.len());
+        if entry != self.hovered
+            && let Some(index) = entry
+        {
+            self.selected = index;
+        }
+        self.hovered = entry;
+    }
+
     /// Resolve a click against the modal. Returns a result when it should
     /// drive a state change in the app:
     /// - click outside the panel → `Cancelled` (caller should close)
@@ -663,6 +682,7 @@ impl CommandPalette {
     /// Update filtered entries based on current input
     fn update_entries(&mut self) {
         self.entries.clear();
+        self.hovered = None;
 
         if self.input.text().is_empty() {
             // Show all commands, recently used first
@@ -1496,6 +1516,42 @@ mod tests {
         assert!(!info.entries.is_empty());
         assert_eq!(info.total_count, palette.registry.len());
         assert_eq!(info.selected, 0);
+    }
+
+    #[test]
+    fn the_pointer_selects_the_entry_it_moves_onto() {
+        use crate::ui::list_dialog::ListDialogLayout;
+        let mut palette = test_palette();
+        palette.open();
+        let info = palette.build_info();
+        let layout = ListDialogLayout::calculate(
+            PALETTE_DIALOG,
+            1000.0,
+            800.0,
+            10.0,
+            20.0,
+            1.0,
+            info.total_count,
+        );
+        let centre = |row: usize| {
+            let bounds = layout.row(row);
+            (
+                bounds.x + bounds.width / 2.0,
+                bounds.y + bounds.height / 2.0,
+            )
+        };
+        assert_eq!(palette.build_info().selected, 0);
+        let (x, y) = centre(2);
+        palette.hover_at(x, y, &layout);
+        assert_eq!(palette.build_info().selected, 2);
+        // The keyboard moves on while the pointer rests on the same entry.
+        palette.select_next();
+        palette.hover_at(x, y, &layout);
+        assert_eq!(palette.build_info().selected, 3);
+        // Moving onto another entry selects it again.
+        let (x, y) = centre(1);
+        palette.hover_at(x, y, &layout);
+        assert_eq!(palette.build_info().selected, 1);
     }
 
     #[test]
