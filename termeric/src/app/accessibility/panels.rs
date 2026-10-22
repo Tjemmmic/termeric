@@ -29,13 +29,16 @@ impl App {
         }
         if matches!(
             request.target_node,
-            SETTINGS_CLOSE | SETTINGS_SAVE | SETTINGS_BACK
+            SETTINGS_CLOSE | SETTINGS_SAVE | SETTINGS_DISCARD | SETTINGS_BACK
         ) {
             match request.action {
                 Action::Focus => self.accessibility.focus_override = Some(request.target_node),
                 Action::Click if request.target_node == SETTINGS_CLOSE => {
                     self.settings_panel.close();
                     self.accessibility.focus_override = None;
+                }
+                Action::Click if request.target_node == SETTINGS_DISCARD => {
+                    self.apply_settings_action(crate::ui::settings::SettingsAction::DiscardChanges);
                 }
                 Action::Click if request.target_node == SETTINGS_BACK => {
                     // Only the way back that is shown answers.
@@ -466,7 +469,19 @@ impl App {
             nodes.push((SETTINGS_BACK, back));
             dialog_children.push(SETTINGS_BACK);
         }
-        dialog_children.extend([SETTINGS_LIST, SETTINGS_SAVE]);
+        dialog_children.push(SETTINGS_LIST);
+        // Discard… exists only while there is something to discard.
+        if info.unsaved {
+            let mut discard = Node::new(Role::Button);
+            discard.set_label("Discard unsaved changes");
+            discard.set_description("Asks first, then goes back to the saved file");
+            discard.set_bounds(bounds_rect(layout.discard_button));
+            discard.add_action(Action::Click);
+            discard.add_action(Action::Focus);
+            nodes.push((SETTINGS_DISCARD, discard));
+            dialog_children.push(SETTINGS_DISCARD);
+        }
+        dialog_children.push(SETTINGS_SAVE);
         if info.entries.is_empty() {
             let mut empty = Node::new(Role::Status);
             empty.set_label("No matching settings");

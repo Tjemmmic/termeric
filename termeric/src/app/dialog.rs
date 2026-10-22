@@ -222,6 +222,7 @@ impl App {
                     || self.handle_agent_hook_choice(request_id, &id)
                     || self.handle_revert_choice(request_id, &id)
                     || self.handle_config_reset_choice(request_id, &id)
+                    || self.handle_discard_settings_choice(request_id, &id)
                     || self.handle_shortcut_reassign_choice(request_id, &id)
                     || self.handle_workspace_choice(request_id, &id)
                     || self.handle_file_upload_choice(request_id, &id);

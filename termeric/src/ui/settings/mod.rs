@@ -98,6 +98,8 @@ pub struct SettingsModalLayout {
     pub footer_y: f32,
     pub footer_height: f32,
     pub save_button: Bounds,
+    /// Left of Save, shown only while there are unsaved changes.
+    pub discard_button: Bounds,
     pub cell_width: f32,
     pub cell_height: f32,
 }
@@ -191,6 +193,7 @@ impl SettingsModalLayout {
         let rows_that_fit = (list_space / row_height).floor().max(1.0) as usize;
         let save_height = cell_height * 1.6;
         let save_width = cell_width * 9.0;
+        let discard_width = cell_width * 11.0;
         // Centred on the heading's line, the height of the close button.
         let back_button = Bounds::new(
             content_x.round(),
@@ -222,6 +225,12 @@ impl SettingsModalLayout {
                 x: panel_x + panel_width - padding - save_width,
                 y: footer_y + (footer_height - save_height) / 2.0,
                 width: save_width,
+                height: save_height,
+            },
+            discard_button: Bounds {
+                x: panel_x + panel_width - padding - save_width - padding * 0.5 - discard_width,
+                y: footer_y + (footer_height - save_height) / 2.0,
+                width: discard_width,
                 height: save_height,
             },
             cell_width,
@@ -941,6 +950,9 @@ pub enum SettingsAction {
     OpenKeyboardShortcuts,
     /// Save current config
     SaveConfig,
+    /// Go back to the saved configuration, after asking, when there are
+    /// unsaved changes.
+    DiscardChanges,
     /// No action
     None,
 }
@@ -950,6 +962,9 @@ pub enum SettingsAction {
 pub enum SettingsControl {
     Close,
     Save,
+    /// Throws away unsaved changes, after asking; shown only while there
+    /// are any.
+    Discard,
     /// The way back from a sub-page.
     Back,
     Page(SettingsPage),
@@ -2591,6 +2606,11 @@ impl SettingsPanel {
         }
         if layout.save_button.contains(x, y) {
             return SettingsAction::SaveConfig;
+        }
+        // The application ignores it while nothing is unsaved, when the
+        // button isn't shown.
+        if layout.discard_button.contains(x, y) {
+            return SettingsAction::DiscardChanges;
         }
         if self.shows_back(config) && layout.back_button.contains(x, y) {
             self.leave_sub_page();

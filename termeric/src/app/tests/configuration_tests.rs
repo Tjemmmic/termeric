@@ -1320,3 +1320,41 @@ fn settings_lists_the_themes_directory_when_it_opens_not_as_it_draws() {
     assert!(!before_opening);
     assert!(after_opening);
 }
+
+#[test]
+fn discarding_settings_changes_asks_first_and_restores_the_file() {
+    let (_directory, _path, mut app) = app_with_config_file("[bell]\nvisual = true\n");
+    // Nothing unsaved: nothing to discard, so nothing asks.
+    app.apply_settings_action(SettingsAction::DiscardChanges);
+    assert!(!app.dialog.is_awaiting_current());
+
+    app.apply_settings_action(SettingsAction::SetVisualBell(false));
+    assert!(app.config_has_unsaved_changes());
+    app.apply_settings_action(SettingsAction::DiscardChanges);
+    assert_eq!(app.dialog.title(), "Discard unsaved changes?");
+    // Cancel keeps the change.
+    app.answer_dialog(crate::ui::dialog::CANCEL);
+    assert!(!app.config.bell.visual);
+    assert!(app.config_has_unsaved_changes());
+
+    app.apply_settings_action(SettingsAction::DiscardChanges);
+    app.answer_dialog("discard-settings");
+    assert!(app.config.bell.visual, "back to what the file says");
+    assert!(!app.config_has_unsaved_changes());
+}
+
+#[test]
+fn reloading_the_configuration_asks_only_when_it_would_discard_changes() {
+    let (_directory, path, mut app) = app_with_config_file("[bell]\nvisual = true\n");
+    // Edited by hand with nothing unsaved in Settings: reload at once.
+    std::fs::write(&path, "[bell]\nvisual = false\n").unwrap();
+    app.handle_action(Action::ReloadConfig);
+    assert!(!app.dialog.is_awaiting_current());
+    assert!(!app.config.bell.visual);
+
+    app.apply_settings_action(SettingsAction::SetVisualBell(true));
+    app.handle_action(Action::ReloadConfig);
+    assert_eq!(app.dialog.title(), "Discard unsaved changes?");
+    app.answer_dialog("discard-settings");
+    assert!(!app.config.bell.visual);
+}

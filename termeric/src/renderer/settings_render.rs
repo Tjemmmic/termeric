@@ -355,7 +355,7 @@ impl Renderer {
             fade(self.ui.menu_text_dim, 0.6),
         );
 
-        // ── Footer: save status and Save ──
+        // ── Footer: save status, Discard… while unsaved, and Save ──
         let footer_y = layout.footer_y.round();
         self.rect_pipeline.push_rect(
             panel_x + line,
@@ -374,7 +374,12 @@ impl Renderer {
             panel_x + padding,
             footer_y,
             layout.footer_height,
-            layout.save_button.x - panel_x - padding * 2.0,
+            if info.unsaved {
+                layout.discard_button.x
+            } else {
+                layout.save_button.x
+            } - panel_x
+                - padding * 2.0,
             size * 0.9,
             if info.unsaved {
                 fade(self.ui.palette_accent, 1.0)
@@ -382,6 +387,18 @@ impl Renderer {
                 dim
             },
         );
+        if info.unsaved {
+            self.draw_button(
+                layout.discard_button,
+                "Discard…",
+                ButtonRole::Destructive,
+                ButtonState {
+                    hovered: info.hovered_control == Some(SettingsControl::Discard),
+                    ..ButtonState::default()
+                },
+                anim,
+            );
+        }
         self.draw_button(
             layout.save_button,
             "Save",

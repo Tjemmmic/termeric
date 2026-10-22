@@ -873,6 +873,10 @@ impl App {
                     Some(SettingsControl::Close)
                 } else if layout.save_button.contains(px, py) {
                     Some(SettingsControl::Save)
+                } else if self.config_has_unsaved_changes()
+                    && layout.discard_button.contains(px, py)
+                {
+                    Some(SettingsControl::Discard)
                 } else if self.settings_panel.shows_back(&self.config)
                     && layout.back_button.contains(px, py)
                 {

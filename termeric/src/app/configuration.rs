@@ -5,6 +5,7 @@ use crate::input::keybindings::{BindableAction, KeyChord};
 use crate::ui::dialog::{ButtonRole, DialogBlock, DialogSpec};
 
 const CONFIG_RESET_CHOICE: &str = "config-reset";
+const DISCARD_SETTINGS_CHOICE: &str = "discard-settings";
 const SHORTCUT_REASSIGN_CHOICE: &str = "shortcut-reassign";
 
 impl App {
@@ -31,6 +32,52 @@ impl App {
             ButtonRole::Destructive,
         ));
         self.dialog_flow = Some(DialogFlow::ConfigReset { request_id });
+    }
+
+    /// Reload the configuration file, first asking when that would throw
+    /// away changes made in Settings and not saved.
+    pub(super) fn reload_config_or_confirm_discard(&mut self) {
+        if self.config_has_unsaved_changes() {
+            self.confirm_discard_settings();
+        } else {
+            self.reload_config_from_disk();
+        }
+    }
+
+    /// Ask before unsaved changes go; nothing to ask while there are none.
+    pub(super) fn confirm_discard_settings(&mut self) {
+        if !self.config_has_unsaved_changes() {
+            return;
+        }
+        let request_id = self.dialog.show(DialogSpec::confirm(
+            "Discard unsaved changes?",
+            vec![DialogBlock::text(
+                "Settings go back to what the configuration file says, and the changes made since it was last saved are lost.",
+            )],
+            DISCARD_SETTINGS_CHOICE,
+            "Discard",
+            ButtonRole::Destructive,
+        ));
+        self.dialog_flow = Some(DialogFlow::DiscardSettings { request_id });
+    }
+
+    /// Answer the discard confirmation. Returns whether the answer was its.
+    pub(super) fn handle_discard_settings_choice(
+        &mut self,
+        request_id: u64,
+        choice_id: &str,
+    ) -> bool {
+        let pending = matches!(
+            self.dialog_flow,
+            Some(DialogFlow::DiscardSettings { request_id: pending }) if pending == request_id
+        );
+        if !pending || choice_id != DISCARD_SETTINGS_CHOICE {
+            return false;
+        }
+        self.dialog.dismiss(request_id);
+        self.dialog_flow = None;
+        self.reload_config_from_disk();
+        true
     }
 
     /// Answer the reset confirmation. Returns whether the answer was its.
@@ -775,6 +822,10 @@ impl App {
             }
             SettingsAction::SetHighContrast(preference) => {
                 config.accessibility.high_contrast = preference;
+            }
+            SettingsAction::DiscardChanges => {
+                self.confirm_discard_settings();
+                return;
             }
             SettingsAction::SaveConfig => {
                 match self.save_config() {

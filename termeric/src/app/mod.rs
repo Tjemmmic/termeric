@@ -484,6 +484,8 @@ enum DialogFlow {
     FileUpload(PendingFileUpload),
     /// Reset Configuration awaiting confirmation.
     ConfigReset { request_id: u64 },
+    /// Discarding unsaved Settings changes awaiting confirmation.
+    DiscardSettings { request_id: u64 },
     /// A recorded shortcut that another action uses, awaiting confirmation
     /// before `holder` loses it to `action`.
     ShortcutReassign {
@@ -2743,7 +2745,7 @@ impl App {
                 self.request_redraw(RedrawReason::Action);
             }
             Action::SaveConfig => self.save_config_with_toast(),
-            Action::ReloadConfig => self.reload_config_from_disk(),
+            Action::ReloadConfig => self.reload_config_or_confirm_discard(),
             Action::ResetConfig => self.confirm_config_reset(),
             Action::ToggleWorkspaceManager => self.toggle_workspace_manager(),
             Action::SaveWorkspace => self.force_save_workspace(workspaces::WorkspaceSave::Update),

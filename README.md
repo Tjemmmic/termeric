@@ -124,7 +124,7 @@ Uninstalling never removes your settings or saved data. They live in two folders
 ## Getting started
 
 - **Ctrl+Shift+P** opens the command palette, which lists every command with its shortcut. If you remember one key, make it this one.
-- **Ctrl+,** opens Settings. Changes apply as you make them; **Ctrl+S** saves them to `~/.config/termeric/config.toml`.
+- **Ctrl+,** opens Settings. Changes apply as you make them and stay when you close it; **Ctrl+S** saves them to `~/.config/termeric/config.toml`, and **Discard…** goes back to the saved file.
 - **Change Theme…** in the palette previews each theme as you move through the list.
 - **Keyboard Shortcuts** in the palette lists and rebinds every shortcut.
 - **F6** moves keyboard focus to the tab bar and toolbar, and **Escape** returns it to the terminal.
