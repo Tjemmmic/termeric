@@ -491,6 +491,23 @@ impl CommandsPanel {
         self.hovered = control;
     }
 
+    /// The control under the pointer. As in a menu, a command row the
+    /// pointer moves onto takes the keyboard focus, so the pointer and the
+    /// keyboard share one current row rather than highlighting two.
+    pub fn hover(
+        &mut self,
+        control: Option<CommandControl>,
+        commands: &[CustomCommand],
+        layout: CommandsPanelLayout,
+    ) {
+        if control != self.hovered
+            && let Some(index) = control.and_then(CommandControl::row)
+        {
+            self.focus_browse_control(CommandControl::Run(index), commands, layout);
+        }
+        self.set_hover(control);
+    }
+
     pub fn layout(
         &self,
         width: f32,
@@ -767,6 +784,29 @@ impl CommandsPanel {
 mod tests {
     use super::*;
     use unicode_segmentation::UnicodeSegmentation;
+
+    #[test]
+    fn the_pointer_moves_focus_onto_the_command_row_it_enters() {
+        let commands: Vec<_> = (0..3)
+            .map(|index| CustomCommand {
+                name: format!("Command {index}"),
+                command: "inert".into(),
+                alias: None,
+            })
+            .collect();
+        let mut panel = CommandsPanel::new();
+        panel.set_reduced_motion(true);
+        panel.toggle();
+        let layout = panel.layout(800.0, 600.0, 0.0, 8.0, 16.0, commands.len());
+        // Over a row's Delete button counts as the row.
+        panel.hover(Some(CommandControl::Delete(2)), &commands, layout);
+        assert_eq!(panel.browse_focus(&commands), Some(CommandControl::Run(2)));
+        panel.hover(Some(CommandControl::Run(1)), &commands, layout);
+        assert_eq!(panel.browse_focus(&commands), Some(CommandControl::Run(1)));
+        // Over a header control the focus stays on its row.
+        panel.hover(Some(CommandControl::Close), &commands, layout);
+        assert_eq!(panel.browse_focus(&commands), Some(CommandControl::Run(1)));
+    }
 
     #[test]
     fn command_browse_navigation_reveals_and_revalidates_before_activation() {

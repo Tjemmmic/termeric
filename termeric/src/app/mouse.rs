@@ -791,7 +791,8 @@ impl App {
                 let px = position.0 as f32;
                 let py = position.1 as f32;
                 let layout = self.commands_panel_layout();
-                self.commands_panel.set_hover(layout.control_at(px, py));
+                self.commands_panel
+                    .hover(layout.control_at(px, py), &self.config.commands, layout);
                 self.request_redraw(RedrawReason::PointerInput);
                 return;
             }

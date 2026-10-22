@@ -624,8 +624,9 @@ impl Renderer {
             let absolute_index = info.scroll_offset + visible_index;
             let entry = layout.entry(visible_index);
             let row = entry.row;
-            let active =
-                info.hovered_index == Some(absolute_index) || info.selected_index == absolute_index;
+            // The pointer selects the row it moves onto, so the selection
+            // is the one current row.
+            let active = info.selected_index == absolute_index;
             if active {
                 self.rect_pipeline.push_rounded_rect(
                     row.x + padding_x * 0.5,

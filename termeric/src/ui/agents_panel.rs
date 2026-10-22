@@ -405,7 +405,16 @@ impl AgentsPanel {
         self.animation.set_reduced_motion(reduced_motion);
     }
 
+    /// The control under the pointer. As in a menu, an agent row the pointer
+    /// moves onto takes the keyboard focus, so the pointer and the keyboard
+    /// share one current row rather than highlighting two.
     pub fn set_hover(&mut self, control: Option<AgentsControl>) {
+        if control != self.hovered
+            && let Some(AgentsControl::Agent(index)) = control
+            && let Some(identity) = self.shown_agent(index)
+        {
+            self.focus = Some(Focus::Agent(identity));
+        }
         self.hovered = control;
     }
 
@@ -489,6 +498,8 @@ impl AgentsPanel {
             .focus
             .and_then(|focus| controls.iter().position(|control| *control == focus));
         self.focus = Some(controls[step.target(current, controls.len())]);
+        // The keyboard takes over from the pointer until it moves again.
+        self.hovered = None;
         self.reveal_focus(layout);
     }
 
@@ -673,6 +684,27 @@ mod tests {
         let info = panel.build_info(vec![row(1, "a")], None);
         assert_eq!(info.focus, Some(AgentsControl::Agent(0)));
         assert_eq!(panel.activate(layout), AgentsPanelAction::Show(0));
+    }
+
+    #[test]
+    fn the_pointer_moves_focus_onto_the_agent_row_it_enters() {
+        let mut panel = AgentsPanel::new();
+        let rows = vec![row(1, "a"), row(2, "b"), row(3, "c")];
+        panel.toggle(&rows);
+        assert_eq!(
+            panel.build_info(rows.clone(), None).focus,
+            Some(AgentsControl::Agent(0))
+        );
+        panel.set_hover(Some(AgentsControl::Agent(2)));
+        assert_eq!(
+            panel.build_info(rows.clone(), None).focus,
+            Some(AgentsControl::Agent(2))
+        );
+        // The keyboard takes over: one current row, not the hovered one too.
+        panel.navigate(FocusStep::Previous, layout(3, None));
+        let info = panel.build_info(rows, None);
+        assert_eq!(info.focus, Some(AgentsControl::Agent(1)));
+        assert_eq!(info.hovered, None);
     }
 
     #[test]

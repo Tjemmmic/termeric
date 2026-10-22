@@ -66,8 +66,6 @@ pub struct WorkspacePanelInfo {
     pub animation: f32,
     /// The workspaces or snapshots to display
     pub entries: Vec<WorkspaceEntry>,
-    /// Mouse-hovered entry index (None if not hovering any entry)
-    pub hovered_index: Option<usize>,
     /// Header or footer control under the pointer.
     pub hovered_control: Option<WorkspacePanelControl>,
     /// Inline rename text, when active.
@@ -523,7 +521,6 @@ impl WorkspacePanel {
         WorkspacePanelInfo {
             animation: self.animation_progress(),
             entries: self.entries.clone(),
-            hovered_index: self.hovered_index,
             hovered_control: self.hovered_control,
             rename_text: self
                 .rename_target
@@ -590,8 +587,15 @@ impl WorkspacePanel {
         }
     }
 
-    /// Update hover state from mouse position
+    /// Update hover state from mouse position. As in a menu, a row the
+    /// pointer moves onto becomes the selected row, so the pointer and the
+    /// keyboard share one current row rather than highlighting two.
     pub fn set_hover(&mut self, index: Option<usize>, control: Option<WorkspacePanelControl>) {
+        if index != self.hovered_index
+            && let Some(index) = index
+        {
+            self.selected_index = index;
+        }
         self.hovered_index = index;
         self.hovered_control = control;
     }
@@ -703,12 +707,15 @@ impl WorkspacePanel {
             };
         }
         match key {
+            // The keyboard takes over from the pointer until it moves again.
             WorkspacePanelKey::Up => {
+                self.hovered_index = None;
                 self.selected_index = self.selected_index.saturating_sub(1);
                 self.ensure_selection_visible();
                 WorkspacePanelAction::None
             }
             WorkspacePanelKey::Down => {
+                self.hovered_index = None;
                 if self.selected_index + 1 < self.entries.len() {
                     self.selected_index += 1;
                     self.ensure_selection_visible();
@@ -795,6 +802,35 @@ mod tests {
         panel.workspaces = false;
         panel.begin_rename("workspace-1");
         assert!(!panel.is_renaming());
+    }
+
+    #[test]
+    fn the_pointer_and_the_keyboard_share_one_current_row() {
+        let mut panel = WorkspacePanel::new();
+        panel.set_test_entries(
+            (0..4)
+                .map(|index| WorkspaceEntry {
+                    id: format!("workspace-{index}"),
+                    display_name: format!("Workspace {index}"),
+                    subtitle: String::new(),
+                    last_modified: String::new(),
+                })
+                .collect(),
+            true,
+        );
+        assert_eq!(panel.build_info().selected_index, 0);
+        // Moving onto a row selects it, as in a menu.
+        panel.set_hover(Some(2), None);
+        assert_eq!(panel.build_info().selected_index, 2);
+        // The keyboard carries on from there and takes over the hover.
+        panel.handle_key(WorkspacePanelKey::Up);
+        assert_eq!(panel.build_info().selected_index, 1);
+        assert_eq!(panel.hovered_index, None);
+        // Resting on a row does not pull the selection back; moving does.
+        panel.set_hover(None, None);
+        assert_eq!(panel.build_info().selected_index, 1);
+        panel.set_hover(Some(3), None);
+        assert_eq!(panel.build_info().selected_index, 3);
     }
 
     #[test]
