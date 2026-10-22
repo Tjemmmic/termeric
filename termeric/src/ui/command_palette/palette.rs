@@ -173,6 +173,25 @@ pub struct PaletteEntryInfo {
     pub match_positions: Vec<usize>,
 }
 
+/// The category of features that work but may change between previews. It
+/// is a status rather than a grouping, so its rows show it even where
+/// categories are hidden.
+pub const EXPERIMENTAL_CATEGORY: &str = "Experimental";
+
+impl PaletteEntryInfo {
+    /// The dim text after the title: the shortcut, else the category where
+    /// the list shows categories or the row is experimental.
+    pub fn detail(&self, show_category: bool) -> Option<&str> {
+        self.shortcut
+            .as_deref()
+            .or_else(|| {
+                (show_category || self.category == EXPERIMENTAL_CATEGORY)
+                    .then_some(self.category.as_str())
+            })
+            .filter(|detail| !detail.is_empty())
+    }
+}
+
 /// The command palette state
 pub struct CommandPalette {
     /// Animation state
@@ -778,7 +797,7 @@ impl CoreCategory {
             Self::Tabs => "Tabs",
             Self::Panes => "Panes",
             Self::Appearance => "Appearance",
-            Self::Experimental => "Experimental",
+            Self::Experimental => EXPERIMENTAL_CATEGORY,
         }
     }
 }
@@ -1158,11 +1177,34 @@ mod tests {
             .expect("live domains are available without being turned on");
         assert_eq!(attach.category, "Experimental");
 
+        // As the window's command palette is set up: categories hidden.
         let mut palette = CommandPalette::new();
+        palette.set_show_category(false);
         palette.replace_core_commands(commands);
         palette.open();
         palette.insert_query_text("experimental");
         let info = palette.build_info();
+        let attach = info
+            .entries
+            .iter()
+            .find(|entry| entry.title == "Attach Live Domain…")
+            .expect("searching for experimental finds it");
+        // The label shows even though grouping labels are hidden.
+        assert_eq!(
+            attach.detail(info.show_category),
+            Some(EXPERIMENTAL_CATEGORY)
+        );
+        let mut unfiltered = CommandPalette::new();
+        unfiltered.set_show_category(false);
+        unfiltered.replace_core_commands(core_commands(false, false, &ShortcutRegistry::new()));
+        unfiltered.open();
+        let unlabelled = unfiltered
+            .build_info()
+            .entries
+            .into_iter()
+            .find(|entry| entry.shortcut.is_none() && entry.category != EXPERIMENTAL_CATEGORY)
+            .expect("an ordinary command without a shortcut");
+        assert_eq!(unlabelled.detail(false), None);
         assert!(
             info.entries
                 .iter()

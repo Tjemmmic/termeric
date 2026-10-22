@@ -113,11 +113,7 @@ impl Renderer {
             }
             let text = fade(self.ui.palette_text, if selected { 1.0 } else { 0.88 });
             let dim = fade(self.ui.menu_text_dim, 1.0);
-            let detail = entry
-                .shortcut
-                .clone()
-                .or_else(|| info.show_category.then(|| entry.category.clone()))
-                .filter(|detail| !detail.is_empty());
+            let detail = entry.detail(info.show_category).map(str::to_owned);
             let detail_width = match detail {
                 Some(detail) => {
                     let width = self.ui_text_width(&detail, size);
