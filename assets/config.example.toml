@@ -158,6 +158,8 @@ share_process = true
 # A static PNG or JPEG behind the terminal text, at most 16 MiB and 8192
 # pixels a side. A relative path is resolved beside this file. Termeric
 # reloads the image when the file changes.
+# Settings → Appearance → Background Image chooses one with your desktop's file
+# picker. A relative path is read from this file's folder.
 [window.background_image]
 # path = "/path/to/background.png"
 opacity = 0.20            # 0.0 to 1.0, independent of window.opacity

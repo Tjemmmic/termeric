@@ -882,6 +882,11 @@ pub enum SettingsAction {
     SetPadding(u32),
     /// Change window opacity
     SetOpacity(f32),
+    /// Choose a background image with the desktop's file chooser, or a
+    /// typed path where there is none.
+    ChooseBackgroundImage,
+    /// Use this background image, or none.
+    SetBackgroundImagePath(Option<std::path::PathBuf>),
     /// Change background-image alpha over the theme background.
     SetBackgroundImageOpacity(f32),
     /// Change background-image mapping within the terminal viewport.
@@ -1483,9 +1488,8 @@ impl SettingsPanel {
         }
 
         // Window
-        result.push((
-            SettingsSection::Window,
-            vec![
+        {
+            let mut items = vec![
                 SettingItem {
                     label: "Padding".into(),
                     value: format!("{}", config.window.padding),
@@ -1511,11 +1515,30 @@ impl SettingsPanel {
                 SettingItem {
                     label: "Background Image".into(),
                     value: config.window.background_image.path.as_ref().map_or_else(
-                        || "Off (set path in config.toml)".into(),
-                        |path| path.display().to_string(),
+                        || "None".into(),
+                        |path| {
+                            path.file_name()
+                                .unwrap_or(path.as_os_str())
+                                .to_string_lossy()
+                                .into_owned()
+                        },
                     ),
-                    kind: SettingKind::ReadOnly,
+                    kind: SettingKind::Action {
+                        action: SettingsAction::ChooseBackgroundImage,
+                    },
                 },
+            ];
+            if config.window.background_image.path.is_some() {
+                items.push(SettingItem {
+                    label: "Remove Background Image".into(),
+                    value: String::new(),
+                    kind: SettingKind::Button {
+                        action: SettingsAction::SetBackgroundImagePath(None),
+                        role: ButtonRole::Destructive,
+                    },
+                });
+            }
+            items.extend([
                 SettingItem {
                     label: "Background Image Opacity".into(),
                     value: format!("{:.2}", config.window.background_image.opacity),
@@ -1553,8 +1576,9 @@ impl SettingsPanel {
                     TabBarPosition::label,
                     SettingsAction::SetTabBarPosition,
                 ),
-            ],
-        ));
+            ]);
+            result.push((SettingsSection::Window, items));
+        }
 
         // Cursor
         result.push((
@@ -3224,6 +3248,59 @@ mod tests {
     }
 
     #[test]
+    fn the_background_image_is_chosen_from_its_row_and_removed_by_a_button() {
+        let registry = default_registry();
+        let mut panel = SettingsPanel::new();
+        panel.open();
+        panel.select_page(SettingsPage::Appearance);
+        let rows = |panel: &SettingsPanel, config: &Config| {
+            panel
+                .build_entries(config, &registry)
+                .into_iter()
+                .filter(|entry| entry.section == SettingsSection::Window)
+                .map(|entry| (entry.label.to_string(), entry.value, entry.kind))
+                .collect::<Vec<_>>()
+        };
+        let mut config = Config::default();
+        let without = rows(&panel, &config);
+        let (_, value, kind) = without
+            .iter()
+            .find(|(label, ..)| label == "Background Image")
+            .expect("a Background Image row");
+        assert_eq!(value, "None");
+        assert!(matches!(
+            kind,
+            SettingKind::Action {
+                action: SettingsAction::ChooseBackgroundImage
+            }
+        ));
+        assert!(
+            !without
+                .iter()
+                .any(|(label, ..)| label == "Remove Background Image")
+        );
+
+        config.window.background_image.path = Some("/home/me/Pictures/sky.png".into());
+        let with = rows(&panel, &config);
+        let (_, value, _) = with
+            .iter()
+            .find(|(label, ..)| label == "Background Image")
+            .unwrap();
+        assert_eq!(value, "sky.png");
+        let (_, _, remove) = with
+            .iter()
+            .find(|(label, ..)| label == "Remove Background Image")
+            .expect("a Remove button once an image is set");
+        assert!(matches!(
+            remove,
+            SettingKind::Button {
+                action: SettingsAction::SetBackgroundImagePath(None),
+                role: ButtonRole::Destructive,
+            }
+        ));
+    }
+
+    #[test]
     fn test_value_adjustment() {
         let mut panel = SettingsPanel::new();
         panel.open();
@@ -3713,7 +3790,7 @@ mod tests {
     }
 
     #[test]
-    fn background_image_settings_expose_path_fit_and_opacity_without_a_file_picker() {
+    fn background_image_settings_expose_path_fit_and_opacity() {
         let panel = SettingsPanel::new();
         let mut config = Config::default();
         config.window.background_image.path = Some("wallpaper.png".into());
@@ -3726,7 +3803,12 @@ mod tests {
             .find(|entry| entry.label == "Background Image")
             .expect("background image path row");
         assert_eq!(path.value, "wallpaper.png");
-        assert!(matches!(path.kind, SettingKind::ReadOnly));
+        assert!(matches!(
+            path.kind,
+            SettingKind::Action {
+                action: SettingsAction::ChooseBackgroundImage
+            }
+        ));
 
         let fit = entries
             .iter()

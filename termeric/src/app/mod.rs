@@ -10,6 +10,7 @@ mod agent_view_tabs;
 mod agents;
 mod agents_panel;
 mod application;
+mod background_chooser;
 mod broadcast;
 mod clipboard;
 mod commands_input;
@@ -213,6 +214,10 @@ pub(crate) enum WindowResult {
         path: PathBuf,
         result: std::result::Result<crate::renderer::DecodedBackgroundImage, String>,
     },
+    /// The file chooser Settings opened for a background image closed.
+    BackgroundImageChosen {
+        result: std::result::Result<crate::portal::FileChoice, String>,
+    },
     LiveDomainTopology {
         domain_id: String,
         result: std::result::Result<crate::domain::DomainTopologyEvent, String>,
@@ -252,6 +257,7 @@ impl WindowResult {
         match self {
             Self::RendererDeviceLost { .. } => RedrawReason::SurfaceRecovery,
             Self::BackgroundImageLoaded { .. }
+            | Self::BackgroundImageChosen { .. }
             | Self::LiveDomainTopology { .. }
             | Self::DomainPickerLoaded { .. }
             | Self::ContextGathered { .. }
@@ -284,6 +290,9 @@ impl App {
                 path,
                 result,
             } => self.handle_background_image_loaded(generation, path, result),
+            WindowResult::BackgroundImageChosen { result } => {
+                self.handle_background_image_chosen(result)
+            }
             WindowResult::LiveDomainTopology { domain_id, result } => {
                 self.handle_live_domain_topology(domain_id, result)
             }
@@ -486,6 +495,8 @@ enum DialogFlow {
     ConfigReset { request_id: u64 },
     /// Discarding unsaved Settings changes awaiting confirmation.
     DiscardSettings { request_id: u64 },
+    /// A typed background image path, where no file chooser could open.
+    BackgroundImagePath { request_id: u64 },
     /// A recorded shortcut that another action uses, awaiting confirmation
     /// before `holder` loses it to `action`.
     ShortcutReassign {
@@ -588,6 +599,8 @@ pub struct App {
     renderer_generation: u64,
     /// Invalidates stale asynchronous background-image decodes.
     background_image_generation: u64,
+    /// Whether the file chooser for a background image is open.
+    background_chooser_open: bool,
     /// Only one bounded decoder worker may be active per native window.
     background_image_loading: bool,
     /// Coalesces changes observed while the decoder worker is active.
@@ -1017,6 +1030,7 @@ impl App {
             renderer: None,
             renderer_generation: 0,
             background_image_generation: 0,
+            background_chooser_open: false,
             background_image_loading: false,
             background_image_pending: false,
             background_image_path,

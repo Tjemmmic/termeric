@@ -793,6 +793,13 @@ impl App {
             }
             SettingsAction::SetPadding(padding) => config.window.padding = padding,
             SettingsAction::SetOpacity(opacity) => config.window.opacity = opacity,
+            SettingsAction::ChooseBackgroundImage => {
+                self.choose_background_image();
+                return;
+            }
+            SettingsAction::SetBackgroundImagePath(path) => {
+                config.window.background_image.path = path;
+            }
             SettingsAction::SetBackgroundImageOpacity(opacity) => {
                 config.window.background_image.opacity = opacity;
             }

@@ -25,6 +25,7 @@ mod notifications;
 mod panes;
 mod paths;
 mod plugin;
+mod portal;
 mod process_group;
 mod raw_terminal;
 mod renderer;

@@ -23,7 +23,7 @@ What Termeric supports today, and what is planned. Termeric runs on Linux only f
 | Right-to-left and bidirectional text | Planned | |
 | Themes | Supported | 26 built in (twelve named after roots, fourteen from the community) and your own theme files, which reload when you save them. |
 | Window opacity | Supported | Needs a compositor with transparency. |
-| Background images | Partial | A static local PNG or JPEG with fit and opacity. Not tiling, animated images, remote URLs, or different images per tab or pane. |
+| Background images | Partial | A static local PNG or JPEG with fit and opacity, chosen in Settings with the desktop's file picker. Not tiling, animated images, remote URLs, or different images per tab or pane. |
 | Unicode character picker | Supported | Searches every character by name, and emoji by English name and keyword. |
 
 ## Terminal compatibility

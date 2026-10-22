@@ -1358,3 +1358,45 @@ fn reloading_the_configuration_asks_only_when_it_would_discard_changes() {
     app.answer_dialog("discard-settings");
     assert!(!app.config.bell.visual);
 }
+
+#[test]
+fn a_background_image_is_chosen_typed_or_removed_from_settings() {
+    use crate::portal::FileChoice;
+    let directory = tempfile::tempdir().unwrap();
+    let image = directory.path().join("sky.png");
+    std::fs::write(&image, b"").unwrap();
+    let mut app = App::new_headless(Config::default()).unwrap();
+
+    // Closing the chooser without choosing changes nothing.
+    app.handle_background_image_chosen(Ok(FileChoice::Cancelled));
+    assert_eq!(app.config.window.background_image.path, None);
+    assert!(!app.dialog.is_awaiting_current());
+
+    // A chosen file applies at once, unsaved like any other change.
+    app.handle_background_image_chosen(Ok(FileChoice::Chosen(image.clone())));
+    assert_eq!(
+        app.config.window.background_image.path.as_ref(),
+        Some(&image)
+    );
+    assert!(app.config_has_unsaved_changes());
+
+    // Removing it is another change.
+    app.apply_settings_action(SettingsAction::SetBackgroundImagePath(None));
+    assert_eq!(app.config.window.background_image.path, None);
+
+    // Without a chooser, a path is asked for and checked.
+    app.handle_background_image_chosen(Err("no portal".into()));
+    assert_eq!(app.dialog.title(), "Choose a background image");
+    app.submit_dialog_field("relative.png");
+    assert!(
+        app.dialog_text().contains("Use a full path"),
+        "{}",
+        app.dialog_text()
+    );
+    app.submit_dialog_field(&image.display().to_string());
+    assert!(!app.dialog.is_awaiting_current());
+    assert_eq!(
+        app.config.window.background_image.path.as_ref(),
+        Some(&image)
+    );
+}
