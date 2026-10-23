@@ -22,14 +22,16 @@ fn end_persistence_test() {
 }
 
 #[test]
-fn save_workspace_names_a_long_titled_tab_within_the_name_limit() {
+fn save_workspace_suggests_a_long_titled_tab_within_the_name_limit() {
     let root = tempfile::tempdir().unwrap();
     let mut app = persistence_app(root.path());
     let tabs = app.tabs.as_mut().unwrap();
     tabs.new_tab().unwrap();
     tabs.active_tab_mut().unwrap().title = "x".repeat(300);
 
-    app.force_save_workspace(crate::app::workspaces::WorkspaceSave::Update);
+    // Saving the suggestion as it stands.
+    app.request_save_workspace(crate::app::workspaces::WorkspaceSave::Update);
+    app.answer_dialog("workspace-save");
     let saved = crate::workspace::list_workspaces();
     end_persistence_test();
 
@@ -115,7 +117,7 @@ fn saving_and_renaming_a_workspace_keep_when_it_was_created() {
     app.automatic_persistence = true;
     app.tabs.as_mut().unwrap().new_tab().unwrap();
     let id = app
-        .save_workspace(crate::app::workspaces::WorkspaceSave::New)
+        .save_workspace(crate::app::workspaces::WorkspaceSave::New, "Roots".into())
         .unwrap()
         .id;
     let mut saved = crate::workspace::load_workspace(&id).unwrap().workspace;
@@ -157,7 +159,7 @@ fn a_reopened_pinned_tab_joins_the_pinned_group_and_the_window_still_saves() {
     assert_eq!(tabs.active_index(), 0);
     assert_eq!(tabs.active_tab().unwrap().title, "pinned");
 
-    let saved = app.save_workspace(crate::app::workspaces::WorkspaceSave::New);
+    let saved = app.save_workspace(crate::app::workspaces::WorkspaceSave::New, "Pinned".into());
     end_persistence_test();
     saved.unwrap();
 }
@@ -245,20 +247,32 @@ fn save_workspace_updates_the_open_workspace_and_save_as_starts_another() {
     let mut app = persistence_app(root.path());
     app.tabs.as_mut().unwrap().new_tab().unwrap();
 
-    let first = app.save_workspace(WorkspaceSave::Update).unwrap().id;
+    let first = app
+        .save_workspace(WorkspaceSave::Update, "Roots".into())
+        .unwrap()
+        .id;
     app.tabs.as_mut().unwrap().new_tab().unwrap();
-    let again = app.save_workspace(WorkspaceSave::Update).unwrap().id;
+    let again = app
+        .save_workspace(WorkspaceSave::Update, "Roots".into())
+        .unwrap()
+        .id;
     let after_two_saves = workspace_ids();
     let updated = crate::workspace::load_workspace(&first).unwrap().workspace;
 
-    let second = app.save_workspace(WorkspaceSave::New).unwrap().id;
+    let second = app
+        .save_workspace(WorkspaceSave::New, "Roots".into())
+        .unwrap()
+        .id;
     let after_save_as = workspace_ids();
     let current_after_save_as = app.current_workspace_id.clone();
 
     // A workspace opened in the window is the one Save Workspace updates.
     assert!(app.restore_saved_workspace(&first));
     app.tabs.as_mut().unwrap().new_tab().unwrap();
-    let reopened = app.save_workspace(WorkspaceSave::Update).unwrap().id;
+    let reopened = app
+        .save_workspace(WorkspaceSave::Update, "Roots".into())
+        .unwrap()
+        .id;
     let after_reopening = workspace_ids();
     let reopened_tabs = crate::workspace::load_workspace(&first)
         .unwrap()
@@ -280,6 +294,55 @@ fn save_workspace_updates_the_open_workspace_and_save_as_starts_another() {
 }
 
 #[test]
+fn save_workspace_asks_for_a_name_until_the_window_has_one() {
+    let root = tempfile::tempdir().unwrap();
+    let mut app = persistence_app(root.path());
+    let tabs = app.tabs.as_mut().unwrap();
+    tabs.new_tab().unwrap();
+    tabs.active_tab_mut().unwrap().title = "notes".into();
+    let names = || -> Vec<String> {
+        let mut names: Vec<_> = crate::workspace::list_workspaces()
+            .into_iter()
+            .map(|workspace| workspace.name)
+            .collect();
+        names.sort();
+        names
+    };
+
+    app.request_save_workspace(WorkspaceSave::Update);
+    let suggested = app
+        .dialog
+        .field_value(app.dialog.request_id())
+        .map(str::to_owned);
+    app.submit_dialog_field("  Roots ");
+    let named = names();
+    // Now the window has a name, Save Workspace saves without asking.
+    let last_question = app.dialog.request_id();
+    app.request_save_workspace(WorkspaceSave::Update);
+    let asked_again = app.dialog.request_id() != last_question;
+    // Save Workspace As… always asks, and keeps asking until the name is valid.
+    app.request_save_workspace(WorkspaceSave::New);
+    app.submit_dialog_field("   ");
+    let refused = app.dialog_text();
+    app.submit_dialog_field("Ginger");
+    let both = names();
+    let toasts = toast_messages(&app);
+    end_persistence_test();
+
+    assert_eq!(suggested.as_deref(), Some("notes workspace"));
+    assert_eq!(named, ["Roots"]);
+    assert!(!asked_again);
+    assert!(refused.contains("Workspace name must"), "{refused}");
+    assert_eq!(both, ["Ginger", "Roots"]);
+    assert!(
+        toasts
+            .iter()
+            .any(|toast| toast == "Saved workspace \u{201c}Ginger\u{201d}"),
+        "{toasts:?}"
+    );
+}
+
+#[test]
 fn saving_an_automatic_workspace_makes_it_the_persons() {
     let root = tempfile::tempdir().unwrap();
     let mut app = persistence_app(root.path());
@@ -290,7 +353,10 @@ fn saving_an_automatic_workspace_makes_it_the_persons() {
 
     app.auto_save_workspace();
     let automatic = crate::workspace::list_workspaces();
-    let saved = app.save_workspace(WorkspaceSave::Update).unwrap().id;
+    // An automatic workspace has no name of the person's, so they are asked.
+    app.request_save_workspace(WorkspaceSave::Update);
+    app.answer_dialog("workspace-save");
+    let saved = app.current_workspace_id.clone().unwrap();
     let promoted = crate::workspace::load_workspace(&saved).unwrap().workspace;
     end_persistence_test();
 
@@ -309,12 +375,18 @@ fn two_workspaces(app: &mut App) -> (String, String) {
     let tabs = app.tabs.as_mut().unwrap();
     tabs.new_tab().unwrap();
     tabs.new_tab().unwrap();
-    let a = app.save_workspace(WorkspaceSave::New).unwrap().id;
+    let a = app
+        .save_workspace(WorkspaceSave::New, "Roots".into())
+        .unwrap()
+        .id;
     let tabs = app.tabs.as_mut().unwrap();
     assert!(tabs.close_tab(tabs.active_index()));
     tabs.set_reduced_motion(true);
     tabs.cleanup_closed(false, false);
-    let b = app.save_workspace(WorkspaceSave::New).unwrap().id;
+    let b = app
+        .save_workspace(WorkspaceSave::New, "Roots".into())
+        .unwrap()
+        .id;
     app.current_workspace_id = None;
     (a, b)
 }

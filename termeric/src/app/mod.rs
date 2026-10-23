@@ -510,6 +510,11 @@ enum DialogFlow {
         request_id: u64,
         workspace_id: String,
     },
+    /// A name for the workspace Save Workspace (As…) is about to save.
+    WorkspaceName {
+        request_id: u64,
+        mode: workspaces::WorkspaceSave,
+    },
     /// Deleting a workspace or closed-tab snapshot, awaiting confirmation.
     WorkspaceDelete {
         request_id: u64,
@@ -2766,8 +2771,8 @@ impl App {
             Action::ReloadConfig => self.reload_config_or_confirm_discard(),
             Action::ResetConfig => self.confirm_config_reset(),
             Action::ToggleWorkspaceManager => self.toggle_workspace_manager(),
-            Action::SaveWorkspace => self.force_save_workspace(workspaces::WorkspaceSave::Update),
-            Action::SaveWorkspaceAs => self.force_save_workspace(workspaces::WorkspaceSave::New),
+            Action::SaveWorkspace => self.request_save_workspace(workspaces::WorkspaceSave::Update),
+            Action::SaveWorkspaceAs => self.request_save_workspace(workspaces::WorkspaceSave::New),
             Action::ConfigurePlugins => {
                 self.open_settings_section(crate::ui::settings::SettingsSection::Plugins);
                 self.request_redraw(RedrawReason::Action);

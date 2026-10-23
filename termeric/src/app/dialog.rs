@@ -226,6 +226,7 @@ impl App {
                     || self.handle_background_image_path_choice(request_id, &id)
                     || self.handle_shortcut_reassign_choice(request_id, &id)
                     || self.handle_workspace_choice(request_id, &id)
+                    || self.handle_workspace_name_choice(request_id, &id)
                     || self.handle_file_upload_choice(request_id, &id);
                 // An answer no flow takes, such as Cancel on a plain
                 // question, closes the dialog.

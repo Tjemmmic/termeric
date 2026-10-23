@@ -115,10 +115,10 @@ impl App {
         match action {
             WorkspaceMenuAction::Open(id) => self.request_open_workspace(&id),
             WorkspaceMenuAction::Save => {
-                self.force_save_workspace(super::workspaces::WorkspaceSave::Update)
+                self.request_save_workspace(super::workspaces::WorkspaceSave::Update)
             }
             WorkspaceMenuAction::SaveAs => {
-                self.force_save_workspace(super::workspaces::WorkspaceSave::New)
+                self.request_save_workspace(super::workspaces::WorkspaceSave::New)
             }
             WorkspaceMenuAction::Manage => {
                 self.settings_panel.close();

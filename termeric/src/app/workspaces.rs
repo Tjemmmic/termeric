@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::tabs::TabType;
-use crate::ui::dialog::{ButtonRole, DialogBlock, DialogSpec};
+use crate::ui::dialog::{ButtonRole, DialogBlock, DialogSpec, FieldSpec};
 use crate::ui::text::plural;
 use crate::workspace::{
     WorkspaceConfigReference, WorkspaceLaunch, WorkspaceRestoreOutcome, WorkspaceSnapshot,
@@ -30,13 +30,85 @@ struct SaveTarget {
 const AUTOMATIC_WORKSPACE_NAME: &str = "Last workspace";
 const WORKSPACE_OPEN_CHOICE: &str = "workspace-open";
 const WORKSPACE_DELETE_CHOICE: &str = "workspace-delete";
-/// Longest workspace name a confirmation quotes.
+const WORKSPACE_SAVE_CHOICE: &str = "workspace-save";
+/// Longest workspace name a confirmation or message quotes.
 const CONFIRMATION_NAME_CHARS: usize = 40;
 
 impl App {
-    /// Save this window as the person asked, and say how it went.
-    pub(super) fn force_save_workspace(&mut self, mode: WorkspaceSave) {
-        match self.save_workspace(mode) {
+    /// **Save Workspace** or **Save Workspace As…**: save this window back
+    /// into the workspace the person named for it, else ask for a name,
+    /// suggesting one from the active tab.
+    pub(super) fn request_save_workspace(&mut self, mode: WorkspaceSave) {
+        let named = match mode {
+            WorkspaceSave::Update => self
+                .current_save_target()
+                .filter(|target| !target.automatic)
+                .map(|target| target.name),
+            WorkspaceSave::New => None,
+        };
+        match named {
+            Some(name) => self.force_save_workspace(mode, name),
+            None => {
+                let suggestion = self.new_workspace_name();
+                self.ask_workspace_name(mode, suggestion, None);
+            }
+        }
+    }
+
+    fn ask_workspace_name(&mut self, mode: WorkspaceSave, value: String, error: Option<&str>) {
+        let spec = DialogSpec::prompt(
+            "Name this workspace",
+            vec![DialogBlock::text(
+                "This window's tabs and panes are saved under this name, and Manage Workspaces… opens them again.",
+            )],
+            FieldSpec::new(
+                "Name",
+                value,
+                crate::workspace::MAX_WORKSPACE_NAME_CHARS * 4,
+            )
+            .with_error(error.map(crate::safe_text::capitalized)),
+            WORKSPACE_SAVE_CHOICE,
+            "Save",
+        );
+        let request_id = self.dialog.show(spec);
+        self.dialog_flow = Some(DialogFlow::WorkspaceName { request_id, mode });
+    }
+
+    /// Answer the name prompt. Returns whether the answer was its.
+    pub(super) fn handle_workspace_name_choice(
+        &mut self,
+        request_id: u64,
+        choice_id: &str,
+    ) -> bool {
+        let Some(DialogFlow::WorkspaceName {
+            request_id: pending,
+            mode,
+        }) = self.dialog_flow
+        else {
+            return false;
+        };
+        if pending != request_id || choice_id != WORKSPACE_SAVE_CHOICE {
+            return false;
+        }
+        let Some(value) = self.dialog.field_value(request_id).map(ToOwned::to_owned) else {
+            return false;
+        };
+        self.dialog.dismiss(request_id);
+        self.dialog_flow = None;
+        let name = value.trim().to_owned();
+        match crate::workspace::validate_workspace_name(&name) {
+            Ok(()) => self.force_save_workspace(mode, name),
+            Err(error) => self.ask_workspace_name(mode, value, Some(&format!("{error:#}"))),
+        }
+        self.request_redraw(RedrawReason::Action);
+        true
+    }
+
+    /// Save this window as the person asked, named `name`, and say how it
+    /// went.
+    pub(super) fn force_save_workspace(&mut self, mode: WorkspaceSave, name: String) {
+        let quoted = quoted_name(&name);
+        match self.save_workspace(mode, name) {
             Ok(report) => {
                 let suffix = if report.truncated_panes.is_empty() {
                     String::new()
@@ -48,7 +120,7 @@ impl App {
                     )
                 };
                 self.toasts
-                    .success(format!("Saved workspace {}{}", report.id, suffix));
+                    .success(format!("Saved workspace {quoted}{suffix}"));
             }
             Err(error) => self
                 .toasts
@@ -56,21 +128,18 @@ impl App {
         }
     }
 
-    /// Save this window into its own workspace (for `Update`) or a new one,
-    /// which it then belongs to. A workspace saved by the person is theirs:
-    /// an automatic "Last workspace" saved this way takes the name a new
-    /// save would, and is never pruned.
+    /// Save this window, named `name`, into its own workspace (for
+    /// `Update`) or a new one, which it then belongs to. A workspace saved
+    /// by the person is theirs: an automatic "Last workspace" saved this way
+    /// takes the name and is never pruned.
     pub(super) fn save_workspace(
         &mut self,
         mode: WorkspaceSave,
+        name: String,
     ) -> anyhow::Result<crate::workspace::WorkspaceSaveReport> {
         let target = match mode {
             WorkspaceSave::Update => self.current_save_target(),
             WorkspaceSave::New => None,
-        };
-        let name = match &target {
-            Some(target) if !target.automatic => target.name.clone(),
-            _ => self.new_workspace_name(),
         };
         let (id, report) = self.save_window_into(name, target.as_ref(), false)?;
         if let Err(error) = self.remember_workspace(&id) {
@@ -81,8 +150,8 @@ impl App {
         Ok(report)
     }
 
-    /// The name a new workspace takes from the active tab.
-    fn new_workspace_name(&self) -> String {
+    /// The name suggested for a new workspace, from the active tab.
+    pub(super) fn new_workspace_name(&self) -> String {
         self.tabs
             .as_ref()
             .and_then(|tabs| tabs.active_tab())
@@ -608,10 +677,11 @@ impl App {
         } else {
             "workspace"
         };
+        let name = confirmation_name(id);
         match crate::workspace::delete_workspace(id) {
             Ok(()) => {
                 log::info!("Deleted {noun} '{id}'");
-                self.toasts.success(format!("Deleted {noun} '{id}'"));
+                self.toasts.success(format!("Deleted {noun} {name}"));
                 if !closed_tab {
                     if self.current_workspace_id.as_deref() == Some(id) {
                         self.current_workspace_id = None;
@@ -639,9 +709,14 @@ impl App {
 fn confirmation_name(id: &str) -> String {
     let name = crate::workspace::describe_workspace(id)
         .map_or_else(|_| id.to_owned(), |workspace| workspace.name);
+    quoted_name(&name)
+}
+
+/// A workspace `name`, quoted and bounded for a message.
+fn quoted_name(name: &str) -> String {
     format!(
         "\u{201c}{}\u{201d}",
-        crate::safe_text::truncate_with_ellipsis(&name, CONFIRMATION_NAME_CHARS)
+        crate::safe_text::truncate_with_ellipsis(name, CONFIRMATION_NAME_CHARS)
     )
 }
 

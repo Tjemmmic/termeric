@@ -79,7 +79,7 @@ fn complete_workspace_round_trip_restores_nested_panes_plugin_profile_and_focus(
         app.tabs = Some(tabs);
         app.execute_plugin_command("codex.open");
         let report = app
-            .save_workspace(crate::app::workspaces::WorkspaceSave::New)
+            .save_workspace(crate::app::workspaces::WorkspaceSave::New, "Agents".into())
             .unwrap();
 
         app.tabs.as_mut().unwrap().new_tab().unwrap();
