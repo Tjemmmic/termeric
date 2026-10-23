@@ -337,7 +337,7 @@ The limit applies to one conversation, not across events. An action can cause a 
 | Plugins with a handler process at once | 8 |
 | Queued requests per plugin | 32 |
 
-A handler that exits with an error, times out, writes invalid JSON, sends the wrong `schema_version` or `request_id`, or asks for something it may not do produces an error toast, "Plugin ID event handler failed", with the reason and, when the handler exited with an error, the start of its standard error. Control characters, line and paragraph separators, and bidirectional formatting characters are removed, and the whole message is cut to 1 KiB. An action that Termeric accepts but can't carry out, such as selecting a tab that has closed, comes back as an `action-result` with `ok` set to `false`.
+A handler that exits with an error, times out, writes invalid JSON, sends the wrong `schema_version` or `request_id`, or asks for something it may not do produces an error toast, "Plugin ID event handler failed", with the reason and, when the handler exited with an error, the end of its standard error, where a traceback's error line is. Control characters, line and paragraph separators, and bidirectional formatting characters are removed, and the whole message is cut to 1 KiB. An action that Termeric accepts but can't carry out, such as selecting a tab that has closed, comes back as an `action-result` with `ok` set to `false`.
 
 ### A complete example
 
