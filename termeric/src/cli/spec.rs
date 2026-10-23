@@ -23,15 +23,20 @@ const RENDERING: &str = "Rendering";
 /// a process of its own: the rule `cli::LaunchPlan::join_tabs` and
 /// `control::join_running_launch` apply.
 fn joining_a_running_termeric() -> String {
+    let [identity @ .., last] = crate::control::TERMINAL_IDENTITY_VARIABLES;
     format!(
         "A plain launch opens its window in the Termeric already running on this display, so \
          tabs can move between its windows; the window uses that process's settings and \
          environment. A launch starts a process of its own instead when it passes \
          --separate-process, opens two or more windows, or uses any option besides --new-window, \
          --tab, --working-directory, --title, --command, and a COMMAND; when [window] \
-         share_process is false; when the termeric executable differs from the running one; or \
-         when any of these variables differs from the running process's: {}.",
-        crate::control::JOIN_ENVIRONMENT_VARIABLES.join(", ")
+         share_process is false; when the termeric executable differs from the running one; \
+         when any of these variables differs from the running process's: {}; or when {}, and {} \
+         select a different terminal identity (TERM and its terminfo entry) from the running \
+         process's.",
+        crate::control::JOIN_ENVIRONMENT_VARIABLES.join(", "),
+        identity.join(", "),
+        last
     )
 }
 

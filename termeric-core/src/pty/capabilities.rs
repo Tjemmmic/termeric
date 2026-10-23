@@ -140,10 +140,13 @@ fn terminfo_entry_exists(root: &Path) -> bool {
             .is_file()
 }
 
+/// `root` first, then `existing` without it again, so a terminal started
+/// inside one of Termeric's terminals (whose `TERMINFO_DIRS` already leads
+/// with `root`) advertises the same path rather than a longer one.
 fn terminfo_search_path(root: &Path, existing: Option<&std::ffi::OsStr>) -> Option<OsString> {
     let mut paths = vec![root.to_path_buf()];
     if let Some(existing) = existing {
-        paths.extend(env::split_paths(&existing));
+        paths.extend(env::split_paths(&existing).filter(|path| path != root));
     } else {
         // An empty TERMINFO_DIRS component asks ncurses to retain its compiled
         // system defaults after Termeric's discovered entry directory.
@@ -240,5 +243,21 @@ mod tests {
                 PathBuf::from("/custom/two")
             ]
         );
+    }
+
+    #[test]
+    fn a_terminal_inside_a_termeric_terminal_advertises_the_same_search_path() {
+        let root = Path::new("/opt/termeric/share/terminfo");
+        for inherited in [None, Some(Path::new("/custom/one"))] {
+            let outer = termeric_environment(
+                root,
+                inherited
+                    .map(|path| env::join_paths([path]).unwrap())
+                    .as_deref(),
+            );
+            // What a terminal started inside the outer one inherits.
+            let inner = termeric_environment(root, outer.terminfo_dirs.as_deref());
+            assert_eq!(inner, outer, "{inherited:?}");
+        }
     }
 }

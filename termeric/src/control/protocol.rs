@@ -103,8 +103,9 @@ pub enum Request {
         build: String,
         /// The launcher's environment identity, a fingerprint of the
         /// variables that shape the Termeric process itself
-        /// (`control::JOIN_ENVIRONMENT_VARIABLES`); a process started with
-        /// other values refuses it, so the launch runs with its own.
+        /// (`control::JOIN_ENVIRONMENT_VARIABLES`) and the terminal identity
+        /// it would advertise; a process started with other values refuses
+        /// it, so the launch runs with its own.
         environment: String,
         tabs: Vec<JoinTab>,
     },

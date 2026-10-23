@@ -14,6 +14,19 @@ pub use environment::{
 pub use event::PtyEvent;
 pub use portable_pty::PtySize;
 
+/// The terminal identity a terminal started now advertises to its programs:
+/// `TERM`, and the `TERMINFO` and `TERMINFO_DIRS` it sets, if any. Started
+/// inside one of those terminals, this finds the same identity, since the
+/// variables it set point back at the same entry.
+pub fn advertised_terminal_identity() -> [(&'static str, Option<std::ffi::OsString>); 3] {
+    let environment = capabilities::terminal_environment();
+    [
+        ("TERM", Some(environment.term.into())),
+        ("TERMINFO", environment.terminfo),
+        ("TERMINFO_DIRS", environment.terminfo_dirs),
+    ]
+}
+
 use child::PtyChild;
 use portable_pty::{CommandBuilder, MasterPty, native_pty_system};
 use std::io::{Read, Write};

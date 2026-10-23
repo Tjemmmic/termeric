@@ -114,49 +114,65 @@ pub fn build_identity() -> Option<String> {
 }
 
 /// The variables that shape the Termeric process itself: its logging,
-/// renderer, terminal identity, and where it reads configuration and keeps
-/// data. A launch whose values differ starts a process of its own, since a
-/// running process cannot take them on; the rest of the launcher's
-/// environment is never carried to a running process. `HOME` counts because
-/// the configuration and data directories, and `~/.terminfo`, fall back to
-/// it when the XDG variables are unset.
-pub const JOIN_ENVIRONMENT_VARIABLES: [&str; 12] = [
+/// renderer, and where it reads configuration and keeps data. A launch whose
+/// values differ starts a process of its own, since a running process cannot
+/// take them on; the rest of the launcher's environment is never carried to
+/// a running process. `HOME` counts because the configuration and data
+/// directories, and `~/.terminfo`, fall back to it when the XDG variables
+/// are unset.
+pub const JOIN_ENVIRONMENT_VARIABLES: [&str; 8] = [
     "RUST_LOG",
     "WGPU_BACKEND",
     "WGPU_ADAPTER_NAME",
     "WGPU_POWER_PREF",
     "LIBGL_ALWAYS_SOFTWARE",
-    "TERMERIC_TERM",
-    "TERMERIC_TERMINFO_DIR",
-    "TERMINFO",
-    "TERMINFO_DIRS",
     "HOME",
     "XDG_CONFIG_HOME",
     "XDG_DATA_HOME",
 ];
 
+/// The variables that choose the terminal identity Termeric's terminals
+/// advertise. They count through that identity, not their values: Termeric
+/// sets `TERMINFO` and `TERMINFO_DIRS` in its own terminals, so a launch from
+/// one of them sees other values that still select the same identity.
+pub const TERMINAL_IDENTITY_VARIABLES: [&str; 4] = [
+    "TERMERIC_TERM",
+    "TERMERIC_TERMINFO_DIR",
+    "TERMINFO",
+    "TERMINFO_DIRS",
+];
+
 /// Digits in an environment identity.
 pub const ENVIRONMENT_IDENTITY_DIGITS: usize = 16;
 
-/// A fingerprint of this process's `JOIN_ENVIRONMENT_VARIABLES`, as first
-/// asked. A process asks at startup, so what it reports is what it runs
-/// with.
+/// A fingerprint of this process's `JOIN_ENVIRONMENT_VARIABLES` and the
+/// terminal identity its terminals advertise, as first asked. A process asks
+/// at startup, so what it reports is what it runs with.
 pub fn environment_identity() -> &'static str {
     static IDENTITY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     IDENTITY.get_or_init(|| {
-        fingerprint_environment(|name| std::env::var_os(name).map(std::ffi::OsString::into_vec))
+        let variables = JOIN_ENVIRONMENT_VARIABLES.map(|name| {
+            (
+                name,
+                std::env::var_os(name).map(std::ffi::OsString::into_vec),
+            )
+        });
+        let terminal = termeric_core::pty::advertised_terminal_identity()
+            .map(|(name, value)| (name, value.map(std::ffi::OsString::into_vec)));
+        fingerprint_environment(variables.into_iter().chain(terminal))
     })
 }
 
-/// The fingerprint of the values `lookup` gives each of
-/// `JOIN_ENVIRONMENT_VARIABLES`. An unset variable differs from an empty
+/// The fingerprint of named values. An unset value differs from an empty
 /// one, and every value is length-prefixed, so no two environments share an
 /// encoding.
-fn fingerprint_environment(lookup: impl Fn(&str) -> Option<Vec<u8>>) -> String {
+fn fingerprint_environment<'a>(
+    values: impl IntoIterator<Item = (&'a str, Option<Vec<u8>>)>,
+) -> String {
     let mut encoded = Vec::new();
-    for name in JOIN_ENVIRONMENT_VARIABLES {
+    for (name, value) in values {
         encoded.extend_from_slice(name.as_bytes());
-        match lookup(name) {
+        match value {
             Some(value) => {
                 encoded.push(1);
                 encoded.extend_from_slice(&(value.len() as u64).to_le_bytes());
@@ -274,12 +290,15 @@ mod tests {
 
     #[test]
     fn environment_identity_depends_only_on_the_listed_variables() {
-        let unset = fingerprint_environment(|_| None);
+        let lookup = |lookup: &dyn Fn(&str) -> Option<Vec<u8>>| {
+            fingerprint_environment(JOIN_ENVIRONMENT_VARIABLES.map(|name| (name, lookup(name))))
+        };
+        let unset = lookup(&|_| None);
         assert!(termeric_core::hex::is_lower(
             &unset,
             ENVIRONMENT_IDENTITY_DIGITS
         ));
-        assert_eq!(unset, fingerprint_environment(|_| None), "deterministic");
+        assert_eq!(unset, lookup(&|_| None), "deterministic");
         assert_eq!(
             super::environment_identity(),
             super::environment_identity(),
@@ -287,7 +306,7 @@ mod tests {
         );
 
         let with = |set: &'static str, value: &'static str| {
-            fingerprint_environment(move |name| (name == set).then(|| value.as_bytes().to_vec()))
+            lookup(&move |name| (name == set).then(|| value.as_bytes().to_vec()))
         };
         // An empty value is not an unset one, and each listed variable counts.
         assert_ne!(with("RUST_LOG", ""), unset);
