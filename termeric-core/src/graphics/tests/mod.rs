@@ -175,6 +175,19 @@ fn disabled_file_media_and_animations_report_truthfully() {
     let media = manager.handle_command(command(b"a=q,t=f,i=1;L3RtcC9pbWFnZQ=="), false);
     assert_eq!(media.response.unwrap().error_code, Some("EPERM"));
     assert!(!manager.file_transmission_allowed());
+    // A temporary file falls under the same policy, so a client probing it
+    // (kitten icat) doesn't go on to send ordinary files that are refused.
+    let temporary = tempfile::Builder::new()
+        .prefix("tty-graphics-protocol-")
+        .tempfile_in(std::env::temp_dir())
+        .unwrap();
+    let probe = format!(
+        "a=q,t=t,f=24,s=1,v=1,i=2;{}",
+        encoded_path(temporary.path())
+    );
+    let media = manager.handle_command(command(probe.as_bytes()), false);
+    assert_eq!(media.response.unwrap().error_code, Some("EPERM"));
+    assert!(temporary.path().exists(), "a refused file is left alone");
     let animation = manager.handle_command(command(b"a=f,i=1"), false);
     assert_eq!(animation.response.unwrap().error_code, Some("ENOENT"));
 }
@@ -475,6 +488,7 @@ fn animation_frames_use_the_supported_temporary_file_medium() {
     use std::io::Write;
 
     let mut manager = GraphicsManager::new();
+    manager.set_file_transmission_allowed(true);
     manager.handle_command(raw_command("a=t,f=32,s=1,v=1,i=21", &[1, 2, 3, 4]), false);
     let mut file = tempfile::Builder::new()
         .prefix("tty-graphics-protocol-animation-")
@@ -611,6 +625,7 @@ fn temporary_file_range_is_loaded_deleted_and_queryable() {
     );
 
     let mut manager = GraphicsManager::new();
+    manager.set_file_transmission_allowed(true);
     let result = manager.handle_command(command(payload.as_bytes()), false);
     assert!(result.response.unwrap().ok);
     assert!(!image_path.exists());
@@ -762,6 +777,7 @@ fn local_media_policy_rejects_unsafe_paths_and_special_files() {
     let result = manager.handle_command(command(payload.as_bytes()), false);
     assert_eq!(result.response.unwrap().error_code, Some("EPERM"));
     assert!(ordinary_path.exists());
+    manager.set_file_transmission_allowed(true);
 
     let unmarked = tempfile::Builder::new()
         .prefix("termeric-image-")
@@ -814,6 +830,7 @@ fn oversized_safe_temporary_file_is_rejected_and_removed() {
     let payload = format!("a=q,t=t,f=32,s=1,v=1,i=47;{}", encoded_path(&path));
 
     let mut manager = GraphicsManager::new();
+    manager.set_file_transmission_allowed(true);
     let result = manager.handle_command(command(payload.as_bytes()), false);
     assert_eq!(result.response.unwrap().error_code, Some("E2BIG"));
     assert!(!path.exists());
@@ -894,6 +911,7 @@ fn compressed_local_media_uses_format_specific_size_semantics() {
         encoded_path(&raw_path)
     );
     let mut manager = GraphicsManager::new();
+    manager.set_file_transmission_allowed(true);
     let result = manager.handle_command(command(payload.as_bytes()), false);
     assert!(result.response.unwrap().ok);
     assert!(!raw_path.exists());
@@ -906,7 +924,6 @@ fn compressed_local_media_uses_format_specific_size_semantics() {
     ordinary_raw.write_all(&compressed_raw).unwrap();
     ordinary_raw.flush().unwrap();
     let ordinary_path = ordinary_raw.path().to_path_buf();
-    manager.set_file_transmission_allowed(true);
     let payload = format!(
         "a=t,t=f,f=32,s=2,v=1,S={},o=z,i=66;{}",
         compressed_raw.len(),

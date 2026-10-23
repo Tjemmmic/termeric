@@ -661,8 +661,8 @@ pub struct SecurityConfig {
     /// DECRQCRA checksum reports. Disabled by default to prevent screen scraping.
     pub allow_screen_checksum_reports: bool,
     /// Permit terminal applications to read persistent local files through
-    /// Kitty's `t=f` graphics medium. Disabled by default because the path is
-    /// supplied by the application running inside the terminal.
+    /// Kitty's file graphics media (`t=f` and `t=t`). Disabled by default
+    /// because the path is supplied by the application inside the terminal.
     pub allow_kitty_file_transfers: bool,
     /// Permit authenticated running-GUI control and separately granted
     /// declarative plugins to write bounded UTF-8 text to an exact terminal.

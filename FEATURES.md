@@ -46,7 +46,7 @@ What Termeric supports today, and what is planned. Termeric runs on Linux only f
 
 | Feature | Status | Notes |
 | --- | --- | --- |
-| Kitty graphics | Partial | Most of the protocol, including animation, Unicode placeholders, and relative placements. Loading images from files on disk needs `allow_kitty_file_transfers = true` under `[security]`. |
+| Kitty graphics | Partial | Most of the protocol, including animation, Unicode placeholders, and relative placements. Loading images from files on disk, ordinary or temporary, needs `allow_kitty_file_transfers = true` under `[security]`; without it, `kitten icat` sends images inline. |
 | Sixel and iTerm2 images | Partial | Static Sixel images and iTerm2 inline PNG images. Not iTerm2 file downloads, other iTerm2 image formats, or animation. |
 | Kitty file transfer | Partial | Files, folders, and links from a program or remote shell to your machine, and up to 16 files (64 MiB in all) back, each after you approve it. Not resuming, overwriting, delta transfers, or sending folders back. Refused in agent and plugin panes and in serial tabs. |
 | Drag and drop | Partial | Dropping a file or folder types its quoted path into the pane, including agent and plugin panes. Not into serial tabs or read-only panes. On a live-domain pane it uploads the file after you confirm, one at a time, up to 64 MiB. |

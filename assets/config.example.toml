@@ -181,8 +181,9 @@ mode = "firstboot"        # never, firstboot (the first launch ever), newwindow,
 [security]
 # Let programs read your screen one cell at a time (DECRQCRA). Keep off.
 allow_screen_checksum_reports = false
-# Let programs load Kitty images from files on disk. Keep off unless you trust
-# every program you run.
+# Let programs load Kitty images from files on disk, ordinary or temporary.
+# While off, programs that ask first (such as kitten icat) send images inline.
+# Keep off unless you trust every program you run.
 allow_kitty_file_transfers = false
 # Let `termeric control send-text`, `termeric mcp`, and plugins granted
 # terminal-input type into terminals. Reading pane text through the control

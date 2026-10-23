@@ -99,9 +99,9 @@ pub(crate) struct GraphicsManager {
     pending_frame: Option<PendingFrame>,
     placements: VecDeque<ManagedImagePlacement>,
     virtual_placements: VecDeque<VirtualImagePlacement>,
-    /// Ordinary-file transmission lets terminal applications request reads
-    /// from persistent host paths. Keep it behind an explicit host policy;
-    /// temporary files and POSIX shared memory have narrower lifecycles.
+    /// File transmission (ordinary and temporary files) lets terminal
+    /// applications request reads from host paths. Keep it behind an explicit
+    /// host policy; POSIX shared memory has a narrower lifecycle.
     allow_file_transmission: bool,
     /// Image numbers are non-unique aliases. Each number retains creation
     /// order so commands can resolve the newest image that has not been
@@ -299,7 +299,7 @@ impl GraphicsManager {
         }
     }
 
-    /// Permit or deny Kitty's persistent ordinary-file transmission medium.
+    /// Permit or deny Kitty's ordinary- and temporary-file transmission media.
     /// This host policy is intentionally independent of terminal reset state.
     pub(crate) fn set_file_transmission_allowed(&mut self, allowed: bool) {
         self.allow_file_transmission = allowed;

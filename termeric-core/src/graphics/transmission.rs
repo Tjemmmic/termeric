@@ -17,11 +17,7 @@ pub(super) fn prepare_transmission_data(
             Ok(())
         }
         KittyMedium::File => {
-            if !allow_file_transmission {
-                return Err(ProtocolError::permission_denied(
-                    "ordinary file transmission is disabled by host policy",
-                ));
-            }
+            ensure_files_allowed(allow_file_transmission)?;
             if cmd.more_chunks {
                 return Err(ProtocolError::invalid(
                     "ordinary-file transmission cannot be chunked",
@@ -48,6 +44,7 @@ pub(super) fn prepare_transmission_data(
             Ok(())
         }
         KittyMedium::TempFile => {
+            ensure_files_allowed(allow_file_transmission)?;
             if cmd.more_chunks {
                 return Err(ProtocolError::invalid(
                     "temporary-file transmission cannot be chunked",
@@ -60,6 +57,19 @@ pub(super) fn prepare_transmission_data(
             )?;
             Ok(())
         }
+    }
+}
+
+/// Ordinary and temporary files are one policy: clients such as `kitten
+/// icat` probe a temporary file and then send ordinary ones, so answering the
+/// two differently would have them send images that are then refused.
+fn ensure_files_allowed(allowed: bool) -> Result<(), ProtocolError> {
+    if allowed {
+        Ok(())
+    } else {
+        Err(ProtocolError::permission_denied(
+            "file transmission is disabled by host policy",
+        ))
     }
 }
 

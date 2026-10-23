@@ -2526,7 +2526,7 @@ impl Terminal {
         self.erase_cells_in_region(cursor.row..cursor.row + 1, start..end, true);
     }
 
-    /// Permit or deny Kitty's persistent ordinary-file transmission medium.
+    /// Permit or deny Kitty's ordinary- and temporary-file transmission media.
     /// Like other host security policy, this survives DECSTR and RIS resets.
     pub fn set_kitty_file_transmission(&mut self, allowed: bool) {
         self.graphics.set_file_transmission_allowed(allowed);
