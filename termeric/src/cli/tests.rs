@@ -1811,3 +1811,59 @@ fn invalid_domain_commands_fail_before_connecting() {
         assert!(parse(arguments.into_iter().map(OsString::from)).is_err());
     }
 }
+
+#[test]
+fn command_tabs_start_and_find_relative_programs_where_the_launch_started() {
+    use std::path::Path;
+
+    let ParseOutcome::Run(mut plan) = parse(
+        [
+            "--command",
+            "./run-me.sh",
+            "--tab",
+            "--command",
+            "htop",
+            "--tab",
+            "--cwd",
+            "/srv",
+            "--command",
+            "bin/tool",
+            "--tab",
+            "--tab",
+            "--",
+            "./last",
+            "./notes.txt",
+        ]
+        .map(OsString::from),
+    )
+    .unwrap() else {
+        panic!("expected a launch plan");
+    };
+    plan.anchor_commands(Path::new("/home/someone/project"));
+    let tabs: Vec<_> = plan.windows[0]
+        .tabs
+        .iter()
+        .map(|tab| {
+            let program = match &tab.target {
+                LaunchTarget::Command { program, .. } => Some(program.as_str()),
+                _ => None,
+            };
+            (program, tab.working_directory.as_deref())
+        })
+        .collect();
+    let project = Some(Path::new("/home/someone/project"));
+    assert_eq!(
+        tabs,
+        [
+            (Some("/home/someone/project/./run-me.sh"), project),
+            (Some("htop"), project),
+            (
+                Some("/home/someone/project/bin/tool"),
+                Some(Path::new("/srv"))
+            ),
+            // A plain shell tab is left alone.
+            (None, None),
+            (Some("/home/someone/project/./last"), project),
+        ]
+    );
+}

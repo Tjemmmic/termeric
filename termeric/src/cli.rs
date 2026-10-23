@@ -100,6 +100,28 @@ impl LaunchPlan {
         matches!(self.windows.as_slice(), [window] if *window == WindowLaunch::default())
     }
 
+    /// Start each `-- COMMAND` tab where this launch started (`launched_in`)
+    /// unless it names a folder, and find a relative program path such as
+    /// `./script` from there, as the shell it was typed in would, whether the
+    /// tab opens in a running Termeric or in a process of its own.
+    pub fn anchor_commands(&mut self, launched_in: &std::path::Path) {
+        for tab in self.windows.iter_mut().flat_map(|window| &mut window.tabs) {
+            let LaunchTarget::Command { program, .. } = &mut tab.target else {
+                continue;
+            };
+            if program.contains('/')
+                && std::path::Path::new(program.as_str()).is_relative()
+                && let Some(anchored) = launched_in.join(program.as_str()).to_str()
+            {
+                *program = anchored.to_owned();
+            }
+            // A tab's folder must be UTF-8; elsewhere it opens as before.
+            if tab.working_directory.is_none() && launched_in.to_str().is_some() {
+                tab.working_directory = Some(launched_in.to_path_buf());
+            }
+        }
+    }
+
     /// The tabs to ask a running Termeric to open, when this launch is one
     /// it can open: a single window of shell or command tabs, each with at
     /// most a folder and a title. Anything a running process cannot honor
@@ -207,7 +229,13 @@ pub fn parse_env() -> anyhow::Result<Invocation> {
     if arguments.first().and_then(|value| value.to_str()) == Some("agent-event") {
         return Ok(Invocation::AgentEvent(parse_agent_event(&arguments[1..])));
     }
-    Ok(Invocation::Command(Box::new(parse_command(arguments)?)))
+    let mut outcome = parse_command(arguments)?;
+    if let (ParseOutcome::Run(plan) | ParseOutcome::QuickAccess(plan), Ok(launched_in)) =
+        (&mut outcome, std::env::current_dir())
+    {
+        plan.anchor_commands(&launched_in);
+    }
+    Ok(Invocation::Command(Box::new(outcome)))
 }
 
 fn parse_command(arguments: Vec<OsString>) -> anyhow::Result<ParseOutcome> {
