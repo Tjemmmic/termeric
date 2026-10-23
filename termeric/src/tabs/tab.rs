@@ -707,13 +707,14 @@ impl Tab {
     }
 
     /// Whether any of this tab's terminals runs a program besides an idle
-    /// shell: a profile or agent the tab launched, or a program started at
-    /// a shell's prompt, which then holds the terminal's foreground. Closing
-    /// the tab ends that program.
+    /// shell: a command, profile, or agent the tab launched, or a program
+    /// started at a shell's prompt, which then holds the terminal's
+    /// foreground. Closing the tab ends that program.
     pub(crate) fn has_running_program(&self) -> bool {
         self.panes.iter_panes().any(|pane| {
             !pane.closed
-                && (!matches!(pane.launch, crate::workspace::WorkspaceLaunch::Shell)
+                && (pane.runs_command
+                    || !matches!(pane.launch, crate::workspace::WorkspaceLaunch::Shell)
                     || pane.pty.foreground_process_group().is_some_and(|group| {
                         !crate::agents::detect::child_holds_foreground(
                             pane.pty.child_id().map(i64::from),

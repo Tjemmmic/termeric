@@ -480,17 +480,13 @@ fn deleting_a_workspace_asks_first() {
 
 #[test]
 fn only_a_program_besides_an_idle_shell_counts_as_running() {
-    let mut tabs = TabManager::for_test(ShellConfig::default());
     // An interactive shell gives what it starts a foreground job of its own.
-    tabs.new_tab_with_command(
-        "/bin/sh",
-        &["-i".into()],
-        None,
-        None,
-        None,
-        HashMap::from([("ENV".to_owned(), "/dev/null".to_owned())]),
-    )
-    .unwrap();
+    let mut tabs = TabManager::for_test(ShellConfig {
+        program: Some("/bin/sh".into()),
+        args: vec!["-i".into()],
+        env: [("ENV".to_owned(), "/dev/null".to_owned())].into(),
+    });
+    tabs.new_tab().unwrap();
     let tab = tabs.active_tab_mut().unwrap();
     assert!(
         crate::test_support::poll_until(Duration::from_secs(5), || {
@@ -505,6 +501,16 @@ fn only_a_program_besides_an_idle_shell_counts_as_running() {
         crate::test_support::poll_until(Duration::from_secs(5), || tab.has_running_program()),
         "a program started at the prompt runs"
     );
+}
+
+#[test]
+fn a_command_the_tab_was_opened_with_counts_as_running() {
+    // `termeric -- vim`: the program is the terminal's own process, so it
+    // holds the foreground just as an idle shell would.
+    let mut tabs = TabManager::for_test(ShellConfig::default());
+    tabs.new_tab_with_command("sleep", &["30".into()], None, None, None, HashMap::new())
+        .unwrap();
+    assert!(tabs.active_tab().unwrap().has_running_program());
 }
 
 #[test]

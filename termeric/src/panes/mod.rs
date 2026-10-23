@@ -101,6 +101,10 @@ pub struct Pane {
     /// owner when a pane is reparented.
     pub(crate) launch: crate::workspace::WorkspaceLaunch,
     pub(crate) launch_shell: ShellConfig,
+    /// The PTY runs a program named when the tab opened (`termeric --
+    /// COMMAND`, a plugin's command), not an interactive shell, so that
+    /// program is running for as long as the pane is open.
+    pub(crate) runs_command: bool,
     pub(crate) integration: crate::session::terminal_state::TerminalIntegration,
     event_overflow_reported: bool,
     /// Daemon-owned terminals consume protocol replies at the real PTY; their
@@ -200,6 +204,7 @@ impl Pane {
             integration: crate::session::terminal_state::TerminalIntegration::default(),
             launch: crate::workspace::WorkspaceLaunch::Shell,
             launch_shell: ShellConfig::default(),
+            runs_command: false,
             event_overflow_reported: false,
             suppress_protocol_replies: false,
         })
@@ -267,6 +272,7 @@ impl Pane {
             ),
         )?;
         pane.last_command = Some(launch.program.clone());
+        pane.runs_command = true;
         if let Some(crate::tabs::TabType::Plugin { plugin_id }) = &launch.tab_type {
             pane.launch = crate::workspace::WorkspaceLaunch::Plugin {
                 plugin_id: plugin_id.clone(),
