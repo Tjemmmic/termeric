@@ -103,7 +103,7 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `deadline_io.rs` | Frame reads and writes bounded by one deadline that trickled bytes cannot renew: the time left (`remaining`), a readiness poll (`readable`), `PollReader` for sockets and pipes (optionally idle without limit until input starts, and cancellable), and `SocketWriter` |
 | `local_socket.rs` | What the domain daemon and the control socket share: the private runtime directory, socket and token paths, same-user peer checks, version-and-token authentication, the bounded accept loop, and stale-socket removal |
 | `safe_text.rs` | Bounding untrusted text shown in chrome or sent over protocols (character classes come from termeric-core) |
-| `portal.rs` | The desktop's own file chooser through the XDG desktop portal (`choose_file`), used by Settings to pick a background image |
+| `portal.rs` | The desktop's own file chooser through the XDG desktop portal (`choose_file`, `choose_folder`), used by Settings to pick a background image and a plugin to install; `app/file_chooser.rs` opens it off the event loop and routes the answer back |
 | `process_group.rs` | Starting, reaping, and signalling a child that leads its own process group with piped stdio (agent view agents, plugin handlers): its group is signalled only while it is unreaped |
 | `stderr_capture.rs` | Keeping the end of a child's stderr on a thread of its own, waiting a bounded time for it to close (agent view agents, plugin handlers) |
 

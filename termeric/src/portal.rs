@@ -31,11 +31,29 @@ pub enum FileChoice {
     Cancelled,
 }
 
+/// What the chooser picks.
+enum Pick<'a> {
+    /// One file of the kind the filter describes.
+    File(&'a FileFilter),
+    /// One folder, starting in `start` when given.
+    Folder { start: Option<&'a std::path::Path> },
+}
+
 /// Ask the desktop for one local file of the kind `filter` describes. It
 /// blocks until the person answers, so call it off the event loop. An error
 /// means no chooser could be shown, such as when no portal runs, and the
 /// caller should ask another way.
 pub fn choose_file(title: &str, filter: &FileFilter) -> Result<FileChoice, String> {
+    choose(title, Pick::File(filter))
+}
+
+/// Ask the desktop for one local folder, starting in `start` when given,
+/// as [`choose_file`] asks for a file.
+pub fn choose_folder(title: &str, start: Option<&std::path::Path>) -> Result<FileChoice, String> {
+    choose(title, Pick::Folder { start })
+}
+
+fn choose(title: &str, pick: Pick<'_>) -> Result<FileChoice, String> {
     let connection = zbus::blocking::connection::Builder::session()
         .and_then(|builder| builder.method_timeout(METHOD_TIMEOUT).build())
         .map_err(|error| format!("session bus connection failed: {error}"))?;
@@ -63,7 +81,7 @@ pub fn choose_file(title: &str, filter: &FileFilter) -> Result<FileChoice, Strin
         zbus::blocking::Proxy::new(&connection, PORTAL_SERVICE, PORTAL_PATH, FILE_CHOOSER)
             .map_err(|error| error.to_string())?;
     let _: OwnedObjectPath = chooser
-        .call("OpenFile", &("", title, open_file_options(&token, filter)))
+        .call("OpenFile", &("", title, open_file_options(&token, &pick)))
         .map_err(|error| format!("the file chooser portal is unavailable: {error}"))?;
 
     let message = responses
@@ -82,29 +100,41 @@ pub fn choose_file(title: &str, filter: &FileFilter) -> Result<FileChoice, Strin
             uris.first()
                 .and_then(|uri| local_path(uri))
                 .map(FileChoice::Chosen)
-                .ok_or_else(|| "the file chooser returned no local file".into())
+                .ok_or_else(|| "the file chooser returned no local path".into())
         }
         1 => Ok(FileChoice::Cancelled),
         _ => Err("the file chooser failed".into()),
     }
 }
 
-/// `OpenFile`'s options: the token that names the request, and the one
-/// filter, as `a(sa(us))` (a name, then glob patterns tagged 0).
-fn open_file_options<'a>(
-    token: &'a str,
-    filter: &'a FileFilter,
-) -> HashMap<&'static str, Value<'a>> {
-    let patterns: Vec<(u32, &str)> = filter
-        .patterns
-        .iter()
-        .map(|pattern| (0, *pattern))
-        .collect();
-    HashMap::from([
+/// `OpenFile`'s options: the token that names the request, and for a file
+/// the one filter, as `a(sa(us))` (a name, then glob patterns tagged 0), or
+/// for a folder `directory` and where to start, as NUL-terminated bytes.
+fn open_file_options<'a>(token: &'a str, pick: &Pick<'a>) -> HashMap<&'static str, Value<'a>> {
+    let mut options = HashMap::from([
         ("handle_token", Value::from(token)),
         ("modal", Value::from(true)),
-        ("filters", Value::from(vec![(filter.name, patterns)])),
-    ])
+    ]);
+    match pick {
+        Pick::File(filter) => {
+            let patterns: Vec<(u32, &str)> = filter
+                .patterns
+                .iter()
+                .map(|pattern| (0, *pattern))
+                .collect();
+            options.insert("filters", Value::from(vec![(filter.name, patterns)]));
+        }
+        Pick::Folder { start } => {
+            options.insert("directory", Value::from(true));
+            if let Some(start) = start {
+                use std::os::unix::ffi::OsStrExt;
+                let mut bytes = start.as_os_str().as_bytes().to_vec();
+                bytes.push(0);
+                options.insert("current_folder", Value::from(bytes));
+            }
+        }
+    }
+    options
 }
 
 /// Where the portal posts its answer to the request `token` names, for the
@@ -148,11 +178,21 @@ mod tests {
             name: "Images",
             patterns: &["*.png"],
         };
-        let options = open_file_options("termeric_ab12", &filter);
+        let options = open_file_options("termeric_ab12", &Pick::File(&filter));
         let signature = |key: &str| options[key].value_signature().to_string();
         assert_eq!(signature("handle_token"), "s");
         assert_eq!(signature("modal"), "b");
         assert_eq!(signature("filters"), "a(sa(us))");
+        assert!(!options.contains_key("directory"));
+
+        let start = std::path::Path::new("/home/me/plugins");
+        let folder = open_file_options("termeric_ab12", &Pick::Folder { start: Some(start) });
+        let signature = |key: &str| folder[key].value_signature().to_string();
+        assert_eq!(signature("directory"), "b");
+        assert_eq!(signature("current_folder"), "ay");
+        assert!(!folder.contains_key("filters"));
+        let bytes = Vec::<u8>::try_from(folder["current_folder"].try_clone().unwrap()).unwrap();
+        assert_eq!(bytes, b"/home/me/plugins\0");
     }
 
     #[test]

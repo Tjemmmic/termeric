@@ -1,6 +1,7 @@
 //! Choosing the background image from Settings: the desktop's own file
 //! chooser, or a typed path where the desktop offers none.
 
+use super::file_chooser::FileChooserPurpose;
 use super::*;
 use crate::portal::{FileChoice, FileFilter};
 use crate::ui::dialog::{DialogBlock, DialogSpec, FieldSpec};
@@ -16,31 +17,14 @@ const USE_IMAGE: &str = "use-background-image";
 const MAX_PATH_BYTES: usize = 4096;
 
 impl App {
-    /// Open the desktop's file chooser for a background image, off the event
-    /// loop. Only one at a time; another request while it is open does nothing.
+    /// Open the desktop's file chooser for a background image, else ask for
+    /// its path.
     pub(super) fn choose_background_image(&mut self) {
-        if self.background_chooser_open {
-            return;
-        }
-        let Some(proxy) = EVENT_LOOP_PROXY.get().cloned() else {
-            return;
-        };
-        let window_key = self.window_key();
-        let spawn = std::thread::Builder::new()
-            .name("termeric-file-chooser".into())
-            .spawn(move || {
-                let result = crate::portal::choose_file("Choose a background image", &IMAGES);
-                let _ = proxy.send_event(AppEvent::WindowResult {
-                    window: window_key,
-                    result: WindowResult::BackgroundImageChosen { result },
-                });
-            });
-        match spawn {
-            Ok(_) => self.background_chooser_open = true,
-            Err(error) => {
-                log::warn!("Could not start the file chooser: {error}");
-                self.ask_background_image_path(String::new(), None);
-            }
+        let opened = self.open_file_chooser(FileChooserPurpose::BackgroundImage, || {
+            crate::portal::choose_file("Choose a background image", &IMAGES)
+        });
+        if !opened {
+            self.ask_background_image_path(String::new(), None);
         }
     }
 
@@ -49,7 +33,6 @@ impl App {
         &mut self,
         result: std::result::Result<FileChoice, String>,
     ) {
-        self.background_chooser_open = false;
         match result {
             Ok(FileChoice::Chosen(path)) => {
                 self.apply_settings_action(SettingsAction::SetBackgroundImagePath(Some(path)));

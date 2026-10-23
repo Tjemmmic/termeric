@@ -23,6 +23,7 @@ mod dialog;
 mod diff_review;
 mod domain_picker;
 mod event_loop;
+mod file_chooser;
 mod file_drop;
 mod font_coverage;
 mod font_features;
@@ -214,8 +215,9 @@ pub(crate) enum WindowResult {
         path: PathBuf,
         result: std::result::Result<crate::renderer::DecodedBackgroundImage, String>,
     },
-    /// The file chooser Settings opened for a background image closed.
-    BackgroundImageChosen {
+    /// The desktop's file chooser this window opened closed.
+    FileChosen {
+        purpose: file_chooser::FileChooserPurpose,
         result: std::result::Result<crate::portal::FileChoice, String>,
     },
     LiveDomainTopology {
@@ -257,7 +259,7 @@ impl WindowResult {
         match self {
             Self::RendererDeviceLost { .. } => RedrawReason::SurfaceRecovery,
             Self::BackgroundImageLoaded { .. }
-            | Self::BackgroundImageChosen { .. }
+            | Self::FileChosen { .. }
             | Self::LiveDomainTopology { .. }
             | Self::DomainPickerLoaded { .. }
             | Self::ContextGathered { .. }
@@ -290,8 +292,8 @@ impl App {
                 path,
                 result,
             } => self.handle_background_image_loaded(generation, path, result),
-            WindowResult::BackgroundImageChosen { result } => {
-                self.handle_background_image_chosen(result)
+            WindowResult::FileChosen { purpose, result } => {
+                self.handle_file_chosen(purpose, result)
             }
             WindowResult::LiveDomainTopology { domain_id, result } => {
                 self.handle_live_domain_topology(domain_id, result)
@@ -604,8 +606,8 @@ pub struct App {
     renderer_generation: u64,
     /// Invalidates stale asynchronous background-image decodes.
     background_image_generation: u64,
-    /// Whether the file chooser for a background image is open.
-    background_chooser_open: bool,
+    /// Whether the desktop's file chooser is open for this window.
+    file_chooser_open: bool,
     /// Only one bounded decoder worker may be active per native window.
     background_image_loading: bool,
     /// Coalesces changes observed while the decoder worker is active.
@@ -1035,7 +1037,7 @@ impl App {
             renderer: None,
             renderer_generation: 0,
             background_image_generation: 0,
-            background_chooser_open: false,
+            file_chooser_open: false,
             background_image_loading: false,
             background_image_pending: false,
             background_image_path,

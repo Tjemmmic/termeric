@@ -123,9 +123,7 @@ impl App {
     /// Do what a row of the Plugins page asks.
     pub(super) fn apply_plugin_action(&mut self, action: PluginAction) {
         match action {
-            PluginAction::Install => {
-                self.ask_plugin(PluginQuestion::InstallPath, String::new(), None)
-            }
+            PluginAction::Install => self.choose_plugin_folder(None),
             PluginAction::SetEnabled { id, enabled } => self.set_plugin_enabled(id, enabled),
             PluginAction::SetPermission {
                 id,
@@ -423,11 +421,10 @@ impl App {
                 finish(self);
                 self.review_plugin_install(field.unwrap_or_default());
             }
-            // Back from the review returns to its folder.
+            // Back from the review chooses again, beside the folder it read.
             (PluginQuestion::ReviewInstall(preview), CANCEL) => {
                 finish(self);
-                let folder = preview.source.display().to_string();
-                self.ask_plugin(PluginQuestion::InstallPath, folder, None);
+                self.choose_plugin_folder(Some(preview.source));
             }
             (PluginQuestion::ReviewInstall(preview), INSTALL_DISABLED | INSTALL_ENABLED) => {
                 finish(self);
@@ -557,6 +554,48 @@ impl App {
             _ => return false,
         }
         true
+    }
+
+    /// Open the desktop's folder chooser for a plugin to install, starting
+    /// beside `previous` (the folder last reviewed), else ask for its path.
+    fn choose_plugin_folder(&mut self, previous: Option<PathBuf>) {
+        let start = previous
+            .as_deref()
+            .and_then(std::path::Path::parent)
+            .map(std::path::Path::to_path_buf);
+        let opened = self.open_file_chooser(
+            super::file_chooser::FileChooserPurpose::PluginFolder,
+            move || crate::portal::choose_folder("Choose a plugin folder", start.as_deref()),
+        );
+        if !opened {
+            let folder = previous
+                .map(|folder| folder.display().to_string())
+                .unwrap_or_default();
+            self.ask_plugin(PluginQuestion::InstallPath, folder, None);
+        }
+    }
+
+    /// Review the plugin in the folder the chooser returned, or ask for its
+    /// path when no chooser could open.
+    pub(super) fn handle_plugin_folder_chosen(
+        &mut self,
+        result: std::result::Result<crate::portal::FileChoice, String>,
+    ) {
+        match result {
+            Ok(crate::portal::FileChoice::Chosen(folder)) => match folder.to_str() {
+                Some(folder) => self.review_plugin_install(folder.to_owned()),
+                None => self.ask_plugin(
+                    PluginQuestion::InstallPath,
+                    folder.display().to_string(),
+                    Some("the folder's path isn't valid UTF-8; move or rename it"),
+                ),
+            },
+            Ok(crate::portal::FileChoice::Cancelled) => {}
+            Err(error) => {
+                log::info!("No folder chooser ({error}); asking for a path instead");
+                self.ask_plugin(PluginQuestion::InstallPath, String::new(), None);
+            }
+        }
     }
 
     /// Read the plugin in `folder` and review installing it, or ask for
@@ -1412,6 +1451,48 @@ program = "termeric-test-fixture-must-not-run"
                 .error
                 .is_some()
         );
+        assert_eq!(fixture.statuses().len(), 1);
+    }
+
+    #[test]
+    fn a_folder_chosen_in_the_desktops_chooser_is_reviewed() {
+        use crate::portal::FileChoice;
+        let fixture = Fixture::new();
+        let source = fixture.base().join("source-chosen-tool");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(
+            source.join(crate::plugin::runtime::MANIFEST_NAME),
+            fixture_manifest("chosen-tool", "1.0.0", false),
+        )
+        .unwrap();
+        let empty = fixture.base().join("not-a-plugin");
+        std::fs::create_dir_all(&empty).unwrap();
+        let mut app = fixture.app();
+
+        // Closing the chooser changes nothing.
+        app.handle_plugin_folder_chosen(Ok(FileChoice::Cancelled));
+        assert!(!app.dialog.is_awaiting_current());
+
+        // A plugin folder goes straight to its review.
+        app.handle_plugin_folder_chosen(Ok(FileChoice::Chosen(source.clone())));
+        assert!(
+            app.dialog_text().contains("fnv1a64:"),
+            "{}",
+            app.dialog_text()
+        );
+        app.answer_dialog(CANCEL);
+
+        // A folder with no plugin in it is refused where it can be retyped.
+        app.handle_plugin_folder_chosen(Ok(FileChoice::Chosen(empty.clone())));
+        let field = app.dialog.field(app.dialog.request_id()).unwrap();
+        assert_eq!(field.value, empty.display().to_string());
+        assert!(field.error.is_some());
+        app.answer_dialog(CANCEL);
+
+        // Without a chooser, the path is asked for.
+        app.handle_plugin_folder_chosen(Err("no portal".into()));
+        app.submit_dialog_field(&source.display().to_string());
+        app.answer_dialog(INSTALL_DISABLED);
         assert_eq!(fixture.statuses().len(), 1);
     }
 
