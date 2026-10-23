@@ -1125,11 +1125,11 @@ impl Plugin for DeclarativePlugin {
                 let mut restore_context = context.clone();
                 restore_context.cwd.clone_from(cwd);
                 let mut response = Some(self.action_for(selected, &restore_context));
-                // Explicit pane launches use the host's pane cwd policy, not
-                // a tab profile's active/inherit placement default.
-                if matches!(hook, Hook::PaneLaunch { .. })
-                    && let Some(PluginAction::OpenTab { cwd: actual, .. }) = &mut response
-                {
+                // Both ask for a terminal in an exact directory: a pane goes
+                // where the host's pane policy puts it, and a restored
+                // terminal back where it was saved. A profile's active or
+                // inherit placement applies only to a fresh tab.
+                if let Some(PluginAction::OpenTab { cwd: actual, .. }) = &mut response {
                     actual.clone_from(cwd);
                 }
                 response
@@ -2536,6 +2536,20 @@ events = ["command-invoked"]
             Some(PluginAction::OpenTab {
                 cwd: Some(cwd), profile: Some(profile), ..
             }) if cwd == "/saved/workspace" && profile == "default"
+        ));
+        // An inherit profile also restores into the directory it was saved in.
+        assert!(matches!(
+            plugins[0].on_hook(
+                &Hook::WorkspaceRestore {
+                    plugin_id: "sample-tools".into(),
+                    profile: Some("quiet".into()),
+                    cwd: Some("/saved/workspace".into())
+                },
+                &context
+            ),
+            Some(PluginAction::OpenTab {
+                cwd: Some(cwd), profile: Some(profile), ..
+            }) if cwd == "/saved/workspace" && profile == "quiet"
         ));
 
         execute_admin_at(
