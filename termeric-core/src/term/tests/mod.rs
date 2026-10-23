@@ -1,4 +1,5 @@
 mod command_text;
+mod graphics_cursor;
 mod graphics_history;
 mod graphics_relay_geometry;
 mod graphics_resize;
@@ -4386,7 +4387,7 @@ fn current_kitty_natural_placement_uses_image_pixels_and_moves_the_cursor() {
     );
     assert_eq!(
         (term.grid().cursor().col, term.grid().cursor().row),
-        (10, 4)
+        (10, 3)
     );
     assert_eq!(term.presentation_images().len(), 1);
     assert!(term.drain_events().is_empty());

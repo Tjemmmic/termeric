@@ -2085,7 +2085,13 @@ impl Terminal {
         } else {
             cursor.col
         };
+        self.index_to_column(col);
+    }
 
+    /// Move the cursor one line down to `col`, scrolling the region when the
+    /// cursor is on its bottom margin.
+    pub(crate) fn index_to_column(&mut self, col: usize) {
+        let cursor = self.grid().cursor();
         if cursor.row + 1 == self.scroll_bottom && self.col_inside_horizontal_margins(col) {
             // At bottom of scroll region, scroll up
             self.scroll_up(1);

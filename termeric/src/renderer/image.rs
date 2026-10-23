@@ -634,8 +634,10 @@ mod tests {
         for down in [false, true] {
             let mut terminal = termeric_core::Terminal::new(4, 4);
             terminal.set_pixel_geometry(16, 16);
-            // A non-top-origin region cannot archive removed image rows.
-            terminal.process(b"\x1b[2;3r\x1b[2;1H\x1bP7q\"1;1;6;6!6~\x1b\\");
+            // A non-top-origin region cannot archive removed image rows. The
+            // margins come after the image, since leaving the cursor below an
+            // image that fills the region would already scroll it.
+            terminal.process(b"\x1b[2;1H\x1bP7q\"1;1;6;6!6~\x1b\\\x1b[2;3r");
             terminal.process(if down { b"\x1b[T" } else { b"\x1b[S" });
             let images = rendered_images(&terminal, (4.0, 4.0));
             assert_eq!(images.len(), 1);

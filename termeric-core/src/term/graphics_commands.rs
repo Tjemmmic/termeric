@@ -58,18 +58,7 @@ impl Terminal {
                 cmd.placement.row = Some(cursor.row as u32);
                 let result = self.graphics.handle_command(cmd, self.alt_screen_active);
                 if let Some((cols, rows)) = result.cursor_movement {
-                    let terminal_rows = self.rows;
-                    let terminal_cols = self.cols;
-                    self.grid_mut().set_cursor(
-                        cursor
-                            .row
-                            .saturating_add(rows as usize)
-                            .min(terminal_rows - 1),
-                        cursor
-                            .col
-                            .saturating_add(cols as usize)
-                            .min(terminal_cols - 1),
-                    );
+                    self.move_after_kitty_image(cursor, cols, rows);
                 }
                 if let Some(response) = result.response {
                     log::trace!("Graphics response: {:?}", response);
@@ -129,11 +118,21 @@ impl Terminal {
         }
     }
 
+    /// Kitty leaves the cursor on the image's last row, just right of it,
+    /// wrapping to the next line past the right edge.
+    fn move_after_kitty_image(&mut self, cursor: crate::grid::Cursor, cols: u32, rows: u32) {
+        let col = cursor.col.saturating_add(cols as usize);
+        let mut lines = (rows as usize).saturating_sub(1);
+        let col = if col >= self.cols {
+            lines += 1;
+            0
+        } else {
+            col
+        };
+        self.move_down_past_image(lines, col);
+    }
+
     fn move_after_inline_image(&mut self, cursor: crate::grid::Cursor, cols: u32, rows: u32) {
-        let row = cursor
-            .row
-            .saturating_add(rows as usize)
-            .min(self.rows.saturating_sub(1));
         let col = if cols == 0 {
             0
         } else {
@@ -142,16 +141,26 @@ impl Terminal {
                 .saturating_add(cols as usize)
                 .min(self.cols.saturating_sub(1))
         };
-        self.grid_mut().set_cursor(row, col);
+        self.move_down_past_image(rows as usize, col);
     }
 
     fn move_after_sixel_image(&mut self, cursor: crate::grid::Cursor, rows: u32) {
-        let row = cursor
-            .row
-            .saturating_add(rows as usize)
-            .min(self.rows.saturating_sub(1));
         let col = cursor.col.min(self.cols.saturating_sub(1));
+        self.move_down_past_image(rows as usize, col);
+    }
+
+    /// Move the cursor `lines` down to `col` the way line feeds do, so an
+    /// image drawn near the bottom scrolls into view with its text instead of
+    /// hanging below the screen for the next output to cover.
+    fn move_down_past_image(&mut self, lines: usize, col: usize) {
+        let cursor = self.grid().cursor();
+        let lines = lines.min(self.rows);
+        for _ in 0..lines {
+            self.index_to_column(cursor.col);
+        }
+        let row = self.grid().cursor().row;
         self.grid_mut().set_cursor(row, col);
+        self.grid_mut().set_wrap_pending(false);
     }
 
     /// Get all image placements for rendering
