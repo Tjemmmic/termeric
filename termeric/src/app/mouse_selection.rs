@@ -125,6 +125,7 @@ impl App {
         self.mouse_selection_source = Some(source);
         self.mouse_pressed = true;
         if let Some(terminal) = self.active_terminal_mut() {
+            terminal.end_prompt_navigation();
             let bounds = match selection.ty {
                 termeric_core::SelectionType::Semantic => Some(terminal.word_at(point)),
                 termeric_core::SelectionType::Lines => Some(terminal.line_at(point)),

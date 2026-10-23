@@ -1952,6 +1952,7 @@ impl App {
                     },
                     copy_mode: (*focused).then_some(copy_mode_info.as_ref()).flatten(),
                     images: term.presentation_images(),
+                    prompt_mark: focused.then(|| term.prompt_navigation_row()).flatten(),
                 }
             })
             .collect();
@@ -2674,18 +2675,19 @@ impl App {
                 self.toggle_settings_surface();
                 self.request_redraw(RedrawReason::Action);
             }
-            Action::PreviousPrompt => {
-                if let Some(terminal) = self.active_terminal_mut() {
-                    if let Some(row) = terminal.previous_prompt() {
-                        log::debug!("Navigate to previous prompt at row {}", row);
+            Action::PreviousPrompt | Action::NextPrompt => {
+                let previous = matches!(action, Action::PreviousPrompt);
+                let landed = self.active_terminal_mut().and_then(|terminal| {
+                    if previous {
+                        terminal.previous_prompt()
+                    } else {
+                        terminal.next_prompt()
                     }
-                }
-            }
-            Action::NextPrompt => {
-                if let Some(terminal) = self.active_terminal_mut() {
-                    if let Some(row) = terminal.next_prompt() {
-                        log::debug!("Navigate to next prompt at row {}", row);
-                    }
+                });
+                if let Some(row) = landed {
+                    log::debug!("Navigate to prompt at row {row}");
+                    // The view may not move, but the mark on the prompt does.
+                    self.request_redraw(RedrawReason::Action);
                 }
             }
             // Off, agent actions have no shortcut: the key is the terminal's.

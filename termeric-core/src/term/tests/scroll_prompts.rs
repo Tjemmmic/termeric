@@ -217,3 +217,35 @@ fn archival_prompt_updates_do_not_move_unrelated_history_or_revive_manual_naviga
         );
     }
 }
+
+#[test]
+fn a_jump_to_a_prompt_on_screen_marks_it_until_navigation_ends() {
+    let mut terminal = Terminal::new(20, 10);
+    for command in ["true", "false", "echo"] {
+        terminal.process(b"\x1b]133;A\x07$ \x1b]133;B\x07");
+        terminal.process(command.as_bytes());
+        terminal.process(b"\r\n\x1b]133;C\x07out\r\n\x1b]133;D;0\x07");
+    }
+    terminal.process(b"\x1b]133;A\x07$ \x1b]133;B\x07");
+    assert_eq!(terminal.prompt_navigation_row(), None);
+
+    // Every prompt is on screen, so the view doesn't move; the mark shows
+    // where the jump landed.
+    assert_eq!(terminal.previous_prompt(), Some(4));
+    assert_eq!(terminal.grid().scroll_offset(), 0);
+    assert_eq!(terminal.prompt_navigation_row(), Some(4));
+    assert_eq!(terminal.previous_prompt(), Some(2));
+    assert_eq!(terminal.prompt_navigation_row(), Some(2));
+
+    terminal.end_prompt_navigation();
+    assert_eq!(terminal.prompt_navigation_row(), None);
+    assert_eq!(
+        terminal.previous_prompt(),
+        Some(4),
+        "it starts from the cursor again"
+    );
+
+    // A new prompt ends it too.
+    terminal.process(b"\x1b]133;A\x07");
+    assert_eq!(terminal.prompt_navigation_row(), None);
+}

@@ -43,6 +43,9 @@ pub(crate) struct UiPalette {
     pub(crate) scrim: [f32; 4],
     // Search colors
     pub(crate) search_match: [f32; 4],
+    /// The row a prompt or failed-command jump landed on: a gentle tint of
+    /// the cursor color behind its text.
+    pub(crate) prompt_mark: [f32; 4],
     pub(crate) search_match_current: [f32; 4],
     // URL/hyperlink color
     pub(crate) url: [f32; 4],
@@ -110,6 +113,7 @@ impl UiPalette {
             scrim: with_alpha(scale_rgb(bg.to_f32_array(), 0.3), 0.30),
             // Search highlights
             search_match: theme.ui.search_match.with_alpha(0.35).to_f32_array(),
+            prompt_mark: with_alpha(cursor.to_f32_array(), 0.16),
             search_match_current: theme.ui.search_match.with_alpha(0.65).to_f32_array(),
             // URL/hyperlink color from theme
             url: theme.ui.url.to_f32_array(),

@@ -37,6 +37,7 @@ impl Renderer {
         window_height: f32,
         pane_width: f32,
         scrollbar: Option<PaneScrollbar>,
+        prompt_mark: Option<i32>,
     ) {
         let cell_width = self.cell_width();
         let cell_height = self.cell_height();
@@ -103,7 +104,9 @@ impl Renderer {
             };
             let cursor_break_col =
                 cursor_cell.and_then(|(row, col)| (row == visual_row).then_some(col));
+            let marked = !filter_mode && prompt_mark == Some(grid_row);
             let mut hasher = DefaultHasher::new();
+            marked.hash(&mut hasher);
             dynamic_colors.generation().hash(&mut hasher);
             grid_row.hash(&mut hasher);
             pane_cols.hash(&mut hasher);
@@ -160,6 +163,19 @@ impl Renderer {
             let rect_checkpoint = self.rect_pipeline.checkpoint();
             let text_checkpoint = self.text_pipeline.queued_checkpoint();
             let mut text_run = TextRunAccumulator::default();
+
+            // The band goes first, so selections, matches, and colored cells
+            // still show over it, and the text over them all.
+            let row_y = offset_y + visual_row as f32 * cell_height;
+            if marked && row_y + cell_height <= max_grid_y {
+                self.rect_pipeline.push_rect(
+                    offset_x,
+                    row_y,
+                    pane_width,
+                    cell_height,
+                    scale_rgb(self.ui.prompt_mark, brightness),
+                );
+            }
 
             for col in 0..pane_cols.min(grid.cols()) {
                 if cursor_break_col == Some(col) {

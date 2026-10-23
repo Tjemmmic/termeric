@@ -413,6 +413,7 @@ mod tests {
                 height: 240.0,
             },
             is_focused: focused,
+            prompt_mark: None,
             broadcast_target: None,
             read_only: false,
             is_zoomed: false,

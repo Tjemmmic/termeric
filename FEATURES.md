@@ -78,7 +78,7 @@ What Termeric supports today, and what is planned. Termeric runs on Linux only f
 
 | Feature | Status | Notes |
 | --- | --- | --- |
-| Shell integration | Supported | Bash, Zsh, Fish, Nushell, and Elvish: prompt jumping and failed-command navigation. |
+| Shell integration | Supported | Bash, Zsh, Fish, Nushell, and Elvish: prompt jumping and failed-command navigation, which scroll to the prompt and tint its row until you type or click. |
 | Shell-reported folder (OSC 7) | Partial | Drives tab titles, new-pane folders, and workspaces. Under Nushell, folder names with an encoded slash (`%2F`) are misread. |
 | Git branch completion | Supported | For Git commands typed at the prompt. |
 | Workspaces | Supported | Saving and restoring windows, tabs, pane layouts, folders, and scrollback; programs start fresh. Save Workspace As…, and Save Workspace in a window not saved yet, ask for a name. In Manage Workspaces…, Enter opens the selected workspace, F2 renames it, and Delete deletes it. `termeric workspace list` lists them. |

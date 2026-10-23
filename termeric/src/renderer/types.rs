@@ -426,6 +426,9 @@ pub struct PaneRenderData<'a> {
     pub copy_mode: Option<&'a CopyModeRenderInfo>,
     /// Graphics placements owned by this pane's terminal.
     pub images: Vec<termeric_core::PresentationImage>,
+    /// The prompt row a prompt or failed-command jump landed on, relative to
+    /// the live screen, while that navigation lasts (focused pane only).
+    pub prompt_mark: Option<i32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

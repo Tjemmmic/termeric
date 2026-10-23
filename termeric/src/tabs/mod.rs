@@ -2226,6 +2226,24 @@ mod tests {
     }
 
     #[test]
+    fn typing_ends_a_prompt_jump() {
+        let mut manager = TabManager::for_test(crate::test_support::sleeping_shell());
+        manager.new_tab().unwrap();
+        let tab = manager.active_tab_mut().unwrap();
+        let terminal = tab.focused_terminal_mut().unwrap();
+        terminal.process(b"\x1b]133;A\x07$ \x1b]133;B\x07true\r\n\x1b]133;C\x07\x1b]133;D;0\x07");
+        terminal.process(b"\x1b]133;A\x07$ \x1b]133;B\x07");
+        assert_eq!(terminal.previous_prompt(), Some(0));
+        assert_eq!(terminal.prompt_navigation_row(), Some(0));
+
+        tab.write(b"x").unwrap();
+        assert_eq!(
+            tab.focused_terminal().unwrap().prompt_navigation_row(),
+            None
+        );
+    }
+
+    #[test]
     fn a_launch_title_stays_when_the_shell_titles_the_tab() {
         let mut manager = TabManager::for_test(crate::test_support::sleeping_shell());
         manager.new_tab_with_cwd(None, Some("foo")).unwrap();

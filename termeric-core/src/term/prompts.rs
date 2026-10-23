@@ -91,6 +91,22 @@ impl Terminal {
         Some(row)
     }
 
+    /// The prompt the last prompt or failed-command jump landed on, as a row
+    /// relative to the live screen (negative in scrollback), for as long as
+    /// that navigation lasts: until the view is scrolled by hand, a new
+    /// prompt starts, or [`Self::end_prompt_navigation`].
+    pub fn prompt_navigation_row(&self) -> Option<i32> {
+        self.prompt_navigation
+            .filter(|navigation| navigation.scroll_offset == self.grid.scroll_offset())
+            .map(|navigation| navigation.row)
+    }
+
+    /// End prompt navigation, as typing or clicking in the terminal does: the
+    /// next jump starts from the cursor or the view again.
+    pub fn end_prompt_navigation(&mut self) {
+        self.prompt_navigation = None;
+    }
+
     fn prompt_navigation_origin(&mut self, previous: bool) -> i32 {
         let offset = self.grid().scroll_offset();
         if let Some(navigation) = self.prompt_navigation

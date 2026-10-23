@@ -366,6 +366,7 @@ impl Renderer {
                 window_height,
                 pane_width,
                 scrollbar,
+                pane.prompt_mark,
             );
             if let Some(copy_mode) = pane.copy_mode {
                 copy_mode_overlays.push((
