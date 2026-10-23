@@ -435,21 +435,21 @@ impl Tab {
         self.pinned = pinned;
     }
 
-    /// A tab running `shell`, titled `title`, else after `working_dir`, else
-    /// after the shell's own working directory.
+    /// A tab running `shell`, named `user_title` (`--title`, a profile's
+    /// title) as renaming it would, so the shell's own titles don't replace
+    /// it; else titled after `working_dir`, else after the shell's own
+    /// working directory, until the shell titles it.
     pub(crate) fn new_shell(
         id: usize,
         area: TerminalArea,
         shell: &ShellConfig,
         policy: &TerminalPolicy,
         working_dir: Option<&str>,
-        title: Option<&str>,
+        user_title: Option<&str>,
     ) -> anyhow::Result<Self> {
         let pane = Pane::new_local(PaneId(0), area.geometry, shell, policy, working_dir, false)?;
-        // Use the given title, else the working directory's name.
-        let title = title
-            .map(str::to_string)
-            .or_else(|| working_dir.map(dir_name_from_path))
+        let title = working_dir
+            .map(dir_name_from_path)
             .or_else(|| {
                 pane.pty
                     .child_id()
@@ -457,15 +457,12 @@ impl Tab {
                     .map(|cwd| dir_name_from_path(&cwd))
             })
             .unwrap_or_else(|| format!("Tab {}", id + 1));
-        Ok(Self::with_terminal(
-            id,
-            title,
-            pane,
-            area,
-            policy,
-            TabType::Shell,
-            shell.clone(),
-        ))
+        let mut tab =
+            Self::with_terminal(id, title, pane, area, policy, TabType::Shell, shell.clone());
+        if let Some(user_title) = user_title {
+            tab.set_user_title(Some(user_title.to_owned()));
+        }
+        Ok(tab)
     }
 
     /// Get the current working directory of this tab's shell process

@@ -137,16 +137,24 @@ impl TabManager {
         self.new_tab_with_cwd(None, None)
     }
 
-    /// Create a shell tab with explicit startup cwd/title overrides.
+    /// Create a shell tab in `working_dir`, named `user_title` as renaming
+    /// it would (see [`Tab::new_shell`]).
     pub(crate) fn new_tab_with_cwd(
         &mut self,
         working_dir: Option<&str>,
-        title: Option<&str>,
+        user_title: Option<&str>,
     ) -> anyhow::Result<usize> {
         let id = self.next_id;
         self.next_id += 1;
 
-        let tab = Tab::new_shell(id, self.area, &self.shell, &self.policy, working_dir, title)?;
+        let tab = Tab::new_shell(
+            id,
+            self.area,
+            &self.shell,
+            &self.policy,
+            working_dir,
+            user_title,
+        )?;
         self.tabs.push(tab);
         self.active = self.tabs.len() - 1;
 
@@ -154,18 +162,19 @@ impl TabManager {
         Ok(id)
     }
 
-    /// Create a tab from a validated reusable terminal profile. The profile's
-    /// executable, argv, and environment are frozen for future pane splits.
+    /// Create a tab from a validated reusable terminal profile, named
+    /// `user_title` as renaming it would. The profile's executable, argv, and
+    /// environment are frozen for future pane splits.
     pub(crate) fn new_tab_with_profile(
         &mut self,
         name: &str,
         shell: ShellConfig,
         working_dir: Option<&str>,
-        title: Option<&str>,
+        user_title: Option<&str>,
     ) -> anyhow::Result<usize> {
         let id = self.next_id;
         self.next_id += 1;
-        let mut tab = Tab::new_shell(id, self.area, &shell, &self.policy, working_dir, title)?;
+        let mut tab = Tab::new_shell(id, self.area, &shell, &self.policy, working_dir, user_title)?;
         tab.tab_type = TabType::Profile {
             name: name.to_string(),
         };
@@ -1232,7 +1241,8 @@ impl TabManager {
     ) -> anyhow::Result<(usize, Vec<String>)> {
         let mut warnings = Vec::new();
         let cwd = usable_primary_workspace_cwd(snapshot, &mut warnings)?;
-        self.new_tab_with_cwd(cwd.as_deref(), Some(&snapshot.title))?;
+        // The saved titles are applied with the layout.
+        self.new_tab_with_cwd(cwd.as_deref(), None)?;
         let index = self.tabs.len() - 1;
         warnings.extend(self.apply_workspace_layout(index, snapshot, pane_launches)?);
         Ok((index, warnings))
@@ -1247,7 +1257,7 @@ impl TabManager {
     ) -> anyhow::Result<(usize, Vec<String>)> {
         let mut warnings = Vec::new();
         let cwd = usable_primary_workspace_cwd(snapshot, &mut warnings)?;
-        self.new_tab_with_profile(name, shell, cwd.as_deref(), Some(&snapshot.title))?;
+        self.new_tab_with_profile(name, shell, cwd.as_deref(), None)?;
         let index = self.tabs.len() - 1;
         warnings.extend(self.apply_workspace_layout(index, snapshot, pane_launches)?);
         Ok((index, warnings))
@@ -2213,6 +2223,16 @@ mod tests {
             let pane = tab.panes.iter().find(|saved| saved.id == pane).unwrap();
             assert!(pane.scrollback_lines.join("\n").contains(history));
         }
+    }
+
+    #[test]
+    fn a_launch_title_stays_when_the_shell_titles_the_tab() {
+        let mut manager = TabManager::for_test(crate::test_support::sleeping_shell());
+        manager.new_tab_with_cwd(None, Some("foo")).unwrap();
+        let tab = manager.active_tab_mut().unwrap();
+        tab.set_osc_title("user@host:~".into());
+        assert_eq!(tab.title, "foo");
+        assert_eq!(tab.user_title(), Some("foo"));
     }
 
     #[test]

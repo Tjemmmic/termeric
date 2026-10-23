@@ -105,21 +105,27 @@ impl App {
                         .new_tab_with_cwd(cwd.as_deref(), spec.title.as_deref())?;
                 }
                 crate::cli::LaunchTarget::Command { program, args } => {
-                    self.tabs
+                    let tabs = self
+                        .tabs
                         .as_mut()
-                        .context("tab manager was lost during startup")?
-                        .launch_command_tab(
-                            crate::tabs::CommandLaunch {
-                                program: program.clone(),
-                                args: args.clone(),
-                                working_dir: cwd.clone(),
-                                title: spec.title.clone(),
-                                tab_type: None,
-                                env: spec.environment.clone(),
-                                environment_policy: spec.environment_policy.clone(),
-                            },
-                            false,
-                        )?;
+                        .context("tab manager was lost during startup")?;
+                    tabs.launch_command_tab(
+                        crate::tabs::CommandLaunch {
+                            program: program.clone(),
+                            args: args.clone(),
+                            working_dir: cwd.clone(),
+                            title: None,
+                            tab_type: None,
+                            env: spec.environment.clone(),
+                            environment_policy: spec.environment_policy.clone(),
+                        },
+                        false,
+                    )?;
+                    if let Some(title) = &spec.title {
+                        tabs.active_tab_mut()
+                            .context("the command tab was lost during startup")?
+                            .set_user_title(Some(title.clone()));
+                    }
                 }
                 crate::cli::LaunchTarget::TerminalProfile { name } => {
                     let profile = self.config.launch_profile(name)?.clone();
