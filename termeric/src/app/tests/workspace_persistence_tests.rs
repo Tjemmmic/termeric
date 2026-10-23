@@ -506,3 +506,41 @@ fn only_a_program_besides_an_idle_shell_counts_as_running() {
         "a program started at the prompt runs"
     );
 }
+
+#[test]
+fn a_closed_split_tab_reopens_with_every_pane_and_its_layout() {
+    let root = tempfile::tempdir().unwrap();
+    let mut app = persistence_app(root.path());
+    let shell = crate::test_support::sleeping_shell();
+    let tabs = app.tabs.as_mut().unwrap();
+    tabs.new_tab().unwrap();
+    tabs.new_tab().unwrap();
+    tabs.active_tab_mut()
+        .unwrap()
+        .panes_for_test(shell, 800.0, 480.0, 10.0, 20.0)
+        .split(
+            termeric_core::split::SplitDirection::Vertical,
+            crate::config::PaneCwdMode::Focused,
+        )
+        .unwrap();
+    let id = close_active_tab(&mut app);
+
+    app.restore_closed_tab(&id);
+    let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
+    let layout = tab.panes.workspace_layout();
+    let panes = tab.panes.iter_panes().count();
+    let toasts = toast_messages(&app);
+    end_persistence_test();
+
+    assert_eq!(panes, 2, "{toasts:?}");
+    assert!(
+        matches!(
+            layout,
+            crate::workspace::WorkspacePaneLayout::Split {
+                direction: termeric_core::split::SplitDirection::Vertical,
+                ..
+            }
+        ),
+        "{layout:?}"
+    );
+}

@@ -787,11 +787,13 @@ impl Tab {
     }
 
     /// Whether the tab is worth keeping as a closed-tab snapshot: it was
-    /// reopened from one, or any of its panes ran a command or scrolled
-    /// output off screen. Short commands that fit on screen still count;
-    /// splash art or a pristine prompt does not.
+    /// reopened from one, it is split (the layout is worth having back), or
+    /// any of its panes ran a command or scrolled output off screen. Short
+    /// commands that fit on screen still count; splash art or a pristine
+    /// prompt in a lone pane does not.
     pub fn has_content(&self) -> bool {
         self.saved_snapshot.is_some()
+            || self.split_panes().is_some()
             || self.panes.iter_panes().any(|pane| {
                 pane.last_command.is_some() || pane.terminal.grid().scrollback_len() > 0
             })

@@ -205,7 +205,7 @@ enabled = true
 auto_restore = false
 # Save a window's workspace when it closes, if it is the last window open or
 # belongs to a saved workspace, and keep a snapshot of each closing tab that
-# had output (Manage Workspaces…, then Tab snapshots).
+# had output or was split (Manage Workspaces…, then Tab snapshots).
 auto_save = true
 # Include terminal text in workspaces and tab snapshots. It is stored as plain
 # text under ~/.local/share/termeric/workspaces/.

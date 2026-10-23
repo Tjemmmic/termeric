@@ -2216,6 +2216,22 @@ mod tests {
     }
 
     #[test]
+    fn a_split_tab_is_worth_saving_before_anything_runs_in_it() {
+        let shell = crate::test_support::sleeping_shell();
+        let mut manager = TabManager::for_test(shell.clone());
+        manager.new_tab().unwrap();
+        let tab = manager.active_tab_mut().unwrap();
+        assert!(!tab.has_content(), "a pristine lone pane is not kept");
+        tab.panes_for_test(shell, 800.0, 160.0, 10.0, 20.0)
+            .split(
+                SplitDirection::Vertical,
+                crate::config::PaneCwdMode::Focused,
+            )
+            .unwrap();
+        assert!(tab.has_content(), "its layout is worth having back");
+    }
+
+    #[test]
     fn output_in_any_pane_makes_a_closing_tab_worth_saving() {
         let root = tempfile::tempdir().unwrap();
         crate::workspace::set_test_workspaces_base_dir(Some(root.path().to_path_buf()));
