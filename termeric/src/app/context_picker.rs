@@ -158,6 +158,20 @@ impl App {
     }
 
     pub(super) fn apply_context_picker_action(&mut self, action: ContextPickerAction) {
+        // Choose Files… opens the desktop's file chooser where there is one,
+        // and the typed list only where there isn't.
+        if let ContextPickerAction::EditFiles { request_id } = action
+            && self.context_picker.can_choose_files(request_id)
+        {
+            let start = self.context_picker.cwd().map(std::path::Path::to_path_buf);
+            let opened = self.open_file_chooser(
+                super::file_chooser::FileChooserPurpose::ContextFiles { request_id },
+                move || crate::portal::choose_files("Choose files to send", start.as_deref()),
+            );
+            if opened {
+                return;
+            }
+        }
         let start = matches!(
             action,
             ContextPickerAction::Primary { request_id }
@@ -169,6 +183,27 @@ impl App {
         if start {
             self.start_context_gather(request_id);
         }
+    }
+
+    /// Use the files chosen for request `request_id`, or offer the typed
+    /// list when no chooser could open.
+    pub(super) fn handle_context_files_chosen(
+        &mut self,
+        request_id: u64,
+        result: std::result::Result<crate::portal::FileChoice, String>,
+    ) {
+        match result {
+            Ok(crate::portal::FileChoice::Chosen(paths)) => {
+                self.context_picker.use_chosen_files(request_id, &paths);
+            }
+            Ok(crate::portal::FileChoice::Cancelled) => {}
+            Err(error) => {
+                log::info!("No file chooser ({error}); asking for paths instead");
+                self.context_picker
+                    .apply(ContextPickerAction::EditFiles { request_id });
+            }
+        }
+        self.request_redraw(RedrawReason::Action);
     }
 
     fn start_context_gather(&mut self, request_id: u64) {

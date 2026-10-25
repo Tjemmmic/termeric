@@ -1373,7 +1373,7 @@ fn a_background_image_is_chosen_typed_or_removed_from_settings() {
     assert!(!app.dialog.is_awaiting_current());
 
     // A chosen file applies at once, unsaved like any other change.
-    app.handle_background_image_chosen(Ok(FileChoice::Chosen(image.clone())));
+    app.handle_background_image_chosen(Ok(FileChoice::Chosen(vec![image.clone()])));
     assert_eq!(
         app.config.window.background_image.path.as_ref(),
         Some(&image)

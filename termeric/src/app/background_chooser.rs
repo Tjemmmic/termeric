@@ -34,8 +34,10 @@ impl App {
         result: std::result::Result<FileChoice, String>,
     ) {
         match result {
-            Ok(FileChoice::Chosen(path)) => {
-                self.apply_settings_action(SettingsAction::SetBackgroundImagePath(Some(path)));
+            Ok(FileChoice::Chosen(paths)) => {
+                if let Some(path) = paths.into_iter().next() {
+                    self.apply_settings_action(SettingsAction::SetBackgroundImagePath(Some(path)));
+                }
             }
             Ok(FileChoice::Cancelled) => {}
             Err(error) => {

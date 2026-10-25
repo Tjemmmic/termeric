@@ -26,7 +26,8 @@ pub struct FileFilter {
 /// What the person did in the chooser.
 #[derive(Debug, PartialEq, Eq)]
 pub enum FileChoice {
-    Chosen(PathBuf),
+    /// What they chose: one path, unless they were offered several.
+    Chosen(Vec<PathBuf>),
     /// They closed it without choosing.
     Cancelled,
 }
@@ -37,6 +38,8 @@ enum Pick<'a> {
     File(&'a FileFilter),
     /// One folder, starting in `start` when given.
     Folder { start: Option<&'a std::path::Path> },
+    /// Any number of files, starting in `start` when given.
+    Files { start: Option<&'a std::path::Path> },
 }
 
 /// Ask the desktop for one local file of the kind `filter` describes. It
@@ -51,6 +54,12 @@ pub fn choose_file(title: &str, filter: &FileFilter) -> Result<FileChoice, Strin
 /// as [`choose_file`] asks for a file.
 pub fn choose_folder(title: &str, start: Option<&std::path::Path>) -> Result<FileChoice, String> {
     choose(title, Pick::Folder { start })
+}
+
+/// Ask the desktop for any number of local files, starting in `start` when
+/// given, as [`choose_file`] asks for one.
+pub fn choose_files(title: &str, start: Option<&std::path::Path>) -> Result<FileChoice, String> {
+    choose(title, Pick::Files { start })
 }
 
 fn choose(title: &str, pick: Pick<'_>) -> Result<FileChoice, String> {
@@ -97,10 +106,11 @@ fn choose(title: &str, pick: Pick<'_>) -> Result<FileChoice, String> {
                 .get("uris")
                 .and_then(|uris| Vec::<String>::try_from(uris.clone()).ok())
                 .unwrap_or_default();
-            uris.first()
-                .and_then(|uri| local_path(uri))
-                .map(FileChoice::Chosen)
-                .ok_or_else(|| "the file chooser returned no local path".into())
+            let paths: Vec<PathBuf> = uris.iter().filter_map(|uri| local_path(uri)).collect();
+            if paths.is_empty() || paths.len() != uris.len() {
+                return Err("the file chooser returned a path that isn't on this computer".into());
+            }
+            Ok(FileChoice::Chosen(paths))
         }
         1 => Ok(FileChoice::Cancelled),
         _ => Err("the file chooser failed".into()),
@@ -126,15 +136,24 @@ fn open_file_options<'a>(token: &'a str, pick: &Pick<'a>) -> HashMap<&'static st
         }
         Pick::Folder { start } => {
             options.insert("directory", Value::from(true));
-            if let Some(start) = start {
-                use std::os::unix::ffi::OsStrExt;
-                let mut bytes = start.as_os_str().as_bytes().to_vec();
-                bytes.push(0);
-                options.insert("current_folder", Value::from(bytes));
-            }
+            insert_start(&mut options, *start);
+        }
+        Pick::Files { start } => {
+            options.insert("multiple", Value::from(true));
+            insert_start(&mut options, *start);
         }
     }
     options
+}
+
+/// Where the chooser starts, as the NUL-terminated bytes it reads.
+fn insert_start(options: &mut HashMap<&'static str, Value<'_>>, start: Option<&std::path::Path>) {
+    if let Some(start) = start {
+        use std::os::unix::ffi::OsStrExt;
+        let mut bytes = start.as_os_str().as_bytes().to_vec();
+        bytes.push(0);
+        options.insert("current_folder", Value::from(bytes));
+    }
 }
 
 /// Where the portal posts its answer to the request `token` names, for the
@@ -191,6 +210,9 @@ mod tests {
         assert_eq!(signature("directory"), "b");
         assert_eq!(signature("current_folder"), "ay");
         assert!(!folder.contains_key("filters"));
+        let files = open_file_options("termeric_ab12", &Pick::Files { start: Some(start) });
+        assert_eq!(files["multiple"].value_signature().to_string(), "b");
+        assert!(!files.contains_key("directory"));
         let bytes = Vec::<u8>::try_from(folder["current_folder"].try_clone().unwrap()).unwrap();
         assert_eq!(bytes, b"/home/me/plugins\0");
     }

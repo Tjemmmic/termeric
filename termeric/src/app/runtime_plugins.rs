@@ -593,14 +593,19 @@ impl App {
         result: std::result::Result<crate::portal::FileChoice, String>,
     ) {
         match result {
-            Ok(crate::portal::FileChoice::Chosen(folder)) => match folder.to_str() {
-                Some(folder) => self.review_plugin_install(folder.to_owned()),
-                None => self.ask_plugin(
-                    PluginQuestion::InstallPath,
-                    folder.display().to_string(),
-                    Some("the folder's path isn't valid UTF-8; move or rename it"),
-                ),
-            },
+            Ok(crate::portal::FileChoice::Chosen(folders)) => {
+                let Some(folder) = folders.into_iter().next() else {
+                    return;
+                };
+                match folder.to_str() {
+                    Some(folder) => self.review_plugin_install(folder.to_owned()),
+                    None => self.ask_plugin(
+                        PluginQuestion::InstallPath,
+                        folder.display().to_string(),
+                        Some("the folder's path isn't valid UTF-8; move or rename it"),
+                    ),
+                }
+            }
             Ok(crate::portal::FileChoice::Cancelled) => {}
             Err(error) => {
                 log::info!("No folder chooser ({error}); asking for a path instead");
@@ -1492,7 +1497,7 @@ program = "termeric-test-fixture-must-not-run"
         assert!(!app.dialog.is_awaiting_current());
 
         // A plugin folder goes straight to its review.
-        app.handle_plugin_folder_chosen(Ok(FileChoice::Chosen(source.clone())));
+        app.handle_plugin_folder_chosen(Ok(FileChoice::Chosen(vec![source.clone()])));
         assert!(
             app.dialog_text().contains("fnv1a64:"),
             "{}",
@@ -1501,7 +1506,7 @@ program = "termeric-test-fixture-must-not-run"
         app.answer_dialog(CANCEL);
 
         // A folder with no plugin in it is refused where it can be retyped.
-        app.handle_plugin_folder_chosen(Ok(FileChoice::Chosen(empty.clone())));
+        app.handle_plugin_folder_chosen(Ok(FileChoice::Chosen(vec![empty.clone()])));
         let field = app.dialog.field(app.dialog.request_id()).unwrap();
         assert_eq!(field.value, empty.display().to_string());
         assert!(field.error.is_some());

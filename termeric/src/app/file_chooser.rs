@@ -12,6 +12,8 @@ pub(crate) enum FileChooserPurpose {
     BackgroundImage,
     /// Settings → Plugins → Install a plugin….
     PluginFolder,
+    /// The context picker's Choose Files…, for its request `request_id`.
+    ContextFiles { request_id: u64 },
 }
 
 impl App {
@@ -62,6 +64,9 @@ impl App {
         match purpose {
             FileChooserPurpose::BackgroundImage => self.handle_background_image_chosen(result),
             FileChooserPurpose::PluginFolder => self.handle_plugin_folder_chosen(result),
+            FileChooserPurpose::ContextFiles { request_id } => {
+                self.handle_context_files_chosen(request_id, result);
+            }
         }
     }
 }

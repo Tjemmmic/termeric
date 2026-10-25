@@ -11,7 +11,7 @@ use super::text_input_viewport::TextInputViewport;
 use crate::agents::AgentTarget;
 use crate::agents::context::{
     ContextGatherRequest, MAX_CONTEXT_FILES, MAX_CONTEXT_PATH_CHARS, MAX_CONTEXT_SOURCE_CHARS,
-    is_git_repo, validate_specific_files,
+    is_git_repo, validate_chosen_files, validate_specific_files,
 };
 use crate::ui::geometry::Bounds;
 
@@ -524,6 +524,36 @@ impl ContextPicker {
         self.request.is_awaiting_current()
     }
 
+    /// The folder the context comes from, where the file chooser starts.
+    pub fn cwd(&self) -> Option<&std::path::Path> {
+        self.cwd.as_deref()
+    }
+
+    /// Whether Choose Files… in request `request_id` would open now: the
+    /// sources show and there is a folder to choose in.
+    pub fn can_choose_files(&self, request_id: u64) -> bool {
+        self.is_awaiting(request_id)
+            && self.phase == ContextPickerPhase::Sources
+            && self.cwd.is_some()
+    }
+
+    /// Use the files the desktop's chooser returned for request
+    /// `request_id`. Ones it refuses (outside the folder, not files, too
+    /// many) open the typed list with them in it and the reason, to fix.
+    pub fn use_chosen_files(&mut self, request_id: u64, chosen: &[PathBuf]) {
+        if !self.can_choose_files(request_id) {
+            return;
+        }
+        match validate_chosen_files(self.cwd.as_deref(), chosen) {
+            Ok(paths) => self.set_specific_files(paths),
+            Err(error) => {
+                self.specific_files = chosen.to_vec();
+                self.open_file_editor();
+                self.status = Some(error);
+            }
+        }
+    }
+
     pub fn phase(&self) -> ContextPickerPhase {
         self.phase
     }
@@ -906,30 +936,33 @@ impl ContextPicker {
 
     fn commit_file_editor(&mut self) {
         match validate_specific_files(self.cwd.as_deref(), self.file_input.text()) {
-            Ok(paths) => {
-                self.specific_files = paths;
-                if let Some(source) = self
-                    .sources
-                    .iter_mut()
-                    .find(|source| source.id == ContextSourceId::SpecificFiles)
-                {
-                    // Saving paths includes them; saving none leaves the
-                    // source nothing to send.
-                    let chosen = !self.specific_files.is_empty();
-                    source.available = chosen;
-                    source.selected = chosen;
-                    source.label = if chosen {
-                        format!("Specific Files ({})", self.specific_files.len())
-                    } else {
-                        "Specific Files".into()
-                    };
-                }
-                self.phase = ContextPickerPhase::Sources;
-                self.status = None;
-                self.focus = ContextPickerFocus::Button(ContextPickerButton::ChooseFiles);
-            }
+            Ok(paths) => self.set_specific_files(paths),
             Err(error) => self.status = Some(error),
         }
+    }
+
+    /// Send `paths` as Specific Files, back on the sources.
+    fn set_specific_files(&mut self, paths: Vec<PathBuf>) {
+        self.specific_files = paths;
+        if let Some(source) = self
+            .sources
+            .iter_mut()
+            .find(|source| source.id == ContextSourceId::SpecificFiles)
+        {
+            // Saving paths includes them; saving none leaves the
+            // source nothing to send.
+            let chosen = !self.specific_files.is_empty();
+            source.available = chosen;
+            source.selected = chosen;
+            source.label = if chosen {
+                format!("Specific Files ({})", self.specific_files.len())
+            } else {
+                "Specific Files".into()
+            };
+        }
+        self.phase = ContextPickerPhase::Sources;
+        self.status = None;
+        self.focus = ContextPickerFocus::Button(ContextPickerButton::ChooseFiles);
     }
 
     fn reveal_selection(&mut self) {
@@ -1252,6 +1285,42 @@ mod tests {
         assert_eq!(
             initial_selection(&unavailable),
             (0, ContextPickerFocus::Button(ContextPickerButton::Cancel))
+        );
+    }
+
+    #[test]
+    fn files_chosen_in_the_desktops_chooser_are_sent_or_offered_to_fix() {
+        let directory = tempfile::tempdir().unwrap();
+        // A comma in a name is fine: chosen paths are never split as text.
+        let first = directory.path().join("roots, notes.txt");
+        let second = directory.path().join("ginger.rs");
+        std::fs::write(&first, "a\n").unwrap();
+        std::fs::write(&second, "b\n").unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        let mut picker = ContextPicker::new();
+        let request = picker.open(Some(directory.path().display().to_string()), target(5));
+        assert!(picker.can_choose_files(request));
+        assert!(!picker.can_choose_files(request + 1));
+
+        picker.use_chosen_files(request, &[first.clone(), second.clone()]);
+        assert_eq!(picker.phase(), ContextPickerPhase::Sources);
+        let files = picker
+            .sources()
+            .iter()
+            .find(|source| source.id == ContextSourceId::SpecificFiles)
+            .cloned()
+            .unwrap();
+        assert_eq!(files.label, "Specific Files (2)");
+        assert!(files.selected);
+
+        // A file outside the folder opens the typed list with the reason.
+        picker.use_chosen_files(request, &[outside.path().to_path_buf()]);
+        assert_eq!(picker.phase(), ContextPickerPhase::FilePaths);
+        assert!(
+            picker
+                .status
+                .as_deref()
+                .is_some_and(|status| status.contains("outside"))
         );
     }
 

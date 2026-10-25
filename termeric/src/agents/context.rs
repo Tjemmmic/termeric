@@ -44,26 +44,47 @@ pub(crate) fn validate_specific_files(
     cwd: Option<&Path>,
     value: &str,
 ) -> Result<Vec<PathBuf>, String> {
-    let root = cwd
-        .ok_or_else(|| "Specific files require a working directory".to_string())?
-        .canonicalize()
-        .map_err(|error| format!("Could not resolve the working directory: {error}"))?;
-    let entries: Vec<_> = value
+    let root = context_root(cwd)?;
+    let entries: Vec<&Path> = value
         .split([',', '\n'])
         .map(str::trim)
         .filter(|entry| !entry.is_empty())
+        .map(Path::new)
         .collect();
+    validate_specific_paths(&root, &entries)
+}
+
+/// Check files chosen as paths (the desktop's file chooser), as
+/// [`validate_specific_files`] checks typed ones: each an existing regular
+/// file inside `cwd`, at most [`MAX_CONTEXT_FILES`] of them.
+pub(crate) fn validate_chosen_files(
+    cwd: Option<&Path>,
+    chosen: &[PathBuf],
+) -> Result<Vec<PathBuf>, String> {
+    let root = context_root(cwd)?;
+    let entries: Vec<&Path> = chosen.iter().map(PathBuf::as_path).collect();
+    validate_specific_paths(&root, &entries)
+}
+
+/// The folder specific files must be inside, resolved.
+fn context_root(cwd: Option<&Path>) -> Result<PathBuf, String> {
+    cwd.ok_or_else(|| "Specific files require a working directory".to_string())?
+        .canonicalize()
+        .map_err(|error| format!("Could not resolve the working directory: {error}"))
+}
+
+fn validate_specific_paths(root: &Path, entries: &[&Path]) -> Result<Vec<PathBuf>, String> {
     if entries.len() > MAX_CONTEXT_FILES {
         return Err(format!("Choose at most {MAX_CONTEXT_FILES} files"));
     }
     let mut paths = Vec::with_capacity(entries.len());
-    for entry in entries {
-        if entry.chars().count() > MAX_CONTEXT_PATH_CHARS {
+    for &candidate in entries {
+        let entry = candidate.display();
+        if entry.to_string().chars().count() > MAX_CONTEXT_PATH_CHARS {
             return Err(format!(
                 "A file path exceeds {MAX_CONTEXT_PATH_CHARS} characters"
             ));
         }
-        let candidate = Path::new(entry);
         let candidate = if candidate.is_absolute() {
             candidate.to_path_buf()
         } else {
@@ -72,7 +93,7 @@ pub(crate) fn validate_specific_files(
         let canonical = candidate
             .canonicalize()
             .map_err(|error| format!("Could not open {entry}: {error}"))?;
-        if !canonical.starts_with(&root) {
+        if !canonical.starts_with(root) {
             return Err(format!("{entry} is outside the context working directory"));
         }
         if !canonical.is_file() {
