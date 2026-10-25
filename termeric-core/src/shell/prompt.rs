@@ -41,6 +41,11 @@ pub struct CommandRegion {
     /// Whether this region's row coordinates still refer to retained grid
     /// content. Completed identity survives after its text is evicted.
     pub content_available: bool,
+    /// Whether the rows still on the grid hold this region's content, even
+    /// when its top has scrolled out of history: only an erase, a reflow, or
+    /// a scroll region splitting it clears this, so the rest of a long
+    /// command's output can still be read.
+    pub tail_retained: bool,
     /// Row where the prompt started
     pub prompt_row: i32,
     /// Row where command input started
@@ -204,6 +209,7 @@ impl PromptTracker {
         self.current_region = Some(CommandRegion {
             id,
             content_available: true,
+            tail_retained: true,
             prompt_row: bounded_row(row),
             command_row: None,
             output_row: None,
@@ -482,8 +488,9 @@ impl PromptTracker {
             .iter_mut()
             .chain(self.current_region.iter_mut())
         {
-            if region.content_available && region_overlaps(region, start_row, end_row) {
+            if region_overlaps(region, start_row, end_row) {
                 region.content_available = false;
+                region.tail_retained = false;
             }
         }
     }
@@ -596,7 +603,10 @@ fn shift_archival_region(
         first = first.min(row);
         last = last.max(row);
     }
-    region.content_available &= !(first < bottom && last >= bottom);
+    if first < bottom && last >= bottom {
+        region.content_available = false;
+        region.tail_retained = false;
+    }
     for row in std::iter::once(&mut region.prompt_row).chain(
         [
             &mut region.command_row,
@@ -632,11 +642,15 @@ fn shift_region(region: &mut CommandRegion, amount: i32) {
 }
 
 fn remap_region(region: &mut CommandRegion, rows: &HashMap<i32, i32>) {
+    // A reflow maps only whole regions; the rows of one whose top was gone
+    // no longer refer to its text.
     if !region.content_available {
+        region.tail_retained = false;
         return;
     }
     let Some(prompt_row) = rows.get(&region.prompt_row).copied() else {
         region.content_available = false;
+        region.tail_retained = false;
         return;
     };
     let remap_optional = |row: Option<i32>| match row {
@@ -649,6 +663,7 @@ fn remap_region(region: &mut CommandRegion, rows: &HashMap<i32, i32>) {
         remap_optional(region.finish_row),
     ) else {
         region.content_available = false;
+        region.tail_retained = false;
         return;
     };
     region.prompt_row = prompt_row;

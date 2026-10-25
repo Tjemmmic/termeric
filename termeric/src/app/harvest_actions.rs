@@ -582,26 +582,40 @@ impl App {
 
     /// The command a region ran, as the terminal read it when its output
     /// began; empty once the region's rows are no longer retained.
+    /// A region's command, as read when its output started; it outlives the
+    /// rows it was read from.
     pub(super) fn region_command_text(region: &CommandRegion) -> (String, bool) {
-        if !region.content_available {
-            return (String::new(), false);
-        }
         (region.command_text.clone(), region.command_truncated)
     }
 
     /// Extract the output block of a command (between output start and
-    /// finish), keeping its end when it is longer than the budget.
+    /// finish), keeping its end when it is longer than the budget. When its
+    /// top has scrolled out of history, what is left is read and marked as
+    /// cut off.
     pub(super) fn extract_output_text(
         terminal: &Terminal,
         region: &CommandRegion,
     ) -> (String, bool) {
-        if !region.content_available {
-            return (String::new(), false);
-        }
         let Some((start, end)) = region_output_rows(region) else {
             return (String::new(), false);
         };
-        terminal.bounded_rows_text_tail(start, end, MAX_COMMAND_REGION_OUTPUT_BYTES)
+        if region.content_available {
+            return terminal.bounded_rows_text_tail(start, end, MAX_COMMAND_REGION_OUTPUT_BYTES);
+        }
+        if !region.tail_retained {
+            return (String::new(), false);
+        }
+        let oldest =
+            i32::try_from(terminal.grid().scrollback_len()).map_or(i32::MIN, i32::saturating_neg);
+        if end < oldest {
+            return (String::new(), true);
+        }
+        let (text, _) = terminal.bounded_rows_text_tail(
+            start.max(oldest),
+            end,
+            MAX_COMMAND_REGION_OUTPUT_BYTES,
+        );
+        (text, true)
     }
 }
 
@@ -619,6 +633,44 @@ fn region_output_rows(region: &CommandRegion) -> Option<(i32, i32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_command_longer_than_history_keeps_its_text_and_the_end_of_its_output() {
+        let mut terminal = Terminal::new(20, 5);
+        terminal.set_scrollback_limits(10, 1024 * 1024);
+        terminal.process(b"\x1b]133;A\x07$ \x1b]133;B\x07seq 40\r\n\x1b]133;C\x07");
+        for line in 1..=40 {
+            terminal.process(format!("{line}\r\n").as_bytes());
+        }
+        terminal.process(b"\x1b]133;D;0\x07");
+        let region = terminal
+            .prompt_tracker()
+            .completed_region(0)
+            .unwrap()
+            .clone();
+        assert!(!region.content_available, "its prompt left history");
+        assert!(region.tail_retained);
+
+        assert_eq!(App::region_command_text(&region), ("seq 40".into(), false));
+        let (output, truncated) = App::extract_output_text(&terminal, &region);
+        assert!(truncated);
+        assert!(output.trim_end().ends_with("40"), "{output:?}");
+        assert!(!output.contains("\n1\n"), "{output:?}");
+
+        // Erased output is gone, not misread from whatever replaced it.
+        let mut erased = Terminal::new(20, 5);
+        erased.process(
+            b"\x1b]133;A\x07$ \x1b]133;B\x07echo hi\r\n\x1b]133;C\x07hi\r\n\x1b]133;D;0\x07",
+        );
+        erased.process(b"\x1b[H\x1b[2J");
+        let region = erased.prompt_tracker().completed_region(0).unwrap().clone();
+        assert!(!region.tail_retained);
+        assert_eq!(
+            App::extract_output_text(&erased, &region),
+            (String::new(), false)
+        );
+        assert_eq!(App::region_command_text(&region), ("echo hi".into(), false));
+    }
 
     #[test]
     fn harvest_explain_context_discloses_each_partial_snapshot_without_provider_execution() {

@@ -1513,7 +1513,9 @@ impl App {
                             command_truncated,
                             output,
                             output_truncated,
-                            content_available: region.content_available,
+                            // What's left of a long command whose start left
+                            // history still counts; erased content doesn't.
+                            content_available: region.content_available || region.tail_retained,
                             exit_code: region.exit_code,
                         });
                     }

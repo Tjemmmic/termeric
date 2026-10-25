@@ -254,7 +254,7 @@ Result events (below) carry no `context`; a handler that needs it later keeps it
 
 Tab IDs (`tab_id`, `from`, `to`) are unique within their window, so pair them with `origin_window_id`. One change of the active tab raises one `tab-switched`, after the action that caused it.
 
-In `command-completed`, `pane_id` is `null` in a tab that isn't split, `exit_code` is `null` when the shell didn't report one, and `command` and `output` are each `{"text", "truncated", "sanitized"}`. Command text keeps its first 2 KiB or so and output its last 8 KiB or so; `truncated` says the rest was left out, which for output means its start. Control characters other than tab and newline are replaced with `�` and `sanitized` is `true`. When `content_available` is `false`, both texts are empty.
+In `command-completed`, `pane_id` is `null` in a tab that isn't split, `exit_code` is `null` when the shell didn't report one, and `command` and `output` are each `{"text", "truncated", "sanitized"}`. Command text keeps its first 2 KiB or so and output its last 8 KiB or so; `truncated` says the rest was left out, which for output means its start. Control characters other than tab and newline are replaced with `�` and `sanitized` is `true`. `content_available` is `false` when the command's lines were erased or overwritten before it was reported, and both texts are then empty; a command whose start scrolled out of history still has content, and its output keeps what's left, with `truncated` set.
 
 Tabs, panes, and focus changed by a plugin's own actions raise no events; the action's result is the only reply.
 
