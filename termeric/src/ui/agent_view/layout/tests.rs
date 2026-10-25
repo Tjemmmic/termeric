@@ -1032,3 +1032,58 @@ fn spinners_hold_still_with_reduced_motion() {
     assert_eq!(feed::spinner_phase(now, true), 0.0);
     assert_eq!(feed::spinner_phase(later, true), 0.0);
 }
+
+#[test]
+fn a_long_expanded_output_ends_in_a_control_that_collapses_it() {
+    let command_with_output = |output: String| {
+        let mut transcript = Transcript::new("Claude Code", "default");
+        transcript.apply(AgentEvent::Ready(Handshake::default()));
+        transcript.push_user("Run long-output.sh.".into(), Vec::new());
+        message(
+            &mut transcript,
+            "b1",
+            vec![tool_use(
+                "b1",
+                "Bash",
+                json!({"command": "sh long-output.sh"}),
+            )],
+        );
+        transcript.apply(AgentEvent::ToolResult {
+            thread: Thread::Main,
+            result: ToolResult {
+                tool_use_id: "b1".into(),
+                content: output,
+                is_error: false,
+                detail: None,
+            },
+        });
+        AgentSession::detached(PathBuf::from("/home/me/dev/termeric"), transcript)
+    };
+    let key = ExpandKey::Tool("b1".into());
+    let expanded_scene = |session: &AgentSession| {
+        let mut state = open_on(session);
+        state.conversation_mut(session.id()).toggle(key.clone());
+        scene_for(&state, &[session], PANEL)
+    };
+
+    // One enormous line is cut, so it stays a few rows tall.
+    let huge = command_with_output("x".repeat(2_000_000));
+    let scene = expanded_scene(&huge);
+    assert!(targets(&scene).contains(&Target::Toggle(key.clone())));
+    assert!(
+        (0.0..400.0).contains(&scene.feed_height) && scene.feed_height > 0.0,
+        "{}",
+        scene.feed_height
+    );
+
+    // Many lines show their last twelve, ending in Collapse.
+    let long = command_with_output((1..=30).map(|line| format!("line {line}\n")).collect());
+    let scene = expanded_scene(&long);
+    assert!(targets(&scene).contains(&Target::Collapse(key.clone())));
+
+    // A short output needs none: its header is right above it.
+    let short = command_with_output("one\ntwo\n".into());
+    let scene = expanded_scene(&short);
+    assert!(targets(&scene).contains(&Target::Toggle(key.clone())));
+    assert!(!targets(&scene).contains(&Target::Collapse(key)));
+}

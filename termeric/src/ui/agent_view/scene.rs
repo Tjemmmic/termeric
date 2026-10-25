@@ -135,6 +135,9 @@ pub enum Target {
     Back,
     // Conversation.
     Toggle(ExpandKey),
+    /// The control at the end of a long expanded block that collapses it,
+    /// so it can be closed without scrolling back to its header.
+    Collapse(ExpandKey),
     Allow {
         request_id: String,
     },

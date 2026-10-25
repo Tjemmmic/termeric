@@ -892,11 +892,19 @@ pub fn conversation_text(
 }
 
 /// The last `limit` lines of a command's output, and how many were left out.
-pub fn output_tail(text: &str, limit: usize) -> (Vec<&str>, usize) {
+pub fn output_tail(text: &str, limit: usize) -> (Vec<String>, usize) {
     let lines: Vec<&str> = text.trim_end().lines().collect();
     let skipped = lines.len().saturating_sub(limit);
-    (lines[skipped..].to_vec(), skipped)
+    let shown = lines[skipped..]
+        .iter()
+        .map(|line| crate::safe_text::truncate_with_ellipsis(line, OUTPUT_LINE_CHARS))
+        .collect();
+    (shown, skipped)
 }
+
+/// The most of one output line shown; a single huge line would otherwise
+/// fill the conversation.
+pub const OUTPUT_LINE_CHARS: usize = 400;
 
 #[cfg(test)]
 mod tests {
@@ -1211,6 +1219,12 @@ mod tests {
 
         assert_eq!(plan_text(&json!({"plan": "## Steps"})), Some("## Steps"));
         assert_eq!(plan_text(&json!({"plan": "  "})), None);
-        assert_eq!(output_tail("a\nb\nc\n", 2), (vec!["b", "c"], 1));
+        assert_eq!(
+            output_tail("a\nb\nc\n", 2),
+            (vec!["b".into(), "c".into()], 1)
+        );
+        let (huge, _) = output_tail(&"x".repeat(1_000_000), 2);
+        assert_eq!(huge[0].chars().count(), OUTPUT_LINE_CHARS);
+        assert!(huge[0].ends_with('…'));
     }
 }

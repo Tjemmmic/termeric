@@ -77,6 +77,24 @@ impl App {
                     self.agent_view.state.conversation_mut(id).toggle(key);
                 }
             }
+            Target::Collapse(key) => {
+                if let Some(id) = active {
+                    self.agent_view
+                        .state
+                        .conversation_mut(id)
+                        .toggle(key.clone());
+                    // The block's header is where it can be opened again;
+                    // bring it into view, with the keyboard there if it was here.
+                    let header = Target::Toggle(key);
+                    if matches!(
+                        &self.agent_view.state.focus,
+                        Focus::Target(Target::Collapse(_))
+                    ) {
+                        self.agent_view.state.focus = Focus::Target(header.clone());
+                    }
+                    self.reveal_agent_view_target(&header);
+                }
+            }
             Target::Allow { request_id } => {
                 if let Some(session) = self.agent_view.active_session_mut() {
                     session.allow(&request_id, false, DecidedBy::Person);

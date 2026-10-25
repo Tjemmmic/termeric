@@ -25,6 +25,9 @@ const MAX_DIFF_LINES: usize = 200;
 const OUTPUT_LINES: usize = 12;
 /// Diffs this long start collapsed.
 const COLLAPSE_DIFF_LINES: usize = 24;
+/// An expanded block taller than this many lines also ends in a control
+/// that collapses it.
+const COLLAPSE_CONTROL_LINES: f32 = 8.0;
 
 impl Builder<'_, '_> {
     /// The conversation in content coordinates, and its height.
@@ -991,7 +994,16 @@ impl Builder<'_, '_> {
             }
             let indent = self.m.px(22.0);
             height += self.m.px(4.0);
-            height += self.code_block(region, &text, x + indent, y + height, width - indent);
+            let block = self.code_block(region, &text, x + indent, y + height, width - indent);
+            height += block;
+            height += self.collapse_control(
+                region,
+                &ExpandKey::Tool(tool.id.clone()),
+                block,
+                x + indent,
+                y + height,
+                width - indent,
+            );
         }
         height
     }
@@ -1449,6 +1461,14 @@ impl Builder<'_, '_> {
                 heading: false,
             }));
             cursor += layout.height + self.m.px(8.0);
+            cursor += self.collapse_control(
+                &mut body,
+                &key,
+                layout.height,
+                x + pad,
+                cursor,
+                width - pad * 2.0,
+            );
         }
         let bounds = Bounds::new(x, y, width, (cursor - y).round());
         self.header_card(
@@ -1697,15 +1717,53 @@ impl Builder<'_, '_> {
         if expanded && let Some(report) = report {
             let indent = self.m.px(22.0);
             height += self.m.px(4.0);
-            height += self.markdown(
+            let block = self.markdown(
                 region,
                 &report.content,
                 x + indent,
                 y + height,
                 width - indent,
             );
+            height += block;
+            height += self.collapse_control(
+                region,
+                &ExpandKey::Tool(tool.id.clone()),
+                block,
+                x + indent,
+                y + height,
+                width - indent,
+            );
         }
         height
+    }
+
+    /// Below an expanded block `block` tall, a control that collapses it
+    /// when it is long enough to have pushed its header away. Returns the
+    /// height it takes.
+    fn collapse_control(
+        &mut self,
+        region: &mut Region,
+        key: &ExpandKey,
+        block: f32,
+        x: f32,
+        y: f32,
+        width: f32,
+    ) -> f32 {
+        if block <= self.m.mono.line_px * COLLAPSE_CONTROL_LINES {
+            return 0.0;
+        }
+        let gap = self.m.px(4.0);
+        self.button(
+            region,
+            x,
+            y + gap,
+            "Collapse",
+            Some(Icon::ChevronUp),
+            ButtonKind::Ghost,
+            Target::Collapse(key.clone()),
+            width,
+        );
+        gap + self.m.control + gap
     }
 
     // ── Decisions ────────────────────────────────────────────────────────
