@@ -18,7 +18,10 @@ begin
     function __termeric_cwd --on-event fish_prompt
         __termeric_report_cwd "$PWD"
     end
-    if string match -qr '^[0-3]\.' $version
+    # Fish 4 marks its own prompts, with the command's start after the
+    # prompt. Only where it doesn't (Fish 3, or mark-prompt turned off) does
+    # Termeric mark them; the command then starts where typing begins.
+    if not status test-feature mark-prompt 2>/dev/null
         function __termeric_preexec --on-event fish_preexec; printf '\e]133;C\a'; end
         function __termeric_postexec --on-event fish_postexec; printf '\e]133;D;%s\a' $status; end
         function __termeric_prompt --on-event fish_prompt; printf '\e]133;A\a\e]133;B\a'; end

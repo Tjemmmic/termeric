@@ -33,7 +33,21 @@ __termeric_precmd() {
         printf '\033]133;D;%s\007' "$__termeric_status"
     fi
     __termeric_report_cwd
-    printf '\033]133;A\007\033]133;B\007'
+    printf '\033]133;A\007'
+    # The command starts where the prompt ends, so this mark goes at the end
+    # of PS1, again on every prompt: themes may have just rebuilt it. Without
+    # %{…%} the mark would count as prompt width, so then it goes here and
+    # Termeric takes the command's start from where typing begins.
+    if [[ -o prompt_percent ]]; then
+        local __termeric_command_start=$'%{\033]133;B\007%}'
+        if [[ ${PS1-} != *"$__termeric_command_start" ]]; then
+            PS1="${PS1-}$__termeric_command_start"
+        fi
+    else
+        printf '\033]133;B\007'
+    fi
+    # Run after hooks added later, such as a theme's, next time too.
+    precmd_functions=(${precmd_functions:#__termeric_precmd} __termeric_precmd)
     __termeric_seen_command=1
 }
 typeset -ga preexec_functions precmd_functions

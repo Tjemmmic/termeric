@@ -11,7 +11,12 @@ pub(super) const INJECTION_PATH: &str = "/tmp/control\x07\x1b]2;INJECTED_TITLE\x
 /// Printable UTF-8, a literal `%2F`, and URI punctuation that must survive.
 pub(super) const ROUND_TRIP_PATH: &str = "/tmp/space %2F #?;quote'\"/界/é/👩\u{200d}💻";
 
-/// The prompt marks shells emit after the cwd report.
+/// The prompt-start mark Bash and Zsh emit after the cwd report; their
+/// command-start mark ends the prompt itself.
+pub(super) const PROMPT_START: &[u8] = b"\x1b]133;A\x07";
+
+/// The prompt marks Elvish and Fish 3 emit after the cwd report, both
+/// before the prompt is drawn.
 pub(super) const PROMPT_MARKS: &[u8] = b"\x1b]133;A\x07\x1b]133;B\x07";
 
 /// Paths around the 4,096-byte URI ceiling ("file://" leaves 4,089 bytes for

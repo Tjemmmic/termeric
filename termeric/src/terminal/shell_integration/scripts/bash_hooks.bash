@@ -3,6 +3,12 @@
 builtin declare +x __termeric_allexport=$-
 builtin set +a
 builtin unset __termeric_seen_command
+# The command starts where the prompt ends, so this mark goes at the end of
+# PS1, not with the prompt-start mark printed before it.
+__termeric_command_start='\[\e]133;B\a\]'
+# Output starts once the command is entered, before anything the user's own
+# PS0 prints.
+__termeric_output_start=$'\033]133;C\007'
 __termeric_before_prompt() {
     local __termeric_status=$?
     if [ -n "${__termeric_seen_command-}" ]; then
@@ -39,7 +45,22 @@ __termeric_after_prompt() {
             printf '\033]7;file://%s\007' "$__termeric_cwd"
         fi
     fi
-    printf '\033]133;A\007\033]133;B\007'
+    printf '\033]133;A\007'
+    # Again on every prompt, after the user's own hooks, which may have just
+    # rebuilt PS1 (as prompt tools such as starship do).
+    # Under allexport these assignments would export the prompts to every
+    # child; only the user decides that.
+    local __termeric_options=$-
+    builtin set +a
+    if [[ ${PS1-} != *"$__termeric_command_start" ]]; then
+        PS1="${PS1-}$__termeric_command_start"
+    fi
+    if [[ ${PS0-} != "$__termeric_output_start"* ]]; then
+        PS0="$__termeric_output_start${PS0-}"
+    fi
+    if [[ $__termeric_options == *a* ]]; then
+        builtin set -a
+    fi
     __termeric_seen_command=1
     # The user may enable allexport after installation, too. This flag belongs
     # only to this shell, never to a child shell's first prompt.
@@ -56,7 +77,6 @@ else
     # preserve trailing comments instead of appending unsafe semicolons.
     PROMPT_COMMAND=$'__termeric_before_prompt\n'"${PROMPT_COMMAND-}"$'\n__termeric_after_prompt'
 fi
-PS0="${PS0-}"$'\033]133;C\007'
 if [[ $__termeric_allexport == *a* ]]; then
     builtin unset __termeric_allexport
     builtin set -a

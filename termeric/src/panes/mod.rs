@@ -456,6 +456,7 @@ impl Pane {
         }
         self.pty.write_all(data)?;
         self.integration.record_input(data);
+        self.terminal.note_user_input();
         // Typing returns to the live prompt, so a prompt jump's mark ends.
         self.terminal.end_prompt_navigation();
         Ok(())

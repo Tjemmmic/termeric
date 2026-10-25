@@ -542,6 +542,12 @@ pub struct Terminal {
     /// Exact prompt selected by the previous/next prompt actions. The saved
     /// offset lets direct/manual scrolling invalidate this navigation cursor.
     prompt_navigation: Option<PromptNavigationState>,
+    /// Where the cursor was at the last prompt-start mark, as (row, column).
+    prompt_start_cursor: Option<(usize, usize)>,
+    /// The shell marked the command's start where its prompt starts, before
+    /// drawing the prompt (Elvish, Fish 3), so the command really begins where
+    /// the cursor is when the person first types.
+    command_start_awaits_input: bool,
     /// Pending events to be handled by the application
     pending_events: Vec<TerminalEvent>,
     pending_notification_icon_event_bytes: usize,
@@ -643,6 +649,8 @@ impl Terminal {
             pending_graphics_relay_import: None,
             prompt_tracker: PromptTracker::new(),
             prompt_navigation: None,
+            prompt_start_cursor: None,
+            command_start_awaits_input: false,
             pending_events: Vec::new(),
             pending_notification_icon_event_bytes: 0,
             dynamic_colors: DynamicColors::default(),

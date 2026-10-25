@@ -120,6 +120,16 @@ second_hook() {{
     Some((hooks, bytes))
 }
 
+/// What each finished command reads as, which plugins and Harvest are given:
+/// the typed text alone, never the prompt before it.
+fn command_texts(terminal: &termeric_core::Terminal) -> Vec<String> {
+    let tracker = terminal.prompt_tracker();
+    (0..tracker.completed_count())
+        .filter_map(|index| tracker.completed_region(index))
+        .map(|region| region.command_text.clone())
+        .collect()
+}
+
 fn assert_prompt_preserved(command: &str) {
     let Some((baseline_hooks, baseline_bytes)) = probe(command, false) else {
         return;
@@ -163,6 +173,7 @@ fn assert_prompt_preserved(command: &str) {
         vec![0, 1],
         "user hooks must not replace the command exit status"
     );
+    assert_eq!(command_texts(&terminal)[..2], ["true", "false"], "{output}");
 }
 
 #[test]
@@ -228,4 +239,5 @@ fn assert_nounset_without_user_hooks(rc_commands: &str) {
             .collect::<Vec<_>>(),
         vec![0, 1]
     );
+    assert_eq!(command_texts(&terminal)[..2], ["true", "false"], "{output}");
 }

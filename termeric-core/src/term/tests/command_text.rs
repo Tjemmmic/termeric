@@ -83,3 +83,26 @@ fn command_text_is_bounded() {
     assert!(truncated);
     assert_eq!(text, "x".repeat(MAX_COMMAND_TEXT_BYTES));
 }
+
+#[test]
+fn a_command_marked_before_its_prompt_starts_where_typing_began() {
+    // Elvish and Fish 3 mark the command's start before drawing the prompt.
+    let mut terminal = Terminal::new(40, 6);
+    for _ in 0..2 {
+        terminal.process(PROMPT_START);
+        terminal.process(COMMAND_START);
+        terminal.process(b"~/roots> ");
+        terminal.note_user_input();
+        terminal.process(b"ls -l");
+        run(&mut terminal, b"file\r\n");
+        assert_eq!(last_command(&terminal), ("ls -l".into(), false));
+    }
+
+    // A shell that marks it after its prompt is left as it marked it, even
+    // when typing comes later in the line.
+    type_at_prompt(&mut terminal, b"$ ", b"echo ");
+    terminal.note_user_input();
+    terminal.process(b"hi");
+    run(&mut terminal, b"hi\r\n");
+    assert_eq!(last_command(&terminal), ("echo hi".into(), false));
+}

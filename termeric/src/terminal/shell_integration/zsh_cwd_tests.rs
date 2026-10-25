@@ -53,7 +53,7 @@ fn zsh_cwd_encodes_every_nonzero_byte() {
     let Some(bytes) = report(OsStr::from_bytes(&path), "") else {
         return;
     };
-    assert_every_byte_encoded(&bytes, &path, PROMPT_MARKS);
+    assert_every_byte_encoded(&bytes, &path, PROMPT_START);
 }
 
 #[test]
@@ -62,6 +62,32 @@ fn zsh_cwd_bounds_reports_without_truncation_and_keeps_prompt_markers() {
         let Some(bytes) = report(&path, "") else {
             return;
         };
-        assert_bounded(&bytes, &path, accepted, PROMPT_MARKS);
+        assert_bounded(&bytes, &path, accepted, PROMPT_START);
     }
+}
+
+#[test]
+fn zsh_prompt_ends_with_the_command_start_mark_once_after_later_hooks() {
+    let Some(program) = super::tests::test_shell("zsh") else {
+        return;
+    };
+    let home = tempfile::tempdir().unwrap();
+    // A theme's hook, added after Termeric's, rebuilds PS1 on every prompt.
+    let script = format!(
+        "{ZSH_RC}\ntheme() {{ PS1='THEME> ' }}\nprecmd_functions+=(theme)\nfor _ in 1 2 3; do for f in $precmd_functions; do $f; done; done\nprint -rn -- \"$PS1|$precmd_functions\"\n"
+    );
+    let output = Command::new(program)
+        .args(["-f", "-c", &script])
+        .env_clear()
+        .env("HOME", home.path())
+        .env("TERMERIC_ORIGINAL_ZDOTDIR", "")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // The hooks' own output (cwd reports, prompt-start marks) comes first.
+    let (output_and_prompt, hooks) = stdout.rsplit_once('|').unwrap();
+    let (_, prompt) = output_and_prompt.rsplit_once("\x1b]133;A\x07").unwrap();
+    assert_eq!(prompt, "THEME> %{\x1b]133;B\x07%}");
+    assert_eq!(hooks, "theme __termeric_precmd");
 }

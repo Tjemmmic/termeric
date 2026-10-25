@@ -15,6 +15,7 @@ impl Terminal {
         let cursor_col = cursor.col + usize::from(cursor.wrap_pending);
         if params.first().is_some_and(|value| *value == b"A") {
             self.prompt_navigation = None;
+            self.prompt_start_cursor = Some((cursor_row, cursor_col));
         }
         // The command runs from where the prompt ended to where output
         // begins; read its start before output-start closes it.
@@ -22,8 +23,11 @@ impl Terminal {
         match self.prompt_tracker.handle_osc_133(params, cursor_row) {
             Some(PromptType::CommandStart) => {
                 self.prompt_tracker.set_command_start_column(cursor_col);
+                self.command_start_awaits_input =
+                    self.prompt_start_cursor == Some((cursor_row, cursor_col));
             }
             Some(PromptType::OutputStart) => {
+                self.command_start_awaits_input = false;
                 let (text, truncated) = match command_start {
                     Some(start) => self.command_text_between(
                         start,
@@ -89,6 +93,23 @@ impl Terminal {
         let row = self.prompt_tracker.next_failed_prompt(from_row)?;
         self.reveal_prompt(row);
         Some(row)
+    }
+
+    /// Note that the person typed or pasted into this terminal. When the shell
+    /// marked the command's start before drawing its prompt, the command
+    /// begins where the cursor rests now, after the prompt, so its text never
+    /// includes the prompt.
+    pub fn note_user_input(&mut self) {
+        if !std::mem::take(&mut self.command_start_awaits_input)
+            || self.prompt_tracker.pending_command_start().is_none()
+        {
+            return;
+        }
+        let cursor = self.grid().cursor();
+        let row = i32::try_from(cursor.row).unwrap_or(i32::MAX);
+        let column = cursor.col + usize::from(cursor.wrap_pending);
+        self.prompt_tracker
+            .set_pending_command_start(Some((row, column)));
     }
 
     /// The prompt the last prompt or failed-command jump landed on, as a row

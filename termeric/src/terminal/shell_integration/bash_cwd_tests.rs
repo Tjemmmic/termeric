@@ -46,7 +46,7 @@ fn bash_cwd_encodes_every_nonzero_byte_without_leaking_protocol_controls() {
     let Some(bytes) = report(OsStr::from_bytes(&path)) else {
         return;
     };
-    assert_every_byte_encoded(&bytes, &path, PROMPT_MARKS);
+    assert_every_byte_encoded(&bytes, &path, PROMPT_START);
 }
 
 #[test]
@@ -55,6 +55,6 @@ fn bash_cwd_bounds_encoded_reports_without_truncating_or_losing_prompt_marks() {
         let Some(bytes) = report(&path) else {
             return;
         };
-        assert_bounded(&bytes, &path, accepted, PROMPT_MARKS);
+        assert_bounded(&bytes, &path, accepted, PROMPT_START);
     }
 }
