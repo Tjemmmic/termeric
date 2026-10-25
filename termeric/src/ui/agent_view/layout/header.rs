@@ -356,13 +356,15 @@ impl Builder<'_, '_> {
         bounds.bottom()
     }
 
+    /// Draw a scrollbar for `content` scrolled by `offset` in `viewport`,
+    /// and return its geometry for dragging.
     pub(super) fn scrollbar(
         &self,
         region: &mut Region,
         viewport: Bounds,
         content: f32,
         offset: f32,
-    ) {
+    ) -> ScrollbarGeometry {
         let width = self.m.px(4.0);
         let track = viewport.inset(0.0, self.m.px(4.0));
         let length = (track.height * viewport.height / content)
@@ -376,16 +378,30 @@ impl Builder<'_, '_> {
             } else {
                 0.0
             };
+        let thumb = Bounds::new(
+            viewport.right() - width - self.m.px(3.0),
+            y.round(),
+            width,
+            length.round(),
+        );
         region.prims.push(Prim::Fill {
-            bounds: Bounds::new(
-                viewport.right() - width - self.m.px(3.0),
-                y.round(),
-                width,
-                length.round(),
-            ),
+            bounds: thumb,
             radius: width / 2.0,
             color: scale_alpha(self.c.text_muted, 0.45),
         });
+        // The thumb is thin; a press anywhere in the strip beside the edge
+        // takes it.
+        let grab_width = self.m.px(14.0);
+        ScrollbarGeometry {
+            track,
+            thumb,
+            grab: Bounds::new(
+                viewport.right() - grab_width,
+                track.y,
+                grab_width,
+                track.height,
+            ),
+        }
     }
 
     pub(super) fn jump_to_end(&mut self, region: &mut Region, viewport: Bounds) {

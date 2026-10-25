@@ -1294,6 +1294,10 @@ impl App {
         }
         self.set_agent_view_keyboard(true);
         self.agent_view.state.focus_visible = false;
+        if self.press_agent_view_scrollbar(x, y) {
+            self.request_redraw(RedrawReason::PointerInput);
+            return true;
+        }
         let hit = self
             .agent_view
             .scene
@@ -1389,6 +1393,11 @@ impl App {
             self.request_redraw(RedrawReason::PointerInput);
             return true;
         }
+        if let Some(grab) = self.agent_view.scrollbar_grab {
+            self.drag_agent_view_scrollbar(y - grab);
+            self.request_redraw(RedrawReason::PointerInput);
+            return true;
+        }
         let inside = self.agent_view_contains(x, y);
         let on_divider = inside && self.on_agent_view_divider(x);
         self.set_agent_view_cursor(on_divider);
@@ -1419,7 +1428,51 @@ impl App {
             self.agent_view.selecting = false;
             used = true;
         }
+        if self.agent_view.scrollbar_grab.take().is_some() {
+            used = true;
+        }
         used
+    }
+
+    /// A press in the feed scrollbar's strip grabs its thumb where it was
+    /// pressed, or, beside the thumb, moves the thumb's middle there first.
+    /// Returns whether it was there.
+    fn press_agent_view_scrollbar(&mut self, x: f32, y: f32) -> bool {
+        let Some(bar) = self
+            .agent_view
+            .scene
+            .as_ref()
+            .and_then(|scene| scene.feed_scrollbar)
+        else {
+            return false;
+        };
+        if !bar.grab.contains(x, y) {
+            return false;
+        }
+        let grab = if (bar.thumb.y..bar.thumb.bottom()).contains(&y) {
+            y - bar.thumb.y
+        } else {
+            let middle = bar.thumb.height / 2.0;
+            self.drag_agent_view_scrollbar(y - middle);
+            middle
+        };
+        self.agent_view.scrollbar_grab = Some(grab);
+        true
+    }
+
+    /// Scroll the feed so the scrollbar's thumb starts at `thumb_top`.
+    fn drag_agent_view_scrollbar(&mut self, thumb_top: f32) {
+        let Some(scene) = self.agent_view.scene.clone() else {
+            return;
+        };
+        let Some(bar) = scene.feed_scrollbar else {
+            return;
+        };
+        let max = (scene.feed_height - scene.feed_viewport.height).max(0.0);
+        let offset = bar.offset_for(thumb_top, max);
+        if let Some(scroll) = self.agent_view_scroll_mut() {
+            scroll.jump_to(offset, max);
+        }
     }
 
     /// Ends pointer gestures, as when the window loses focus or a modal
@@ -1427,6 +1480,7 @@ impl App {
     pub(super) fn cancel_agent_view_gestures(&mut self) {
         self.agent_view.state.end_resize();
         self.agent_view.selecting = false;
+        self.agent_view.scrollbar_grab = None;
         self.agent_view.state.hover = None;
     }
 

@@ -587,7 +587,8 @@ impl Builder<'_, '_> {
         let scroll = scroll.round();
         translate(&mut list, -scroll, viewport);
         if max_scroll > 0.0 {
-            self.scrollbar(&mut list, viewport, content_height, scroll);
+            // Menus scroll by wheel and keys; their bar only shows where.
+            let _ = self.scrollbar(&mut list, viewport, content_height, scroll);
         }
         Some(MenuList {
             region: list,

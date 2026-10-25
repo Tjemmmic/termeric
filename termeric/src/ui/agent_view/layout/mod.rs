@@ -41,7 +41,7 @@ use crate::ui::icon::Icon;
 
 use super::scene::{
     Caret, ComposerGeometry, Hit, HitRole, Layer, MenuAction, MenuKind, Node, Prim, Scene,
-    SpanPaint, Target, TextNode, composer_layout,
+    ScrollbarGeometry, SpanPaint, Target, TextNode, composer_layout,
 };
 use super::{AgentViewState, Focus, Layout, OpenMenu, Screen};
 
@@ -330,9 +330,8 @@ impl Builder<'_, '_> {
         let shift = (viewport.y - offset).round();
         translate(&mut feed, shift, viewport);
 
-        if max > 0.0 {
-            self.scrollbar(&mut feed, viewport, feed_height, offset);
-        }
+        let feed_scrollbar =
+            (max > 0.0).then(|| self.scrollbar(&mut feed, viewport, feed_height, offset));
         if self.input.state.screen == Screen::Conversation
             && scroll.is_some_and(|scroll| !scroll.following())
             && max - offset > self.m.px(40.0)
@@ -363,6 +362,7 @@ impl Builder<'_, '_> {
             self.composer_geometry.take(),
         );
         scene.background = self.c.panel;
+        scene.feed_scrollbar = feed_scrollbar;
         scene
     }
 }
@@ -455,6 +455,7 @@ fn assemble(
         nodes: Vec::new(),
         feed_viewport: viewport,
         feed_height,
+        feed_scrollbar: None,
         caret,
         composer_text,
     };

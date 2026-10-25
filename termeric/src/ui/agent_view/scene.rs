@@ -292,9 +292,32 @@ pub struct Scene {
     pub feed_viewport: Bounds,
     /// Height of everything in the feed, for scrolling.
     pub feed_height: f32,
+    /// The feed's scrollbar, while the feed scrolls, for dragging it.
+    pub feed_scrollbar: Option<ScrollbarGeometry>,
     pub caret: Option<Caret>,
     /// The composer's text box, for pointer selection.
     pub composer_text: Option<ComposerGeometry>,
+}
+
+/// A scrollbar as drawn: where its thumb travels, the thumb, and the wider
+/// strip a press grabs it in.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScrollbarGeometry {
+    pub track: Bounds,
+    pub thumb: Bounds,
+    pub grab: Bounds,
+}
+
+impl ScrollbarGeometry {
+    /// The scroll offset, out of `max`, that puts the thumb's top at
+    /// `thumb_top`.
+    pub fn offset_for(&self, thumb_top: f32, max: f32) -> f32 {
+        let travel = self.track.height - self.thumb.height;
+        if travel <= 0.0 {
+            return 0.0;
+        }
+        ((thumb_top - self.track.y) / travel).clamp(0.0, 1.0) * max
+    }
 }
 
 /// Where and how the composer's text is laid out, so keys and clicks can

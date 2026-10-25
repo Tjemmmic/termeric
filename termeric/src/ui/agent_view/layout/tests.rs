@@ -1087,3 +1087,31 @@ fn a_long_expanded_output_ends_in_a_control_that_collapses_it() {
     assert!(targets(&scene).contains(&Target::Toggle(key.clone())));
     assert!(!targets(&scene).contains(&Target::Collapse(key)));
 }
+
+#[test]
+fn a_scrolling_feed_records_its_scrollbar_for_dragging() {
+    let session = busy_session();
+    let state = open_on(&session);
+    // Short enough that the conversation scrolls.
+    let short = Bounds::new(PANEL.x, PANEL.y, PANEL.width, 360.0);
+    let scene = scene_for(&state, &[&session], short);
+    let max = scene.feed_height - scene.feed_viewport.height;
+    assert!(max > 0.0, "{}", scene.feed_height);
+    let bar = scene
+        .feed_scrollbar
+        .expect("a scrolling feed has a scrollbar");
+    assert!(bar.grab.contains(bar.thumb.x + 1.0, bar.thumb.y + 1.0));
+    assert!(bar.grab.right() <= scene.feed_viewport.right());
+    assert_eq!(bar.offset_for(bar.track.y, max), 0.0);
+    assert_eq!(
+        bar.offset_for(bar.track.bottom() - bar.thumb.height, max),
+        max
+    );
+    assert_eq!(bar.offset_for(bar.track.bottom() + 100.0, max), max);
+
+    // A feed that fits has none.
+    let scene = scene_for(&state, &[&session], PANEL);
+    if scene.feed_height <= scene.feed_viewport.height {
+        assert!(scene.feed_scrollbar.is_none());
+    }
+}

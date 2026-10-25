@@ -54,6 +54,9 @@ pub(super) struct AgentViewWindow {
     pub selecting: bool,
     /// The last composer press, to recognize a double-click.
     pub last_press: Option<(Instant, f32, f32)>,
+    /// While the feed's scrollbar is dragged, how far below the thumb's
+    /// top it was grabbed.
+    pub scrollbar_grab: Option<f32>,
     /// The pointer shows the resize cursor over the divider.
     resize_cursor: bool,
     /// Sessions already announced as needing the person.
