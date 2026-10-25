@@ -168,6 +168,17 @@ impl App {
                 );
             }
             PluginAction::Update(id) => match self.preview_runtime_plugin_update(&id) {
+                Ok(preview) if preview.is_unchanged() => {
+                    self.dialog.show(DialogSpec::message(
+                        format!("{} is up to date", preview.name),
+                        vec![
+                            DialogBlock::text(
+                                "Its folder holds the same manifest that's installed, so there's nothing to update.",
+                            ),
+                            DialogBlock::value(preview.source.display().to_string()),
+                        ],
+                    ));
+                }
                 Ok(preview) => self.ask_plugin(
                     PluginQuestion::ReviewUpdate(Box::new(preview)),
                     String::new(),
@@ -856,10 +867,17 @@ fn update_review(preview: &PluginUpdatePreview, error: Option<&str>) -> DialogSp
         .uncovered_by(&preview.candidate_permissions);
     let mut body = vec![DialogBlock::value(
         [
-            format!(
-                "{} {} → {}",
-                preview.id, preview.current_version, preview.candidate_version
-            ),
+            if preview.current_version == preview.candidate_version {
+                format!(
+                    "{} {} (the same version, with a changed manifest)",
+                    preview.id, preview.candidate_version
+                )
+            } else {
+                format!(
+                    "{} {} → {}",
+                    preview.id, preview.current_version, preview.candidate_version
+                )
+            },
             format!(
                 "{} → {} profiles · {} → {} commands",
                 preview.current_profile_count,
@@ -1847,6 +1865,28 @@ program = "termeric-test-fixture-must-not-run"
         assert_eq!(statuses[0].version, "2.0.0");
         assert_eq!(statuses[0].configured_setting_count, 1);
         assert_eq!(row(&app, "Version").unwrap().value, "2.0.0");
+
+        // With the same manifest in its folder, there is nothing to update.
+        let before = app.dialog.request_id();
+        activate(&mut app, manage, "Update…");
+        assert_ne!(app.dialog.request_id(), before);
+        assert!(
+            app.dialog.title().ends_with("is up to date"),
+            "{}",
+            app.dialog.title()
+        );
+        app.apply_dialog_action(DialogAction::Close {
+            request_id: app.dialog.request_id(),
+        });
+        let reported = crate::plugin::runtime::execute_admin_at(
+            PluginAdminCommand::Update {
+                id: "fixture-tool".into(),
+            },
+            &fixture.registry,
+            &fixture.root,
+        )
+        .unwrap();
+        assert!(reported.contains("is up to date"), "{reported}");
 
         activate(&mut app, manage, "Reset settings…");
         assert_eq!(

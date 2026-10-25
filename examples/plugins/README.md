@@ -82,7 +82,7 @@ You grant permissions when you install, and can change them at any time afterwar
 
 ### Updating
 
-Installing copies the manifest, so editing the plugin's source directory has no effect until you update. **Update…** on the plugin's page shows the installed and updated version, profile and command counts, both fingerprints, and the permissions added and removed. Permissions that stay the same keep their grants. Choose **Update and keep on** (or **Update and turn on**), which also grants what the update newly asks for, or **Update and turn off** (or **Update turned off**), which leaves newly requested permissions ungranted.
+Installing copies the manifest, so editing the plugin's source directory has no effect until you update. When the directory still holds the installed manifest, **Update…** and `termeric plugin update` say the plugin is up to date and change nothing; a changed manifest can be updated even when its version stays the same. Otherwise, **Update…** on the plugin's page shows the installed and updated version, profile and command counts, both fingerprints, and the permissions added and removed. Permissions that stay the same keep their grants. Choose **Update and keep on** (or **Update and turn on**), which also grants what the update newly asks for, or **Update and turn off** (or **Update turned off**), which leaves newly requested permissions ungranted.
 
 `termeric plugin update ID` does the same without a review, so it refuses an update that requests a permission or a wider scope the installed version didn't; install that version with `--replace` and explicit `--allow` options instead. Grants for permissions the update drops are removed, and a grant whose permission the update narrows to window scope narrows with it.
 

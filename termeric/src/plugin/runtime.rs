@@ -569,6 +569,12 @@ pub(crate) struct PluginUpdatePreview {
 }
 
 impl PluginUpdatePreview {
+    /// The source folder holds the very manifest that was installed, so
+    /// there is nothing to update.
+    pub(crate) fn is_unchanged(&self) -> bool {
+        self.current_source_fingerprint == self.candidate_source_fingerprint
+    }
+
     pub(crate) fn command(&self, grants: PluginPermissions, enable: bool) -> PluginAdminCommand {
         PluginAdminCommand::UpdateReviewed {
             id: self.id.clone(),
@@ -1327,6 +1333,12 @@ pub(crate) fn execute_admin_at(
                     "updated source changed plugin id from {id:?} to {:?}",
                     manifest.id
                 );
+            }
+            if fingerprint(&bytes) == installed.source_fingerprint {
+                return Ok(format!(
+                    "{id} is up to date: {} holds the manifest that is installed",
+                    installed.source.display()
+                ));
             }
             let previous_manifest = load_installed(&installed, root)?;
             let added_permissions = manifest
