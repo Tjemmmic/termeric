@@ -103,7 +103,7 @@ Everything here is off until you turn on **Agent Features** on the **Agents** pa
 | --- | --- | --- |
 | Recognizing agents in terminals | Experimental | Claude Code, Codex, Gemini CLI, OpenCode, and agents you add. Status reports work for Claude Code and Codex, after **Set Up Agent Status…**. |
 | Change review | Experimental | Reviewing, staging, and reverting an agent's changes to a Git repository. |
-| Agent view | Experimental | A docked panel that runs Claude Code, Codex, or OpenCode as a conversation. |
+| Agent view | Experimental | A docked panel that runs Claude Code, Codex, or OpenCode as a conversation. Tab moves between its controls, the arrow keys move the choice of agent, PageUp and PageDown scroll, and Ctrl+Home and Ctrl+End go to the start and end (in the composer, while it is empty). |
 | Supervisor | Experimental | |
 | Transcripts | Experimental | Recording and exporting an agent's session. Removing secrets from exports is best effort. |
 | `termeric mcp` | Experimental | Termeric's tools for a coding agent, over MCP. |

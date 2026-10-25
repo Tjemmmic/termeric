@@ -614,7 +614,32 @@ impl App {
                 };
                 self.scroll_agent_view_page(direction);
             }
+            // Ctrl+Home and Ctrl+End move the composer's caret while it has
+            // text to move through, and otherwise go to the page's ends.
+            Key::Named(NamedKey::Home | NamedKey::End)
+                if control && !shift && !self.agent_view_composer_has_text() =>
+            {
+                self.scroll_agent_view_to_end(matches!(key, Key::Named(NamedKey::End)));
+            }
             _ => match self.agent_view.state.focus.clone() {
+                // The agents to choose between are one group: the arrows
+                // move the choice, as they do among radio buttons.
+                Focus::Target(Target::ChooseAgent(_))
+                    if plain
+                        && matches!(
+                            key,
+                            Key::Named(
+                                NamedKey::ArrowUp
+                                    | NamedKey::ArrowDown
+                                    | NamedKey::ArrowLeft
+                                    | NamedKey::ArrowRight
+                            )
+                        ) =>
+                {
+                    let forward =
+                        matches!(key, Key::Named(NamedKey::ArrowDown | NamedKey::ArrowRight));
+                    self.step_agent_choice(forward);
+                }
                 Focus::Target(target) => match key {
                     Key::Named(NamedKey::Enter | NamedKey::Space) if plain => {
                         self.activate_agent_view_target(target);
@@ -989,6 +1014,59 @@ impl App {
             Screen::Sessions => Some(&mut state.sessions_scroll),
             Screen::NewSession => Some(&mut state.new_session.scroll),
         }
+    }
+
+    /// Whether the composer, wherever it shows, holds any text.
+    fn agent_view_composer_has_text(&self) -> bool {
+        matches!(self.agent_view.state.focus, Focus::Composer)
+            && self
+                .agent_view
+                .state
+                .composer()
+                .is_some_and(|composer| !composer.text().is_empty())
+    }
+
+    /// Glide to the start of the page, or to its end (the conversation's
+    /// latest), where it then follows what arrives.
+    fn scroll_agent_view_to_end(&mut self, end: bool) {
+        let Some(scene) = self.agent_view.scene.clone() else {
+            return;
+        };
+        let max = (scene.feed_height - scene.feed_viewport.height).max(0.0);
+        let now = Instant::now();
+        let reduced_motion = self.agent_view.state.reduced_motion();
+        if let Some(scroll) = self.agent_view_scroll_mut() {
+            scroll.glide_to(if end { max } else { 0.0 }, max, now, reduced_motion);
+        }
+    }
+
+    /// Choose the next or previous agent on the new-session page, keeping
+    /// the keyboard on it.
+    fn step_agent_choice(&mut self, forward: bool) {
+        let Some(scene) = self.agent_view.scene.clone() else {
+            return;
+        };
+        let agents: Vec<Target> = scene
+            .focus_order()
+            .filter(|target| matches!(target, Target::ChooseAgent(_)))
+            .cloned()
+            .collect();
+        let Focus::Target(current) = &self.agent_view.state.focus else {
+            return;
+        };
+        let Some(at) = agents.iter().position(|target| target == current) else {
+            return;
+        };
+        let next = if forward {
+            (at + 1) % agents.len()
+        } else {
+            (at + agents.len() - 1) % agents.len()
+        };
+        let target = agents[next].clone();
+        self.agent_view.state.focus_visible = true;
+        self.agent_view.state.focus = Focus::Target(target.clone());
+        self.activate_agent_view_target(target.clone());
+        self.reveal_agent_view_target(&target);
     }
 
     fn scroll_agent_view_page(&mut self, direction: f32) {
@@ -1631,6 +1709,64 @@ mod tests {
         let form = &app.agent_view.state.new_session;
         assert_eq!(form.mode.as_deref(), Some("bypassPermissions"));
         assert!(form.auto_approve);
+    }
+
+    #[test]
+    fn the_arrows_move_the_agent_choice_and_ctrl_end_reaches_the_page_end() {
+        use crate::agent_view::agent::AgentKind;
+        use crate::ui::agent_view::scene::{Hit, HitRole, Scene};
+        use crate::ui::geometry::Bounds;
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.agent_view.state.screen = Screen::NewSession;
+        app.agent_view
+            .state
+            .new_session
+            .choose_agent(AgentKind::ClaudeCode);
+        let card = |agent| Hit {
+            bounds: Bounds::new(0.0, 0.0, 10.0, 10.0),
+            clip: None,
+            target: Target::ChooseAgent(agent),
+            role: HitRole::Option { selected: false },
+            label: String::new(),
+            focusable: true,
+        };
+        app.agent_view.scene = Some(std::sync::Arc::new(Scene {
+            hits: vec![
+                card(AgentKind::ClaudeCode),
+                card(AgentKind::Codex),
+                card(AgentKind::OpenCode),
+            ],
+            feed_viewport: Bounds::new(0.0, 0.0, 100.0, 100.0),
+            feed_height: 500.0,
+            ..Scene::default()
+        }));
+        app.agent_view.state.focus = Focus::Target(Target::ChooseAgent(AgentKind::ClaudeCode));
+
+        app.step_agent_choice(true);
+        assert_eq!(app.agent_view.state.new_session.agent, AgentKind::Codex);
+        assert_eq!(
+            app.agent_view.state.focus,
+            Focus::Target(Target::ChooseAgent(AgentKind::Codex))
+        );
+        app.step_agent_choice(false);
+        app.step_agent_choice(false);
+        assert_eq!(
+            app.agent_view.state.new_session.agent,
+            AgentKind::OpenCode,
+            "the choice wraps"
+        );
+
+        app.scroll_agent_view_to_end(true);
+        let later = Instant::now() + std::time::Duration::from_secs(1);
+        assert_eq!(
+            app.agent_view.state.new_session.scroll.offset(400.0, later),
+            400.0
+        );
+        app.scroll_agent_view_to_end(false);
+        assert_eq!(
+            app.agent_view.state.new_session.scroll.offset(400.0, later),
+            0.0
+        );
     }
 
     #[test]
