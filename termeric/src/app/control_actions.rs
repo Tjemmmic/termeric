@@ -30,11 +30,6 @@ impl Requester {
         self == Self::Control
     }
 
-    /// Plugin text always passes destructive-command guardrails.
-    fn always_guards_destructive_input(self) -> bool {
-        self == Self::Plugin
-    }
-
     /// A plugin may target a window other than the focused one, so its
     /// guardrail confirmation names the window.
     fn names_target_window(self) -> bool {
@@ -510,7 +505,7 @@ impl App {
         if self.guardrail.is_awaiting_current() {
             return Err("A destructive-command confirmation is already pending".into());
         }
-        let (tab_id, origin, mode, guarded, read_only) = {
+        let (tab_id, origin, mode, read_only) = {
             let tab = self.control_tab(tab_id)?;
             let tab_id = tab.id;
             let pane = control_running_pane(tab, pane_id)?;
@@ -521,8 +516,6 @@ impl App {
                     pane_id: PaneId(pane_id),
                 },
                 pane.terminal.mode(),
-                requester.always_guards_destructive_input()
-                    || matches!(tab.tab_type, crate::tabs::TabType::Plugin { .. }),
                 pane.read_only,
             )
         };
@@ -543,7 +536,9 @@ impl App {
         let input_bytes = u32::try_from(input_bytes).expect("bounded control input fits u32");
         let wire_bytes = u32::try_from(wire.len()).expect("bounded control wire input fits u32");
 
-        if guarded && let Some(matched) = crate::terminal::guardrails::check_command(text) {
+        // Every automated write, from the control socket (and so `termeric
+        // mcp`) or a plugin, has a destructive command confirmed, in any tab.
+        if let Some(matched) = crate::terminal::guardrails::check_command(text) {
             let target = if requester.names_target_window() {
                 format!(
                     "GUI window {}, tab {tab_id}, pane {pane_id}",

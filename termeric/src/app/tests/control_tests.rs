@@ -1729,6 +1729,26 @@ fn control_input_is_opt_in_exact_paste_aware_and_guarded_without_provider_execut
         "exact control input was {output:?}"
     );
 
+    // A destructive command waits for confirmation even in an ordinary tab:
+    // the control socket also carries what coding agents type through MCP.
+    let (_, _, disposition, confirmation_id) = app
+        .send_text_for(
+            Requester::Control,
+            tab_id as u64,
+            0,
+            "rm -rf ~",
+            false,
+            true,
+        )
+        .unwrap();
+    assert_eq!(
+        disposition,
+        crate::control::protocol::InputDisposition::PendingConfirmation
+    );
+    app.apply_guardrail_action(crate::terminal::guardrails::GuardrailAction::Cancel {
+        request_id: confirmation_id.unwrap(),
+    });
+
     app.tabs
         .as_mut()
         .unwrap()

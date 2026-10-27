@@ -66,6 +66,9 @@ enum ControlArgs {
         json: bool,
     },
     /// Type text into a pane; needs [security] allow_gui_control_input = true
+    ///
+    /// Text that looks destructive, such as `rm -rf`, waits in Termeric until
+    /// you confirm it there.
     SendText {
         #[command(flatten)]
         pane: PaneTarget,

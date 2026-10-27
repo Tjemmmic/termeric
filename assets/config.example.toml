@@ -186,7 +186,8 @@ allow_screen_checksum_reports = false
 # Keep off unless you trust every program you run.
 allow_kitty_file_transfers = false
 # Let `termeric control send-text`, `termeric mcp`, and plugins granted
-# terminal-input type into terminals. Reading pane text through the control
+# terminal-input type into terminals; a command that looks destructive, such
+# as rm -rf, waits until you confirm it. Reading pane text through the control
 # socket needs no setting: any program running as your user can do it.
 allow_gui_control_input = false
 
