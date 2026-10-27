@@ -65,6 +65,9 @@ pub struct Application {
     /// kept apart from the configuration so a reload cannot drop it and a
     /// save cannot write it.
     renderer_backend: Option<crate::config::RendererBackend>,
+    /// Takes files dropped on the windows under Wayland, where winit reports
+    /// none; `None` on X11.
+    wayland_drop: Option<super::wayland_drop::WaylandDrop>,
 }
 
 /// A tab released outside its window. On Wayland no window knows where the
@@ -422,6 +425,7 @@ impl Application {
             last_plugin_registry_check: Instant::now(),
             plugin_paths,
             renderer_backend,
+            wayland_drop: None,
         })
     }
 
@@ -461,6 +465,9 @@ impl Application {
                     .or(window.launch.adopts_tab.then_some(0))
             {
                 let control_id = window.control_window_id;
+                if let (Some(listener), Some(native)) = (&self.wayland_drop, &window.window) {
+                    listener.register(native, window.window_key());
+                }
                 self.window_order.push(id);
                 self.control_window_ids.insert(id, control_id);
                 self.windows.insert(id, window);
@@ -631,6 +638,11 @@ impl Application {
                 }
             }
         }
+        if let Some(listener) = &self.wayland_drop {
+            for window in self.windows.values().filter(|window| window.should_exit) {
+                listener.unregister(window.window_key());
+            }
+        }
         self.windows.retain(|_, window| !window.should_exit);
         self.window_order.retain(|id| self.windows.contains_key(id));
         self.control_window_ids
@@ -731,6 +743,11 @@ impl ApplicationHandler<AppEvent> for Application {
             if let Some(proxy) = super::EVENT_LOOP_PROXY.get().cloned() {
                 super::system_accessibility::start_monitor(proxy);
             }
+        }
+        if self.wayland_drop.is_none()
+            && let Some(proxy) = super::EVENT_LOOP_PROXY.get().cloned()
+        {
+            self.wayland_drop = super::wayland_drop::WaylandDrop::start(event_loop, proxy);
         }
         let _ = self.create_pending_windows(event_loop);
         self.remove_closed_windows(event_loop);
@@ -976,6 +993,12 @@ impl ApplicationHandler<AppEvent> for Application {
         } else {
             event_loop.set_control_flow(ControlFlow::Wait);
         }
+    }
+
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        // The drop listener reads from winit's connection, which closes as
+        // the event loop ends, right after this.
+        self.wayland_drop = None;
     }
 }
 

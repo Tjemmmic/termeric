@@ -165,7 +165,7 @@ fn request_path(sender: &str, token: &str) -> String {
 
 /// The path a `file://` URI names on this computer, or `None` for another
 /// host, another scheme, or a malformed escape.
-fn local_path(uri: &str) -> Option<PathBuf> {
+pub(crate) fn local_path(uri: &str) -> Option<PathBuf> {
     let rest = uri.strip_prefix("file://")?;
     let slash = rest.find('/')?;
     let host = &rest[..slash];

@@ -3202,6 +3202,8 @@ dependencies = [
  "toml_edit 0.22.27",
  "unicode-segmentation",
  "unicode_names2",
+ "wayland-backend",
+ "wayland-client",
  "wgpu",
  "winit",
  "zbus",

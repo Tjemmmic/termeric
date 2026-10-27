@@ -23,6 +23,10 @@ termeric-core = { version = "0.1.0", path = "../termeric-core" }
 # Windowing
 winit = "0.30"
 raw-window-handle = "0.6"
+# Files dropped on a window under Wayland, which winit doesn't report: the
+# versions winit itself uses, on its own connection (`client_system`).
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system"] }
 accesskit = "0.24.1"
 accesskit_winit = "0.33.2"
 

@@ -227,6 +227,24 @@ impl App {
         quote_local_drop_path(path).map(DroppedPathAction::InsertLocal)
     }
 
+    /// Files dropped on this window under Wayland, each handled as X11's
+    /// `DroppedFile` is.
+    pub(super) fn handle_files_dropped(
+        &mut self,
+        result: std::result::Result<Vec<PathBuf>, String>,
+    ) {
+        match result {
+            Ok(paths) => {
+                for path in paths {
+                    self.handle_dropped_path(&path);
+                }
+            }
+            Err(reason) => self
+                .toasts
+                .warning(format!("File was not dropped: {reason}")),
+        }
+    }
+
     pub(super) fn handle_dropped_path(&mut self, path: &std::path::Path) -> bool {
         let action = match self.dropped_path_action(path) {
             Ok(action) => action,

@@ -67,6 +67,7 @@ mod text_target;
 mod theme_picker;
 mod transcripts;
 mod unicode_picker;
+mod wayland_drop;
 mod workspace_actions;
 mod workspace_menu;
 mod workspace_panel_input;
@@ -215,6 +216,9 @@ pub(crate) enum WindowResult {
         path: PathBuf,
         result: std::result::Result<crate::renderer::DecodedBackgroundImage, String>,
     },
+    /// Files were dropped on this window under Wayland (on X11, winit
+    /// reports them as `WindowEvent::DroppedFile`).
+    FilesDropped(std::result::Result<Vec<PathBuf>, String>),
     /// The desktop's file chooser this window opened closed.
     FileChosen {
         purpose: file_chooser::FileChooserPurpose,
@@ -259,6 +263,7 @@ impl WindowResult {
         match self {
             Self::RendererDeviceLost { .. } => RedrawReason::SurfaceRecovery,
             Self::BackgroundImageLoaded { .. }
+            | Self::FilesDropped(_)
             | Self::FileChosen { .. }
             | Self::LiveDomainTopology { .. }
             | Self::DomainPickerLoaded { .. }
@@ -292,6 +297,7 @@ impl App {
                 path,
                 result,
             } => self.handle_background_image_loaded(generation, path, result),
+            WindowResult::FilesDropped(result) => self.handle_files_dropped(result),
             WindowResult::FileChosen { purpose, result } => {
                 self.handle_file_chosen(purpose, result)
             }

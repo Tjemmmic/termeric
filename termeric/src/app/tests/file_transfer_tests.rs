@@ -51,6 +51,41 @@ fn local_file_drop_is_quoted_and_refuses_unsafe_terminal_routes() {
 }
 
 #[test]
+fn a_wayland_drop_handles_each_file_and_says_why_one_was_refused() {
+    let config = Config {
+        shell: crate::test_support::sleeping_shell(),
+        ..Config::default()
+    };
+    let mut app = App::new_headless_with_tabs(config);
+    let messages = |app: &App| -> Vec<String> {
+        app.toasts
+            .iter()
+            .map(|toast| toast.message.clone())
+            .collect()
+    };
+
+    app.handle_window_result(WindowResult::FilesDropped(Err(
+        "only files on this computer can be dropped".into(),
+    )));
+    assert_eq!(
+        messages(&app),
+        ["File was not dropped: only files on this computer can be dropped"]
+    );
+
+    app.handle_window_result(WindowResult::FilesDropped(Ok(vec![
+        PathBuf::from("/tmp/one"),
+        PathBuf::from("relative"),
+    ])));
+    let messages = messages(&app);
+    assert_eq!(messages.len(), 3, "{messages:?}");
+    assert_eq!(
+        messages[1],
+        "Inserted quoted local path; press Enter to use it"
+    );
+    assert!(messages[2].contains("non-absolute"), "{messages:?}");
+}
+
+#[test]
 fn local_file_drop_writes_one_bracketed_payload_without_enter() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("project file's.txt");
