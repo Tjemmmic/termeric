@@ -37,7 +37,7 @@ Termeric has one install method for each platform it supports, and you can alway
 | Windows | — | Chosen with the port | Planned |
 | FreeBSD and other BSDs | — | Chosen with the port | Planned |
 
-Wayland and X11 both work; [FEATURES.md](FEATURES.md) notes where they differ. The arm64 packages are built by the release workflow but haven't been tested on arm64 hardware yet.
+Wayland and X11 both work; [FEATURES.md](FEATURES.md) notes where they differ. This preview is tested by hand on KDE Plasma, on Wayland and X11; GNOME and screen readers aren't tested yet. The arm64 packages are built by the release workflow but haven't been tested on arm64 hardware yet.
 
 Every package installs the program, its desktop entry and icons, the `xterm-termeric` terminfo entry, the manual page, and Bash, Zsh, and Fish completions. Termeric also needs a Vulkan driver for your GPU, or Mesa, whose software renderer it uses when the GPU can't be used.
 
