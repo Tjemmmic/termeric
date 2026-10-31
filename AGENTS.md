@@ -278,7 +278,7 @@ Termeric is named after turmeric, the root, and its house themes are named after
 #### Naming
 
 - **Root themes** are Termeric's own palettes. They must be named after a real root, rhizome, or tuber, and set `author = "Termeric"`. The current twelve: turmeric (the default), ginger, daikon, malanga, beet, turnip, yuca, taro, wasabi, galangal, horseradish, parsnip.
-- **Guest themes** are community palettes (Solarized, Catppuccin, Dracula, Nord, and others). They keep their original names and authors. The theme picker lists them under "Guest", apart from the roots.
+- **Guest themes** are community palettes (Solarized, Catppuccin, Dracula, Nord, and others). They keep their original names and authors. The theme picker lists them under "Guest", apart from the roots. A new guest theme needs its project's license under "Guest themes" in `packaging/notices/notices.hbs`, then the notices regenerated (see Dependencies in CONTRIBUTING.md).
 
 The file name and lookup key are the lowercase name (`turmeric.toml`); the display name in `meta.name` is capitalized (`"Turmeric"`).
 
