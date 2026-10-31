@@ -7,9 +7,9 @@ pkgrel=1
 pkgdesc="GPU-accelerated terminal emulator themed around roots and rhizomes"
 arch=('x86_64' 'aarch64')
 url="https://github.com/Tjemmmic/termeric"
-# Termeric is MIT. The rest covers what the binary links, as listed in the
-# shipped THIRD_PARTY_NOTICES.md: the Rust crates, the Unicode CLDR data, and
-# the bundled libgit2 (GPL-2.0 with its linking exception), its xdiff (LGPL),
+# Termeric is MIT. The rest covers what the binary includes, as listed in the
+# shipped THIRD_PARTY_NOTICES.md: the Rust crates, the guest themes' colors
+# (MIT), the Unicode CLDR data, and the bundled libgit2 (GPL-2.0 with its linking exception), its xdiff (LGPL),
 # and its PCRE2 (BSD-3-Clause with the PCRE2 exception).
 license=(
   'MIT'
