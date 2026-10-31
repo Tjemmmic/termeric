@@ -174,7 +174,7 @@ fn window_grouping() -> [Arg; 5] {
         ),
         flag(
             "quick-access",
-            "Toggle or launch one top-edge drop-down window",
+            "Show or hide the top-edge drop-down terminal, starting it the first time",
             WINDOW_GROUPING,
         ),
         flag(

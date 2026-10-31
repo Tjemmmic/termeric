@@ -606,6 +606,9 @@ pub struct App {
     /// Requested visibility for the dedicated quick-access window. Native
     /// visibility queries are optional on some compositors.
     quick_access_visible: bool,
+    /// Set when a hidden quick-access window should show (a click on one of
+    /// its notifications); Application opens its native window and clears it.
+    request_quick_access_show: bool,
     /// The renderer
     renderer: Option<Renderer>,
     /// Identifies callbacks belonging to the currently installed WGPU device.
@@ -1040,6 +1043,7 @@ impl App {
             last_native_window_title: None,
             fullscreen_requested: false,
             quick_access_visible: true,
+            request_quick_access_show: false,
             renderer: None,
             renderer_generation: 0,
             background_image_generation: 0,

@@ -83,15 +83,15 @@ impl App {
             return false;
         }
 
+        if self.launch.quick_access && !self.quick_access_visible {
+            // Hidden, it has no native window; Application opens one.
+            self.request_quick_access_show = true;
+            return true;
+        }
         let Some(window) = self.window.as_ref() else {
             // Headless tests still exercise exact-origin selection.
             return true;
         };
-        if self.launch.quick_access && !self.quick_access_visible {
-            self.quick_access_visible = true;
-            self.window_occluded = false;
-            window.set_visible(true);
-        }
         window.set_minimized(false);
 
         use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};

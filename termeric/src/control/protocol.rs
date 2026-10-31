@@ -149,6 +149,9 @@ pub enum Request {
         request_id: String,
         window_id: u64,
         visible: bool,
+        /// The desktop's activation token of the launch that asked, so the
+        /// window it shows takes focus.
+        activation_token: Option<String>,
     },
     SelectTab {
         request_id: String,
@@ -1168,8 +1171,24 @@ impl Request {
                 require_target_window(*window_id)?;
                 Ok(())
             }
+            Self::SetQuickAccessVisibility {
+                window_id,
+                activation_token,
+                ..
+            } => {
+                require_target_window(*window_id)?;
+                if activation_token.as_deref().is_some_and(|token| {
+                    token.is_empty()
+                        || token.len() > MAX_JOIN_IDENTITY_BYTES
+                        || token.chars().any(crate::safe_text::is_unsafe_display_char)
+                }) {
+                    return Err(format!(
+                        "A quick-access activation token must be printable UTF-8 of at most {MAX_JOIN_IDENTITY_BYTES} bytes"
+                    ));
+                }
+                Ok(())
+            }
             Self::FocusWindow { window_id, .. }
-            | Self::SetQuickAccessVisibility { window_id, .. }
             | Self::SelectTab { window_id, .. }
             | Self::FocusPane { window_id, .. }
             | Self::CloseWindow { window_id, .. }
@@ -2438,6 +2457,7 @@ mod tests {
                 request_id: request_id.clone(),
                 window_id: 7,
                 visible: false,
+                activation_token: None,
             },
             Request::SelectTab {
                 request_id: request_id.clone(),

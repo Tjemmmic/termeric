@@ -34,14 +34,19 @@ pub fn list(json: bool) -> anyhow::Result<String> {
     }
 }
 
-/// Toggle the one discoverable quick-access window. `None` means no running
-/// process owns one and the caller may safely attempt a guarded launch.
-pub fn toggle_existing_quick_access() -> anyhow::Result<Option<String>> {
-    toggle_existing_quick_access_at(ControlEndpoint::discover_all()?)
+/// Show the one discoverable quick-access window if it is hidden, else hide
+/// it; showing passes on `activation_token` so it takes focus. `None` means
+/// no running process owns one and the caller may safely attempt a guarded
+/// launch.
+pub fn toggle_existing_quick_access(
+    activation_token: Option<String>,
+) -> anyhow::Result<Option<String>> {
+    toggle_existing_quick_access_at(ControlEndpoint::discover_all()?, activation_token)
 }
 
 fn toggle_existing_quick_access_at(
     endpoints: Vec<ControlEndpoint>,
+    activation_token: Option<String>,
 ) -> anyhow::Result<Option<String>> {
     let mut targets = Vec::new();
     let mut incomplete_inventory = false;
@@ -49,8 +54,10 @@ fn toggle_existing_quick_access_at(
         incomplete_inventory |= inventory.truncated;
         for window in inventory.windows {
             if window.quick_access {
-                let visible = !(window.visible && window.focused);
-                targets.push((endpoint.clone(), window.id, visible));
+                // Visible but behind another window still hides: on Wayland
+                // a window can't take focus without a fresh token, so
+                // "bring it forward" could leave a hotkey doing nothing.
+                targets.push((endpoint.clone(), window.id, !window.visible));
             }
         }
     }
@@ -72,6 +79,7 @@ fn toggle_existing_quick_access_at(
         request_id: request_id.clone(),
         window_id,
         visible: desired_visible,
+        activation_token: activation_token.filter(|_| desired_visible),
     };
     // The request ID makes the retry a replay, never a second toggle.
     let response = match request_within(&endpoint, &toggle, IO_TIMEOUT) {
@@ -1254,9 +1262,10 @@ mod tests {
                         &mut stream,
                         &ServerFrame::new(Response::Inventory(ProcessInventory {
                             process_id: std::process::id(),
+                            // Visible behind another window: it hides.
                             windows: vec![WindowInventory {
                                 id: 9,
-                                focused: true,
+                                focused: false,
                                 visible: true,
                                 quick_access: true,
                                 workspace_id: None,
@@ -1274,12 +1283,14 @@ mod tests {
                         request_id,
                         window_id,
                         visible,
+                        activation_token,
                     } = frame.request
                     else {
                         panic!("expected quick-access toggle request")
                     };
                     assert_eq!(window_id, 9);
                     assert!(!visible);
+                    assert_eq!(activation_token, None, "hiding needs no token");
                     protocol::write_frame(
                         &mut stream,
                         &ServerFrame::new(Response::QuickAccessChanged {
@@ -1294,7 +1305,8 @@ mod tests {
             }
         });
 
-        let output = toggle_existing_quick_access_at(vec![endpoint]).unwrap();
+        let output =
+            toggle_existing_quick_access_at(vec![endpoint], Some("launch-token".into())).unwrap();
         assert!(
             output
                 .as_deref()
@@ -1393,12 +1405,14 @@ mod tests {
                     request_id,
                     window_id,
                     visible,
+                    activation_token,
                 } = &frame.request
                 else {
                     panic!("expected quick-access visibility request")
                 };
                 assert_eq!(*window_id, 9);
                 assert!(*visible);
+                assert_eq!(activation_token.as_deref(), Some("launch-token"));
                 if request_index == 1 {
                     first_visibility_request = Some(frame.request);
                     // Simulate an ambiguous failure after the server received
@@ -1419,7 +1433,8 @@ mod tests {
             }
         });
 
-        let output = toggle_existing_quick_access_at(vec![endpoint]).unwrap();
+        let output =
+            toggle_existing_quick_access_at(vec![endpoint], Some("launch-token".into())).unwrap();
         assert!(
             output
                 .as_deref()

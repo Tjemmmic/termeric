@@ -23,6 +23,7 @@ mod control;
 pub(super) mod inventory;
 mod live_domain;
 mod plugin_host;
+mod quick_access;
 mod transfer;
 
 /// One event-loop application containing any number of window-local terminal
@@ -985,6 +986,7 @@ impl ApplicationHandler<AppEvent> for Application {
             }
         }
         self.remove_closed_windows(event_loop);
+        self.show_requested_quick_access(event_loop);
         if self.windows.is_empty() {
             return;
         }

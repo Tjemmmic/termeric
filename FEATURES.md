@@ -59,7 +59,7 @@ What Termeric supports today, and what is planned. Termeric runs on Linux only f
 | Split panes | Supported | Layout presets, zoom, swap, and moving panes between windows. |
 | Broadcast input | Partial | To several panes of the active tab. Not named, saved, or cross-window groups. |
 | Read-only panes | Partial | A locked pane keeps showing output. Restoring a workspace unlocks every pane. |
-| Quick-access terminal | Partial | A drop-down terminal toggled with `termeric --quick-access`. Wayland compositors may ignore its placement and focus; a compositor rule for its `org.termeric.Termeric.QuickAccess` app ID fixes that. |
+| Quick-access terminal | Partial | A drop-down terminal: `termeric --quick-access` starts it, then shows or hides it, and its shells keep running while it's hidden. Bound to a desktop shortcut, it takes focus when shown. Wayland compositors may ignore its placement; a compositor rule for its `org.termeric.Termeric.QuickAccess` app ID fixes that. |
 | Always on top or bottom | Partial | Your desktop decides the final order, and many Wayland compositors ignore the request. |
 | Fullscreen | Partial | F11. Not remembered between launches. |
 

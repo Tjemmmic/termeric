@@ -9,9 +9,11 @@ impl Application {
         (1..self.window_order.len())
             .map(|offset| self.window_order[(source_index + offset) % self.window_order.len()])
             .find(|candidate| {
-                self.windows
-                    .get(candidate)
-                    .is_some_and(|window| !window.should_exit)
+                // A hidden quick-access terminal would take a tab out of sight.
+                self.windows.get(candidate).is_some_and(|window| {
+                    !window.should_exit
+                        && !(window.launch.quick_access && !window.quick_access_visible)
+                })
             })
     }
 

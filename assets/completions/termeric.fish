@@ -40,7 +40,7 @@ software\t'Insist on software rendering'"
 complete -c termeric -n "__fish_termeric_needs_command" -s h -l help -d 'Print this help'
 complete -c termeric -n "__fish_termeric_needs_command" -l new-window -d 'Start another window; first, a fresh one that skips restore'
 complete -c termeric -n "__fish_termeric_needs_command" -l separate-process -d 'Start a process of its own, even when Termeric runs'
-complete -c termeric -n "__fish_termeric_needs_command" -l quick-access -d 'Toggle or launch one top-edge drop-down window'
+complete -c termeric -n "__fish_termeric_needs_command" -l quick-access -d 'Show or hide the top-edge drop-down terminal, starting it the first time'
 complete -c termeric -n "__fish_termeric_needs_command" -l tab -d 'Start another tab in the current window'
 complete -c termeric -n "__fish_termeric_needs_command" -s V -l version -d 'Print version'
 complete -c termeric -n "__fish_termeric_needs_command" -a "domain" -d 'Keep terminals running in a background daemon, here or over SSH (experimental)'

@@ -22,7 +22,52 @@ impl App {
             return;
         }
 
-        // Create window
+        let window = match self.open_native_window(event_loop) {
+            Ok(window) => window,
+            Err(e) => {
+                self.fail_startup(
+                    format!("Failed to create window: {e:#}"),
+                    "native window creation",
+                );
+                return;
+            }
+        };
+
+        // Initialize renderer
+        if let Err(e) = self.init_renderer(window.clone()) {
+            self.fail_startup(
+                format!("Failed to initialize renderer: {e:#}"),
+                "window renderer initialization",
+            );
+            return;
+        }
+
+        // Initialize tabs with first tab
+        if let Err(e) = self.init_tabs() {
+            self.fail_startup(
+                format!("Failed to initialize tabs: {e:#}"),
+                "window tab initialization",
+            );
+            return;
+        }
+
+        window.set_visible(true);
+        if self.launch.quick_access {
+            window.focus_window();
+        }
+        self.warn_about_outdated_agent_hooks();
+
+        self.redraw_scheduler.request(RedrawReason::Startup);
+        self.render_frame();
+    }
+
+    /// Create this window's native window, hidden until its first frame, and
+    /// its accessibility adapter. A quick-access terminal also comes here
+    /// each time it is shown again (see `application/quick_access.rs`).
+    pub(super) fn open_native_window(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+    ) -> Result<Arc<Window>, winit::error::OsError> {
         let quick_monitor = self
             .launch
             .quick_access
@@ -97,53 +142,19 @@ impl App {
             window_attrs = window_attrs.with_window_icon(Some(icon));
         }
 
-        match event_loop.create_window(window_attrs) {
-            Ok(window) => {
-                log::info!("Window created");
-                let window = Arc::new(window);
-                // Winit leaves IME disabled by default.
-                window.set_ime_allowed(true);
-                self.accessibility_adapter = Some(accesskit_winit::Adapter::with_event_loop_proxy(
-                    event_loop,
-                    &window,
-                    super::EVENT_LOOP_PROXY
-                        .get()
-                        .cloned()
-                        .expect("event-loop proxy is installed before resume"),
-                ));
-
-                // Initialize renderer
-                if let Err(e) = self.init_renderer(window.clone()) {
-                    self.fail_startup(
-                        format!("Failed to initialize renderer: {e:#}"),
-                        "window renderer initialization",
-                    );
-                    return;
-                }
-
-                // Initialize tabs with first tab
-                if let Err(e) = self.init_tabs() {
-                    self.fail_startup(
-                        format!("Failed to initialize tabs: {e:#}"),
-                        "window tab initialization",
-                    );
-                    return;
-                }
-
-                window.set_visible(true);
-                if self.launch.quick_access {
-                    window.focus_window();
-                }
-                self.warn_about_outdated_agent_hooks();
-
-                self.redraw_scheduler.request(RedrawReason::Startup);
-                self.render_frame();
-            }
-            Err(e) => self.fail_startup(
-                format!("Failed to create window: {e:#}"),
-                "native window creation",
-            ),
-        }
+        let window = Arc::new(event_loop.create_window(window_attrs)?);
+        log::info!("Window created");
+        // Winit leaves IME disabled by default.
+        window.set_ime_allowed(true);
+        self.accessibility_adapter = Some(accesskit_winit::Adapter::with_event_loop_proxy(
+            event_loop,
+            &window,
+            super::EVENT_LOOP_PROXY
+                .get()
+                .cloned()
+                .expect("event-loop proxy is installed before resume"),
+        ));
+        Ok(window)
     }
 
     /// Draw a frame for every reason requested since the last one.

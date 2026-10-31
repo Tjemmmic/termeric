@@ -34,7 +34,7 @@ software\:"Insist on software rendering"))' \
 '--help[Print this help]' \
 '--new-window[Start another window; first, a fresh one that skips restore]' \
 '--separate-process[Start a process of its own, even when Termeric runs]' \
-'--quick-access[Toggle or launch one top-edge drop-down window]' \
+'--quick-access[Show or hide the top-edge drop-down terminal, starting it the first time]' \
 '--tab[Start another tab in the current window]' \
 '-V[Print version]' \
 '--version[Print version]' \

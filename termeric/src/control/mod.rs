@@ -204,15 +204,26 @@ pub fn join_running_launch(plan: &crate::cli::LaunchPlan) -> Option<(u32, u64)> 
     let display = display_identity()?;
     let build = build_identity()?;
     let environment = environment_identity();
-    let variable = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
-    let token = variable("XDG_ACTIVATION_TOKEN").or_else(|| variable("DESKTOP_STARTUP_ID"));
-    match client::join_running(&display, &build, environment, token, tabs) {
+    match client::join_running(
+        &display,
+        &build,
+        environment,
+        launcher_activation_token(),
+        tabs,
+    ) {
         Ok(joined) => joined,
         Err(error) => {
             log::debug!("Could not look for a running Termeric: {error:#}");
             None
         }
     }
+}
+
+/// The activation token the desktop gave this launch (Wayland's, else
+/// X11's startup ID), which a window it opens or shows needs to take focus.
+pub fn launcher_activation_token() -> Option<String> {
+    let variable = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
+    variable("XDG_ACTIVATION_TOKEN").or_else(|| variable("DESKTOP_STARTUP_ID"))
 }
 
 /// A pane's recent terminal text, oldest first.

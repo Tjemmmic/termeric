@@ -179,7 +179,14 @@ impl Application {
                 request_id,
                 window_id,
                 visible,
-            } => self.set_control_quick_access_visibility(request_id, *window_id, *visible),
+                activation_token,
+            } => self.set_control_quick_access_visibility(
+                event_loop,
+                request_id,
+                *window_id,
+                *visible,
+                activation_token.clone(),
+            ),
             Request::SelectTab {
                 request_id,
                 window_id,
@@ -818,9 +825,11 @@ impl Application {
 
     pub(super) fn set_control_quick_access_visibility(
         &mut self,
+        event_loop: &ActiveEventLoop,
         request_id: &str,
         window_id: u64,
         visible: bool,
+        activation_token: Option<String>,
     ) -> std::result::Result<crate::control::protocol::Response, String> {
         let native_id = self.control_native_window_id(window_id)?;
         let window = self.live_window_mut(native_id, window_id)?;
@@ -829,19 +838,7 @@ impl Application {
                 "GUI window {window_id} is not a quick-access terminal"
             ));
         }
-        let native = window
-            .window
-            .clone()
-            .ok_or_else(|| format!("GUI window {window_id} has no native window"))?;
-        window.quick_access_visible = visible;
-        native.set_visible(visible);
-        window.handle_window_occlusion_change(!visible);
-        if visible {
-            native.set_minimized(false);
-            native.focus_window();
-            native.request_user_attention(Some(winit::window::UserAttentionType::Critical));
-            window.request_redraw(RedrawReason::WindowEvent);
-        }
+        self.set_quick_access_visible(event_loop, native_id, window_id, visible, activation_token)?;
         Ok(crate::control::protocol::Response::QuickAccessChanged {
             process_id: std::process::id(),
             request_id: request_id.to_string(),

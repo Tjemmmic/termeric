@@ -89,7 +89,9 @@ fn main() -> Result<std::process::ExitCode> {
             return Ok(std::process::ExitCode::SUCCESS);
         }
         cli::ParseOutcome::QuickAccess(launch) => {
-            if let Some(output) = control::toggle_existing_quick_access()? {
+            if let Some(output) =
+                control::toggle_existing_quick_access(control::launcher_activation_token())?
+            {
                 println!("{output}");
                 return Ok(std::process::ExitCode::SUCCESS);
             }
