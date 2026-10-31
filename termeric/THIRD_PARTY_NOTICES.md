@@ -5666,7 +5666,7 @@ Used by:
 - [indexmap 2.13.0](https://github.com/indexmap-rs/indexmap)
 - [khronos-egl 6.0.0](https://github.com/timothee-haudebourg/khronos-egl)
 - [libgit2-sys 0.18.8+1.9.7](https://github.com/rust-lang/git2-rs)
-- [libz-sys 1.1.24](https://github.com/rust-lang/libz-sys)
+- [libz-sys 1.1.31](https://github.com/rust-lang/libz-sys)
 - [linux-raw-sys 0.11.0](https://github.com/sunfishcode/linux-raw-sys)
 - [linux-raw-sys 0.4.15](https://github.com/sunfishcode/linux-raw-sys)
 - [lock_api 0.4.14](https://github.com/Amanieu/parking_lot)
