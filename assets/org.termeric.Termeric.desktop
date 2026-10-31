@@ -1,7 +1,8 @@
 [Desktop Entry]
 Type=Application
 Name=Termeric
-Comment=GPU-accelerated terminal emulator themed around roots and rhizomes
+GenericName=Terminal
+Comment=GPU-accelerated terminal emulator
 Exec=termeric
 Icon=org.termeric.Termeric
 Terminal=false
