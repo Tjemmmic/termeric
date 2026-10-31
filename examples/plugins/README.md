@@ -11,7 +11,7 @@ A plugin can:
 
 Nothing takes effect until you install the plugin and grant the permissions it asks for.
 
-> **Experimental.** The manifest format, the permissions, and the handler protocol may change between releases, and plugins may need updating when they do.
+> **Experimental.** The manifest format, the permissions, and the handler protocol may change between releases, and plugins may need updating when they do. A change that breaks existing plugins raises `api_version`, so Termeric refuses a plugin written for an earlier version and says which version it supports, rather than running it wrongly; additions that existing plugins can ignore keep the version.
 
 ## Example plugins
 

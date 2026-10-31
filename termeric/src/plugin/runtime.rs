@@ -19,7 +19,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// The one declarative plugin API version. Manifests must declare it exactly;
-/// capabilities, not versions, decide what a plugin may do.
+/// capabilities, not versions, decide what a plugin may do. Raise it with any
+/// change that breaks existing plugins (the manifest, the permissions, the
+/// events, or the handler protocol), so an older plugin is refused with a
+/// clear message instead of misbehaving; additions that old plugins can
+/// ignore keep it.
 pub const PLUGIN_API_VERSION: u32 = 1;
 pub const REGISTRY_SCHEMA_VERSION: u32 = 1;
 pub const MANIFEST_NAME: &str = "termeric-plugin.toml";
