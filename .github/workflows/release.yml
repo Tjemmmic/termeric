@@ -34,7 +34,7 @@ jobs:
       version: ${{ steps.release.outputs.version }}
       publish: ${{ steps.release.outputs.publish }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check the tag, CHANGELOG.md, and the AppStream release
         id: release
         env:
@@ -98,8 +98,8 @@ jobs:
             build-essential pkg-config libfontconfig1-dev libwayland-dev \
             libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev libvulkan-dev \
             ncurses-bin desktop-file-utils dpkg-dev python3
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - run: cargo build --release --locked
       - name: Stage the install tree
         run: python3 scripts/stage_install_tree.py --binary target/release/termeric --out target/install-tree
@@ -110,7 +110,7 @@ jobs:
           tar -C target/dist --owner=0 --group=0 --numeric-owner --sort=name \
             -czf "target/dist/$DIST_NAME.tar.gz" "$DIST_NAME"
           "target/dist/$DIST_NAME/bin/termeric" --version
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
         with:
           tool: cargo-deb@3.7.0
       - name: Make and check the .deb
@@ -118,7 +118,7 @@ jobs:
           cargo deb -p termeric --no-build
           python3 scripts/check_debian_package.py target/debian/termeric_*.deb
           cp target/debian/termeric_*.deb target/dist/
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-${{ matrix.arch }}
           path: |
@@ -132,7 +132,7 @@ jobs:
     container: archlinux:base-devel
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # makepkg refuses to run as root.
       - name: Compare each .SRCINFO with makepkg --printsrcinfo
         run: |
@@ -155,8 +155,8 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: dist-*
           merge-multiple: true
@@ -166,7 +166,7 @@ jobs:
           cd dist
           sha256sum -- *.tar.gz *.deb > SHA256SUMS
           cat SHA256SUMS
-      - uses: actions/attest@v4
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: |
             dist/*.tar.gz

@@ -46,6 +46,8 @@ Most of Termeric's tests are ordinary Rust unit and integration tests that run a
 
 The GPU smoke, the soak, benchmarks, the Arch package check, and the packages' `--system-lifecycle` checks don't run in CI. Run them by hand before a release.
 
+Every action the workflows use is pinned to a commit SHA, with its release in a comment (`# v7.0.1`), so a moved tag can't change what runs. To update one, take the commit of the new release's tag (`git ls-remote --tags https://github.com/OWNER/ACTION`) and change the SHA and the comment together. `dtolnay/rust-toolchain` has no releases: it is pinned to the head of its `stable` or `nightly` branch, which selects the toolchain.
+
 ### GPU render smoke
 
 The GPU smoke runs the renderer's offscreen checks (text, emoji, ligatures, inline images, themes, background images, and a glyph-atlas stress test) on a software adapter (Mesa llvmpipe, `mesa-vulkan-drivers` on Debian and Ubuntu), then compares one frame with the visual signature in `termeric/src/renderer/visual_baseline.json`:
