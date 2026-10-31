@@ -27,6 +27,13 @@ Thumbs.db
 # Local development
 .docs
 
-# Personal coding-agent instructions; the shared guide is AGENTS.md
+# Separate, personal coding-agent instructions
 CLAUDE.md
 CLAUDE.local.md
+GEMINI.md
+.cursorrules
+.cursor/
+.windsurfrules
+.windsurf/
+.clinerules/
+.github/copilot-instructions.md
