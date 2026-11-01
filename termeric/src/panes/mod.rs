@@ -1793,7 +1793,7 @@ fn navigation_target(
 
     if let Some(id) = remembered
         && id != current_id
-        && layout.get(&id).is_some_and(&is_neighbor)
+        && layout.get(&id).is_some_and(is_neighbor)
     {
         return Some(id);
     }
