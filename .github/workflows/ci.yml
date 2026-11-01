@@ -39,6 +39,10 @@ jobs:
             libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libvulkan-dev mesa-vulkan-drivers \
             ncurses-bin vim less tmux zsh fish
+      - name: Close zsh's function directories to other users
+        # The runner image leaves some writable by others, so the system
+        # zshrc's compinit stops every interactive zsh to ask about them.
+        run: zsh -fc 'autoload -Uz compaudit; compaudit || true' | xargs -r sudo chmod go-w
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
