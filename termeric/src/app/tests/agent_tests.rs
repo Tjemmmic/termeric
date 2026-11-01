@@ -2,6 +2,12 @@
 
 use super::*;
 
+/// How long a test waits on background work (a Git job, an agent process, a
+/// transcript export) before calling it hung. Shared CI runners stall for
+/// seconds at a time, so this sits far above what the work takes; a passing
+/// test never waits it out.
+const BACKGROUND_WAIT: Duration = Duration::from_secs(30);
+
 #[test]
 fn context_picker_completion_preserves_plugin_owner_across_topology_changes() {
     use crate::ui::context_picker::{ContextPickerAction, ContextSourceId};
@@ -230,7 +236,7 @@ fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
         agent_name: "Codex".into(),
     };
     let read = |expected_len: usize| {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + BACKGROUND_WAIT;
         loop {
             let mut bytes = Vec::new();
             if let Ok(mut file) = std::fs::File::open(&capture) {
@@ -243,7 +249,7 @@ fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
         }
     };
 
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + BACKGROUND_WAIT;
     loop {
         let tabs = app.tabs.as_mut().unwrap();
         tabs.poll_events();
@@ -410,7 +416,7 @@ fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
     // A process that has exited, even one not yet reaped, has no command line.
     let running =
         || std::fs::read(format!("/proc/{child}/cmdline")).is_ok_and(|argv| !argv.is_empty());
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + BACKGROUND_WAIT;
     while running() {
         assert!(Instant::now() < deadline, "the agent did not exit");
         std::thread::sleep(Duration::from_millis(5));
@@ -472,7 +478,7 @@ fn hook_reports_track_an_agent_started_from_a_shell_until_it_exits() {
         .unwrap()
         .write(b"sleep 30\r")
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + BACKGROUND_WAIT;
     let foreground = loop {
         let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
         let pty = tab.panes.lone_pane().map(|pane| &pane.pty).unwrap();
@@ -605,7 +611,7 @@ fn hook_reports_track_an_agent_started_from_a_shell_until_it_exits() {
         .unwrap()
         .write(b"\x03")
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + BACKGROUND_WAIT;
     while session(&app).0.is_some() {
         assert!(
             Instant::now() < deadline,
@@ -772,7 +778,7 @@ fn agent_changes_are_listed_reviewed_staged_and_reverted_for_their_terminal() {
         let pane = tab.focused_terminal_identity().pane_id;
         let changes = &mut tab.pane_integration_mut(pane).unwrap().agent_changes;
         changes.start_capture(("codex", Some(1)), Some(root.to_path_buf()));
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + BACKGROUND_WAIT;
         while !changes.poll() {
             assert!(Instant::now() < deadline, "the baseline was never captured");
             std::thread::sleep(Duration::from_millis(5));
@@ -783,7 +789,7 @@ fn agent_changes_are_listed_reviewed_staged_and_reverted_for_their_terminal() {
             .contains(&"agent.review-changes".to_string())
     );
     let finish_job = |app: &mut App| {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + BACKGROUND_WAIT;
         while !app.poll_agent_change_job() {
             assert!(Instant::now() < deadline, "the Git job never finished");
             std::thread::sleep(Duration::from_millis(5));
@@ -881,7 +887,7 @@ fn agent_changes_are_listed_reviewed_staged_and_reverted_for_their_terminal() {
         let pane = tab.focused_terminal_identity().pane_id;
         let changes = &mut tab.pane_integration_mut(pane).unwrap().agent_changes;
         changes.start_capture(("codex", Some(2)), Some(root.to_path_buf()));
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + BACKGROUND_WAIT;
         while !changes.poll() {
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(5));
@@ -1056,7 +1062,7 @@ fn a_read_only_agent_refuses_context_with_its_own_reason() {
         agent_id: "codex".into(),
         agent_name: "Codex".into(),
     };
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + BACKGROUND_WAIT;
     while app.recheck_agent_target(&target).is_err() {
         assert!(Instant::now() < deadline, "Codex was never recognized");
         std::thread::sleep(Duration::from_millis(5));
@@ -1354,7 +1360,7 @@ done
                 "{agent_id} transcript did not start"
             );
             app.run_agent_command("agent.export");
-            let export_deadline = Instant::now() + Duration::from_secs(5);
+            let export_deadline = Instant::now() + BACKGROUND_WAIT;
             while app.session_export.is_some() && Instant::now() < export_deadline {
                 app.poll_session_export();
                 std::thread::sleep(Duration::from_millis(5));
