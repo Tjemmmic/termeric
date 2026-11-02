@@ -875,6 +875,14 @@ fn agent_changes_are_listed_reviewed_staged_and_reverted_for_their_terminal() {
             .get_path(std::path::Path::new("added.txt"), 0)
             .is_some()
     );
+    // Staging reopens the list. Its job reads the working tree, so it has to
+    // finish before the next edit, or it can read a file mid-write.
+    finish_job(&mut app);
+    assert_eq!(
+        app.command_palette.active_pick(),
+        Some(PickKind::AgentChange)
+    );
+    app.command_palette.close();
 
     // A diff shown for one agent run cannot stage for the next.
     std::fs::write(root.join("kept.txt"), "once more\n").unwrap();
