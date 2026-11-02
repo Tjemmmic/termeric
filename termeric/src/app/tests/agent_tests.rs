@@ -788,13 +788,21 @@ fn agent_changes_are_listed_reviewed_staged_and_reverted_for_their_terminal() {
         !app.unavailable_agent_commands()
             .contains(&"agent.review-changes".to_string())
     );
-    let finish_job = |app: &mut App| {
+    // A hang reports the step that waited (`track_caller`), whether its job
+    // ever started, and the last notice, which says why one didn't.
+    #[track_caller]
+    fn finish_job(app: &mut App) {
         let deadline = Instant::now() + BACKGROUND_WAIT;
         while !app.poll_agent_change_job() {
-            assert!(Instant::now() < deadline, "the Git job never finished");
+            assert!(
+                Instant::now() < deadline,
+                "the Git job never finished (a job is running: {}; the last notice: {:?})",
+                app.agent_change_job.is_some(),
+                latest_toast(app)
+            );
             std::thread::sleep(Duration::from_millis(5));
         }
-    };
+    }
 
     // The agent edits a file after it started.
     std::fs::write(root.join("kept.txt"), "one\nTWO\n").unwrap();
