@@ -14,10 +14,11 @@ The first release: a developer preview for Linux, on Wayland and X11. Features s
 - 26 built-in themes, twelve named after roots and fourteen from the community, plus your own theme files, which reload when you save them, and background images.
 - Ligatures and OpenType features, color emoji, wide and combined characters, an ordered font fallback list, per-range font overrides, and a Unicode character picker.
 - Inline images through the Kitty graphics protocol, Sixel, and iTerm2, and Kitty file transfer with approval for each file.
-- Shell integration for Bash, Zsh, Fish, Nushell, and Elvish: prompt jumping and failed-command navigation.
+- Shell integration for Bash, Zsh, Fish, Nushell, and Elvish: prompt jumping, failed-command navigation, and Git branch completion.
 - Search with plain text, regular expressions, and a filter mode; keyboard copy mode; quick-select hints; clickable hyperlinks and detected links.
 - A command palette, a Settings dialog, rebindable shortcuts, terminal profiles, and a quick-access drop-down terminal.
 - xterm modified keys and the Kitty keyboard protocol; mouse, focus, and bracketed-paste reporting; synchronized output; and the `xterm-termeric` terminfo entry.
+- Desktop notifications and bells, clipboard access for programs through OSC 52 (reading stays off until you allow it), input methods such as Fcitx and IBus, and dropping files to type their paths.
 - Screen reader information, keyboard access to the interface (F6), reduced motion, and a high-contrast mode.
 - Launching windows, tabs, commands, profiles, and workspaces from the command line.
 - Packages for x86_64 and arm64: a `.deb`, the `termeric` and `termeric-git` AUR packages, and a tarball with an `install.sh` for other distributions, each with a manual page and Bash, Zsh, and Fish completions.
@@ -26,6 +27,7 @@ The first release: a developer preview for Linux, on Wayland and X11. Features s
 ### Known limitations
 
 - macOS and Windows aren't supported yet.
+- Tested by hand only on KDE Plasma, on Wayland and X11; GNOME and arm64 hardware haven't been tested yet.
 - Right-to-left and bidirectional text aren't supported.
 - Screen reader support hasn't been confirmed with Orca yet.
 - Removing secrets from exported transcripts is best effort.
