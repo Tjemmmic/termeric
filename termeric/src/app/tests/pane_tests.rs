@@ -880,8 +880,11 @@ fn read_only_focused_pane_rejects_keyboard_and_running_gui_control_input() {
 #[test]
 fn a_closed_split_tab_keeps_every_pane_and_is_named_for_the_focused_one() {
     let workspace = tempfile::tempdir().unwrap();
-    let left_dir = workspace.path().join("left");
-    let right_dir = workspace.path().join("right");
+    // The kernel reports directories with links resolved (on macOS the
+    // temporary directory is under the `/var` link).
+    let root = workspace.path().canonicalize().unwrap();
+    let left_dir = root.join("left");
+    let right_dir = root.join("right");
     std::fs::create_dir_all(&left_dir).unwrap();
     std::fs::create_dir_all(&right_dir).unwrap();
 

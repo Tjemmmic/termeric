@@ -1968,11 +1968,12 @@ done"#,
         let directory = tempfile::tempdir().unwrap();
         let pid_file = directory.path().join("escaped");
         // A command in a session of its own keeps the handler's output open;
-        // the handler takes the event and never answers.
+        // the handler takes the event and never answers. Perl starts the
+        // session: macOS has no `setsid` command.
         let invocation = persistent_fixture(
             "escaping-fixture",
             &format!(
-                "setsid sleep 30 </dev/null 2>/dev/null & echo $! > '{}'\n\
+                "perl -MPOSIX -e 'POSIX::setsid() or die; exec @ARGV' sleep 30 </dev/null 2>/dev/null & echo $! > '{}'\n\
                  IFS= read -r event\nsleep 30",
                 pid_file.display()
             ),
