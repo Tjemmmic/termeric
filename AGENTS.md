@@ -277,32 +277,32 @@ Termeric is named after turmeric, the root, and its house themes are named after
 
 #### Naming
 
-- **Root themes** are Termeric's own palettes. They must be named after a real root, rhizome, or tuber, and set `author = "Termeric"`. The current twelve: turmeric (the default), ginger, daikon, malanga, beet, turnip, yuca, taro, wasabi, galangal, horseradish, parsnip.
+- **Root themes** are Termeric's own palettes. They must be named after a real root, rhizome, or tuber, and set `author = "Termeric"`. Every root comes in a dark theme and a light one, listed as two themes. The current twelve roots: turmeric (the default), ginger, daikon, malanga, beet, turnip, yuca, taro, wasabi, galangal, horseradish, parsnip.
 - **Guest themes** are community palettes (Solarized, Catppuccin, Dracula, Nord, and others). They keep their original names and authors. The theme picker lists them under "Guest", apart from the roots. A new guest theme needs its project's license under "Guest themes" in `packaging/notices/notices.hbs`, then the notices regenerated (see Dependencies in CONTRIBUTING.md).
 
-The file name and lookup key are the lowercase name (`turmeric.toml`); the display name in `meta.name` is capitalized (`"Turmeric"`).
+The file name and lookup key are the lowercase name (`turmeric.toml`); the display name in `meta.name` is capitalized (`"Turmeric"`). The unsuffixed name is the dark theme and `<root>-light` its light partner, named `"<Root> Light"` (`turmeric-light.toml`, `"Turmeric Light"`).
 
 #### Deriving a root palette
 
 A root theme takes its colors from the actual plant: its skin, flesh, leaves, and flowers. Programs rely on what ANSI colors mean, though — red for errors, green for success, yellow for warnings, blue for directories, dim bright-black for hints — so every slot stays in its own hue family and only leans toward the plant. Turnip's red is a rose-tinted red rather than its purple top, and a leaf becomes a leaf-tinted teal for `cyan` rather than another green.
 
-| Slot | Hue family | Tinted toward |
-|---|---|---|
-| `background` | — | The root's deepest skin or bark tone (dark) |
-| `foreground` | — | The root's lightest flesh |
-| `cursor` | — | The most vibrant part of the flesh |
-| `black` | neutral | Dried skin, a step above the background |
-| `white` | neutral | Lightest interior or pith |
-| `red` | red | Skin blush or red/purple flesh streaks |
-| `green` | green | The plant's leaves |
-| `yellow` | yellow | Flowers or golden flesh |
-| `blue` | blue | Stems or cool shadows |
-| `magenta` | magenta | Flowers or purple flesh |
-| `cyan` | cyan | Young leaves or shoots |
-| `selection` | — | Semi-transparent flesh tone |
-| `url` | — | Bright leaf or shoot color |
+| Slot | Hue family | Dark theme | Light theme |
+|---|---|---|---|
+| `background` | — | The root's deepest skin or bark tone | The root's pale flesh or skin |
+| `foreground` | — | The root's lightest flesh | The root's deepest skin or bark |
+| `cursor` | — | The most vibrant part of the flesh | The same, deepened until it stands out |
+| `black` | neutral | Dried skin, a step above the background | Dark skin or bark, as text |
+| `white` | neutral | Lightest interior or pith | The flesh in shade, a readable mid tone |
+| `red` | red | Skin blush or red/purple flesh streaks | The same |
+| `green` | green | The plant's leaves | The same |
+| `yellow` | yellow | Flowers or golden flesh | The same |
+| `blue` | blue | Stems or cool shadows | The same |
+| `magenta` | magenta | Flowers or purple flesh | The same |
+| `cyan` | cyan | Young leaves or shoots | The same |
+| `selection` | — | Semi-transparent flesh tone | The same |
+| `url` | — | Bright leaf or shoot color | The same, deepened |
 
-Not every root is warm: daikon, wasabi, and horseradish use cool or neutral charcoal backgrounds because the plants do.
+A light theme keeps each chromatic slot's hue from its dark partner and only deepens it until it reads on the light background, so the two feel like one plant. Not every root is warm: daikon, wasabi, and horseradish use cool or neutral charcoal backgrounds because the plants do.
 
 #### Palette contract
 
@@ -310,9 +310,9 @@ The test `root_theme_palettes_keep_ansi_meaning_and_contrast` in `termeric/src/c
 
 - Each chromatic slot stays in its hue family (HSL degrees): red below 20 or from 345, yellow 35–70, green 75–155, cyan 160–200, blue 200–255, magenta 275–345.
 - Saturation is at least 0.25, so tinted colors still read as colors. Keep it near or below 0.6 so nothing turns neon (advice, not enforced).
-- Contrast against the background is at least 3:1 for primary slots and 4.5:1 for bright slots, and every bright slot is lighter than its primary.
+- Contrast against the background is at least 3:1 for primary slots and 4.5:1 for bright slots, and every bright slot contrasts more than its primary: lighter on a dark theme, deeper on a light one.
 - Neighbouring families (red/yellow, yellow/green, green/cyan, cyan/blue, blue/magenta, magenta/red) stay at least 25° apart.
-- `black` is visibly lighter than the background (at least 1.15:1), bright black is readable dim text (at least 3:1), and whites reach 4.5:1 and 7:1.
+- The neutrals keep their names, so `black` is always dark and `white` light. On a dark theme `black` is visibly lighter than the background (at least 1.15:1) and the whites reach 4.5:1 and 7:1. On a light theme `black` is text (at least 7:1), `white` a readable mid tone (at least 3:1), and bright white visibly off the background (at least 1.15:1). Bright black is readable dim text (at least 3:1) on both, and lighter than `black`.
 - Foreground text reaches at least 7:1.
 
 #### Theme files
@@ -325,11 +325,11 @@ Built-in themes are TOML files in `termeric/themes/roots/` and `termeric/themes/
 
 Colors are `#RRGGBB` or `#RRGGBBAA`. In a root theme, give every color a short comment naming the part of the plant it came from.
 
-To add a root theme:
+To add a root:
 
-1. Add `termeric/themes/roots/<name>.toml`.
-2. Add `builtin_theme!("roots", "<name>")` after the other root themes in `BUILTIN_THEMES` (`termeric/src/config/theme.rs`) and raise the table's length by one; the theme list and `Theme::load_builtin` both read that table.
-3. Bump the root count in `root_theme_palettes_keep_ansi_meaning_and_contrast`.
+1. Add `termeric/themes/roots/<name>.toml` and `termeric/themes/roots/<name>-light.toml`.
+2. Add `builtin_theme!("roots", "<name>")` and `builtin_theme!("roots", "<name>-light")` after the other root themes in `BUILTIN_THEMES` (`termeric/src/config/theme.rs`) and raise the table's length by two; the theme list and `Theme::load_builtin` both read that table.
+3. Bump the root count in `root_theme_palettes_keep_ansi_meaning_and_contrast` by two.
 4. Add it to the theme list under `[theme]` in `assets/config.example.toml`.
 5. Run `cargo test -p termeric config::theme`.
 

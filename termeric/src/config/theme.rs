@@ -32,20 +32,33 @@ macro_rules! builtin_theme {
 }
 
 /// Every built-in theme: its name and its embedded TOML.
-const BUILTIN_THEMES: [(&str, &str); 26] = [
-    // Root themes (Termeric house palettes)
+const BUILTIN_THEMES: [(&str, &str); 38] = [
+    // Root themes (Termeric house palettes), each dark one beside its light
+    // partner
     builtin_theme!("roots", "turmeric"),
+    builtin_theme!("roots", "turmeric-light"),
     builtin_theme!("roots", "ginger"),
+    builtin_theme!("roots", "ginger-light"),
     builtin_theme!("roots", "daikon"),
+    builtin_theme!("roots", "daikon-light"),
     builtin_theme!("roots", "malanga"),
+    builtin_theme!("roots", "malanga-light"),
     builtin_theme!("roots", "beet"),
+    builtin_theme!("roots", "beet-light"),
     builtin_theme!("roots", "turnip"),
+    builtin_theme!("roots", "turnip-light"),
     builtin_theme!("roots", "yuca"),
+    builtin_theme!("roots", "yuca-light"),
     builtin_theme!("roots", "taro"),
+    builtin_theme!("roots", "taro-light"),
     builtin_theme!("roots", "wasabi"),
+    builtin_theme!("roots", "wasabi-light"),
     builtin_theme!("roots", "galangal"),
+    builtin_theme!("roots", "galangal-light"),
     builtin_theme!("roots", "horseradish"),
+    builtin_theme!("roots", "horseradish-light"),
     builtin_theme!("roots", "parsnip"),
+    builtin_theme!("roots", "parsnip-light"),
     // Community themes
     builtin_theme!("community", "solarized-dark"),
     builtin_theme!("community", "solarized-light"),
@@ -191,6 +204,17 @@ impl Theme {
         }
     }
 
+    /// Dark or light, read from the colors themselves so a theme file needs
+    /// no key for it: light when the background is lighter than the text.
+    pub fn appearance(&self) -> Appearance {
+        let luminance = |color: Color| crate::ui::color::relative_luminance(color.to_f32_array());
+        if luminance(self.ui.background) > luminance(self.ui.foreground) {
+            Appearance::Light
+        } else {
+            Appearance::Dark
+        }
+    }
+
     /// Get ANSI color by index (0-15)
     pub fn ansi_color(&self, index: u8) -> Color {
         match index {
@@ -213,6 +237,14 @@ impl Theme {
             _ => self.ui.foreground,
         }
     }
+}
+
+/// Whether a theme sets light text on a dark background or dark text on a
+/// light one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Appearance {
+    Dark,
+    Light,
 }
 
 /// Theme metadata
@@ -569,9 +601,11 @@ mod tests {
                     format!("{variant}{slot} contrast {ratio:.1} < {minimum}"),
                 );
             }
+            // Bright is the emphatic step: lighter on a dark theme, deeper on
+            // a light one.
             require(
-                relative_luminance(bright) > relative_luminance(primary),
-                format!("bright {slot} is not lighter than {slot}"),
+                contrast(bright, background) > contrast(primary, background),
+                format!("bright {slot} is not further from the background than {slot}"),
             );
         }
         for (variant, colors) in [
@@ -600,22 +634,33 @@ mod tests {
                 );
             }
         }
-        let black = contrast(&p.black, background);
+        // The neutrals keep their names on both appearances, so black is
+        // dark and white is light. On a dark theme black is a surface a step
+        // off the background and white is text; on a light theme black is
+        // text and bright white is that surface. Bright black is dim hint
+        // text on either.
+        let minimums = match theme.appearance() {
+            Appearance::Dark => [1.15, 3.0, 4.5, 7.0],
+            Appearance::Light => [7.0, 3.0, 3.0, 1.15],
+        };
+        for ((neutral, color), minimum) in [
+            ("black", &p.black),
+            ("bright black", &b.black),
+            ("white", &p.white),
+            ("bright white", &b.white),
+        ]
+        .into_iter()
+        .zip(minimums)
+        {
+            let ratio = contrast(color, background);
+            require(
+                ratio >= minimum,
+                format!("{neutral} contrast {ratio:.2} < {minimum} against the background"),
+            );
+        }
         require(
-            black >= 1.15,
-            format!("black contrast {black:.2} < 1.15 against background"),
-        );
-        let bright_black = contrast(&b.black, background);
-        require(
-            bright_black >= 3.0,
-            format!("bright black contrast {bright_black:.1} < 3"),
-        );
-        let white = contrast(&p.white, background);
-        require(white >= 4.5, format!("white contrast {white:.1} < 4.5"));
-        let bright_white = contrast(&b.white, background);
-        require(
-            bright_white >= 7.0,
-            format!("bright white contrast {bright_white:.1} < 7"),
+            relative_luminance(&b.black) > relative_luminance(&p.black),
+            "bright black is not lighter than black".into(),
         );
         violations
     }
@@ -634,12 +679,38 @@ mod tests {
                 violations.extend(root_palette_violations(name, &theme));
             }
         }
-        assert_eq!(roots, 12, "every root theme must be checked");
+        assert_eq!(roots, 24, "every root theme must be checked");
         assert!(
             violations.is_empty(),
             "root palette contract violations:\n{}",
             violations.join("\n")
         );
+    }
+
+    /// Every root comes dark and light: `<root>` is the dark one and
+    /// `<root>-light` its light partner, named "<Root> Light".
+    #[test]
+    fn every_root_theme_has_a_light_partner() {
+        let roots: Vec<(&str, Theme)> = Theme::list_available()
+            .iter()
+            .map(|name| (*name, Theme::load_builtin(name).unwrap()))
+            .filter(|(_, theme)| theme.meta.author == "Termeric")
+            .collect();
+        for (name, theme) in &roots {
+            if let Some(dark) = name.strip_suffix("-light") {
+                assert_eq!(theme.appearance(), Appearance::Light, "{name}");
+                let partner = Theme::load_builtin(dark).unwrap();
+                assert_eq!(partner.appearance(), Appearance::Dark, "{dark}");
+                assert_eq!(theme.meta.name, format!("{} Light", partner.meta.name));
+            } else {
+                assert_eq!(theme.appearance(), Appearance::Dark, "{name}");
+                let light = format!("{name}-light");
+                assert!(
+                    roots.iter().any(|(other, _)| *other == light),
+                    "{name} has no light partner"
+                );
+            }
+        }
     }
 
     #[test]

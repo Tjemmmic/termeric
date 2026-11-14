@@ -1243,7 +1243,7 @@ fn headless_sgr_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
             (b'A' + index as u8) as char,
             8.0 + index as f32 * 13.0,
             8.0,
-            style.text_color(None, 1.0),
+            style.text_color(None, Fade::NONE),
             style.font,
             clip,
         );
@@ -1306,7 +1306,16 @@ fn headless_sgr_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
             false,
             TextBlinkPhases::default(),
         );
-        style::queue_sgr_decorations(&mut rects, style, 4.0, 48.0, 12.0, cell_height, 1.0, None);
+        style::queue_sgr_decorations(
+            &mut rects,
+            style,
+            4.0,
+            48.0,
+            12.0,
+            cell_height,
+            Fade::NONE,
+            None,
+        );
         let batch = rects.take_since(checkpoint);
         anyhow::ensure!(
             batch.indices.len() / 6 == expected_rectangles,
@@ -1328,7 +1337,7 @@ fn headless_sgr_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
             (b'A' + index as u8) as char,
             8.0 + index as f32 * 13.0,
             8.0,
-            style.text_color(None, 1.0),
+            style.text_color(None, Fade::NONE),
             style.font,
             clip,
         );
@@ -1349,7 +1358,7 @@ fn headless_sgr_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
         48.0,
         80.0,
         cell_height,
-        1.0,
+        Fade::NONE,
         None,
     );
     text.upload(device, queue, &mut glyph_cache);

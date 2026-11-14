@@ -120,8 +120,9 @@ copy_on_select = false
 # A built-in theme, or the name of a file in ~/.config/termeric/themes/
 # without ".toml" (a file with a built-in name replaces that theme). Change
 # Theme… in the command palette previews each one as you move through them.
-#   Root themes: turmeric, ginger, daikon, malanga, beet, turnip, yuca, taro,
-#   wasabi, galangal, horseradish, parsnip.
+#   Root themes, each dark and light (add "-light", as in "turmeric-light"):
+#   turmeric, ginger, daikon, malanga, beet, turnip, yuca, taro, wasabi,
+#   galangal, horseradish, parsnip.
 #   Guest themes: catppuccin-latte, catppuccin-mocha, dracula, everforest,
 #   gruvbox-dark, gruvbox-light, kanagawa, nord, one-dark, one-light,
 #   rose-pine, solarized-dark, solarized-light, tokyo-night.

@@ -459,8 +459,8 @@ impl UrlCache {
             url.end_row = end.row;
             url.end_col = end.end_column(url.end_col);
             let url = Arc::new(url);
-            for row in url.start_row..=url.end_row {
-                self.urls_by_row[row].push(Arc::clone(&url));
+            for row_urls in &mut self.urls_by_row[url.start_row..=url.end_row] {
+                row_urls.push(Arc::clone(&url));
             }
         }
         self.detection_scans += 1;

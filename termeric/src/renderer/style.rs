@@ -3,10 +3,55 @@
 use super::TerminalPalette;
 use super::glyph_cache::FontStyle;
 use super::types::{TextBlinkPhases, VisibleTextBlink};
-use crate::ui::color::scale_rgb;
+use crate::ui::color::mix;
+use std::hash::{Hash, Hasher};
 use termeric_core::{Cell, CellAttrs, Color as TermColor};
 
+/// The share of its color faint (SGR 2) text keeps.
 const DIM_FACTOR: f32 = 0.66;
+
+/// How far terminal colors have faded into the pane's background while its
+/// window is unfocused. Faint text fades the same way, so both grow quieter
+/// on light themes as on dark ones; darkening toward black would make them
+/// stand out on a light background instead.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Fade {
+    background: [f32; 4],
+    /// The share of each color kept, from 1.0 (unfaded) down.
+    keep: f32,
+}
+
+impl Fade {
+    /// Colors as they are, faint text darkened toward black: for test
+    /// renders that clear to black.
+    #[cfg(test)]
+    pub(super) const NONE: Self = Self {
+        background: [0.0, 0.0, 0.0, 1.0],
+        keep: 1.0,
+    };
+
+    pub(super) fn new(background: [f32; 4], keep: f32) -> Self {
+        Self { background, keep }
+    }
+
+    /// `color` faded toward the background; its alpha is kept.
+    pub(super) fn apply(self, color: [f32; 4]) -> [f32; 4] {
+        self.apply_keeping(color, 1.0)
+    }
+
+    fn apply_keeping(self, color: [f32; 4], share: f32) -> [f32; 4] {
+        let mut faded = mix(color, self.background, 1.0 - self.keep * share);
+        faded[3] = color[3];
+        faded
+    }
+
+    pub(super) fn hash_into(self, hasher: &mut impl Hasher) {
+        for component in self.background {
+            component.to_bits().hash(hasher);
+        }
+        self.keep.to_bits().hash(hasher);
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum UnderlineStyle {
@@ -78,14 +123,14 @@ impl ResolvedCellStyle {
     }
 
     /// Resolve terminal foreground, selection/cursor override, dim, and pane
-    /// focus brightness in that order.
-    pub(super) fn text_color(self, override_color: Option<[f32; 4]>, brightness: f32) -> [f32; 4] {
+    /// focus fade in that order.
+    pub(super) fn text_color(self, override_color: Option<[f32; 4]>, fade: Fade) -> [f32; 4] {
         let color = override_color.unwrap_or_else(|| self.foreground.to_f32_array());
-        shade_foreground(color, self.dim, brightness)
+        shade_foreground(color, self.dim, fade)
     }
 
-    pub(super) fn decoration_color(self, brightness: f32) -> [f32; 4] {
-        shade_foreground(self.underline_color.to_f32_array(), self.dim, brightness)
+    pub(super) fn decoration_color(self, fade: Fade) -> [f32; 4] {
+        shade_foreground(self.underline_color.to_f32_array(), self.dim, fade)
     }
 }
 
@@ -96,7 +141,7 @@ impl super::Renderer {
         x: f32,
         y: f32,
         width: f32,
-        brightness: f32,
+        fade: Fade,
         override_color: Option<([f32; 4], f32)>,
     ) {
         let cell_height = self.cell_height();
@@ -107,7 +152,7 @@ impl super::Renderer {
             y,
             width,
             cell_height,
-            brightness,
+            fade,
             override_color,
         );
     }
@@ -120,13 +165,13 @@ pub(super) fn queue_sgr_decorations(
     y: f32,
     width: f32,
     cell_height: f32,
-    brightness: f32,
+    fade: Fade,
     override_color: Option<([f32; 4], f32)>,
 ) {
     let underline_color = override_color.map_or_else(
-        || style.decoration_color(brightness),
+        || style.decoration_color(fade),
         |(color, alpha)| {
-            let mut resolved = style.text_color(Some(color), brightness);
+            let mut resolved = style.text_color(Some(color), fade);
             resolved[3] = alpha;
             resolved
         },
@@ -178,9 +223,9 @@ pub(super) fn queue_sgr_decorations(
 
     if style.strikethrough {
         let strike_color = override_color.map_or_else(
-            || style.text_color(None, brightness),
+            || style.text_color(None, fade),
             |(color, alpha)| {
-                let mut resolved = style.text_color(Some(color), brightness);
+                let mut resolved = style.text_color(Some(color), fade);
                 resolved[3] = alpha;
                 resolved
             },
@@ -236,8 +281,8 @@ pub(super) fn visible_blink_for_cell(cell: &Cell) -> VisibleTextBlink {
     }
 }
 
-fn shade_foreground(color: [f32; 4], dim: bool, brightness: f32) -> [f32; 4] {
-    scale_rgb(color, brightness * if dim { DIM_FACTOR } else { 1.0 })
+fn shade_foreground(color: [f32; 4], dim: bool, fade: Fade) -> [f32; 4] {
+    fade.apply_keeping(color, if dim { DIM_FACTOR } else { 1.0 })
 }
 
 #[cfg(test)]
@@ -295,7 +340,7 @@ mod tests {
         );
         assert!(!hidden.paint_foreground);
         assert_eq!(hidden.background, palette().default_bg);
-        assert!(hidden.text_color(None, 1.0)[0] < 200.0 / 255.0);
+        assert!(hidden.text_color(None, Fade::NONE)[0] < 200.0 / 255.0);
 
         cell.attrs = CellAttrs::BLINK;
         let off = ResolvedCellStyle::resolve(
@@ -309,6 +354,35 @@ mod tests {
             },
         );
         assert!(!off.paint_foreground);
+    }
+
+    /// Faint text and an unfocused window fade toward the background, so
+    /// both lose contrast whether the background is dark or light.
+    #[test]
+    fn faint_and_unfocused_text_fade_into_either_background() {
+        use crate::ui::color::contrast_ratio;
+        let backgrounds = [[0.08, 0.07, 0.06, 1.0], [0.93, 0.88, 0.78, 1.0]];
+        let foregrounds = [[0.9, 0.85, 0.75, 1.0], [0.24, 0.2, 0.17, 1.0]];
+        for (background, foreground) in backgrounds.into_iter().zip(foregrounds) {
+            let unfaded = Fade::new(background, 1.0);
+            let unfocused = Fade::new(background, 0.7);
+            let normal = shade_foreground(foreground, false, unfaded);
+            assert_eq!(normal, foreground);
+            let full = contrast_ratio(normal, background);
+            let faint = contrast_ratio(shade_foreground(foreground, true, unfaded), background);
+            let dimmed = contrast_ratio(unfocused.apply(foreground), background);
+            assert!(
+                faint < full,
+                "faint {faint:.2} vs {full:.2} on {background:?}"
+            );
+            assert!(
+                dimmed < full,
+                "unfocused {dimmed:.2} vs {full:.2} on {background:?}"
+            );
+            assert!(faint > 1.5, "faint text stays readable on {background:?}");
+        }
+        let translucent = Fade::new(backgrounds[1], 0.5).apply([0.2, 0.4, 0.6, 0.25]);
+        assert_eq!(translucent[3], 0.25);
     }
 
     #[test]

@@ -1,0 +1,36 @@
+[meta]
+name = "Beet Light"
+author = "Termeric"
+description = "The pale pink rings of a sliced beet with crimson and maroon"
+
+[primary]
+black = "#4F3838"   # Roasted maroon skin
+red = "#B83D48"     # Roasted crimson
+green = "#59763F"   # Wilted beet greens
+yellow = "#9E792E"  # Caramelized gold
+blue = "#5266A5"    # Dusky purple-blue
+magenta = "#A54682" # Roasted magenta
+cyan = "#41796F"    # Vein teal
+white = "#9F7C69"   # Roasted flesh tan
+
+[bright]
+black = "#80696D"   # Dusty maroon for dim hints
+red = "#9F2C34"     # Deep roasted crimson
+green = "#45622E"   # Deep beet greens
+yellow = "#7C601F"  # Deep caramel
+blue = "#405297"    # Deep dusky blue
+magenta = "#8E356D" # Deep roasted magenta
+cyan = "#30645D"    # Deep vein teal
+white = "#DFC5B7"   # Pink-cream ring, a step off the background
+
+[ui]
+background = "#F0E4DD"   # Pale pink of sliced beet rings
+foreground = "#3F2B2B"   # Near-black maroon skin
+cursor = "#C84359"       # Caramelized rose
+cursor_text = "#F0E4DD"  # Text under the cursor
+selection = "#CC667640"  # Rose tint
+border = "#D9CCC6"       # Chrome separators
+tab_active = "#C84359"   # Caramelized rose
+tab_inactive = "#E8DCD5" # Tab strip
+search_match = "#D1A447" # Caramel gold
+url = "#A93F82"          # Roasted magenta

@@ -1,0 +1,36 @@
+[meta]
+name = "Ginger Light"
+author = "Termeric"
+description = "Papery ginger skin by daylight — warm, sandy, and understated"
+
+[primary]
+black = "#3E362E"   # Dark knuckle skin
+red = "#9F544E"     # Pink-red
+green = "#5F7740"   # Olive leaf
+yellow = "#89753C"  # Straw
+blue = "#4D6C8F"    # Shadow blue
+magenta = "#985281" # Shoot pink
+cyan = "#427B71"    # Reed teal
+white = "#8A7A58"   # Fibrous straw
+
+[bright]
+black = "#6E675B"   # Sand for dim hints
+red = "#84423B"     # Deep muted pink-red
+green = "#4A6034"   # Deep olive leaf
+yellow = "#6B5C2A"  # Deep straw
+blue = "#3F5775"    # Deep shadow blue
+magenta = "#7B4267" # Deep shoot pink
+cyan = "#35625D"    # Deep reed teal
+white = "#CFBF97"   # Pale fibrous cream, a step off the background
+
+[ui]
+background = "#E4DBC4"   # Papery ginger skin
+foreground = "#3A3229"   # Dark knuckle skin
+cursor = "#836826"       # Straw gold
+cursor_text = "#E4DBC4"  # Text under the cursor
+selection = "#CCAB6640"  # Straw tint
+border = "#CEC5B0"       # Chrome separators
+tab_active = "#836826"   # Straw gold
+tab_inactive = "#DCD3BD" # Tab strip
+search_match = "#96D147" # Olive leaf
+url = "#4F6732"          # Olive leaf

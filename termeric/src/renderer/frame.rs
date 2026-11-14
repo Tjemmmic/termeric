@@ -311,8 +311,9 @@ impl Renderer {
         let content_left = self.tab_bar_width();
         let content_width = self.content_width_for(window_width);
 
-        // Calculate brightness multiplier for focus dimming (1.0 = full brightness, lower = dimmed)
-        let brightness = 1.0 - focus_dim;
+        // The share of each terminal color kept while the window is
+        // unfocused (1.0 = unfaded); the rest fades into the background.
+        let focus_keep = 1.0 - focus_dim;
 
         // Content starts directly below the tab bar; the find box floats
         // over it.
@@ -360,7 +361,7 @@ impl Renderer {
                 pane.cursor_pos,
                 text_blink,
                 copy_flash,
-                brightness,
+                focus_keep,
                 search,
                 pane.url_cache,
                 window_height,

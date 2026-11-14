@@ -349,8 +349,8 @@ impl Row {
                 preserved = true;
             } else {
                 damage(leader..grapheme_end);
-                for target in leader..grapheme_end {
-                    self.cells[target].clear_content_preserving_attrs();
+                for cell in &mut self.cells[leader..grapheme_end] {
+                    cell.clear_content_preserving_attrs();
                 }
             }
             col = grapheme_end.max(col + 1);

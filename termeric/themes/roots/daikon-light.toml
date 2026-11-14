@@ -1,0 +1,36 @@
+[meta]
+name = "Daikon Light"
+author = "Termeric"
+description = "The green-tinged shoulder of the Japanese radish, crisp and cool"
+
+[primary]
+black = "#2C3731"   # Deep soil
+red = "#B14144"     # Radish blush
+green = "#47783B"   # Leathery leaf green
+yellow = "#83742F"  # Green-top yellow
+blue = "#406B8F"    # Cool shadow blue
+magenta = "#964F7E" # Rose
+cyan = "#3C796E"    # Leaf-vein teal
+white = "#6F7E62"   # Grey-green skin
+
+[bright]
+black = "#5A695E"   # Grey-green for dim hints
+red = "#962F2F"     # Deep blush
+green = "#36612B"   # Deep leaf green
+yellow = "#645B1F"  # Deep green-top yellow
+blue = "#2F567B"    # Deep shadow blue
+magenta = "#803A68" # Deep rose
+cyan = "#2A6159"    # Deep leaf-vein teal
+white = "#B8BFAE"   # Pale shoulder, a step off the background
+
+[ui]
+background = "#D5D9CF"   # Green-tinged daikon shoulder
+foreground = "#27332D"   # Deep soil green
+cursor = "#377627"       # Fresh leaf green
+cursor_text = "#D5D9CF"  # Text under the cursor
+selection = "#79CC6640"  # Leaf tint
+border = "#BEC3BA"       # Chrome separators
+tab_active = "#377627"   # Fresh leaf green
+tab_inactive = "#CDD1C7" # Tab strip
+search_match = "#D1BF47" # Green-top yellow
+url = "#2C694A"          # Leaf teal

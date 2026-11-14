@@ -1,7 +1,7 @@
 //! Toast rendering — bottom-right stacked cards with severity-tinted border.
 
 use super::Renderer;
-use crate::ui::color::{scale_rgb, with_alpha};
+use crate::ui::color::{mix, with_alpha};
 use crate::ui::constants::{BORDER_WIDTH, CARD_CORNER_RADIUS};
 use crate::ui::geometry::Bounds;
 use crate::ui::toast::{ToastInfo, ToastPlacement, ToastSeverity, toast_at, toast_layout};
@@ -80,10 +80,13 @@ impl Renderer {
                 ),
             };
 
-            // Card background — slightly darker than the palette background
-            // so the toast stays legible over both terminal content and
-            // modal overlays.
-            let bg = with_alpha(scale_rgb(self.ui.palette_bg, 0.95), 0.97 * opacity);
+            // Card background, a step further back than other cards so the
+            // toast stays legible over both terminal content and modal
+            // overlays.
+            let bg = with_alpha(
+                mix(self.ui.palette_bg, self.ui.recede, 0.05),
+                0.97 * opacity,
+            );
 
             self.draw_card_shadow(placement.rect, 0.2 * opacity, 2);
             self.draw_card(placement.rect, bg, border_color);

@@ -1,0 +1,36 @@
+[meta]
+name = "Galangal Light"
+author = "Termeric"
+description = "Pale pinkish-tan galangal flesh with hot pink shoots"
+
+[primary]
+black = "#4E3B38"   # Tan bark
+red = "#B8413D"     # Shoot red
+green = "#507941"   # Blade green
+yellow = "#9B7C31"  # Resin gold
+blue = "#4C68AA"    # Shadow blue
+magenta = "#AE4180" # Dusty pink shoot
+cyan = "#417A74"    # Blade teal
+white = "#9D8066"   # Pinkish tan in shade
+
+[bright]
+black = "#7E6D67"   # Pinkish tan for dim hints
+red = "#9B352D"     # Deep shoot red
+green = "#3B652F"   # Deep blade green
+yellow = "#7A6321"  # Deep resin
+blue = "#3B5599"    # Deep shadow blue
+magenta = "#97306A" # Deep dusty pink
+cyan = "#2F6561"    # Deep blade teal
+white = "#DFC9B4"   # Flesh, a step off the background
+
+[ui]
+background = "#F5E6D8"   # Pale pinkish-tan flesh
+foreground = "#3E2E2B"   # Tan bark
+cursor = "#C84277"       # Hot pink shoot
+cursor_text = "#F5E6D8"  # Text under the cursor
+selection = "#CC668740"  # Dusty pink tint
+border = "#DECEC2"       # Chrome separators
+tab_active = "#C84277"   # Hot pink shoot
+tab_inactive = "#EDDED0" # Tab strip
+search_match = "#6CD147" # Blade green
+url = "#B23B7D"          # Dusty pink shoot

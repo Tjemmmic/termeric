@@ -1,0 +1,36 @@
+[meta]
+name = "Taro Light"
+author = "Termeric"
+description = "Pale lavender taro flesh with purple veins and dusty brown skin"
+
+[primary]
+black = "#473931"   # Dusty brown skin
+red = "#B63A3E"     # Purple-rose red
+green = "#41773D"   # Elephant-ear leaf
+yellow = "#937A27"  # Creamy spadix
+blue = "#4E60B7"    # Periwinkle
+magenta = "#9149A2" # Purple vein
+cyan = "#3A776E"    # Velvety leaf teal
+white = "#8C79A0"   # Lavender flesh in shade
+
+[bright]
+black = "#776A62"   # Fibrous brown for dim hints
+red = "#9E2727"     # Deep purple-rose
+green = "#2E632C"   # Deep leaf
+yellow = "#72611B"  # Deep spadix
+blue = "#3A4BAD"    # Deep periwinkle
+magenta = "#7D358F" # Deep purple vein
+cyan = "#2A625C"    # Deep leaf teal
+white = "#CFC2DD"   # Lavender, a step off the background
+
+[ui]
+background = "#E7E0EE"   # Pale lavender flesh
+foreground = "#382B24"   # Dusty brown skin
+cursor = "#9650C5"       # Purple vein
+cursor_text = "#E7E0EE"  # Text under the cursor
+selection = "#A466CC40"  # Lavender tint
+border = "#D0C8D3"       # Chrome separators
+tab_active = "#9650C5"   # Purple vein
+tab_inactive = "#DFD8E4" # Tab strip
+search_match = "#D1B247" # Creamy spadix
+url = "#8C46AB"          # Purple vein
