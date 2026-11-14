@@ -5,6 +5,8 @@
 //! also tracks the Kitty OSC 99 notifications a terminal may close, query,
 //! or ask to hear about.
 
+#[cfg(target_os = "linux")]
+mod freedesktop;
 mod icon;
 mod tracked;
 
@@ -495,20 +497,6 @@ fn requires_tracked_notification(request: &NotificationRequest) -> bool {
         || request.icon_data.is_some()
 }
 
-fn freedesktop_icon_name(name: &str) -> &str {
-    match name {
-        "error" => "dialog-error",
-        "warn" | "warning" => "dialog-warning",
-        "info" => "dialog-information",
-        "question" => "dialog-question",
-        "help" => "help-browser",
-        "file-manager" => "system-file-manager",
-        "system-monitor" => "utilities-system-monitor",
-        "text-editor" => "accessories-text-editor",
-        _ => name,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -735,26 +723,6 @@ while [ ! -e "$2" ]; do sleep 0.01; done"#;
         let error = report.report(&"x".repeat(1_024)).unwrap();
         assert_eq!(error.chars().count(), MAX_DELIVERY_ERROR_CHARS);
         assert!(error.ends_with('…'));
-    }
-
-    #[test]
-    fn kitty_icon_names_map_to_freedesktop_icons() {
-        assert_eq!(freedesktop_icon_name("error"), "dialog-error");
-        assert_eq!(freedesktop_icon_name("warn"), "dialog-warning");
-        assert_eq!(freedesktop_icon_name("warning"), "dialog-warning");
-        assert_eq!(freedesktop_icon_name("info"), "dialog-information");
-        assert_eq!(freedesktop_icon_name("question"), "dialog-question");
-        assert_eq!(freedesktop_icon_name("help"), "help-browser");
-        assert_eq!(freedesktop_icon_name("file-manager"), "system-file-manager");
-        assert_eq!(
-            freedesktop_icon_name("system-monitor"),
-            "utilities-system-monitor"
-        );
-        assert_eq!(
-            freedesktop_icon_name("text-editor"),
-            "accessories-text-editor"
-        );
-        assert_eq!(freedesktop_icon_name("org.example.App"), "org.example.App");
     }
 
     #[test]
