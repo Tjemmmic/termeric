@@ -51,6 +51,103 @@ impl DetectedUrl {
     }
 }
 
+/// The desktop's handler for links and files.
+#[cfg(target_os = "linux")]
+const OPENER: &str = "xdg-open";
+#[cfg(target_os = "macos")]
+const OPENER: &str = "/usr/bin/open";
+
+/// What opening a document of these kinds does on macOS: run it (scripts,
+/// workflows, Java archives), install it, or launch an application.
+#[cfg(target_os = "macos")]
+const MACOS_RUNNABLE_EXTENSIONS: &[&str] = &[
+    "action",
+    "app",
+    "applescript",
+    "command",
+    "fileloc",
+    "inetloc",
+    "jar",
+    "mpkg",
+    "pkg",
+    "prefpane",
+    "saver",
+    "scpt",
+    "scptd",
+    "shortcut",
+    "terminal",
+    "tool",
+    "webloc",
+    "workflow",
+];
+
+/// The local path `target` names, when opening it would run something
+/// rather than show it: a package or other directory with an extension
+/// (LaunchServices may launch it), an executable file, or a runnable kind of
+/// document. A remote or unreadable file URI is left to `open`, which does
+/// not run remote files.
+#[cfg(target_os = "macos")]
+fn macos_runnable_target(target: &str, directory: Option<&Path>) -> Option<std::path::PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    let path = if target.starts_with('/') {
+        std::path::PathBuf::from(target)
+    } else if UrlDetector::is_relative_path(target) {
+        directory?.join(target)
+    } else {
+        local_file_uri_path(target)?
+    };
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase);
+    let runnable_kind = extension
+        .as_deref()
+        .is_some_and(|extension| MACOS_RUNNABLE_EXTENSIONS.contains(&extension));
+    let runnable = runnable_kind
+        || std::fs::metadata(&path).is_ok_and(|metadata| {
+            (metadata.is_dir() && extension.is_some())
+                || (metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+        });
+    runnable.then_some(path)
+}
+
+/// The path of a `file:` URI for this machine (no host, or `localhost`),
+/// percent-decoded.
+#[cfg(target_os = "macos")]
+fn local_file_uri_path(target: &str) -> Option<std::path::PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+    let (scheme, rest) = target.split_once(':')?;
+    if !scheme.eq_ignore_ascii_case("file") {
+        return None;
+    }
+    let path = match rest.strip_prefix("//") {
+        Some(authority_and_path) => {
+            let slash = authority_and_path.find('/')?;
+            let (authority, path) = authority_and_path.split_at(slash);
+            if !(authority.is_empty() || authority.eq_ignore_ascii_case("localhost")) {
+                return None;
+            }
+            path
+        }
+        None => rest,
+    };
+    // The query and fragment are not part of the path.
+    let path = path.split(['?', '#']).next()?;
+    let mut bytes = Vec::with_capacity(path.len());
+    let mut encoded = path.bytes();
+    while let Some(byte) = encoded.next() {
+        if byte == b'%' {
+            let high = (encoded.next()? as char).to_digit(16)?;
+            let low = (encoded.next()? as char).to_digit(16)?;
+            bytes.push(u8::try_from(high * 16 + low).ok()?);
+        } else {
+            bytes.push(byte);
+        }
+    }
+    (bytes.first() == Some(&b'/') && !bytes.contains(&0))
+        .then(|| std::path::PathBuf::from(std::ffi::OsString::from_vec(bytes)))
+}
+
 /// URL detector for terminal content
 pub struct UrlDetector {
     /// Common URL schemes to detect
@@ -237,15 +334,24 @@ impl UrlDetector {
         } else {
             None
         };
-        let mut command = std::process::Command::new("xdg-open");
+        let mut command = std::process::Command::new(OPENER);
+        #[cfg(target_os = "linux")]
         command.arg(url);
+        // `open` launches applications and runs scripts. Something local that
+        // would run is shown in the Finder instead, so a link a program
+        // printed can never run code with one click.
+        #[cfg(target_os = "macos")]
+        match macos_runnable_target(url, directory) {
+            Some(path) => command.arg("-R").arg(path),
+            None => command.arg(url),
+        };
         if let Some(directory) = directory {
             command.current_dir(directory);
         }
         Ok(command)
     }
 
-    fn is_relative_path(target: &str) -> bool {
+    pub(crate) fn is_relative_path(target: &str) -> bool {
         if Path::new(target).is_absolute() {
             return false;
         }
@@ -1158,6 +1264,59 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_reveals_what_opening_would_run() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let script = root.join("run me");
+        std::fs::write(&script, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let document = root.join("notes.txt");
+        std::fs::write(&document, "text").unwrap();
+        let bundle = root.join("Tool.app");
+        std::fs::create_dir(&bundle).unwrap();
+        let folder = root.join("plain folder");
+        std::fs::create_dir(&folder).unwrap();
+        let encoded = format!("file://{}", script.to_str().unwrap().replace(' ', "%20"));
+        let revealed = |target: &str, directory: Option<&Path>| {
+            let command = UrlDetector::opener_command(target, directory).unwrap();
+            let arguments: Vec<_> = command
+                .get_args()
+                .map(|argument| argument.to_owned())
+                .collect();
+            (arguments.first().map(|argument| argument == "-R") == Some(true))
+                .then(|| arguments[1].clone())
+        };
+        assert_eq!(
+            revealed(script.to_str().unwrap(), None),
+            Some(script.clone().into())
+        );
+        assert_eq!(revealed(&encoded, None), Some(script.clone().into()));
+        assert_eq!(revealed("run me", Some(&root)), Some(script.clone().into()));
+        assert_eq!(
+            revealed(bundle.to_str().unwrap(), None),
+            Some(bundle.clone().into())
+        );
+        assert_eq!(
+            revealed("/Downloads/missing.command", None),
+            Some("/Downloads/missing.command".into())
+        );
+        assert_eq!(
+            revealed("file:///x/Setup.PKG", None),
+            Some("/x/Setup.PKG".into())
+        );
+        for opened in [
+            document.to_str().unwrap(),
+            folder.to_str().unwrap(),
+            "https://example.test/run.command",
+            "file://remote.example/x/run.command",
+        ] {
+            assert_eq!(revealed(opened, None), None, "{opened}");
+        }
+    }
+
     #[test]
     fn opener_rejects_option_shaped_targets() {
         for target in [
@@ -1243,7 +1402,7 @@ mod tests {
                 command.get_current_dir(),
                 UrlDetector::is_relative_path(target).then_some(cwd)
             );
-            assert_eq!(command.get_program(), "xdg-open");
+            assert_eq!(command.get_program(), OPENER);
         }
     }
 
