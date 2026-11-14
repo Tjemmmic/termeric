@@ -986,6 +986,7 @@ impl ApplicationHandler<AppEvent> for Application {
                 }
                 return;
             }
+            #[cfg(target_os = "linux")]
             AppEvent::SystemAccessibilityUnavailable(error) => {
                 log::debug!("Desktop accessibility preferences are unavailable: {error}");
                 return;

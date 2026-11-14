@@ -214,6 +214,8 @@ pub(crate) enum AppEvent {
     StructuredPluginCompleted(crate::plugin::structured::StructuredHandlerCompletion),
     AccessKit(accesskit_winit::Event),
     SystemAccessibilityChanged(system_accessibility::SystemAccessibilityPreferences),
+    /// The desktop portal can't say (macOS always can).
+    #[cfg(target_os = "linux")]
     SystemAccessibilityUnavailable(String),
 }
 

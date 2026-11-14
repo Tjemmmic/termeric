@@ -33,7 +33,8 @@ impl ChannelOrder {
 enum StoredAlpha {
     /// Colors are already multiplied by alpha.
     Premultiplied,
-    /// Colors are independent of alpha.
+    /// Colors are independent of alpha (Metal has no such mode).
+    #[cfg(target_os = "linux")]
     Straight,
     /// The compositor ignores alpha: the window is opaque.
     Ignored,
@@ -197,6 +198,7 @@ fn straight_rgba(bytes: &[u8], layout: CopiedRows) -> Vec<u8> {
             };
             let [r, g, b, a] = match layout.alpha {
                 StoredAlpha::Premultiplied => unpremultiply([r, g, b, a]),
+                #[cfg(target_os = "linux")]
                 StoredAlpha::Straight => [r, g, b, a],
                 StoredAlpha::Ignored => [r, g, b, u8::MAX],
             };

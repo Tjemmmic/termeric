@@ -49,7 +49,9 @@ pub struct FileRequest {
 }
 
 /// The path a `file://` URI names on this computer, or `None` for another
-/// host, another scheme, or a malformed escape.
+/// host, another scheme, or a malformed escape. The portal and Wayland's
+/// drops answer with URIs; macOS answers with paths.
+#[cfg(target_os = "linux")]
 pub(crate) fn local_path(uri: &str) -> Option<PathBuf> {
     use std::os::unix::ffi::OsStringExt;
     let rest = uri.strip_prefix("file://")?;
@@ -81,6 +83,7 @@ fn filter_extensions(filter: &FileFilter) -> Vec<&'static str> {
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn only_local_file_uris_become_paths() {
         use std::os::unix::ffi::OsStringExt;

@@ -40,6 +40,8 @@ pub(crate) fn present(
     panel.setResolvesAliases(true);
     match &request.pick {
         Pick::File(filter) => {
+            // A sheet shows no title, but accessibility names the panel by it.
+            panel.setTitle(Some(&NSString::from_str(filter.name)));
             panel.setCanChooseFiles(true);
             panel.setCanChooseDirectories(false);
             panel.setAllowsMultipleSelection(false);
