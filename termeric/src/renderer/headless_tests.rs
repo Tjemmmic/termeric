@@ -723,22 +723,33 @@ fn headless_unicode_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
 /// Load a real COLR/CBDT emoji font and carry its RGBA pixels through the
 /// dedicated atlas, vertex flag, bind group, and shader compilation path.
 fn headless_color_emoji_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
-    let font_path = [
-        "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
-        "/usr/share/fonts/noto/NotoColorEmoji.ttf",
+    // Linux's Noto Color Emoji (COLR/CBDT), or macOS's own Apple Color
+    // Emoji (sbix bitmaps in a collection).
+    let (font_path, family) = [
+        (
+            "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+            "Noto Color Emoji",
+        ),
+        (
+            "/usr/share/fonts/noto/NotoColorEmoji.ttf",
+            "Noto Color Emoji",
+        ),
+        (
+            "/System/Library/Fonts/Apple Color Emoji.ttc",
+            "Apple Color Emoji",
+        ),
     ]
     .into_iter()
-    .map(std::path::Path::new)
-    .find(|path| path.is_file())
-    .ok_or_else(|| anyhow::anyhow!("Noto Color Emoji is required for the GPU render smoke"))?;
+    .find(|(path, _)| std::path::Path::new(path).is_file())
+    .ok_or_else(|| anyhow::anyhow!("a color emoji font is required for the GPU render smoke"))?;
     let font_data = std::fs::read(font_path)?;
     let mut glyph_cache = GlyphCache::for_test(device, queue, 32.0, false)?;
-    glyph_cache.install_test_font(font_data, "Noto Color Emoji", queue);
+    glyph_cache.install_test_font(font_data, family, queue);
     glyph_cache.begin_frame();
 
     let run = glyph_cache
         .shape_grapheme_styled("😀", glyph_cache::FontStyle::default(), queue)
-        .ok_or_else(|| anyhow::anyhow!("Noto did not shape the emoji fixture"))?;
+        .ok_or_else(|| anyhow::anyhow!("{family} did not shape the emoji fixture"))?;
     anyhow::ensure!(!run.glyphs.is_empty(), "emoji fixture produced no glyphs");
     anyhow::ensure!(
         run.glyphs.iter().all(|glyph| glyph.entry.color),

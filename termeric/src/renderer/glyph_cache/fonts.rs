@@ -382,3 +382,29 @@ pub(super) fn resolve_configured_family(
         .unwrap_or("monospace")
         .to_string()
 }
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_tests {
+    use cosmic_text::fontdb::Family;
+
+    /// What the generic families resolve to on a real Mac: the faces every
+    /// supported macOS installs.
+    #[test]
+    fn generic_families_resolve_to_installed_mac_faces() {
+        let system = super::desktop_font_system();
+        let database = system.db();
+        assert_eq!(database.family_name(&Family::Monospace), "Menlo");
+        let sans = database.family_name(&Family::SansSerif);
+        assert!(
+            [".SF NS", "Helvetica Neue", "Helvetica"].contains(&sans),
+            "{sans}"
+        );
+        assert!(
+            database.faces().any(|face| face
+                .families
+                .iter()
+                .any(|(name, _)| name == "Apple Color Emoji")),
+            "Apple Color Emoji is loaded for emoji fallback"
+        );
+    }
+}
