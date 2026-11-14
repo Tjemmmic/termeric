@@ -3391,6 +3391,43 @@ fn automatic_restore_expands_each_remembered_window_workspace() {
     assert!(!application.pending[0].allow_workspace_fallback);
 }
 
+/// Quitting (on macOS: the menu, the Dock, logging out) ends every window at
+/// once, and every one of them comes back at the next start.
+#[test]
+fn exiting_keeps_every_open_window_for_the_next_start() {
+    let temp = tempfile::tempdir().unwrap();
+    crate::workspace::set_test_workspaces_base_dir(Some(temp.path().join("workspaces")));
+    super::super::state::AppState::set_test_state_path(Some(temp.path().join("state.json")));
+    let outcome = std::panic::catch_unwind(|| {
+        let config = Config {
+            shell: crate::test_support::sleeping_shell(),
+            ..Config::default()
+        };
+        assert!(config.session.enabled && config.session.auto_save);
+        let mut application =
+            Application::from_config(config.clone(), None, LaunchPlan::default()).unwrap();
+        application.pending.clear();
+        for id in [1, 2] {
+            let mut window = App::new_headless_with_tabs(config.clone());
+            window.automatic_persistence = true;
+            application.windows.insert(WindowId::from(id), window);
+        }
+        application.close_every_window();
+        assert!(application.windows.is_empty());
+        assert_eq!(
+            super::super::state::AppState::load()
+                .last_workspace_ids
+                .len(),
+            2
+        );
+    });
+    crate::workspace::set_test_workspaces_base_dir(None);
+    super::super::state::AppState::set_test_state_path(None);
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
+}
+
 #[test]
 fn a_broken_automatic_workspace_opens_a_shell_in_a_separate_process() {
     let temp = tempfile::tempdir().unwrap();
