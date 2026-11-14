@@ -15,7 +15,7 @@ impl Renderer {
         pane_clip: TextClip,
         main_shape: CursorStyle,
         cursor_opacity: f32,
-        brightness: f32,
+        fade: Fade,
         text_blink: TextBlinkPhases,
     ) {
         if cursor_opacity <= 0.0 || grid.scroll_offset() != 0 {
@@ -62,7 +62,7 @@ impl Renderer {
                 pane_clip,
                 shape,
                 cursor_opacity,
-                brightness,
+                fade,
                 text_blink,
                 cursor_color,
                 text_color,
@@ -102,7 +102,7 @@ impl Renderer {
         pane_clip: TextClip,
         shape: CursorStyle,
         opacity: f32,
-        brightness: f32,
+        fade: Fade,
         text_blink: TextBlinkPhases,
         cursor_color: [f32; 4],
         cursor_text: [f32; 4],
@@ -119,7 +119,7 @@ impl Renderer {
             return;
         }
 
-        let mut painted_cursor = scale_rgb(cursor_color, brightness);
+        let mut painted_cursor = fade.apply(cursor_color);
         painted_cursor[3] = opacity;
         match shape {
             CursorStyle::Block => {
@@ -144,7 +144,7 @@ impl Renderer {
                 if !style.paint_foreground {
                     return;
                 }
-                let mut color = style.text_color(Some(cursor_text), brightness);
+                let mut color = style.text_color(Some(cursor_text), fade);
                 color[3] = opacity;
                 if cell.multicell.is_leader() {
                     self.text_pipeline.push_styled_multicell(
@@ -176,7 +176,7 @@ impl Renderer {
                     x,
                     y,
                     cursor_width,
-                    brightness,
+                    fade,
                     Some((cursor_text, opacity)),
                 );
             }

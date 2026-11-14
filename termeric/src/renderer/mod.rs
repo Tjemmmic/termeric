@@ -89,7 +89,7 @@ use winit::window::Window;
 
 use rect::RectPipeline;
 use row_cache::{RowCacheKey, TerminalRowCache};
-use style::ResolvedCellStyle;
+use style::{Fade, ResolvedCellStyle};
 use text::{TextClip, TextPipeline, TextRunAccumulator};
 
 use crate::tabs::TabInfo;

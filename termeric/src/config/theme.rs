@@ -191,6 +191,17 @@ impl Theme {
         }
     }
 
+    /// Dark or light, read from the colors themselves so a theme file needs
+    /// no key for it: light when the background is lighter than the text.
+    pub fn appearance(&self) -> Appearance {
+        let luminance = |color: Color| crate::ui::color::relative_luminance(color.to_f32_array());
+        if luminance(self.ui.background) > luminance(self.ui.foreground) {
+            Appearance::Light
+        } else {
+            Appearance::Dark
+        }
+    }
+
     /// Get ANSI color by index (0-15)
     pub fn ansi_color(&self, index: u8) -> Color {
         match index {
@@ -213,6 +224,14 @@ impl Theme {
             _ => self.ui.foreground,
         }
     }
+}
+
+/// Whether a theme sets light text on a dark background or dark text on a
+/// light one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Appearance {
+    Dark,
+    Light,
 }
 
 /// Theme metadata

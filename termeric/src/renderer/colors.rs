@@ -2,6 +2,7 @@
 //! the encoded-color surface formats frames render into.
 
 use super::*;
+use crate::config::theme::Appearance;
 use crate::ui::color::high_contrast_text_on;
 use crate::ui::dialog::ButtonRole;
 
@@ -51,8 +52,14 @@ pub(crate) struct UiPalette {
     pub(crate) url: [f32; 4],
     // Command palette colors
     pub(crate) palette_scrim: [f32; 4],
+    /// Cards (toasts, diff review, the context picker, the guardrail,
+    /// Harvest, quick-select labels) and, further still, text fields:
+    /// surfaces that sit back from the text.
     pub(crate) palette_bg: [f32; 4],
     pub(crate) palette_input_bg: [f32; 4],
+    /// The color those surfaces step toward, away from the text: black on a
+    /// dark theme, white on a light one.
+    pub(crate) recede: [f32; 4],
     pub(crate) palette_accent: [f32; 4],
     pub(crate) palette_text: [f32; 4],
     pub(crate) palette_text_dim: [f32; 4],
@@ -85,6 +92,10 @@ impl UiPalette {
         let chrome = |amount: f32| mix(strip, fg.to_f32_array(), amount);
         let tab_text_active = fg.to_f32_array();
         let tab_text_inactive = with_alpha(fg.to_f32_array(), 0.62);
+        let recede = match theme.appearance() {
+            Appearance::Dark => [0.0, 0.0, 0.0, 1.0],
+            Appearance::Light => [1.0, 1.0, 1.0, 1.0],
+        };
         let mut palette = Self {
             background: bg.to_wgpu(),
             foreground: fg.to_f32_array(),
@@ -120,8 +131,9 @@ impl UiPalette {
             // Command palette. Its scrim is plain black at low alpha, like
             // every shadow, so it dims light and dark themes alike.
             palette_scrim: [0.0, 0.0, 0.0, 0.3],
-            palette_bg: scale_rgb(bg.to_f32_array(), 0.65),
-            palette_input_bg: scale_rgb(bg.to_f32_array(), 0.50),
+            palette_bg: mix(bg.to_f32_array(), recede, 0.35),
+            palette_input_bg: mix(bg.to_f32_array(), recede, 0.50),
+            recede,
             palette_accent: cursor.to_f32_array(),
             palette_text: fg.to_f32_array(),
             palette_text_dim: with_alpha(fg.to_f32_array(), 0.50),
@@ -509,6 +521,49 @@ mod terminal_palette_tests {
 #[cfg(test)]
 mod ui_palette_accessibility_tests {
     use super::*;
+
+    fn terminal_background(palette: &UiPalette) -> [f32; 4] {
+        let background = palette.background;
+        [
+            background.r as f32,
+            background.g as f32,
+            background.b as f32,
+            1.0,
+        ]
+    }
+
+    /// Cards and fields sit back from the text on light themes as on dark
+    /// ones, so text on them reads better than on the terminal itself.
+    #[test]
+    fn cards_and_fields_recede_from_the_text_on_every_theme() {
+        for theme_name in Theme::list_available() {
+            let theme = Theme::load_builtin(theme_name).unwrap();
+            let palette = UiPalette::from_theme_with_contrast(&theme, false);
+            let text = palette.palette_text;
+            let toast = mix(palette.palette_bg, palette.recede, 0.05);
+            let terminal = contrast_ratio(text, terminal_background(&palette));
+            let card = contrast_ratio(text, palette.palette_bg);
+            let field = contrast_ratio(text, palette.palette_input_bg);
+            let toast = contrast_ratio(text, toast);
+            assert!(
+                terminal < card && card < toast && card < field,
+                "{theme_name}: terminal {terminal:.2}, card {card:.2}, toast {toast:.2}, field {field:.2}"
+            );
+        }
+    }
+
+    #[test]
+    fn dark_theme_cards_and_fields_darken_the_background() {
+        let theme = Theme::load_builtin("turmeric").unwrap();
+        let palette = UiPalette::from_theme_with_contrast(&theme, false);
+        let background = theme.ui.background.to_f32_array();
+        for (surface, factor) in [(palette.palette_bg, 0.65), (palette.palette_input_bg, 0.50)] {
+            let expected = scale_rgb(background, factor);
+            for channel in 0..3 {
+                assert!((surface[channel] - expected[channel]).abs() < 1e-6);
+            }
+        }
+    }
 
     #[test]
     fn high_contrast_chrome_meets_aa_text_contrast() {

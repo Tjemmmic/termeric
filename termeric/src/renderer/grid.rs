@@ -31,7 +31,7 @@ impl Renderer {
         cursor_pos: (f32, f32),
         text_blink: TextBlinkPhases,
         copy_flash: f32,
-        brightness: f32,
+        focus_keep: f32,
         search: &Search,
         url_cache: &UrlCache,
         window_height: f32,
@@ -42,15 +42,16 @@ impl Renderer {
         let cell_width = self.cell_width();
         let cell_height = self.cell_height();
 
+        let default_bg = self.terminal_palette.default_bg(dynamic_colors);
+        let fade = Fade::new(default_bg.to_f32_array(), focus_keep);
+
         // Selection highlight color
         let selection_base = self.ui.selection;
         let selection_flash = self.ui.selection_flash;
-        let selection_color =
-            scale_rgb(mix(selection_base, selection_flash, copy_flash), brightness);
+        let selection_color = fade.apply(mix(selection_base, selection_flash, copy_flash));
 
         let scroll_offset = grid.scroll_offset();
         let scroll_offset_i32 = i32::try_from(scroll_offset).unwrap_or(i32::MAX);
-        let default_bg = self.terminal_palette.default_bg(dynamic_colors);
         if dynamic_colors.background().is_some() {
             self.rect_pipeline.push_rect(
                 offset_x,
@@ -116,7 +117,7 @@ impl Renderer {
             hash_text_clip(pane_clip, &mut hasher);
             cell_width.to_bits().hash(&mut hasher);
             cell_height.to_bits().hash(&mut hasher);
-            brightness.to_bits().hash(&mut hasher);
+            fade.hash_into(&mut hasher);
             cursor_break_col.hash(&mut hasher);
             for component in selection_color {
                 component.to_bits().hash(&mut hasher);
@@ -173,7 +174,7 @@ impl Renderer {
                     row_y,
                     pane_width,
                     cell_height,
-                    scale_rgb(self.ui.prompt_mark, brightness),
+                    fade.apply(self.ui.prompt_mark),
                 );
             }
 
@@ -225,7 +226,7 @@ impl Renderer {
                         y,
                         cell_width,
                         cell_height,
-                        scale_rgb(self.ui.search_match_current, brightness),
+                        fade.apply(self.ui.search_match_current),
                     );
                 } else if is_search_match {
                     self.rect_pipeline.push_rect(
@@ -233,7 +234,7 @@ impl Renderer {
                         y,
                         cell_width,
                         cell_height,
-                        scale_rgb(self.ui.search_match, brightness),
+                        fade.apply(self.ui.search_match),
                     );
                 } else if style.background != default_bg {
                     self.rect_pipeline.push_rect(
@@ -241,7 +242,7 @@ impl Renderer {
                         y,
                         cell_width,
                         cell_height,
-                        scale_rgb(style.background.to_f32_array(), brightness),
+                        fade.apply(style.background.to_f32_array()),
                     );
                 }
 
@@ -250,7 +251,7 @@ impl Renderer {
                 if style.paint_foreground && !cell.content.is_empty() {
                     let text_color = style.text_color(
                         is_selected.then_some(self.ui.selection_text).flatten(),
-                        brightness,
+                        fade,
                     );
                     if cell.multicell.is_leader() {
                         text_run.flush(&mut self.text_pipeline);
@@ -307,7 +308,7 @@ impl Renderer {
                 }
 
                 if style.paint_foreground {
-                    self.draw_sgr_decorations(style, x, y, cell_width, brightness, None);
+                    self.draw_sgr_decorations(style, x, y, cell_width, fade, None);
                 }
 
                 // Draw hyperlink underline
@@ -322,7 +323,7 @@ impl Renderer {
                         x,
                         y + cell_height - 2.0,
                         cell_width,
-                        scale_rgb(self.ui.url, brightness),
+                        fade.apply(self.ui.url),
                     );
                 }
             }
@@ -348,7 +349,7 @@ impl Renderer {
                 pane_clip,
                 cursor_style,
                 cursor_opacity,
-                brightness,
+                fade,
                 text_blink,
             );
         }
@@ -372,7 +373,7 @@ impl Renderer {
                     pane_clip,
                     cursor_style,
                     cursor_opacity,
-                    brightness,
+                    fade,
                     text_blink,
                     cursor_color,
                     self.ui.cursor_text,
