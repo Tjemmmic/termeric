@@ -636,6 +636,70 @@ impl Application {
         self.complete_live_domain_control(key, control, result);
     }
 
+    /// Carry out what handling an event asked of the whole application on
+    /// behalf of window `window_id`: a new window, a launch, moving a pane
+    /// or tab to the next window, or a tab dropped outside it.
+    fn fulfill_window_requests(&mut self, event_loop: &ActiveEventLoop, window_id: WindowId) {
+        let mut create_window = false;
+        let mut requested_window_launch = None;
+        let mut move_pane_to_next_window = false;
+        let mut move_tab_to_next_window = false;
+        let mut dropped_outside = None;
+        if let Some(window) = self.windows.get_mut(&window_id) {
+            create_window = std::mem::take(&mut window.request_new_window);
+            requested_window_launch = window.requested_window_launch.take();
+            move_pane_to_next_window = std::mem::take(&mut window.request_move_pane_to_next_window);
+            move_tab_to_next_window = std::mem::take(&mut window.request_move_tab_to_next_window);
+            dropped_outside = window.tab_dropped_outside.take();
+        }
+        if let Some(tab_id) = dropped_outside {
+            self.tab_drop = Some(PendingTabDrop {
+                source: window_id,
+                tab_id,
+                deadline: Instant::now() + TAB_DROP_CLAIM,
+            });
+        }
+        if move_pane_to_next_window {
+            self.fulfill_pane_window_move(window_id);
+        }
+        if move_tab_to_next_window {
+            self.fulfill_tab_window_move(window_id);
+        }
+        if let Some(launch) = requested_window_launch {
+            let result = self
+                .windows
+                .get(&window_id)
+                .ok_or_else(|| anyhow::anyhow!("source window closed during domain attachment"))
+                .map(|source| source.config.clone())
+                .and_then(|config| self.queue_window(config, launch));
+            if let Err(error) = result {
+                log::error!("Could not create requested window: {error:#}");
+            }
+            let _ = self.create_pending_windows(event_loop);
+        }
+        if create_window {
+            let result = self
+                .windows
+                .get(&window_id)
+                .ok_or_else(|| anyhow::anyhow!("source window closed during new-window request"))
+                .map(|source| {
+                    (
+                        source.config.clone(),
+                        source
+                            .tabs
+                            .as_ref()
+                            .and_then(|tabs| tabs.active_tab())
+                            .and_then(|tab| tab.working_directory()),
+                    )
+                })
+                .and_then(|(config, cwd)| self.queue_default_window(config, cwd));
+            if let Err(error) = result {
+                log::error!("Could not create a new window: {error:#}");
+            }
+            let _ = self.create_pending_windows(event_loop);
+        }
+    }
+
     /// End every window as part of one exit. Each keeps its workspace for
     /// the next start, as the last window closing does: dropping a window
     /// saves it and ends its terminals.
@@ -789,6 +853,8 @@ impl ApplicationHandler<AppEvent> for Application {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if !self.system_accessibility_monitor_started {
             self.system_accessibility_monitor_started = true;
+            #[cfg(target_os = "macos")]
+            super::macos::finish_launching(event_loop);
             if let Some(proxy) = super::EVENT_LOOP_PROXY.get().cloned() {
                 super::system_accessibility::start_monitor(proxy);
             }
@@ -809,11 +875,6 @@ impl ApplicationHandler<AppEvent> for Application {
         window_id: WindowId,
         event: WindowEvent,
     ) {
-        let mut create_window = false;
-        let mut requested_window_launch = None;
-        let mut move_pane_to_next_window = false;
-        let mut move_tab_to_next_window = false;
-        let mut dropped_outside = None;
         // The first pointer position another window hears after a release
         // outside the source is where the tab was dropped.
         if let WindowEvent::CursorMoved { position, .. } = &event
@@ -826,58 +887,8 @@ impl ApplicationHandler<AppEvent> for Application {
         if let Some(window) = self.windows.get_mut(&window_id) {
             window.window_event(event);
             window.sync_tab_drag_pointer(event_loop);
-            create_window = std::mem::take(&mut window.request_new_window);
-            requested_window_launch = window.requested_window_launch.take();
-            move_pane_to_next_window = std::mem::take(&mut window.request_move_pane_to_next_window);
-            move_tab_to_next_window = std::mem::take(&mut window.request_move_tab_to_next_window);
-            dropped_outside = window.tab_dropped_outside.take();
         }
-        if let Some(tab_id) = dropped_outside {
-            self.tab_drop = Some(PendingTabDrop {
-                source: window_id,
-                tab_id,
-                deadline: Instant::now() + TAB_DROP_CLAIM,
-            });
-        }
-        if move_pane_to_next_window {
-            self.fulfill_pane_window_move(window_id);
-        }
-        if move_tab_to_next_window {
-            self.fulfill_tab_window_move(window_id);
-        }
-        if let Some(launch) = requested_window_launch {
-            let result = self
-                .windows
-                .get(&window_id)
-                .ok_or_else(|| anyhow::anyhow!("source window closed during domain attachment"))
-                .map(|source| source.config.clone())
-                .and_then(|config| self.queue_window(config, launch));
-            if let Err(error) = result {
-                log::error!("Could not create requested window: {error:#}");
-            }
-            let _ = self.create_pending_windows(event_loop);
-        }
-        if create_window {
-            let result = self
-                .windows
-                .get(&window_id)
-                .ok_or_else(|| anyhow::anyhow!("source window closed during new-window request"))
-                .map(|source| {
-                    (
-                        source.config.clone(),
-                        source
-                            .tabs
-                            .as_ref()
-                            .and_then(|tabs| tabs.active_tab())
-                            .and_then(|tab| tab.working_directory()),
-                    )
-                })
-                .and_then(|(config, cwd)| self.queue_default_window(config, cwd));
-            if let Err(error) = result {
-                log::error!("Could not create a new window: {error:#}");
-            }
-            let _ = self.create_pending_windows(event_loop);
-        }
+        self.fulfill_window_requests(event_loop, window_id);
         self.remove_closed_windows(event_loop);
     }
 
@@ -895,6 +906,29 @@ impl ApplicationHandler<AppEvent> for Application {
                 if let Some(window) = self.windows.get_mut(&event.window_id) {
                     window.redraw_scheduler.request(RedrawReason::Accessibility);
                     window.handle_accesskit_event(event);
+                }
+                self.remove_closed_windows(event_loop);
+                return;
+            }
+            #[cfg(target_os = "macos")]
+            AppEvent::MenuCommand(action) => {
+                // The window with keyboard focus, else the one opened last.
+                let focused = self
+                    .window_order
+                    .iter()
+                    .rev()
+                    .copied()
+                    .find(|id| {
+                        self.windows
+                            .get(id)
+                            .is_some_and(|window| window.window_focused)
+                    })
+                    .or_else(|| self.window_order.last().copied());
+                if let Some(id) = focused {
+                    if let Some(window) = self.windows.get_mut(&id) {
+                        window.perform_menu_command(action);
+                    }
+                    self.fulfill_window_requests(event_loop, id);
                 }
                 self.remove_closed_windows(event_loop);
                 return;

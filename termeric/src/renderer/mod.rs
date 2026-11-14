@@ -113,6 +113,17 @@ const TERMINAL_PIXELS_PER_POINT: f32 = PIXELS_PER_POINT;
 #[cfg(target_os = "macos")]
 const TERMINAL_PIXELS_PER_POINT: f32 = 1.0;
 
+/// The surface alpha mode that lets `window.opacity` show what is behind the
+/// window. Termeric draws premultiplied colours. Metal offers only `Opaque`
+/// and `PostMultiplied`, and its `PostMultiplied` only makes the layer
+/// non-opaque: Core Animation composites the layer's colours as
+/// premultiplied, so that is the mode on macOS (where every window is made
+/// transparent for it).
+#[cfg(target_os = "linux")]
+const TRANSLUCENT_ALPHA_MODE: wgpu::CompositeAlphaMode = wgpu::CompositeAlphaMode::PreMultiplied;
+#[cfg(target_os = "macos")]
+const TRANSLUCENT_ALPHA_MODE: wgpu::CompositeAlphaMode = wgpu::CompositeAlphaMode::PostMultiplied;
+
 /// Physical rasterization size for a configured `font.size` in points.
 /// A logical chrome length at `scale_factor`, in whole physical pixels and
 /// never below one: [`Renderer::px`], for geometry computed without one.
@@ -264,11 +275,8 @@ impl Renderer {
         let formats = select_surface_formats(&surface_caps.formats)
             .ok_or_else(|| anyhow::anyhow!("selected adapter exposes no presentation format"))?;
         let alpha_mode =
-            if surface_caps
-                .alpha_modes
-                .contains(&wgpu::CompositeAlphaMode::PreMultiplied)
-            {
-                wgpu::CompositeAlphaMode::PreMultiplied
+            if surface_caps.alpha_modes.contains(&TRANSLUCENT_ALPHA_MODE) {
+                TRANSLUCENT_ALPHA_MODE
             } else {
                 surface_caps.alpha_modes.first().copied().ok_or_else(|| {
                     anyhow::anyhow!("selected adapter exposes no surface alpha mode")

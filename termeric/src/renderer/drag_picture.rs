@@ -43,6 +43,11 @@ impl StoredAlpha {
     fn of(mode: wgpu::CompositeAlphaMode) -> Self {
         match mode {
             wgpu::CompositeAlphaMode::PreMultiplied => Self::Premultiplied,
+            // Metal's PostMultiplied only makes the layer non-opaque; Core
+            // Animation reads its colours as premultiplied.
+            #[cfg(target_os = "macos")]
+            wgpu::CompositeAlphaMode::PostMultiplied => Self::Premultiplied,
+            #[cfg(target_os = "linux")]
             wgpu::CompositeAlphaMode::PostMultiplied => Self::Straight,
             _ => Self::Ignored,
         }

@@ -35,6 +35,8 @@ mod harvest_actions;
 mod ime;
 mod kitty_file_transfer;
 mod live_domain_control;
+#[cfg(target_os = "macos")]
+pub(crate) mod macos;
 mod modal_layer;
 mod mouse;
 mod mouse_selection;
@@ -172,6 +174,9 @@ pub(crate) struct WindowKey(u64);
 
 #[derive(Debug)]
 pub(crate) enum AppEvent {
+    /// A menu-bar command, for the focused window (`macos/menu.rs`).
+    #[cfg(target_os = "macos")]
+    MenuCommand(Action),
     Pty,
     Git,
     Transcript,
@@ -341,6 +346,15 @@ impl From<accesskit_winit::Event> for AppEvent {
 }
 
 static EVENT_LOOP_PROXY: OnceLock<EventLoopProxy<AppEvent>> = OnceLock::new();
+
+/// Hand a menu-bar command to the event loop, which runs it in the focused
+/// window.
+#[cfg(target_os = "macos")]
+fn post_menu_command(action: Action) {
+    if let Some(proxy) = EVENT_LOOP_PROXY.get() {
+        let _ = proxy.send_event(AppEvent::MenuCommand(action));
+    }
+}
 static PTY_WAKE_PENDING: AtomicBool = AtomicBool::new(false);
 static TRANSCRIPT_WAKE_PENDING: AtomicBool = AtomicBool::new(false);
 static AGENT_VIEW_WAKE_PENDING: AtomicBool = AtomicBool::new(false);
@@ -1279,6 +1293,9 @@ impl App {
             self.renderer_backend(),
             failure_callback,
         )?;
+        #[cfg(target_os = "macos")]
+        macos::prepare_window_surface(&window);
+        self.sync_native_appearance(&window);
 
         // Apply initial opacity from config
         renderer.set_opacity(self.config.window.opacity);
@@ -2585,6 +2602,19 @@ impl App {
         } else {
             self.toasts.info("No later failed command");
         }
+    }
+
+    /// Run a menu-bar command as its shortcut would run with the terminals
+    /// holding the keyboard. Under a modal layer, the layer in front owns
+    /// input, as it does for keys, so the command does nothing; a paste
+    /// still goes where any paste goes (`text_target`).
+    #[cfg(target_os = "macos")]
+    pub(super) fn perform_menu_command(&mut self, action: Action) {
+        if self.top_modal_layer().is_some() && !matches!(action, Action::Paste) {
+            return;
+        }
+        self.handle_action(action);
+        self.request_redraw(RedrawReason::Action);
     }
 
     /// Handle an action from a key binding or the command palette.

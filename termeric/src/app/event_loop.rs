@@ -138,10 +138,13 @@ impl App {
             }
         }
         // macOS has no activation tokens: a window takes focus when it is
-        // shown, so a joining launch's token has nothing to do.
+        // shown, so a joining launch's token has nothing to do. Windows are
+        // transparent so that `window.opacity` can show what is behind them
+        // (see the renderer's alpha mode).
         #[cfg(target_os = "macos")]
         {
             self.activation_token = None;
+            window_attrs = window_attrs.with_transparent(true);
         }
 
         // Load and set window icon if available

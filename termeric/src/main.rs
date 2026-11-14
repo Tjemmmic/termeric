@@ -169,7 +169,10 @@ fn main() -> Result<std::process::ExitCode> {
     let mut app = app::Application::new(launch)?;
 
     // Create event loop
-    let event_loop = EventLoop::<app::AppEvent>::with_user_event().build()?;
+    let mut event_loop = EventLoop::<app::AppEvent>::with_user_event();
+    #[cfg(target_os = "macos")]
+    app::macos::configure_event_loop(&mut event_loop);
+    let event_loop = event_loop.build()?;
     let proxy = event_loop.create_proxy();
     app::install_event_loop_proxy(proxy.clone());
     let control_server = match control::ControlServer::start(proxy) {

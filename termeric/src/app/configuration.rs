@@ -733,7 +733,23 @@ impl App {
         if let Some(renderer) = &mut self.renderer {
             renderer.set_theme(&self.theme);
         }
+        if let Some(window) = &self.window {
+            self.sync_native_appearance(window);
+        }
         self.request_redraw(RedrawReason::ConfigReload);
+    }
+
+    /// macOS draws the title bar above the terminals; it follows the theme's
+    /// appearance, so a light theme doesn't sit under a dark title bar. The
+    /// Linux window decorations are the desktop's to choose.
+    pub(super) fn sync_native_appearance(&self, window: &winit::window::Window) {
+        #[cfg(target_os = "macos")]
+        window.set_theme(Some(match self.theme.appearance() {
+            crate::config::theme::Appearance::Dark => winit::window::Theme::Dark,
+            crate::config::theme::Appearance::Light => winit::window::Theme::Light,
+        }));
+        #[cfg(target_os = "linux")]
+        let _ = window;
     }
 
     /// Apply a settings panel action to the app config
