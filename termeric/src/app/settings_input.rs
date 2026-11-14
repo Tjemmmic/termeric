@@ -1,9 +1,9 @@
 //! Complete bounded Settings-filter events, separate from setting actions.
 
+use super::text_field_keys::FieldKey;
 use super::*;
 use crate::input::platform::System;
 use crate::ui::settings::SettingsKey;
-use crate::ui::text_input::TextInputEdit;
 use winit::keyboard::{Key, NamedKey};
 
 impl App {
@@ -66,44 +66,25 @@ impl App {
         if !self.settings_panel.is_active() {
             return false;
         }
-        let edit = match key {
-            // Plain arrows still adjust the selected setting/dropdown. Modified
-            // arrows must never fall through to those configuration actions.
-            Key::Named(NamedKey::ArrowLeft | NamedKey::ArrowRight)
-                if self.modifiers.is_empty() && !self.alt_graph_active =>
-            {
-                return false;
-            }
-            Key::Named(NamedKey::ArrowLeft) => Some(TextInputEdit::WordLeft),
-            Key::Named(NamedKey::ArrowRight) => Some(TextInputEdit::WordRight),
-            Key::Named(NamedKey::Home) => Some(TextInputEdit::Home),
-            Key::Named(NamedKey::End) => Some(TextInputEdit::End),
-            Key::Named(NamedKey::Backspace) => Some(TextInputEdit::Backspace),
-            Key::Named(NamedKey::Delete) => Some(TextInputEdit::Delete),
-            _ => None,
-        };
-        if let Some(edit) = edit {
-            let edit = match (self.modifiers, self.alt_graph_active, edit) {
-                (_, true, _) => return true,
-                (ModifiersState::CONTROL, false, TextInputEdit::Backspace) => {
-                    TextInputEdit::BackspaceWord
+        // Plain arrows still adjust the selected setting or dropdown.
+        // Modified arrows must never fall through to those configuration
+        // actions.
+        if matches!(key, Key::Named(NamedKey::ArrowLeft | NamedKey::ArrowRight))
+            && self.modifiers.is_empty()
+            && !self.alt_graph_active
+        {
+            return false;
+        }
+        match self.text_edit_for_key(key) {
+            Some(FieldKey::Edit(edit)) => {
+                if self.settings_panel.edit_filter(edit) {
+                    self.settings_filter_changed();
                 }
-                (ModifiersState::CONTROL, false, TextInputEdit::Delete) => {
-                    TextInputEdit::DeleteWord
-                }
-                (
-                    ModifiersState::CONTROL,
-                    false,
-                    TextInputEdit::WordLeft | TextInputEdit::WordRight,
-                ) => edit,
-                (modifiers, false, _) if modifiers.is_empty() => edit,
-                // Selection is not implemented; swallow unsupported modifiers.
-                _ => return true,
-            };
-            if self.settings_panel.edit_filter(edit) {
-                self.settings_filter_changed();
+                return true;
             }
-            return true;
+            // Selection is not implemented; swallow unsupported modifiers.
+            Some(FieldKey::Consume) => return true,
+            None => {}
         }
         let changed = match key {
             Key::Character(text) => {
@@ -276,6 +257,7 @@ mod tests {
         let mut app = App::new_headless(Config::default()).unwrap();
         app.settings_panel.toggle();
         let original = toml::to_string(&app.config).unwrap();
+        let word = System::CURRENT.word();
         assert!(app.settings_panel.insert_filter_text("e\u{301} draft size"));
         for (modifiers, key, text, cursor) in [
             (
@@ -286,22 +268,12 @@ mod tests {
             ),
             (ModifiersState::empty(), NamedKey::Delete, " draft size", 0),
             (ModifiersState::empty(), NamedKey::Delete, "draft size", 0),
-            (
-                ModifiersState::CONTROL,
-                NamedKey::ArrowRight,
-                "draft size",
-                5,
-            ),
-            (
-                ModifiersState::CONTROL,
-                NamedKey::ArrowLeft,
-                "draft size",
-                0,
-            ),
-            (ModifiersState::CONTROL, NamedKey::Delete, " size", 0),
+            (word, NamedKey::ArrowRight, "draft size", 5),
+            (word, NamedKey::ArrowLeft, "draft size", 0),
+            (word, NamedKey::Delete, " size", 0),
             (ModifiersState::empty(), NamedKey::Delete, "size", 0),
             (ModifiersState::empty(), NamedKey::End, "size", 4),
-            (ModifiersState::CONTROL, NamedKey::Backspace, "", 0),
+            (word, NamedKey::Backspace, "", 0),
         ] {
             app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
             app.modifiers = modifiers;
@@ -326,12 +298,18 @@ mod tests {
         app.settings_panel.toggle();
         assert!(app.settings_panel.insert_filter_text("size"));
         app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
-        for modifiers in [
+        // Every modifier but the system's word and line modifiers.
+        let unsupported = [
             ModifiersState::SHIFT,
+            ModifiersState::CONTROL,
             ModifiersState::ALT,
             ModifiersState::SUPER,
             ModifiersState::CONTROL | ModifiersState::SHIFT,
-        ] {
+            ModifiersState::ALT | ModifiersState::SHIFT,
+        ]
+        .into_iter()
+        .filter(|modifiers| System::CURRENT.reach(*modifiers).is_none());
+        for modifiers in unsupported {
             app.modifiers = modifiers;
             for key in [
                 NamedKey::ArrowLeft,

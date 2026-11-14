@@ -1,10 +1,10 @@
 //! Bounded text and grapheme editing for the shortcut filter, not chord recording.
 
+use super::text_field_keys::FieldKey;
 use super::*;
 use crate::input::keybindings::KeyChord;
 use crate::ui::list_dialog::ListDialogLayout;
 use crate::ui::shortcuts_panel::{SHORTCUTS_DIALOG, ShortcutsPanelInfo};
-use crate::ui::text_input::TextInputEdit;
 use winit::keyboard::{Key, NamedKey};
 
 impl App {
@@ -94,40 +94,21 @@ impl App {
         if !self.shortcuts_panel.is_active() || self.shortcuts_panel.is_recording() {
             return false;
         }
-        let edit = match key {
-            Key::Named(NamedKey::ArrowLeft) => Some(TextInputEdit::Left),
-            Key::Named(NamedKey::ArrowRight) => Some(TextInputEdit::Right),
-            Key::Named(NamedKey::Home) => Some(TextInputEdit::Home),
-            Key::Named(NamedKey::End) => Some(TextInputEdit::End),
-            Key::Named(NamedKey::Backspace) => Some(TextInputEdit::Backspace),
-            // Plain Delete belongs to clearing the selected binding. Modified
-            // Delete must not accidentally become that destructive action.
-            Key::Named(NamedKey::Delete) if !self.modifiers.is_empty() || self.alt_graph_active => {
-                return true;
-            }
-            _ => None,
-        };
-        if let Some(edit) = edit {
-            if self.alt_graph_active {
-                return true;
-            }
-            let edit = if self.modifiers == ModifiersState::CONTROL {
-                match edit {
-                    TextInputEdit::Left => TextInputEdit::WordLeft,
-                    TextInputEdit::Right => TextInputEdit::WordRight,
-                    TextInputEdit::Backspace => TextInputEdit::BackspaceWord,
-                    _ => return true,
+        // Plain Delete belongs to clearing the selected binding. Modified
+        // Delete must not accidentally become that destructive action.
+        if matches!(key, Key::Named(NamedKey::Delete)) {
+            return !self.modifiers.is_empty() || self.alt_graph_active;
+        }
+        match self.text_edit_for_key(key) {
+            Some(FieldKey::Edit(edit)) => {
+                if self.shortcuts_panel.edit_filter(edit) {
+                    self.shortcut_filter_changed();
                 }
-            } else if !self.modifiers.is_empty() {
-                // Selection is not implemented; consume unsupported modifiers.
                 return true;
-            } else {
-                edit
-            };
-            if self.shortcuts_panel.edit_filter(edit) {
-                self.shortcut_filter_changed();
             }
-            return true;
+            // Selection is not implemented; consume unsupported modifiers.
+            Some(FieldKey::Consume) => return true,
+            None => {}
         }
         let text = match key {
             Key::Character(text) => text.as_str(),

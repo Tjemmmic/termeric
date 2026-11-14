@@ -2,6 +2,7 @@
 //! terminal.
 
 use super::*;
+use crate::input::platform::System;
 use crate::ui::diff_review::DiffReviewScroll;
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
@@ -9,26 +10,34 @@ use winit::keyboard::{Key, ModifiersState, NamedKey};
 const COLUMN_STEP: isize = 4;
 
 /// Arrows scroll one row or a few columns, Page Up/Down a viewport of rows,
-/// Ctrl+Home/End to the first or last row, and Home/End to the start or end
-/// of the lines.
+/// the command modifier with Home/End (Ctrl, or ⌘ on macOS) to the first or
+/// last row, and Home/End to the start or end of the lines. On macOS ⌘↑ and
+/// ⌘↓ also go to the first and last row, and ⌘← and ⌘→ to the lines' ends.
 fn scroll_for_key(
     key: &Key,
     modifiers: ModifiersState,
     viewport_rows: usize,
+    system: System,
 ) -> Option<DiffReviewScroll> {
     let Key::Named(named) = key else {
         return None;
     };
     let page = viewport_rows as isize;
+    let command = modifiers.contains(system.command());
+    let by_line = system.line().is_some_and(|line| modifiers.contains(line));
     Some(match named {
+        NamedKey::ArrowUp if by_line => DiffReviewScroll::Top,
+        NamedKey::ArrowDown if by_line => DiffReviewScroll::Bottom,
+        NamedKey::ArrowLeft if by_line => DiffReviewScroll::LineStart,
+        NamedKey::ArrowRight if by_line => DiffReviewScroll::LineEnd,
         NamedKey::ArrowUp => DiffReviewScroll::Rows(-1),
         NamedKey::ArrowDown => DiffReviewScroll::Rows(1),
         NamedKey::PageUp => DiffReviewScroll::Rows(-page),
         NamedKey::PageDown => DiffReviewScroll::Rows(page),
         NamedKey::ArrowLeft => DiffReviewScroll::Columns(-COLUMN_STEP),
         NamedKey::ArrowRight => DiffReviewScroll::Columns(COLUMN_STEP),
-        NamedKey::Home if modifiers.control_key() => DiffReviewScroll::Top,
-        NamedKey::End if modifiers.control_key() => DiffReviewScroll::Bottom,
+        NamedKey::Home if command => DiffReviewScroll::Top,
+        NamedKey::End if command => DiffReviewScroll::Bottom,
         NamedKey::Home => DiffReviewScroll::LineStart,
         NamedKey::End => DiffReviewScroll::LineEnd,
         _ => return None,
@@ -73,10 +82,16 @@ impl App {
             Key::Named(NamedKey::Enter | NamedKey::Space) => {
                 self.diff_review.activate_focused(request_id)
             }
-            _ => scroll_for_key(key, self.modifiers, self.diff_review.viewport().rows()).map_or(
-                DiffReviewAction::None,
-                |by| DiffReviewAction::Scroll { request_id, by },
-            ),
+            _ => scroll_for_key(
+                key,
+                self.modifiers,
+                self.diff_review.viewport().rows(),
+                System::CURRENT,
+            )
+            .map_or(DiffReviewAction::None, |by| DiffReviewAction::Scroll {
+                request_id,
+                by,
+            }),
         };
         self.apply_diff_review_action(action);
         self.request_redraw(RedrawReason::KeyboardInput);
@@ -220,12 +235,47 @@ mod tests {
             (NamedKey::Enter, plain, None),
         ] {
             assert_eq!(
-                scroll_for_key(&Key::Named(key), modifiers, 7),
+                scroll_for_key(&Key::Named(key), modifiers, 7, System::Linux),
                 scroll,
                 "{key:?} {modifiers:?}"
             );
         }
-        assert_eq!(scroll_for_key(&Key::Character("j".into()), plain, 7), None);
+        assert_eq!(
+            scroll_for_key(&Key::Character("j".into()), plain, 7, System::Linux),
+            None
+        );
+    }
+
+    #[test]
+    fn command_keys_reach_the_ends_on_a_mac() {
+        let command = ModifiersState::SUPER;
+        let scroll = |key, modifiers| scroll_for_key(&Key::Named(key), modifiers, 7, System::Mac);
+        assert_eq!(
+            scroll(NamedKey::ArrowUp, command),
+            Some(DiffReviewScroll::Top)
+        );
+        assert_eq!(
+            scroll(NamedKey::ArrowDown, command),
+            Some(DiffReviewScroll::Bottom)
+        );
+        assert_eq!(
+            scroll(NamedKey::ArrowLeft, command),
+            Some(DiffReviewScroll::LineStart)
+        );
+        assert_eq!(
+            scroll(NamedKey::ArrowRight, command),
+            Some(DiffReviewScroll::LineEnd)
+        );
+        assert_eq!(scroll(NamedKey::Home, command), Some(DiffReviewScroll::Top));
+        assert_eq!(
+            scroll(NamedKey::End, command),
+            Some(DiffReviewScroll::Bottom)
+        );
+        // Ctrl is the terminal's on a Mac: Ctrl+Home is plain Home here.
+        assert_eq!(
+            scroll(NamedKey::Home, ModifiersState::CONTROL),
+            Some(DiffReviewScroll::LineStart)
+        );
     }
 
     fn show_wide_diff(app: &mut App) -> u64 {

@@ -2,6 +2,7 @@
 //! step focus through a panel's controls.
 
 use super::*;
+use crate::input::platform::{Reach, System};
 use crate::ui::focus_step::FocusStep;
 use crate::ui::text_input::TextInputEdit;
 use winit::keyboard::{Key, NamedKey};
@@ -20,7 +21,7 @@ impl App {
     /// Map the shared editing keys for the current modifiers. `None` means the
     /// key is not an editing key and the field handles it itself.
     pub(super) fn text_edit_for_key(&self, key: &Key) -> Option<FieldKey> {
-        text_edit_for_key(key, self.modifiers, self.alt_graph_active)
+        text_edit_for_key(key, self.modifiers, self.alt_graph_active, System::CURRENT)
     }
 }
 
@@ -49,12 +50,15 @@ pub(super) fn focus_step_for_key(key: &Key, modifiers: ModifiersState) -> Option
     }
 }
 
-/// Plain arrows, Home, End, Backspace, and Delete edit by grapheme; Ctrl turns
-/// the arrows and deletions into word edits.
+/// Plain arrows, Home, End, Backspace, and Delete edit by grapheme. The
+/// system's word modifier (Ctrl, or ⌥ on macOS) turns the horizontal arrows
+/// and deletions into word edits, and on macOS ⌘ turns the arrows into Home
+/// and End and Backspace into deleting to the line's start.
 fn text_edit_for_key(
     key: &Key,
     modifiers: ModifiersState,
     alt_graph_active: bool,
+    system: System,
 ) -> Option<FieldKey> {
     let edit = match key {
         Key::Named(NamedKey::ArrowLeft) => TextInputEdit::Left,
@@ -68,17 +72,18 @@ fn text_edit_for_key(
     if alt_graph_active {
         return Some(FieldKey::Consume);
     }
-    if modifiers.is_empty() {
-        return Some(FieldKey::Edit(edit));
-    }
-    if modifiers != ModifiersState::CONTROL {
+    let Some(reach) = system.reach(modifiers) else {
         return Some(FieldKey::Consume);
-    }
-    Some(match edit {
-        TextInputEdit::Left => FieldKey::Edit(TextInputEdit::WordLeft),
-        TextInputEdit::Right => FieldKey::Edit(TextInputEdit::WordRight),
-        TextInputEdit::Backspace => FieldKey::Edit(TextInputEdit::BackspaceWord),
-        TextInputEdit::Delete => FieldKey::Edit(TextInputEdit::DeleteWord),
+    };
+    Some(match (reach, edit) {
+        (Reach::Character, edit) => FieldKey::Edit(edit),
+        (Reach::Word, TextInputEdit::Left) => FieldKey::Edit(TextInputEdit::WordLeft),
+        (Reach::Word, TextInputEdit::Right) => FieldKey::Edit(TextInputEdit::WordRight),
+        (Reach::Word, TextInputEdit::Backspace) => FieldKey::Edit(TextInputEdit::BackspaceWord),
+        (Reach::Word, TextInputEdit::Delete) => FieldKey::Edit(TextInputEdit::DeleteWord),
+        (Reach::Line, TextInputEdit::Left) => FieldKey::Edit(TextInputEdit::Home),
+        (Reach::Line, TextInputEdit::Right) => FieldKey::Edit(TextInputEdit::End),
+        (Reach::Line, TextInputEdit::Backspace) => FieldKey::Edit(TextInputEdit::BackspaceLine),
         _ => FieldKey::Consume,
     })
 }
@@ -91,7 +96,11 @@ mod tests {
     use TextInputEdit::*;
 
     fn map(key: NamedKey, modifiers: ModifiersState, alt_graph: bool) -> Option<FieldKey> {
-        text_edit_for_key(&Key::Named(key), modifiers, alt_graph)
+        text_edit_for_key(&Key::Named(key), modifiers, alt_graph, System::Linux)
+    }
+
+    fn map_on_mac(key: NamedKey, modifiers: ModifiersState) -> Option<FieldKey> {
+        text_edit_for_key(&Key::Named(key), modifiers, false, System::Mac)
     }
 
     #[test]
@@ -109,6 +118,47 @@ mod tests {
             assert_eq!(map(key, plain, false), Some(plain_edit));
             assert_eq!(map(key, ctrl, false), Some(ctrl_edit));
         }
+    }
+
+    #[test]
+    fn mac_fields_edit_by_word_with_option_and_by_line_with_command() {
+        let plain = ModifiersState::empty();
+        let option = ModifiersState::ALT;
+        let command = ModifiersState::SUPER;
+        for (key, plain_edit, option_edit, command_edit) in [
+            (NamedKey::ArrowLeft, Edit(Left), Edit(WordLeft), Edit(Home)),
+            (
+                NamedKey::ArrowRight,
+                Edit(Right),
+                Edit(WordRight),
+                Edit(End),
+            ),
+            (NamedKey::Home, Edit(Home), Consume, Consume),
+            (NamedKey::End, Edit(End), Consume, Consume),
+            (
+                NamedKey::Backspace,
+                Edit(Backspace),
+                Edit(BackspaceWord),
+                Edit(BackspaceLine),
+            ),
+            (NamedKey::Delete, Edit(Delete), Edit(DeleteWord), Consume),
+        ] {
+            assert_eq!(map_on_mac(key, plain), Some(plain_edit), "{key:?}");
+            assert_eq!(map_on_mac(key, option), Some(option_edit), "{key:?}");
+            assert_eq!(map_on_mac(key, command), Some(command_edit), "{key:?}");
+        }
+        // Ctrl is the terminal's on a Mac, so a field swallows it.
+        for modifiers in [
+            ModifiersState::CONTROL,
+            ModifiersState::SHIFT,
+            option | command,
+        ] {
+            assert_eq!(map_on_mac(NamedKey::ArrowLeft, modifiers), Some(Consume));
+        }
+        // On Linux the same keys keep their meanings: Alt and Super are no
+        // field's.
+        assert_eq!(map(NamedKey::ArrowLeft, option, false), Some(Consume));
+        assert_eq!(map(NamedKey::Backspace, command, false), Some(Consume));
     }
 
     #[test]
@@ -131,7 +181,7 @@ mod tests {
             Key::Character("a".into()),
         ] {
             assert_eq!(
-                text_edit_for_key(&key, ModifiersState::empty(), false),
+                text_edit_for_key(&key, ModifiersState::empty(), false, System::Linux),
                 None
             );
         }

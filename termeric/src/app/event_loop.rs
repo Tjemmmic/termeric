@@ -403,6 +403,7 @@ impl App {
                     &event.logical_key,
                     self.modifiers,
                     self.alt_graph_active,
+                    crate::input::platform::System::CURRENT,
                 ) || !self.run_app_shortcut(&event.logical_key))
             {
                 self.handle_agent_view_key(&event.logical_key, event.text.as_deref());

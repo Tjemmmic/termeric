@@ -38,12 +38,79 @@ impl System {
     pub const CURRENT: Self = Self::Mac;
 
     /// The modifier of Termeric's own commands in its fields and dialogs,
-    /// such as saving Settings or confirming a guarded command: Ctrl on
-    /// Linux, ⌘ on macOS.
+    /// such as select all, copy, paste, undo, saving Settings, or confirming
+    /// a guarded command: Ctrl on Linux, ⌘ on macOS.
     pub const fn command(self) -> ModifiersState {
         match self {
             Self::Linux => ModifiersState::CONTROL,
             Self::Mac => ModifiersState::SUPER,
+        }
+    }
+
+    /// The modifier that moves and deletes by word in a text field: Ctrl on
+    /// Linux, ⌥ on macOS.
+    pub const fn word(self) -> ModifiersState {
+        match self {
+            Self::Linux => ModifiersState::CONTROL,
+            Self::Mac => ModifiersState::ALT,
+        }
+    }
+
+    /// The modifier that moves to the start or end of the line and deletes
+    /// to its start in a text field: ⌘ on macOS. Linux uses Home and End.
+    pub const fn line(self) -> Option<ModifiersState> {
+        match self {
+            Self::Linux => None,
+            Self::Mac => Some(ModifiersState::SUPER),
+        }
+    }
+
+    /// How far an editing key (an arrow, Backspace, or Delete) reaches in a
+    /// text field with `modifiers` held, Shift aside: `None` when the field
+    /// doesn't edit with them.
+    pub fn reach(self, modifiers: ModifiersState) -> Option<Reach> {
+        if modifiers.is_empty() {
+            Some(Reach::Character)
+        } else if modifiers == self.word() {
+            Some(Reach::Word)
+        } else if Some(modifiers) == self.line() {
+            Some(Reach::Line)
+        } else {
+            None
+        }
+    }
+
+    /// The editing command a character key runs in a field that selects and
+    /// undoes, with `modifiers` held: the command modifier with A, C, X, V,
+    /// or Z, Shift with Z to redo, and on Linux also Y to redo. Alt must not
+    /// be held; any other modifier is ignored.
+    pub fn edit_command(self, key: &str, modifiers: ModifiersState) -> Option<EditCommand> {
+        if !modifiers.contains(self.command()) || modifiers.alt_key() {
+            return None;
+        }
+        Some(match key.to_lowercase().as_str() {
+            "a" => EditCommand::SelectAll,
+            "c" => EditCommand::Copy,
+            "x" => EditCommand::Cut,
+            "v" => EditCommand::Paste,
+            "z" if modifiers.shift_key() => EditCommand::Redo,
+            "z" => EditCommand::Undo,
+            "y" if self == Self::Linux => EditCommand::Redo,
+            _ => return None,
+        })
+    }
+
+    /// Whether the chord of `key` and `modifiers` is one of the editing
+    /// commands exactly as `edit_command` names them: the command modifier
+    /// alone, or with Shift only to redo. A field that holds the keyboard
+    /// takes these before any application shortcut.
+    pub fn is_exact_edit_command(self, key: &str, modifiers: ModifiersState) -> bool {
+        if modifiers == self.command() {
+            self.edit_command(key, modifiers).is_some()
+        } else if modifiers == self.command() | ModifiersState::SHIFT {
+            key.eq_ignore_ascii_case("z")
+        } else {
+            false
         }
     }
 
@@ -130,6 +197,29 @@ impl System {
             .peekable();
         words.peek().is_some() && words.all(|word| names.iter().any(|name| name.starts_with(word)))
     }
+}
+
+/// How far an editing key reaches in a text field.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reach {
+    /// One character (grapheme).
+    Character,
+    /// To the next word boundary.
+    Word,
+    /// To the start or end of the line.
+    Line,
+}
+
+/// A command of a field that selects and undoes, such as the agent view's
+/// composer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditCommand {
+    SelectAll,
+    Copy,
+    Cut,
+    Paste,
+    Undo,
+    Redo,
 }
 
 /// One modifier key, for naming chords.
@@ -223,6 +313,49 @@ mod tests {
     fn the_command_modifier_is_ctrl_on_linux_and_command_on_macos() {
         assert_eq!(System::Linux.command(), CTRL);
         assert_eq!(System::Mac.command(), SUPER);
+    }
+
+    #[test]
+    fn fields_reach_by_word_with_ctrl_on_linux_and_option_on_macos() {
+        use Reach::{Character, Line, Word};
+        let none = ModifiersState::empty();
+        assert_eq!(System::Linux.reach(none), Some(Character));
+        assert_eq!(System::Linux.reach(CTRL), Some(Word));
+        assert_eq!(System::Linux.reach(ALT), None);
+        assert_eq!(System::Linux.reach(SUPER), None);
+        assert_eq!(System::Mac.reach(none), Some(Character));
+        assert_eq!(System::Mac.reach(ALT), Some(Word));
+        assert_eq!(System::Mac.reach(SUPER), Some(Line));
+        assert_eq!(System::Mac.reach(CTRL), None);
+        assert_eq!(System::Mac.reach(ALT | SUPER), None);
+        assert_eq!(System::Linux.line(), None);
+    }
+
+    #[test]
+    fn editing_commands_follow_the_command_modifier() {
+        use EditCommand::{Copy, Cut, Paste, Redo, SelectAll, Undo};
+        for (system, command) in [(System::Linux, CTRL), (System::Mac, SUPER)] {
+            for (key, edit) in [
+                ("a", SelectAll),
+                ("C", Copy),
+                ("x", Cut),
+                ("v", Paste),
+                ("z", Undo),
+            ] {
+                assert_eq!(system.edit_command(key, command), Some(edit), "{key}");
+                assert!(system.is_exact_edit_command(key, command), "{key}");
+                assert_eq!(system.edit_command(key, command | ALT), None);
+            }
+            assert_eq!(system.edit_command("z", command | SHIFT), Some(Redo));
+            assert!(system.is_exact_edit_command("Z", command | SHIFT));
+            assert!(!system.is_exact_edit_command("A", command | SHIFT));
+            assert_eq!(system.edit_command("k", command), None);
+            assert_eq!(system.edit_command("a", SHIFT), None);
+        }
+        assert_eq!(System::Linux.edit_command("y", CTRL), Some(Redo));
+        assert_eq!(System::Mac.edit_command("y", SUPER), None);
+        assert_eq!(System::Mac.edit_command("c", CTRL), None);
+        assert!(!System::Linux.is_exact_edit_command("y", CTRL | SHIFT));
     }
 
     #[test]
