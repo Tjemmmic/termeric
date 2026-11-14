@@ -143,12 +143,21 @@ impl ShellLaunch {
     /// `reason`. Without a program it runs `$SHELL`, so the shell's name is
     /// known for integration.
     pub fn without_integration(shell: &ShellConfig, reason: impl Into<String>) -> Self {
+        let (program, args) = match &shell.program {
+            Some(program) => (Some(program.clone()), shell.args.clone()),
+            None => {
+                let program = default_shell_program();
+                let args = if shell.args.is_empty() {
+                    default_shell_arguments(program.as_deref())
+                } else {
+                    shell.args.clone()
+                };
+                (program, args)
+            }
+        };
         Self {
-            program: shell
-                .program
-                .clone()
-                .or_else(|| std::env::var("SHELL").ok()),
-            args: shell.args.clone(),
+            program,
+            args,
             env: shell
                 .env
                 .iter()
@@ -157,6 +166,69 @@ impl ShellLaunch {
             integration: ShellIntegrationSupport::Unavailable(reason.into()),
         }
     }
+}
+
+/// The person's shell: `SHELL`, else the shell the user database names.
+pub(crate) fn default_shell_program() -> Option<String> {
+    std::env::var("SHELL")
+        .ok()
+        .filter(|shell| !shell.is_empty())
+        .or_else(user_database_shell)
+}
+
+/// This user's login shell from the user database.
+fn user_database_shell() -> Option<String> {
+    // SAFETY: passwd is plain old data, for which all zeroes is valid.
+    let mut entry = unsafe { std::mem::zeroed::<libc::passwd>() };
+    let mut found = std::ptr::null_mut();
+    let mut buffer = vec![0 as libc::c_char; 16 * 1024];
+    // SAFETY: entry, buffer, and found are writable for the call, and the
+    // buffer's length is passed with it; the strings the entry points to live
+    // in the buffer, which outlives their use below.
+    let result = unsafe {
+        libc::getpwuid_r(
+            libc::geteuid(),
+            &mut entry,
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut found,
+        )
+    };
+    if result != 0 || found.is_null() || entry.pw_shell.is_null() {
+        return None;
+    }
+    // SAFETY: pw_shell points to a NUL-terminated string inside `buffer`.
+    let shell = unsafe { std::ffi::CStr::from_ptr(entry.pw_shell) };
+    shell
+        .to_str()
+        .ok()
+        .filter(|shell| !shell.is_empty())
+        .map(str::to_owned)
+}
+
+/// The arguments the person's own shell gets when the configuration names
+/// neither a program nor arguments. On macOS that is a login shell, as in
+/// Terminal.app: the system's and the person's profile (`/etc/zprofile`'s
+/// `path_helper`, `~/.zprofile`, `~/.bash_profile`) set up `PATH` there, and
+/// nothing else does for an app started from the Finder. A configured
+/// program runs with exactly the arguments configured for it.
+fn default_shell_arguments(program: Option<&str>) -> Vec<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let name = program
+            .map(Path::new)
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str());
+        if matches!(
+            name,
+            Some("zsh" | "bash" | "fish" | "nu" | "sh" | "dash" | "ksh" | "mksh")
+        ) {
+            return vec!["-l".to_owned()];
+        }
+    }
+    #[cfg(target_os = "linux")]
+    let _ = program;
+    Vec::new()
 }
 
 fn prepare_shell_launch_in(shell: &ShellConfig, base: &Path) -> Result<ShellLaunch> {
@@ -479,6 +551,29 @@ mod tests {
             args: args.iter().map(|arg| (*arg).into()).collect(),
             env: Default::default(),
         }
+    }
+
+    /// The person's own shell, named by `SHELL`, starts as a login shell on
+    /// macOS and keeps its integration; a configured program is left alone.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_default_macos_shell_is_a_login_shell_with_integration() {
+        let program = default_shell_program().expect("the test user has a shell");
+        let name = Path::new(&program).file_name().unwrap().to_str().unwrap();
+        if !matches!(name, "zsh" | "bash" | "fish") {
+            return;
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let default = ShellConfig {
+            program: None,
+            args: Vec::new(),
+            env: Default::default(),
+        };
+        let launch = prepare_shell_launch_in(&default, temp.path()).unwrap();
+        assert_eq!(launch.program.as_deref(), Some(program.as_str()));
+        assert!(launch.integration.is_enabled(), "{:?}", launch.integration);
+        let configured = prepare_shell_launch_in(&shell(&program, &[]), temp.path()).unwrap();
+        assert!(!configured.args.iter().any(|arg| arg == "-l"));
     }
 
     #[test]

@@ -18,6 +18,8 @@ mod domain;
 mod git;
 mod harvest;
 mod input;
+#[cfg(target_os = "macos")]
+mod launch_environment;
 mod line_reader;
 mod local_socket;
 mod mcp;
@@ -60,9 +62,24 @@ fn main() -> Result<std::process::ExitCode> {
         cli::Invocation::Command(outcome) => *outcome,
     };
 
+    // A Mac app started from the Finder, the Dock, or `open` has launchd's
+    // environment, not a login shell's. Nothing has started a thread yet.
+    #[cfg(target_os = "macos")]
+    let completed_environment = match outcome {
+        cli::ParseOutcome::Run(_) | cli::ParseOutcome::QuickAccess(_) => {
+            // SAFETY: parsing starts no threads, and nothing else has run.
+            unsafe { launch_environment::complete() }
+        }
+        _ => Vec::new(),
+    };
+
     // Initialize logging after deterministic parsing but before either GUI or
     // local-domain execution.
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    #[cfg(target_os = "macos")]
+    for change in completed_environment {
+        log::info!("Launch environment: {change}");
+    }
 
     let mut _quick_access_guard = None;
     // Recorded before anything can rebuild the executable, so a launch of a
