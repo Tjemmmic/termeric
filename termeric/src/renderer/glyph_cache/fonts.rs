@@ -36,11 +36,42 @@ pub(super) fn should_synthesize_bold(
 /// alias, so chrome text uses the desktop's UI face. `FontSystem::new` would
 /// replace that alias with a fixed family; its monospace and serif defaults
 /// are kept so terminal text resolves exactly as before.
+#[cfg(target_os = "linux")]
+fn set_generic_families(database: &mut cosmic_text::fontdb::Database) {
+    database.set_monospace_family("Noto Sans Mono");
+    database.set_serif_family("DejaVu Serif");
+}
+
+/// macOS has no fontconfig, so the generic families name the system's own
+/// faces: the first installed of each list. The system UI face (`.SF NS`)
+/// is hidden from font lists but loaded like any other.
+#[cfg(target_os = "macos")]
+fn set_generic_families(database: &mut cosmic_text::fontdb::Database) {
+    let first_installed = |database: &cosmic_text::fontdb::Database, families: &[&str]| {
+        families
+            .iter()
+            .find(|family| {
+                database
+                    .faces()
+                    .any(|face| face.families.iter().any(|(name, _)| name == *family))
+            })
+            .map(|family| (*family).to_owned())
+    };
+    if let Some(family) = first_installed(database, &["SF Mono", "Menlo", "Monaco"]) {
+        database.set_monospace_family(family);
+    }
+    if let Some(family) = first_installed(database, &[".SF NS", "Helvetica Neue", "Helvetica"]) {
+        database.set_sans_serif_family(family);
+    }
+    if let Some(family) = first_installed(database, &["New York", "Times New Roman", "Times"]) {
+        database.set_serif_family(family);
+    }
+}
+
 pub(super) fn desktop_font_system() -> FontSystem {
     let mut database = cosmic_text::fontdb::Database::new();
     database.load_system_fonts();
-    database.set_monospace_family("Noto Sans Mono");
-    database.set_serif_family("DejaVu Serif");
+    set_generic_families(&mut database);
     let locale = sys_locale::get_locale().unwrap_or_else(|| {
         log::warn!("failed to get system locale, falling back to en-US");
         String::from("en-US")

@@ -448,6 +448,12 @@ pub struct GlyphCache {
     ui_layouts: UiLayoutCache,
 }
 
+/// A family the system keeps out of font menus: macOS names its own UI
+/// faces with a leading dot (`.SF NS`), which other apps never list.
+fn is_hidden_family(name: &str) -> bool {
+    name.starts_with('.')
+}
+
 impl GlyphCache {
     /// Create a new glyph cache
     pub fn new(
@@ -1654,6 +1660,7 @@ impl GlyphCache {
                 !name.contains("Emoji") && !name.contains("Symbol") && !name.contains("Icons")
             })
             .filter_map(|face| face.families.first().map(|(name, _)| name.clone()))
+            .filter(|name| !is_hidden_family(name))
             .filter(|name| seen.insert(name.clone())) // Deduplicate
             .collect();
 
@@ -1678,6 +1685,7 @@ impl GlyphCache {
             .db()
             .faces()
             .filter_map(|face| face.families.first().map(|(name, _)| name.clone()))
+            .filter(|name| !is_hidden_family(name))
             .collect();
         families.sort_by_key(|family| family.to_lowercase());
         families.dedup_by(|next, kept| next.eq_ignore_ascii_case(kept));

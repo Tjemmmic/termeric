@@ -86,12 +86,30 @@ pub(super) fn select_adapter<T>(
         }
     }
     anyhow::bail!(
-        "renderer initialization failed with preference {preference}: {}. \
-         Try `termeric --renderer software`, install current graphics/Mesa drivers, \
-         or set renderer.backend = \"software\" in config.toml",
+        "renderer initialization failed with preference {preference}: {}. {RENDERER_FAILURE_HINT}",
         failures.join("; ")
     )
 }
+
+/// What to try when no adapter works.
+#[cfg(target_os = "linux")]
+const RENDERER_FAILURE_HINT: &str = "Try `termeric --renderer software`, install current \
+     graphics/Mesa drivers, or set renderer.backend = \"software\" in config.toml";
+/// What to try when no adapter works. Metal has no software adapter, so
+/// there is no software rendering to fall back to on macOS.
+#[cfg(target_os = "macos")]
+const RENDERER_FAILURE_HINT: &str = "Termeric draws with Metal, which every supported Mac has; \
+     check that renderer.backend is not \"software\" in config.toml and that \
+     WGPU_BACKEND, if set, is \"metal\"";
+
+/// Which GPU to ask for. A terminal needs little, but on Linux the
+/// high-performance adapter is usually the only one or the one in use. On a
+/// Mac with two GPUs, asking for the high-performance one switches the whole
+/// system to the discrete GPU, so Termeric asks for the integrated one.
+#[cfg(target_os = "linux")]
+pub(super) const POWER_PREFERENCE: PowerPreference = PowerPreference::HighPerformance;
+#[cfg(target_os = "macos")]
+pub(super) const POWER_PREFERENCE: PowerPreference = PowerPreference::LowPower;
 
 /// `force_fallback_adapter: false` is a preference, not a guarantee: WGPU may
 /// return a CPU adapter when no GPU is available. Reject that candidate so
@@ -112,7 +130,7 @@ pub(super) fn request_adapter_device(
         instance,
         backends,
         Some(surface),
-        PowerPreference::HighPerformance,
+        POWER_PREFERENCE,
         force_fallback,
     )
     .ok_or_else(|| "was unavailable".to_string())?;
@@ -252,7 +270,7 @@ mod backend_selection_tests {
             ),
             "{error}"
         );
-        assert!(error.contains("termeric --renderer software"), "{error}");
+        assert!(error.ends_with(RENDERER_FAILURE_HINT), "{error}");
 
         // A strict preference makes its one attempt and never falls back.
         let (selected, attempts) =
