@@ -87,7 +87,7 @@ pub fn descends_from(process: u32, ancestor: u32) -> bool {
         if current == ancestor {
             return true;
         }
-        match parent_process(current) {
+        match crate::process_info::parent(current) {
             Some(parent) if parent != 0 && parent != current => current = parent,
             _ => return false,
         }
@@ -95,28 +95,10 @@ pub fn descends_from(process: u32, ancestor: u32) -> bool {
     false
 }
 
-/// The parent of `process`, from the field after its name in
-/// `/proc/PID/stat`. The name may itself hold spaces and parentheses, so the
-/// fields are read after its last closing parenthesis.
-fn parent_process(process: u32) -> Option<u32> {
-    let stat = std::fs::read_to_string(format!("/proc/{process}/stat")).ok()?;
-    let fields = &stat[stat.rfind(')')? + 1..];
-    fields.split_whitespace().nth(1)?.parse().ok()
-}
-
 /// The argument vector of the process leading the terminal's foreground
 /// process group.
 pub fn foreground_argv(process_group: i32) -> Option<Vec<String>> {
-    if process_group <= 0 {
-        return None;
-    }
-    let raw = std::fs::read(format!("/proc/{process_group}/cmdline")).ok()?;
-    let argv: Vec<String> = raw
-        .split(|byte| *byte == 0)
-        .filter(|part| !part.is_empty())
-        .map(|part| String::from_utf8_lossy(part).into_owned())
-        .collect();
-    (!argv.is_empty()).then_some(argv)
+    crate::process_info::arguments(u32::try_from(process_group).ok().filter(|pid| *pid > 0)?)
 }
 
 /// Whether a terminal's own child, its shell or the program the tab

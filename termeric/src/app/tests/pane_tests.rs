@@ -410,7 +410,7 @@ fn splitting_and_closing_back_to_one_pane_keep_the_first_terminal_without_orphan
         .lone_pane()
         .and_then(|pane| pane.pty.child_id())
         .unwrap();
-    let original_cwd = std::fs::read_link(format!("/proc/{original_pid}/cwd")).unwrap();
+    let original_cwd = crate::process_info::working_directory(original_pid).unwrap();
 
     let before_deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < before_deadline
@@ -457,7 +457,7 @@ fn splitting_and_closing_back_to_one_pane_keep_the_first_terminal_without_orphan
         let added_pid = panes.get_pane(added).unwrap().pty.child_id().unwrap();
         assert_ne!(added_pid, original_pid);
         assert_eq!(
-            std::fs::read_link(format!("/proc/{added_pid}/cwd")).unwrap(),
+            crate::process_info::working_directory(added_pid).unwrap(),
             original_cwd
         );
 
@@ -490,12 +490,14 @@ fn splitting_and_closing_back_to_one_pane_keep_the_first_terminal_without_orphan
         );
 
         let exit_deadline = Instant::now() + Duration::from_secs(1);
-        while std::path::Path::new(&format!("/proc/{added_pid}")).exists()
+        while crate::test_support::process_is_alive(added_pid as libc::pid_t)
             && Instant::now() < exit_deadline
         {
             std::thread::sleep(Duration::from_millis(2));
         }
-        assert!(!std::path::Path::new(&format!("/proc/{added_pid}")).exists());
+        assert!(!crate::test_support::process_is_alive(
+            added_pid as libc::pid_t
+        ));
     }
 
     assert!(
@@ -506,12 +508,14 @@ fn splitting_and_closing_back_to_one_pane_keep_the_first_terminal_without_orphan
     );
     drop(tab);
     let exit_deadline = Instant::now() + Duration::from_secs(1);
-    while std::path::Path::new(&format!("/proc/{original_pid}")).exists()
+    while crate::test_support::process_is_alive(original_pid as libc::pid_t)
         && Instant::now() < exit_deadline
     {
         std::thread::sleep(Duration::from_millis(2));
     }
-    assert!(!std::path::Path::new(&format!("/proc/{original_pid}")).exists());
+    assert!(!crate::test_support::process_is_alive(
+        original_pid as libc::pid_t
+    ));
 }
 
 #[test]

@@ -27,6 +27,7 @@ mod paths;
 mod plugin;
 mod portal;
 mod process_group;
+mod process_info;
 mod raw_terminal;
 mod renderer;
 mod safe_fs;

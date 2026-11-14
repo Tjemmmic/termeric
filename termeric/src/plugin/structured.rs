@@ -2257,7 +2257,7 @@ done"#,
         );
         assert!(crate::test_support::poll_until(
             Duration::from_secs(3),
-            || !std::path::Path::new(&format!("/proc/{old_pid}")).exists()
+            || !crate::test_support::process_is_alive(old_pid.parse().unwrap())
         ));
         host.submit(
             2,

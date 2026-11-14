@@ -408,8 +408,7 @@ fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
     // SAFETY: signalling a child this test started.
     assert_eq!(unsafe { libc::kill(child as i32, libc::SIGKILL) }, 0);
     // A process that has exited, even one not yet reaped, has no command line.
-    let running =
-        || std::fs::read(format!("/proc/{child}/cmdline")).is_ok_and(|argv| !argv.is_empty());
+    let running = || crate::process_info::arguments(child).is_some();
     let deadline = Instant::now() + Duration::from_secs(5);
     while running() {
         assert!(Instant::now() < deadline, "the agent did not exit");
