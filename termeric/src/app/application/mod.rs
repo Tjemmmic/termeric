@@ -68,6 +68,7 @@ pub struct Application {
     renderer_backend: Option<crate::config::RendererBackend>,
     /// Takes files dropped on the windows under Wayland, where winit reports
     /// none; `None` on X11.
+    #[cfg(target_os = "linux")]
     wayland_drop: Option<super::wayland_drop::WaylandDrop>,
 }
 
@@ -426,6 +427,7 @@ impl Application {
             last_plugin_registry_check: Instant::now(),
             plugin_paths,
             renderer_backend,
+            #[cfg(target_os = "linux")]
             wayland_drop: None,
         })
     }
@@ -445,7 +447,7 @@ impl Application {
     ) -> Vec<std::result::Result<CreatedWindow, String>> {
         let mut startup_errors = Vec::new();
         let mut results = Vec::with_capacity(self.pending.len());
-        for mut window in self.pending.drain(..) {
+        for mut window in std::mem::take(&mut self.pending) {
             // Starting a window already hands its stable ID to plugins (in
             // app-ready and in restored plugin panes' launch context), so the
             // ID is assigned first. A window that fails to start keeps its ID
@@ -466,9 +468,7 @@ impl Application {
                     .or(window.launch.adopts_tab.then_some(0))
             {
                 let control_id = window.control_window_id;
-                if let (Some(listener), Some(native)) = (&self.wayland_drop, &window.window) {
-                    listener.register(native, window.window_key());
-                }
+                self.register_drop_target(window.window.as_deref(), window.window_key());
                 self.window_order.push(id);
                 self.control_window_ids.insert(id, control_id);
                 self.windows.insert(id, window);
@@ -617,6 +617,27 @@ impl Application {
         self.complete_live_domain_control(key, control, result);
     }
 
+    /// Start hearing file drops on `window`. Wayland reports them on a
+    /// connection of their own (`wayland_drop.rs`); X11 and macOS report them
+    /// through winit, so there is nothing to register there.
+    fn register_drop_target(&self, native: Option<&winit::window::Window>, key: WindowKey) {
+        #[cfg(target_os = "linux")]
+        if let (Some(listener), Some(native)) = (&self.wayland_drop, native) {
+            listener.register(native, key);
+        }
+        #[cfg(target_os = "macos")]
+        let _ = (native, key);
+    }
+
+    fn unregister_drop_target(&self, key: WindowKey) {
+        #[cfg(target_os = "linux")]
+        if let Some(listener) = &self.wayland_drop {
+            listener.unregister(key);
+        }
+        #[cfg(target_os = "macos")]
+        let _ = key;
+    }
+
     fn remove_closed_windows(&mut self, event_loop: &ActiveEventLoop) {
         let surviving = self
             .windows
@@ -639,10 +660,8 @@ impl Application {
                 }
             }
         }
-        if let Some(listener) = &self.wayland_drop {
-            for window in self.windows.values().filter(|window| window.should_exit) {
-                listener.unregister(window.window_key());
-            }
+        for window in self.windows.values().filter(|window| window.should_exit) {
+            self.unregister_drop_target(window.window_key());
         }
         self.windows.retain(|_, window| !window.should_exit);
         self.window_order.retain(|id| self.windows.contains_key(id));
@@ -745,6 +764,7 @@ impl ApplicationHandler<AppEvent> for Application {
                 super::system_accessibility::start_monitor(proxy);
             }
         }
+        #[cfg(target_os = "linux")]
         if self.wayland_drop.is_none()
             && let Some(proxy) = super::EVENT_LOOP_PROXY.get().cloned()
         {
@@ -1000,7 +1020,10 @@ impl ApplicationHandler<AppEvent> for Application {
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         // The drop listener reads from winit's connection, which closes as
         // the event loop ends, right after this.
-        self.wayland_drop = None;
+        #[cfg(target_os = "linux")]
+        {
+            self.wayland_drop = None;
+        }
     }
 }
 

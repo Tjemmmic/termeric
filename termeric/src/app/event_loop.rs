@@ -103,6 +103,7 @@ impl App {
             window_attrs = window_attrs.with_inner_size(PhysicalSize::new(width, height));
         }
 
+        #[cfg(target_os = "linux")]
         {
             use winit::platform::startup_notify::{
                 EventLoopExtStartupNotify, WindowAttributesExtStartupNotify,
@@ -135,6 +136,12 @@ impl App {
                 window_attrs = window_attrs.with_activation_token(token);
                 winit::platform::startup_notify::reset_activation_token_env();
             }
+        }
+        // macOS has no activation tokens: a window takes focus when it is
+        // shown, so a joining launch's token has nothing to do.
+        #[cfg(target_os = "macos")]
+        {
+            self.activation_token = None;
         }
 
         // Load and set window icon if available

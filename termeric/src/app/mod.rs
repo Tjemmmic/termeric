@@ -67,6 +67,7 @@ mod text_target;
 mod theme_picker;
 mod transcripts;
 mod unicode_picker;
+#[cfg(target_os = "linux")]
 mod wayland_drop;
 mod workspace_actions;
 mod workspace_menu;

@@ -105,21 +105,20 @@ impl Application {
             return Ok(());
         };
         let shown = window.open_quick_access_window(event_loop, token)?;
-        if let (Some(listener), Some(native)) = (&self.wayland_drop, &window.window) {
-            listener.register(native, window.window_key());
-        }
+        let (native, key) = (window.window.clone(), window.window_key());
+        self.register_drop_target(native.as_deref(), key);
         self.refile_window(native_id, shown);
         Ok(())
     }
 
     fn hide_quick_access(&mut self, native_id: WindowId, control_id: u64) {
-        let Some(window) = self.windows.get_mut(&native_id) else {
+        let Some(key) = self.windows.get(&native_id).map(App::window_key) else {
             return;
         };
-        if let Some(listener) = &self.wayland_drop {
-            listener.unregister(window.window_key());
+        self.unregister_drop_target(key);
+        if let Some(window) = self.windows.get_mut(&native_id) {
+            window.close_quick_access_window();
         }
-        window.close_quick_access_window();
         self.refile_window(native_id, hidden_window_id(control_id));
     }
 

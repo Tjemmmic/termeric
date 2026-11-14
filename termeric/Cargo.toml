@@ -23,10 +23,6 @@ termeric-core = { version = "0.1.0", path = "../termeric-core" }
 # Windowing
 winit = "0.30"
 raw-window-handle = "0.6"
-# Files dropped on a window under Wayland, which winit doesn't report: the
-# versions winit itself uses, on its own connection (`client_system`).
-wayland-client = "0.31"
-wayland-backend = { version = "0.3", features = ["client_system"] }
 accesskit = "0.24.1"
 accesskit_winit = "0.33.2"
 
@@ -97,6 +93,12 @@ freedesktop-icons = "0.4"
 # Bounded cancellation for the asynchronous notification-signal listener.
 async-channel = "2"
 futures-lite = "2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Files dropped on a window under Wayland, which winit doesn't report: the
+# versions winit itself uses, on its own connection (`client_system`).
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system"] }
 
 [dev-dependencies]
 # Generating the committed manual page and shell completions (cli/spec.rs)
