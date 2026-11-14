@@ -87,18 +87,87 @@ clap = { version = "4.6", default-features = false, features = ["std", "derive",
 anyhow.workspace = true
 
 libc = "0.2"
-# XDG Desktop Portal accessibility preference monitoring.
-zbus = "5.19"
-freedesktop-icons = "0.4"
-# Bounded cancellation for the asynchronous notification-signal listener.
-async-channel = "2"
-futures-lite = "2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Files dropped on a window under Wayland, which winit doesn't report: the
 # versions winit itself uses, on its own connection (`client_system`).
 wayland-client = "0.31"
 wayland-backend = { version = "0.3", features = ["client_system"] }
+# The XDG desktop portal (accessibility preferences, the file chooser) and
+# desktop notifications, over D-Bus.
+zbus = "5.19"
+freedesktop-icons = "0.4"
+# Bounded cancellation for the asynchronous notification-signal listener.
+async-channel = "2"
+futures-lite = "2"
+
+# AppKit, Foundation, UserNotifications, and Core Animation, for the menu bar,
+# windows, notifications, the file chooser, and accessibility preferences.
+# The family arboard already uses; winit keeps its own older family private
+# (its windows are reached through raw handles). Only the classes used are
+# built.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "block2",
+    "NSArray",
+    "NSBundle",
+    "NSDictionary",
+    "NSError",
+    "NSNotification",
+    "NSObject",
+    "NSOperation",
+    "NSSet",
+    "NSString",
+    "NSURL",
+    "NSUserDefaults",
+    "NSValue",
+] }
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "std",
+    "block2",
+    "NSApplication",
+    "NSEvent",
+    "NSGraphics",
+    "NSMenu",
+    "NSMenuItem",
+    "NSOpenPanel",
+    "NSPanel",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSSavePanel",
+    "NSScreen",
+    "NSView",
+    "NSWindow",
+    "NSWorkspace",
+] }
+objc2-user-notifications = { version = "0.3", default-features = false, features = [
+    "std",
+    "block2",
+    "UNNotification",
+    "UNNotificationAction",
+    "UNNotificationAttachment",
+    "UNNotificationCategory",
+    "UNNotificationContent",
+    "UNNotificationRequest",
+    "UNNotificationResponse",
+    "UNNotificationSettings",
+    "UNNotificationSound",
+    "UNNotificationTrigger",
+    "UNUserNotificationCenter",
+] }
+objc2-quartz-core = { version = "0.3", default-features = false, features = [
+    "std",
+    "objc2-core-graphics",
+    "CALayer",
+    "CAMetalLayer",
+] }
+objc2-core-graphics = { version = "0.3", default-features = false, features = [
+    "std",
+    "CGColorSpace",
+] }
 
 [dev-dependencies]
 # Generating the committed manual page and shell completions (cli/spec.rs)
