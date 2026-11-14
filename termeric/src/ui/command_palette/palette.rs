@@ -877,7 +877,7 @@ fn core_command_table() -> Vec<CoreCommand> {
     use CoreCategory::*;
     use CoreRun::{Agent, Bound, Unbound};
     vec![
-        command("core.new-window", "New Window", Core, Unbound(Action::NewWindow)),
+        command("core.new-window", "New Window", Core, Bound(Key::NewWindow)),
         command("core.toggle-fullscreen", "Toggle Fullscreen", Core, Bound(Key::ToggleFullscreen)),
         command("core.attach-domain", "Attach Live Domain…", Experimental, Unbound(Action::AttachDomain)),
         destructive("core.cancel-file-upload", "Cancel Upload", Core, Unbound(Action::CancelFileUpload)),
