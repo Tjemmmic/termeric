@@ -50,8 +50,10 @@ pub(crate) unsafe fn complete() -> Vec<String> {
 }
 
 /// The locale variable to set when none is: `LANG` for the system's
-/// language and region when macOS has that locale, else `LC_CTYPE=UTF-8`,
-/// so text is UTF-8 either way.
+/// language and region when macOS has that locale, else `en_US.UTF-8`, so
+/// text is UTF-8 either way. Only `LANG` is ever set: `ssh` sends `LC_*`
+/// variables to other machines, where a macOS-only value such as
+/// `LC_CTYPE=UTF-8` would break their locale.
 fn missing_locale() -> Option<(&'static str, String)> {
     let set = |name: &str| std::env::var_os(name).is_some_and(|value| !value.is_empty());
     if ["LC_ALL", "LC_CTYPE", "LANG"].into_iter().any(set) {
@@ -59,11 +61,9 @@ fn missing_locale() -> Option<(&'static str, String)> {
     }
     let locale = sys_locale::get_locale()
         .and_then(|tag| posix_locale(&tag))
-        .filter(|locale| Path::new("/usr/share/locale").join(locale).is_dir());
-    Some(match locale {
-        Some(locale) => ("LANG", locale),
-        None => ("LC_CTYPE", "UTF-8".to_owned()),
-    })
+        .filter(|locale| Path::new("/usr/share/locale").join(locale).is_dir())
+        .unwrap_or_else(|| "en_US.UTF-8".to_owned());
+    Some(("LANG", locale))
 }
 
 /// A POSIX locale name for a BCP 47 tag such as `en-US` or `zh-Hans-CN`:
@@ -93,19 +93,30 @@ fn started_by_launchd() -> bool {
 /// The `PATH` the person's login shell sets up, asked for without starting a
 /// thread (see [`complete`]).
 fn login_shell_path() -> Option<OsString> {
+    use std::os::unix::process::CommandExt;
     let shell = crate::terminal::shell_integration::default_shell_program()?;
     let mut child = Command::new(shell)
-        .args(["-l", "-c", "/usr/bin/printenv PATH"])
+        // Interactive too, so what `~/.zshrc` adds (nvm, pyenv) counts, as
+        // in the editors that do the same.
+        .args(["-l", "-i", "-c", "exec /usr/bin/printenv PATH"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
+        // A group of its own, so whatever a profile left running ends with
+        // the shell rather than holding the output open.
+        .process_group(0)
         .spawn()
         .ok()?;
     let output = child
         .stdout
         .take()
         .and_then(|stdout| read_until(stdout, Instant::now() + LOGIN_SHELL_TIMEOUT));
-    let _ = child.kill();
+    // The group is signalled before the shell is reaped, so its ID can't
+    // belong to anything else yet.
+    if let Ok(group) = libc::pid_t::try_from(child.id()) {
+        // SAFETY: kill has no memory preconditions; the group is the child's.
+        unsafe { libc::kill(-group, libc::SIGKILL) };
+    }
     let _ = child.wait();
     login_path_from_output(&output?)
 }
