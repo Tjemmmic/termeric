@@ -95,6 +95,21 @@ impl Default for Theme {
     }
 }
 
+/// Whether `path` is a file whose name is spelled exactly so. macOS's file
+/// system ignores case, so `nord.toml` would otherwise also open a custom
+/// `Nord.toml` and shadow the built-in `nord`, which it doesn't on Linux.
+fn is_file_named_exactly(path: &Path) -> bool {
+    let (Some(directory), Some(name)) = (path.parent(), path.file_name()) else {
+        return false;
+    };
+    path.is_file()
+        && std::fs::read_dir(directory).is_ok_and(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .any(|entry| entry.file_name() == name)
+        })
+}
+
 impl Theme {
     /// Load theme from a TOML file
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
@@ -199,7 +214,7 @@ impl Theme {
             return Self::load(path);
         }
         match Self::configured_file_in_dir(name, None, custom_dir) {
-            Some(path) if path.is_file() => Self::load(&path),
+            Some(path) if is_file_named_exactly(&path) => Self::load(&path),
             _ => Self::load_builtin(name),
         }
     }
@@ -781,6 +796,21 @@ mod tests {
             Theme::configured_file_in_dir("../warm-root", None, Some(dir.path())),
             None
         );
+    }
+
+    /// On a file system that ignores case (macOS), a custom `Nord.toml` must
+    /// not stand in for the built-in `nord`, as it doesn't on Linux.
+    #[test]
+    fn a_custom_theme_differing_only_in_case_does_not_shadow_a_built_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let custom = include_str!("../../themes/roots/turmeric.toml").replacen(
+            "name = \"Turmeric\"",
+            "name = \"Shadow\"",
+            1,
+        );
+        std::fs::write(dir.path().join("Ginger.toml"), custom).unwrap();
+        let theme = Theme::resolve_in_dir("ginger", None, Some(dir.path())).unwrap();
+        assert_eq!(theme.meta.name, "Ginger");
     }
 
     #[test]
