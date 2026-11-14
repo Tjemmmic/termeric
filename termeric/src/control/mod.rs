@@ -82,11 +82,40 @@ pub(crate) use server::ControlServer;
 /// The display this process draws on: its Wayland socket, else its X11
 /// display. Windows of one process share one display connection, so a
 /// launch may join only a process with the same identity.
+#[cfg(target_os = "linux")]
 pub fn display_identity() -> Option<String> {
     let variable = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
     variable("WAYLAND_DISPLAY")
         .map(|display| format!("wayland:{display}"))
         .or_else(|| variable("DISPLAY").map(|display| format!("x11:{display}")))
+}
+
+/// The login session this process draws in. A Mac has one window server,
+/// and each login is its own security session, so a launch from a terminal
+/// of the person at the screen joins the running Termeric. A session without
+/// access to the screen (an SSH login) has no display to share and never
+/// joins. The system reports the session, whatever the environment says.
+#[cfg(target_os = "macos")]
+pub fn display_identity() -> Option<String> {
+    graphical_security_session().map(|session| format!("macos-session:{session}"))
+}
+
+/// This process's security session, when it can draw on the screen, from
+/// Security.framework's `SessionGetInfo`.
+#[cfg(target_os = "macos")]
+fn graphical_security_session() -> Option<u32> {
+    /// `callerSecuritySession`: the session of the calling process.
+    const CALLER_SECURITY_SESSION: u32 = u32::MAX;
+    /// `sessionHasGraphicAccess`.
+    const SESSION_HAS_GRAPHIC_ACCESS: u32 = 0x0010;
+    #[link(name = "Security", kind = "framework")]
+    unsafe extern "C" {
+        fn SessionGetInfo(session: u32, session_id: *mut u32, attributes: *mut u32) -> i32;
+    }
+    let (mut session, mut attributes) = (0u32, 0u32);
+    // SAFETY: both outputs are writable integers for the duration of the call.
+    let status = unsafe { SessionGetInfo(CALLER_SECURITY_SESSION, &mut session, &mut attributes) };
+    (status == 0 && attributes & SESSION_HAS_GRAPHIC_ACCESS != 0).then_some(session)
 }
 
 /// This process's build: its executable and when that file last changed,
@@ -298,6 +327,20 @@ pub fn execute(command: ControlCommand) -> anyhow::Result<ControlOutput> {
 #[cfg(test)]
 mod tests {
     use super::{ENVIRONMENT_IDENTITY_DIGITS, JOIN_ENVIRONMENT_VARIABLES, fingerprint_environment};
+
+    /// A process of the person at the screen (CI runs in such a session)
+    /// knows its session, so a launch can tell whether it shares the running
+    /// Termeric's.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_macos_login_session_is_known_and_stable() {
+        let identity = super::display_identity().expect("a graphical security session");
+        assert!(identity.starts_with("macos-session:"));
+        assert_eq!(
+            super::display_identity().as_deref(),
+            Some(identity.as_str())
+        );
+    }
 
     #[test]
     fn environment_identity_depends_only_on_the_listed_variables() {
