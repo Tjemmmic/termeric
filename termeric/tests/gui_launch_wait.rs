@@ -107,25 +107,79 @@ fn input_file(bytes: &[u8]) -> Stdio {
 }
 
 fn input_pipe(bytes: &[u8]) -> (std::fs::File, std::fs::File) {
-    use std::os::fd::FromRawFd;
-    let mut fds = [-1; 2];
-    // SAFETY: two output descriptors are initialized by pipe2.
-    assert_eq!(unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) }, 0);
-    // SAFETY: each newly created descriptor is adopted exactly once.
-    let (reader, mut writer) = unsafe {
-        (
-            std::fs::File::from_raw_fd(fds[0]),
-            std::fs::File::from_raw_fd(fds[1]),
-        )
-    };
+    let (reader, writer) = std::io::pipe().unwrap();
+    let (reader, mut writer) = (
+        std::fs::File::from(std::os::fd::OwnedFd::from(reader)),
+        std::fs::File::from(std::os::fd::OwnedFd::from(writer)),
+    );
     assert!(bytes.len() < 4096);
     writer.write_all(bytes).unwrap();
     (reader, writer)
 }
 
+/// The process ID of the client connected on `stream`.
+#[cfg(target_os = "linux")]
+fn peer_process_id(stream: &UnixStream) -> libc::pid_t {
+    use std::os::fd::AsRawFd;
+    // SAFETY: getsockopt writes a bounded ucred record for this live socket.
+    let mut credentials: libc::ucred = unsafe { std::mem::zeroed() };
+    let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    assert_eq!(
+        unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                (&mut credentials as *mut libc::ucred).cast(),
+                &mut length,
+            )
+        },
+        0
+    );
+    credentials.pid
+}
+
+/// The process ID of the client connected on `stream`.
+#[cfg(target_os = "macos")]
+fn peer_process_id(stream: &UnixStream) -> libc::pid_t {
+    use std::os::fd::AsRawFd;
+    let mut pid: libc::pid_t = 0;
+    let mut length = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+    // SAFETY: getsockopt writes one pid_t for this live socket.
+    assert_eq!(
+        unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                libc::SOL_LOCAL,
+                libc::LOCAL_PEERPID,
+                (&mut pid as *mut libc::pid_t).cast(),
+                &mut length,
+            )
+        },
+        0
+    );
+    pid
+}
+
+/// The command line of the client connected on `stream`, as `ps` shows it to
+/// any user of the machine.
+fn peer_arguments(stream: &UnixStream) -> String {
+    let output = Command::new("ps")
+        .args([
+            "-ww",
+            "-o",
+            "args=",
+            "-p",
+            &peer_process_id(stream).to_string(),
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    String::from_utf8(output.stdout).unwrap()
+}
+
 #[test]
 fn stdin_environment_reaches_both_launch_targets_without_argv_or_output_exposure() {
-    use std::os::fd::AsRawFd;
     for verb in ["launch-tab", "launch-window"] {
         for wait in [false, true] {
             for pipe in [false, true] {
@@ -175,27 +229,9 @@ fn stdin_environment_reaches_both_launch_targets_without_argv_or_output_exposure
                     assert!(entries.contains(&json!({"name": "LITERAL", "value": "ok"})));
                     assert_eq!(request["request"]["environment_policy"]["clear"], true);
                     // Inspect the live CLI peer while it awaits our acknowledgement.
-                    // SAFETY: getsockopt writes a bounded ucred record for this live socket.
-                    let mut credentials: libc::ucred = unsafe { std::mem::zeroed() };
-                    let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-                    assert_eq!(
-                        unsafe {
-                            libc::getsockopt(
-                                stream.as_raw_fd(),
-                                libc::SOL_SOCKET,
-                                libc::SO_PEERCRED,
-                                (&mut credentials as *mut libc::ucred).cast(),
-                                &mut length,
-                            )
-                        },
-                        0
-                    );
-                    let argv = fs::read(format!("/proc/{}/cmdline", credentials.pid)).unwrap();
-                    assert!(
-                        !argv
-                            .windows(secret.len())
-                            .any(|bytes| bytes == secret.as_bytes())
-                    );
+                    let argv = peer_arguments(&stream);
+                    assert!(!argv.is_empty());
+                    assert!(!argv.contains(secret));
                     send(stream, acknowledgement(verb, ID));
                     if wait {
                         send(

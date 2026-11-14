@@ -50,8 +50,10 @@ impl SocketPaths {
     }
 }
 
-/// This user's runtime directory: `termeric` under `XDG_RUNTIME_DIR` when
-/// that is a private directory of theirs, else `/tmp/termeric-{uid}`.
+/// This user's runtime directory. On Linux: `termeric` under
+/// `XDG_RUNTIME_DIR` when that is a private directory of theirs, else
+/// `/tmp/termeric-{uid}`.
+#[cfg(target_os = "linux")]
 pub(crate) fn runtime_directory() -> PathBuf {
     let uid = effective_uid();
     let base = std::env::var_os("XDG_RUNTIME_DIR")
@@ -63,6 +65,51 @@ pub(crate) fn runtime_directory() -> PathBuf {
     } else {
         base.join("termeric")
     }
+}
+
+/// This user's runtime directory. On macOS: `termeric` in the user's own
+/// private directory under `/var/folders`, which every process of theirs
+/// finds whatever its environment (the Finder gives none of the shell's
+/// variables, and the supervisor's helper runs with almost none), and which
+/// the system never sweeps the way it sweeps `/tmp` and the temporary
+/// directory of files left untouched for days. `XDG_RUNTIME_DIR` is not
+/// consulted: a shell that sets it would disagree with the Finder about where
+/// the running Termeric is. `/tmp/termeric-{uid}` remains if the system
+/// can't say.
+#[cfg(target_os = "macos")]
+pub(crate) fn runtime_directory() -> PathBuf {
+    let uid = effective_uid();
+    darwin_user_directory()
+        .filter(|path| runtime_parent_is_safe(path, uid))
+        .map_or_else(
+            || PathBuf::from(format!("/tmp/termeric-{uid}")),
+            |base| base.join("termeric"),
+        )
+}
+
+/// The user's private per-user directory (`confstr(_CS_DARWIN_USER_DIR)`),
+/// created on demand by the system.
+#[cfg(target_os = "macos")]
+fn darwin_user_directory() -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    let mut buffer = vec![0u8; libc::PATH_MAX as usize];
+    // SAFETY: the buffer is writable for its whole length, which is passed
+    // with it; confstr writes at most that many bytes, NUL included.
+    let needed = unsafe {
+        libc::confstr(
+            libc::_CS_DARWIN_USER_DIR,
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+        )
+    };
+    if needed == 0 || needed > buffer.len() {
+        return None;
+    }
+    // `needed` counts the terminating NUL.
+    buffer.truncate(needed - 1);
+    let path = PathBuf::from(std::ffi::OsStr::from_bytes(&buffer));
+    // The answer ends in a slash; a path without one compares the same.
+    Some(path.components().collect())
 }
 
 pub fn effective_uid() -> u32 {
@@ -179,6 +226,17 @@ fn token_temporary_path(path: &Path, process_id: u32, nonce: &str) -> PathBuf {
 /// the kernel reports one (a peer in another PID namespace reads as 0).
 /// `peer` names the other end in errors.
 pub(crate) fn same_user_peer(stream: &UnixStream, peer: &str) -> anyhow::Result<Option<u32>> {
+    let (uid, pid) = peer_credentials(stream).with_context(|| format!("authenticate {peer}"))?;
+    if uid != effective_uid() {
+        anyhow::bail!("{peer} belongs to a different user");
+    }
+    Ok(pid)
+}
+
+/// The peer's effective user ID and, when known, its process ID, as the
+/// kernel recorded them when the connection was made.
+#[cfg(target_os = "linux")]
+fn peer_credentials(stream: &UnixStream) -> std::io::Result<(u32, Option<u32>)> {
     let mut credentials = libc::ucred {
         pid: 0,
         uid: 0,
@@ -197,13 +255,41 @@ pub(crate) fn same_user_peer(stream: &UnixStream, peer: &str) -> anyhow::Result<
         )
     };
     if result != 0 {
-        return Err(std::io::Error::last_os_error())
-            .with_context(|| format!("authenticate {peer}"));
+        return Err(std::io::Error::last_os_error());
     }
-    if credentials.uid != effective_uid() {
-        anyhow::bail!("{peer} belongs to a different user");
+    Ok((
+        credentials.uid,
+        u32::try_from(credentials.pid).ok().filter(|pid| *pid > 0),
+    ))
+}
+
+/// The peer's effective user ID and, when known, its process ID, as the
+/// kernel recorded them when the connection was made.
+#[cfg(target_os = "macos")]
+fn peer_credentials(stream: &UnixStream) -> std::io::Result<(u32, Option<u32>)> {
+    let descriptor = std::os::fd::AsRawFd::as_raw_fd(stream);
+    let (mut uid, mut gid) = (0, 0);
+    // SAFETY: the connected descriptor and both output locations remain valid
+    // for the duration of the call.
+    if unsafe { libc::getpeereid(descriptor, &mut uid, &mut gid) } != 0 {
+        return Err(std::io::Error::last_os_error());
     }
-    Ok(u32::try_from(credentials.pid).ok().filter(|pid| *pid > 0))
+    let mut pid: libc::pid_t = 0;
+    let mut length = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+    // SAFETY: as above; LOCAL_PEERPID writes one pid_t.
+    let result = unsafe {
+        libc::getsockopt(
+            descriptor,
+            libc::SOL_LOCAL,
+            libc::LOCAL_PEERPID,
+            (&mut pid as *mut libc::pid_t).cast(),
+            &mut length,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok((uid, u32::try_from(pid).ok().filter(|pid| *pid > 0)))
 }
 
 /// Admits a client that speaks `server_version` and presents

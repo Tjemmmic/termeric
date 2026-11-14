@@ -27,13 +27,100 @@ pub(crate) fn remaining(deadline: Instant, expired: &'static str) -> io::Result<
 /// negative timeout waits indefinitely. An interrupted wait reads as not
 /// ready, so callers simply wait again.
 pub(crate) fn readable(descriptor: RawFd, timeout_millis: libc::c_int) -> io::Result<bool> {
-    poll(descriptor, libc::POLLIN | libc::POLLHUP, timeout_millis)
+    let [ready] = ready_to_read([descriptor], timeout_millis)?;
+    Ok(ready)
 }
 
-fn poll(descriptor: RawFd, events: libc::c_short, timeout_millis: libc::c_int) -> io::Result<bool> {
+/// Which of `descriptors` a read would not block on (input, end of file, a
+/// hangup, or an error the read will report) within `timeout_millis`; a
+/// negative timeout waits indefinitely. An interrupted wait reads as none
+/// ready.
+#[cfg(target_os = "linux")]
+pub(crate) fn ready_to_read<const N: usize>(
+    descriptors: [RawFd; N],
+    timeout_millis: libc::c_int,
+) -> io::Result<[bool; N]> {
+    let mut polls = descriptors.map(|fd| libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    });
+    // SAFETY: poll receives `N` initialized descriptors for the duration of
+    // the call and does not retain the pointer.
+    let result = unsafe { libc::poll(polls.as_mut_ptr(), N as libc::nfds_t, timeout_millis) };
+    if result < 0 {
+        let error = io::Error::last_os_error();
+        if error.kind() == io::ErrorKind::Interrupted {
+            return Ok([false; N]);
+        }
+        return Err(error);
+    }
+    Ok(polls.map(|poll| {
+        poll.revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0
+    }))
+}
+
+/// Which of `descriptors` a read would not block on within `timeout_millis`.
+/// macOS's `poll` does not support devices, and terminals and serial ports
+/// are devices, so this waits with `select`, which supports every kind of
+/// descriptor (and reports a hangup or an error as readable, for the read to
+/// tell).
+#[cfg(target_os = "macos")]
+pub(crate) fn ready_to_read<const N: usize>(
+    descriptors: [RawFd; N],
+    timeout_millis: libc::c_int,
+) -> io::Result<[bool; N]> {
+    if let Some(fd) = descriptors
+        .iter()
+        .find(|fd| !(0..libc::FD_SETSIZE as RawFd).contains(*fd))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("descriptor {fd} is out of select's range"),
+        ));
+    }
+    // SAFETY: an all-zero fd_set is the empty set, and FD_SET receives
+    // descriptors checked to lie within FD_SETSIZE.
+    let mut readable = unsafe { std::mem::zeroed::<libc::fd_set>() };
+    for fd in descriptors {
+        unsafe { libc::FD_SET(fd, &mut readable) };
+    }
+    let mut timeout = (timeout_millis >= 0).then(|| libc::timeval {
+        tv_sec: (timeout_millis / 1000).into(),
+        tv_usec: (timeout_millis % 1000) * 1000,
+    });
+    let highest = descriptors.iter().copied().max().unwrap_or(-1);
+    // SAFETY: the set and the optional timeout outlive the call, and nfds is
+    // one more than the highest descriptor in the set.
+    let result = unsafe {
+        libc::select(
+            highest + 1,
+            &mut readable,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            timeout.as_mut().map_or(std::ptr::null_mut(), |timeout| {
+                timeout as *mut libc::timeval
+            }),
+        )
+    };
+    if result < 0 {
+        let error = io::Error::last_os_error();
+        if error.kind() == io::ErrorKind::Interrupted {
+            return Ok([false; N]);
+        }
+        return Err(error);
+    }
+    // SAFETY: FD_ISSET reads the set select filled in, for checked descriptors.
+    Ok(descriptors.map(|fd| unsafe { libc::FD_ISSET(fd, &readable) }))
+}
+
+/// Waits up to `timeout_millis` for `descriptor`, a socket or a pipe, to
+/// take more output. Only sockets and pipes come here, which `poll` supports
+/// on macOS too.
+fn writable(descriptor: RawFd, timeout_millis: libc::c_int) -> io::Result<()> {
     let mut descriptor = libc::pollfd {
         fd: descriptor,
-        events,
+        events: libc::POLLOUT,
         revents: 0,
     };
     // SAFETY: poll receives one initialized descriptor for the duration of the
@@ -41,12 +128,11 @@ fn poll(descriptor: RawFd, events: libc::c_short, timeout_millis: libc::c_int) -
     let result = unsafe { libc::poll(&mut descriptor, 1, timeout_millis) };
     if result < 0 {
         let error = io::Error::last_os_error();
-        if error.kind() == io::ErrorKind::Interrupted {
-            return Ok(false);
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
         }
-        return Err(error);
     }
-    Ok(result > 0)
+    Ok(())
 }
 
 /// A poll timeout for the time left, rounded up to whole milliseconds so a
@@ -247,11 +333,7 @@ pub(crate) fn write_before(
             Err(error) => return Err(error),
         }
         // A HUP or ERR surfaces from the next attempt.
-        poll(
-            descriptor,
-            libc::POLLOUT,
-            poll_millis(remaining(deadline, expired)?),
-        )?;
+        writable(descriptor, poll_millis(remaining(deadline, expired)?))?;
     }
 }
 
