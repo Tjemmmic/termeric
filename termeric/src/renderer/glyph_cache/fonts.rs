@@ -57,7 +57,9 @@ fn set_generic_families(database: &mut cosmic_text::fontdb::Database) {
             })
             .map(|family| (*family).to_owned())
     };
-    if let Some(family) = first_installed(database, &["SF Mono", "Menlo", "Monaco"]) {
+    // SF Mono ships inside Terminal.app rather than as a system font, so it
+    // is not among the installed families unless the person installed it.
+    if let Some(family) = first_installed(database, &["Menlo", "Monaco"]) {
         database.set_monospace_family(family);
     }
     if let Some(family) = first_installed(database, &[".SF NS", "Helvetica Neue", "Helvetica"]) {
