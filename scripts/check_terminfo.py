@@ -107,7 +107,7 @@ def check_database(compiled: Path, env: dict[str, str]) -> None:
         )
     required = [
         "colors#0x100",
-        "pairs#0x10000",
+        "pairs#0x7fff",
         "Rect,",
         "Tc",
         "setrgbf=",
