@@ -1,17 +1,10 @@
-//! Native desktop accessibility preference monitoring.
-//!
 //! Linux exposes reduced-motion and contrast preferences through the XDG
 //! Desktop Portal Settings interface. All D-Bus work stays on one background
 //! thread; the event-loop thread only receives small immutable snapshots.
 
-use super::AppEvent;
+use super::super::AppEvent;
+use super::SystemAccessibilityPreferences;
 use winit::event_loop::EventLoopProxy;
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct SystemAccessibilityPreferences {
-    pub reduce_motion: Option<bool>,
-    pub high_contrast: Option<bool>,
-}
 
 pub(super) fn start_monitor(proxy: EventLoopProxy<AppEvent>) {
     if let Err(error) = std::thread::Builder::new()
