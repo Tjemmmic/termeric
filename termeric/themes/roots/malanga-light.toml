@@ -1,0 +1,36 @@
+[meta]
+name = "Malanga Light"
+author = "Termeric"
+description = "Creamy malanga flesh with purple splotches and dark bark"
+
+[primary]
+black = "#4B3C3C"   # Deep root bark
+red = "#BB3E3E"     # Red tinted toward purple-red skin blush
+green = "#387D38"   # Dark earthy leaf green
+yellow = "#9C7D24"  # Rich yellow flower
+blue = "#5166B2"    # Cool grey-violet
+magenta = "#8C50B0" # Dark purple splotch
+cyan = "#387C71"    # Cyan tinted toward deep forest green
+white = "#988261"   # Grey-brown skin
+
+[bright]
+black = "#7F6C6C"   # Grey-brown for dim hints
+red = "#9C3434"     # Deep red tinted toward purple-rose
+green = "#2E672E"   # Deep earthy green
+yellow = "#766520"  # Deep gold flower
+blue = "#435496"    # Deep violet-grey
+magenta = "#7A408F" # Deep medium purple
+cyan = "#2D665C"    # Deep cyan tinted toward mid forest
+white = "#D9CBB6"   # Cream flesh, a step off the background
+
+[ui]
+background = "#EEE8DF"   # Creamy white flesh
+foreground = "#3C2F2F"   # Deep root bark
+cursor = "#8E701C"       # Yellow flower gold
+cursor_text = "#EEE8DF"  # Text under the cursor
+selection = "#A566CC40"  # Purple splotch tint
+border = "#D7D0C8"       # Chrome separators
+tab_active = "#8E701C"   # Yellow flower gold
+tab_inactive = "#E6E0D7" # Tab strip
+search_match = "#47D147" # Leaf green
+url = "#A14E67"          # Purple-red skin blush

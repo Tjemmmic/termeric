@@ -1,0 +1,36 @@
+[meta]
+name = "Parsnip Light"
+author = "Termeric"
+description = "Sweet cream parsnip flesh with a yellow core and celery leaves"
+
+[primary]
+black = "#494136"   # Parsnip earth
+red = "#C04238"     # Red tinted toward warm tan
+green = "#547D38"   # Celery leaf green
+yellow = "#9D8125"  # Yellow core
+blue = "#436FA3"    # Cool shadow blue
+magenta = "#A64F86" # Dusty rose
+cyan = "#3B7F73"    # Stem green-teal
+white = "#968860"   # Cream skin in shade
+
+[bright]
+black = "#7A7368"   # Warm grey for dim hints
+red = "#A33426"     # Deep warm red
+green = "#406928"   # Deep celery leaf
+yellow = "#7A681D"  # Deep yellow core
+blue = "#315C93"    # Deep shadow blue
+magenta = "#933A72" # Deep dusty rose
+cyan = "#2B6961"    # Deep stem teal
+white = "#DCD1AD"   # Cream, a step off the background
+
+[ui]
+background = "#F4EEDA"   # Sweet cream flesh
+foreground = "#3B342A"   # Parsnip earth
+cursor = "#8E7521"       # Yellow core
+cursor_text = "#F4EEDA"  # Text under the cursor
+selection = "#CCB46640"  # Cream tint
+border = "#DCD6C3"       # Chrome separators
+tab_active = "#8E7521"   # Yellow core
+tab_inactive = "#ECE6D2" # Tab strip
+search_match = "#7FD147" # Celery green
+url = "#4C7731"          # Celery green

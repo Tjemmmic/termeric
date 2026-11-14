@@ -1,0 +1,36 @@
+[meta]
+name = "Turnip Light"
+author = "Termeric"
+description = "Cream turnip skin under a purple top, with sage green leaves"
+
+[primary]
+black = "#3B3043"   # Deep purple soil
+red = "#A04D4D"     # Red tinted toward purple-rose top
+green = "#5A743E"   # Fuzzy sage green leaf
+yellow = "#807445"  # Cream skin
+blue = "#4D688F"    # Cool purple-blue
+magenta = "#924F89" # Mid purple
+cyan = "#40786E"    # Cyan tinted toward spring leaf
+white = "#827953"   # Cream skin in shade
+
+[bright]
+black = "#6F5E7E"   # Purple-grey for dim hints
+red = "#823E3E"     # Deep red tinted toward purple
+green = "#4B5C31"   # Deep spring green
+yellow = "#685938"  # Deep cream skin
+blue = "#3E5473"    # Deep blue
+magenta = "#763F6E" # Deep purple
+cyan = "#2C6057"    # Deep cyan tinted toward spring
+white = "#C0BCAF"   # White flesh, a step off the background
+
+[ui]
+background = "#D9D7CF"   # Cream turnip skin
+foreground = "#372C40"   # Deep purple-grey top
+cursor = "#A43AAD"       # Purple top
+cursor_text = "#D9D7CF"  # Text under the cursor
+selection = "#C566CC40"  # Purple top tint
+border = "#C4C0BC"       # Chrome separators
+tab_active = "#A43AAD"   # Purple top
+tab_inactive = "#D1CFC8" # Tab strip
+search_match = "#9BD147" # Spring green
+url = "#4C6520"          # Spring leaf green

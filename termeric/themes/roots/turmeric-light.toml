@@ -1,0 +1,36 @@
+[meta]
+name = "Turmeric Light"
+author = "Termeric"
+description = "The turmeric root by daylight — sun-dried skin, golden flesh, and leaves"
+
+[primary]
+black = "#40372F"   # Dark rhizome skin
+red = "#A2554C"     # Cinnamon red
+green = "#567A42"   # Leaf green
+yellow = "#917534"  # Golden milk
+blue = "#516C96"    # Slate blue
+magenta = "#9B547D" # Rose
+cyan = "#437D74"    # Sage-teal
+white = "#8C7C5A"   # Dried skin tan
+
+[bright]
+black = "#72685D"   # Muted brown for dim hints
+red = "#874439"     # Deep cinnamon
+green = "#456335"   # Deep leaf
+yellow = "#715D24"  # Deep honey
+blue = "#41587D"    # Deep slate blue
+magenta = "#7E4467" # Deep rose
+cyan = "#366460"    # Deep sage-teal
+white = "#D3C198"   # Golden milk, a step off the background
+
+[ui]
+background = "#EBDDBD"   # Sun-dried turmeric skin
+foreground = "#3D332A"   # Dark rhizome skin
+cursor = "#93631A"       # Honey gold
+cursor_text = "#EBDDBD"  # Text under the cursor
+selection = "#CCA96640"  # Golden milk tint
+border = "#D4C7AA"       # Chrome separators
+tab_active = "#93631A"   # Honey gold
+tab_inactive = "#E3D5B6" # Tab strip
+search_match = "#D1A947" # Honey gold
+url = "#336B63"          # Sage-teal

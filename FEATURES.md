@@ -21,7 +21,7 @@ What Termeric supports today, and what is planned. Termeric runs on Linux only f
 | Fonts | Partial | Font choice, an ordered fallback list, per-range font overrides, and variable font weight. Variable font axes other than weight aren't used. |
 | Text sizing (Kitty's OSC 66) | Partial | How well larger text looks depends on the font. |
 | Right-to-left and bidirectional text | Planned | |
-| Themes | Supported | 26 built in (twelve named after roots, fourteen from the community) and your own theme files, which reload when you save them. |
+| Themes | Supported | 38 built in (twelve named after roots, each dark and light, and fourteen from the community) and your own theme files, which reload when you save them. |
 | Window opacity | Supported | Needs a compositor with transparency. |
 | Background images | Partial | A static local PNG or JPEG with fit and opacity, chosen in Settings with the desktop's file picker. Not tiling, animated images, remote URLs, or different images per tab or pane. |
 | Unicode character picker | Supported | Searches every character by name, and emoji by English name and keyword. |

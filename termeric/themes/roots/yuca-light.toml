@@ -1,0 +1,36 @@
+[meta]
+name = "Yuca Light"
+author = "Termeric"
+description = "Waxed cassava skin and bark-brown text with a coral inner bark"
+
+[primary]
+black = "#402F23"   # Dark bark
+red = "#9F4C4A"     # Red tinted toward pink-coral inner bark
+green = "#45763F"   # Deep tropical leaf green
+yellow = "#867045"  # Woody tan bark
+blue = "#496887"    # Blue tinted toward cool tropical shadow
+magenta = "#934F71" # Magenta tinted toward warm coral
+cyan = "#40766D"    # Cyan tinted toward tropical green
+white = "#797957"   # Woody tan
+
+[bright]
+black = "#785E50"   # Rough bark for dim hints
+red = "#7F3E3C"     # Deep red tinted toward coral
+green = "#395E33"   # Deep tropical leaf
+yellow = "#695732"  # Deep bark tan
+blue = "#3A546C"    # Deep blue tinted toward teal
+magenta = "#77405B" # Deep magenta tinted toward warm coral
+cyan = "#335E57"    # Deep cyan tinted toward mid tropical
+white = "#BBBBB4"   # Starchy white, a step off the background
+
+[ui]
+background = "#D5D5D3"   # Waxed cassava skin
+foreground = "#3D2B1E"   # Bark brown
+cursor = "#A24F36"       # Pink-coral inner bark
+cursor_text = "#D5D5D3"  # Text under the cursor
+selection = "#CCA76640"  # Woody tan tint
+border = "#C1BFBB"       # Chrome separators
+tab_active = "#A24F36"   # Pink-coral inner bark
+tab_inactive = "#CECDCA" # Tab strip
+search_match = "#5DD147" # Tropical green
+url = "#3D6631"          # Tropical leaf

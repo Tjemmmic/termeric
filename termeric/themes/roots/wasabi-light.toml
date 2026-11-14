@@ -1,0 +1,36 @@
+[meta]
+name = "Wasabi Light"
+author = "Termeric"
+description = "Rice white and slate, with fresh wasabi green"
+
+[primary]
+black = "#364245"   # Slate plate
+red = "#BC402C"     # Salmon red
+green = "#557A2B"   # Wasabi green
+yellow = "#9C7D25"  # Tamago yellow
+blue = "#3F6CA5"    # Soy-glaze blue
+magenta = "#AF4279" # Pickled-ginger pink
+cyan = "#377B79"    # Nori teal
+white = "#948462"   # Rice in shadow
+
+[bright]
+black = "#667378"   # Slate grey for dim hints
+red = "#993824"     # Deep salmon
+green = "#426520"   # Deep wasabi
+yellow = "#79641C"  # Deep tamago
+blue = "#2F5894"    # Deep glaze blue
+magenta = "#983064" # Deep gari pink
+cyan = "#276666"    # Deep nori teal
+white = "#D6CCB9"   # Rice, a step off the background
+
+[ui]
+background = "#EDE9E0"   # Rice white
+foreground = "#293337"   # Slate plate
+cursor = "#578022"       # Wasabi green
+cursor_text = "#EDE9E0"  # Text under the cursor
+selection = "#9CCC6640"  # Wasabi tint
+border = "#D4D1CA"       # Chrome separators
+tab_active = "#578022"   # Wasabi green
+tab_inactive = "#E4E0D9" # Tab strip
+search_match = "#D1AD47" # Tamago yellow
+url = "#4F7326"          # Wasabi green

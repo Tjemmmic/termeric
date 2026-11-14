@@ -4,6 +4,10 @@ Notable changes to Termeric, by release. The project follows [Keep a Changelog](
 
 ## [Unreleased]
 
+### Added
+
+- A light theme for every root theme, named after its dark partner with "Light" ("Turmeric Light").
+
 ### Fixed
 
 - On light themes, toasts, cards, and text fields no longer turn a muddy gray, and faint text and an unfocused window fade toward the background instead of growing darker.
