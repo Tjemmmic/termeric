@@ -1,23 +1,68 @@
 //! What a Termeric on macOS sets up with AppKit itself, beyond what winit
-//! does: the menu bar (`menu.rs`), the defaults a terminal needs, and each
-//! window's colour space.
+//! does: the menu bar (`menu.rs`), the defaults a terminal needs, each
+//! window's colour space, and the quick-access terminal's place on screen
+//! and hotkey (`hotkey.rs`).
 
+mod hotkey;
 mod menu;
 
 use super::AppEvent;
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2_app_kit::NSView;
+use objc2_app_kit::{NSScreen, NSView, NSWindowCollectionBehavior};
 use objc2_foundation::{NSDictionary, NSNumber, NSString, NSUserDefaults};
 use objc2_quartz_core::{CALayer, CAMetalLayer};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::event_loop::{ActiveEventLoop, EventLoopBuilder};
 
-/// Before the event loop is built: Termeric installs its own menu bar.
-pub(crate) fn configure_event_loop(builder: &mut EventLoopBuilder<AppEvent>) {
-    use winit::platform::macos::EventLoopBuilderExtMacOS;
+/// Before the event loop is built: Termeric installs its own menu bar. A
+/// quick-access process is an accessory app: no Dock icon of its own beside
+/// Termeric's, and its window may float over another app's full-screen
+/// space.
+pub(crate) fn configure_event_loop(builder: &mut EventLoopBuilder<AppEvent>, quick_access: bool) {
+    use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
     builder.with_default_menu(false);
+    if quick_access {
+        builder.with_activation_policy(ActivationPolicy::Accessory);
+    }
+}
+
+/// Listen for the quick-access hotkey for as long as the process runs.
+pub(super) fn register_quick_access_hotkey(hotkey: &crate::config::quick_access::Hotkey) {
+    match hotkey::register(hotkey) {
+        Ok(()) => log::info!("Listening for the quick-access hotkey"),
+        Err(error) => log::warn!("The quick-access hotkey is unavailable: {error}"),
+    }
+}
+
+/// A shown quick-access window is on every Space, including over a
+/// full-screen app, wherever the person is.
+pub(super) fn prepare_quick_access_window(window: &winit::window::Window) {
+    let Some(native) = native_view(window).and_then(|view| view.window()) else {
+        log::warn!("No AppKit window to place the quick-access terminal with");
+        return;
+    };
+    native.setCollectionBehavior(
+        NSWindowCollectionBehavior::CanJoinAllSpaces
+            | NSWindowCollectionBehavior::FullScreenAuxiliary,
+    );
+}
+
+/// How far below the top of the primary display windows may start, in
+/// physical pixels: the menu bar, and the notch's height where there is one.
+pub(super) fn primary_display_top_inset() -> u32 {
+    let Some(main_thread) = MainThreadMarker::new() else {
+        return 0;
+    };
+    let screens = NSScreen::screens(main_thread);
+    let Some(primary) = screens.firstObject() else {
+        return 0;
+    };
+    let (frame, visible) = (primary.frame(), primary.visibleFrame());
+    let inset_points =
+        (frame.origin.y + frame.size.height) - (visible.origin.y + visible.size.height);
+    (inset_points.max(0.0) * primary.backingScaleFactor()).round() as u32
 }
 
 /// Once the app has finished launching (the first `resumed`), before any

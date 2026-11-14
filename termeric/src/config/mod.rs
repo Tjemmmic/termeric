@@ -1,5 +1,6 @@
 //! Configuration management
 
+pub mod quick_access;
 pub mod save;
 pub mod theme;
 
@@ -81,6 +82,9 @@ pub struct Config {
     /// Harvest mode configuration
     #[serde(default)]
     pub harvest: HarvestConfig,
+    /// `[quick_access]`: how the quick-access terminal is reached.
+    #[serde(default)]
+    pub quick_access: quick_access::QuickAccessConfig,
 }
 
 /// Working directory selected for newly split panes.
@@ -476,6 +480,7 @@ impl Config {
             Some("commands"),
         )?;
         self.domains.validate()?;
+        self.quick_access.validate()?;
         crate::agents::config::validate(&self.agents)?;
         self.supervisor.validate()?;
         for (id, agent) in &self.agents {

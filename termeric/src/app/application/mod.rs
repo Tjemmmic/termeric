@@ -509,6 +509,33 @@ impl Application {
         }
     }
 
+    /// Whether this is a quick-access process (it opens that one window).
+    #[cfg(target_os = "macos")]
+    pub(crate) fn is_quick_access(&self) -> bool {
+        self.pending
+            .iter()
+            .chain(self.windows.values())
+            .any(|window| window.launch.quick_access)
+    }
+
+    /// Show the quick-access terminal if hidden, else hide it.
+    #[cfg(target_os = "macos")]
+    fn toggle_quick_access(&mut self, event_loop: &ActiveEventLoop) {
+        let Some((native_id, control_id, shown)) = self
+            .windows
+            .iter()
+            .find(|(_, window)| window.launch.quick_access && !window.should_exit)
+            .map(|(id, window)| (*id, window.control_window_id, window.window.is_some()))
+        else {
+            return;
+        };
+        if let Err(error) =
+            self.set_quick_access_visible(event_loop, native_id, control_id, !shown, None)
+        {
+            log::warn!("Could not toggle the quick-access terminal: {error}");
+        }
+    }
+
     /// Hold `held` until this process exits.
     pub(crate) fn hold_for_exit(&mut self, held: HeldForExit) {
         self.held_for_exit = held;
@@ -854,7 +881,17 @@ impl ApplicationHandler<AppEvent> for Application {
         if !self.system_accessibility_monitor_started {
             self.system_accessibility_monitor_started = true;
             #[cfg(target_os = "macos")]
-            super::macos::finish_launching(event_loop);
+            {
+                super::macos::finish_launching(event_loop);
+                if let Some(hotkey) = self
+                    .pending
+                    .iter()
+                    .find(|window| window.launch.quick_access)
+                    .and_then(|window| window.config.quick_access.macos_hotkey.clone())
+                {
+                    super::macos::register_quick_access_hotkey(&hotkey);
+                }
+            }
             if let Some(proxy) = super::EVENT_LOOP_PROXY.get().cloned() {
                 super::system_accessibility::start_monitor(proxy);
             }
@@ -907,6 +944,12 @@ impl ApplicationHandler<AppEvent> for Application {
                     window.redraw_scheduler.request(RedrawReason::Accessibility);
                     window.handle_accesskit_event(event);
                 }
+                self.remove_closed_windows(event_loop);
+                return;
+            }
+            #[cfg(target_os = "macos")]
+            AppEvent::QuickAccessHotkey => {
+                self.toggle_quick_access(event_loop);
                 self.remove_closed_windows(event_loop);
                 return;
             }

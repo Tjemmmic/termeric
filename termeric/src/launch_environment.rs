@@ -83,6 +83,43 @@ fn posix_locale(tag: &str) -> Option<String> {
     ))
 }
 
+/// The app bundle to start a quick-access terminal from, when this process
+/// was started by something other than launchd (the Shortcuts app, a
+/// script, a terminal) from inside one. Starting it through LaunchServices
+/// instead makes it an app of its own rather than that program's child, so
+/// it outlives the command, and macOS asks for permissions on Termeric's
+/// behalf rather than the caller's.
+pub(crate) fn quick_access_relaunch_bundle() -> Option<PathBuf> {
+    if started_by_launchd() {
+        return None;
+    }
+    let executable = crate::paths::executable().ok()?;
+    let macos = executable.parent()?;
+    let contents = macos.parent()?;
+    let bundle = contents.parent()?;
+    (macos.file_name()? == "MacOS"
+        && contents.file_name()? == "Contents"
+        && bundle.extension()? == "app")
+        .then(|| bundle.to_path_buf())
+}
+
+/// Start `bundle` anew through LaunchServices with this process's
+/// arguments, and wait only for `open` itself.
+pub(crate) fn relaunch_through_launch_services(bundle: &Path) -> anyhow::Result<()> {
+    use anyhow::Context;
+    let status = Command::new("/usr/bin/open")
+        .args(["-n", "-a"])
+        .arg(bundle)
+        .arg("--args")
+        .args(std::env::args_os().skip(1))
+        .status()
+        .context("start the quick-access terminal through open")?;
+    if !status.success() {
+        anyhow::bail!("open could not start {} ({status})", bundle.display());
+    }
+    Ok(())
+}
+
 /// Whether launchd started this process directly, as it does for the
 /// Finder, the Dock, and `open`, rather than a shell or another program.
 fn started_by_launchd() -> bool {

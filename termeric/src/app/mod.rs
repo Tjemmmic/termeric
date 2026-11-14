@@ -177,6 +177,9 @@ pub(crate) enum AppEvent {
     /// A menu-bar command, for the focused window (`macos/menu.rs`).
     #[cfg(target_os = "macos")]
     MenuCommand(Action),
+    /// The quick-access hotkey was pressed (`macos/hotkey.rs`).
+    #[cfg(target_os = "macos")]
+    QuickAccessHotkey,
     Pty,
     Git,
     Transcript,
@@ -346,6 +349,14 @@ impl From<accesskit_winit::Event> for AppEvent {
 }
 
 static EVENT_LOOP_PROXY: OnceLock<EventLoopProxy<AppEvent>> = OnceLock::new();
+
+/// Tell the event loop the quick-access hotkey was pressed.
+#[cfg(target_os = "macos")]
+fn post_quick_access_hotkey() {
+    if let Some(proxy) = EVENT_LOOP_PROXY.get() {
+        let _ = proxy.send_event(AppEvent::QuickAccessHotkey);
+    }
+}
 
 /// Hand a menu-bar command to the event loop, which runs it in the focused
 /// window.

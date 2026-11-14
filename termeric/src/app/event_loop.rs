@@ -78,7 +78,19 @@ impl App {
             })
             .flatten();
         let quick_geometry = quick_monitor.as_ref().map(|monitor| {
-            quick_access_geometry(monitor.position(), monitor.size(), self.launch.pixel_size)
+            #[cfg(target_os = "linux")]
+            let (position, size) = (monitor.position(), monitor.size());
+            // Below the menu bar (and the notch), where a borderless window
+            // at the very top would be hidden.
+            #[cfg(target_os = "macos")]
+            let (position, size) = {
+                let (mut position, mut size) = (monitor.position(), monitor.size());
+                let inset = super::macos::primary_display_top_inset();
+                position.y = position.y.saturating_add(i32::try_from(inset).unwrap_or(0));
+                size.height = size.height.saturating_sub(inset);
+                (position, size)
+            };
+            quick_access_geometry(position, size, self.launch.pixel_size)
         });
         let mut window_attrs = Window::default_attributes()
             .with_title(self.desired_native_window_title())
@@ -154,6 +166,10 @@ impl App {
 
         let window = Arc::new(event_loop.create_window(window_attrs)?);
         log::info!("Window created");
+        #[cfg(target_os = "macos")]
+        if self.launch.quick_access {
+            super::macos::prepare_quick_access_window(&window);
+        }
         // Winit leaves IME disabled by default.
         window.set_ime_allowed(true);
         self.accessibility_adapter = Some(accesskit_winit::Adapter::with_event_loop_proxy(

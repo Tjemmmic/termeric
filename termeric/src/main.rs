@@ -113,6 +113,11 @@ fn main() -> Result<std::process::ExitCode> {
                 println!("{output}");
                 return Ok(std::process::ExitCode::SUCCESS);
             }
+            #[cfg(target_os = "macos")]
+            if let Some(bundle) = launch_environment::quick_access_relaunch_bundle() {
+                launch_environment::relaunch_through_launch_services(&bundle)?;
+                return Ok(std::process::ExitCode::SUCCESS);
+            }
             quick_access_guard = Some(control::QuickAccessGuard::acquire()?);
             launch
         }
@@ -171,7 +176,7 @@ fn main() -> Result<std::process::ExitCode> {
     // Create event loop
     let mut event_loop = EventLoop::<app::AppEvent>::with_user_event();
     #[cfg(target_os = "macos")]
-    app::macos::configure_event_loop(&mut event_loop);
+    app::macos::configure_event_loop(&mut event_loop, app.is_quick_access());
     let event_loop = event_loop.build()?;
     let proxy = event_loop.create_proxy();
     app::install_event_loop_proxy(proxy.clone());
