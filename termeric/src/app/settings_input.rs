@@ -1,6 +1,7 @@
 //! Complete bounded Settings-filter events, separate from setting actions.
 
 use super::*;
+use crate::input::platform::System;
 use crate::ui::settings::SettingsKey;
 use crate::ui::text_input::TextInputEdit;
 use winit::keyboard::{Key, NamedKey};
@@ -43,10 +44,12 @@ impl App {
             Key::Named(NamedKey::Enter) => Some(SettingsKey::Enter),
             Key::Named(NamedKey::Tab) if self.modifiers.shift_key() => Some(SettingsKey::BackTab),
             Key::Named(NamedKey::Tab) => Some(SettingsKey::Tab),
-            Key::Character(c) if self.modifiers.control_key() => match c.as_str() {
-                "s" | "S" => Some(SettingsKey::Save),
-                _ => None,
-            },
+            Key::Character(c) if self.modifiers.contains(System::CURRENT.command()) => {
+                match c.as_str() {
+                    "s" | "S" => Some(SettingsKey::Save),
+                    _ => None,
+                }
+            }
             _ => None,
         };
 
@@ -107,7 +110,7 @@ impl App {
                 // Preserve the explicit Save action, but never interpret
                 // AltGraph-generated text as a Control shortcut.
                 if !self.alt_graph_active
-                    && self.modifiers == ModifiersState::CONTROL
+                    && self.modifiers == System::CURRENT.command()
                     && matches!(text.as_str(), "s" | "S")
                 {
                     return false;
@@ -169,7 +172,7 @@ mod tests {
                 assert!(app.handle_settings_filter_key(&Key::Named(NamedKey::Backspace)));
             }
         }
-        app.modifiers = ModifiersState::CONTROL;
+        app.modifiers = System::CURRENT.command();
         for text in ["s", "S"] {
             assert!(!app.handle_settings_filter_key(&Key::Character(text.into())));
         }

@@ -256,8 +256,7 @@ impl ShortcutsPanel {
                 && !meta.category.label().to_lowercase().contains(&filter)
                 && !registry
                     .binding_for(action)
-                    .map(|c| c.display_string().to_lowercase().contains(&filter))
-                    .unwrap_or(false)
+                    .is_some_and(|chord| chord.matches_filter(&filter))
             {
                 continue;
             }

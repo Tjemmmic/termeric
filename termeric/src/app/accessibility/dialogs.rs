@@ -149,7 +149,7 @@ impl App {
         confirm.set_description(format!(
             "Release all buffered input to the exact captured terminal destination or destination set; {reason_value}; {context_value}"
         ));
-        confirm.set_keyboard_shortcut("Ctrl+Enter");
+        confirm.set_keyboard_shortcut(crate::app::guardrail_input::guardrail_confirm_chord_label());
         confirm.set_bounds(bounds_rect(layout.confirm_button));
         if awaiting {
             confirm.add_action(Action::Click);

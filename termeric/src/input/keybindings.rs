@@ -5,6 +5,7 @@
 //! for dynamic bindings (SendText, RunCommand, PluginCommand).
 
 use crate::input::Action;
+use crate::input::platform::System;
 use crate::panes::PaneDir;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -312,25 +313,30 @@ impl KeyChord {
         ))
     }
 
-    /// Human-readable string for settings UI: "Ctrl+Shift+C"
+    /// The modifiers the chord holds.
+    pub fn modifiers(&self) -> ModifiersState {
+        let mut modifiers = ModifiersState::empty();
+        modifiers.set(ModifiersState::CONTROL, self.ctrl);
+        modifiers.set(ModifiersState::ALT, self.alt);
+        modifiers.set(ModifiersState::SHIFT, self.shift);
+        modifiers.set(ModifiersState::SUPER, self.super_key);
+        modifiers
+    }
+
+    /// The chord's label in this system's style: "Ctrl+Shift+C" on Linux,
+    /// "⇧⌘C" on macOS.
     pub fn display_string(&self) -> String {
-        let mut parts = Vec::new();
-        if self.ctrl {
-            parts.push("Ctrl");
-        }
-        if self.alt {
-            parts.push("Alt");
-        }
-        if self.shift {
-            parts.push("Shift");
-        }
-        if self.super_key {
-            parts.push("Super");
-        }
-        // Capitalize first letter of the key for display
-        let key_display = capitalize_key(&self.key);
-        parts.push(&key_display);
-        parts.join("+")
+        self.label_on(System::CURRENT)
+    }
+
+    /// The chord's label in `system`'s style.
+    pub fn label_on(&self, system: System) -> String {
+        system.chord_label(self.modifiers(), &self.key)
+    }
+
+    /// Whether the Shortcuts panel's `filter`, in lowercase, finds the chord.
+    pub fn matches_filter(&self, filter: &str) -> bool {
+        System::CURRENT.chord_matches_filter(self.modifiers(), &self.key, filter)
     }
 }
 
@@ -346,38 +352,6 @@ fn is_caseless_character(key: &str) -> bool {
     match (chars.next(), chars.next()) {
         (Some(character), None) => character.to_lowercase().eq(character.to_uppercase()),
         _ => false,
-    }
-}
-
-/// Capitalize a key name for display (e.g. "pageup" → "PageUp", "c" → "C")
-fn capitalize_key(key: &str) -> String {
-    match key {
-        "pageup" => "PageUp".to_string(),
-        "pagedown" => "PageDown".to_string(),
-        "escape" => "Esc".to_string(),
-        "backspace" => "Backspace".to_string(),
-        "delete" => "Delete".to_string(),
-        "insert" => "Insert".to_string(),
-        "enter" => "Enter".to_string(),
-        "space" => "Space".to_string(),
-        "tab" => "Tab".to_string(),
-        "home" => "Home".to_string(),
-        "end" => "End".to_string(),
-        "up" => "Up".to_string(),
-        "down" => "Down".to_string(),
-        "left" => "Left".to_string(),
-        "right" => "Right".to_string(),
-        k if k.starts_with('f') && k.len() <= 3 && k[1..].parse::<u8>().is_ok() => k.to_uppercase(),
-        k => {
-            let mut c = k.chars();
-            match c.next() {
-                None => String::new(),
-                Some(first) => {
-                    let upper: String = first.to_uppercase().collect();
-                    upper + c.as_str()
-                }
-            }
-        }
     }
 }
 
@@ -890,7 +864,7 @@ mod tests {
             Some(BindableAction::PrevTab)
         );
         assert_eq!(
-            KeyChord::new("?", true, false, true, false).display_string(),
+            KeyChord::new("?", true, false, true, false).label_on(System::Linux),
             "Ctrl+?"
         );
     }
@@ -1496,15 +1470,39 @@ mod tests {
     }
 
     #[test]
-    fn test_display_string() {
-        let chord = KeyChord::new("c", true, false, true, false);
-        assert_eq!(chord.display_string(), "Ctrl+Shift+C");
-
-        let chord2 = KeyChord::new("pageup", false, false, true, false);
-        assert_eq!(chord2.display_string(), "Shift+PageUp");
-
-        let chord3 = KeyChord::new("f1", false, false, false, false);
-        assert_eq!(chord3.display_string(), "F1");
+    fn chords_are_labelled_in_each_systems_style() {
+        for (chord, linux, mac) in [
+            (
+                KeyChord::new("c", true, false, true, false),
+                "Ctrl+Shift+C",
+                "⌃⇧C",
+            ),
+            (
+                KeyChord::new("C", false, false, true, true),
+                "Shift+Super+C",
+                "⇧⌘C",
+            ),
+            (
+                KeyChord::new("pageup", false, false, true, false),
+                "Shift+PageUp",
+                "⇧⇞",
+            ),
+            (KeyChord::new("f1", false, false, false, false), "F1", "F1"),
+            (
+                KeyChord::new("}", false, false, true, true),
+                "Super+}",
+                "⌘}",
+            ),
+            (
+                KeyChord::new("Left", false, true, false, true),
+                "Alt+Super+Left",
+                "⌥⌘←",
+            ),
+        ] {
+            assert_eq!(chord.label_on(System::Linux), linux);
+            assert_eq!(chord.label_on(System::Mac), mac);
+            assert_eq!(chord.display_string(), chord.label_on(System::CURRENT));
+        }
     }
 
     #[test]

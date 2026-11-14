@@ -6,6 +6,7 @@ mod actions;
 pub mod keybindings;
 mod keyboard;
 mod mouse;
+pub mod platform;
 mod terminal_protocol;
 
 pub use actions::Action;
