@@ -1,9 +1,11 @@
 //! The terminal bell and desktop notifications.
 //!
 //! The bell flashes the window and can play a sound. Notifications go to the
-//! desktop's notification service over D-Bus from one worker thread, which
+//! desktop's notification service from one worker thread per window, which
 //! also tracks the Kitty OSC 99 notifications a terminal may close, query,
-//! or ask to hear about.
+//! or ask to hear about. The service is the platform's, behind one backend
+//! trait: the freedesktop service over D-Bus on Linux (`freedesktop`), and
+//! the UserNotifications centre on macOS (`user_notifications`).
 //!
 //! The bell's sound is the platform's: Linux plays the freedesktop bell
 //! through a sound player (`audio_player`), and macOS plays the system alert
@@ -17,6 +19,8 @@ mod audio_player;
 mod freedesktop;
 mod icon;
 mod tracked;
+#[cfg(target_os = "macos")]
+mod user_notifications;
 
 #[cfg(target_os = "macos")]
 use alert_sound::BellSound;

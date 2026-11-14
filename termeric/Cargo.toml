@@ -149,6 +149,7 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
 objc2-user-notifications = { version = "0.3", default-features = false, features = [
     "std",
     "block2",
+    "UNError",
     "UNNotification",
     "UNNotificationAction",
     "UNNotificationAttachment",

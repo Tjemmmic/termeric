@@ -86,6 +86,9 @@ pub(super) enum TrackedCommand {
         desktop_id: u32,
         action_key: String,
     },
+    /// A failure the freedesktop signal listener ran into. The macOS centre
+    /// reports its failures through the calls that meet them.
+    #[cfg(target_os = "linux")]
     BackendFailure(String),
     Shutdown,
 }
@@ -552,6 +555,13 @@ impl TrackedNotifications {
         Self::new_with_backend(super::freedesktop::FreedesktopBackend::default())
     }
 
+    /// A worker in front of the macOS notification centre. Fails, before
+    /// anything touches the centre, outside Termeric.app.
+    #[cfg(target_os = "macos")]
+    pub(super) fn new() -> Result<Self, String> {
+        Self::new_with_backend(super::user_notifications::UserNotificationsBackend::new()?)
+    }
+
     /// A real worker whose notification service refuses every notification.
     #[cfg(test)]
     pub(super) fn failing_for_test(error: &str) -> Result<Self, String> {
@@ -725,6 +735,7 @@ fn tracked_worker<B: TrackedNotificationBackend>(
                 }
                 publish_operation(&completions, &mut last_failure, Vec::new());
             }
+            #[cfg(target_os = "linux")]
             Ok(TrackedCommand::BackendFailure(error)) => {
                 publish_operation(&completions, &mut last_failure, vec![error]);
             }
@@ -1503,6 +1514,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn signal_listener_failures_cross_the_bounded_worker_channel() {
         let tracked = TrackedNotifications::new_with_backend(FakeBackend::default()).unwrap();
