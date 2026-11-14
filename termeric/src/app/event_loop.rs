@@ -211,6 +211,10 @@ impl App {
             self.redraw_scheduler.request(reason);
         }
 
+        // `WindowEvent::Destroyed` is deliberately not handled: when macOS
+        // quits the app, winit closes every native window before the event
+        // loop's `exiting`, which is where windows are saved
+        // (`Application::exiting`); acting on it would end them unsaved.
         match event {
             WindowEvent::CloseRequested => {
                 log::info!("Close requested");

@@ -126,6 +126,7 @@ use crate::ui::text::plural;
 use crate::ui::unicode_picker::UnicodePicker;
 
 pub use application::Application;
+pub(crate) use application::HeldForExit;
 
 /// The Wayland app ID and X11 `WM_CLASS` of ordinary windows. Desktops match
 /// it to the installed desktop entry of the same name for the window's icon

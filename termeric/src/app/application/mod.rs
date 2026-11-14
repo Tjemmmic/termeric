@@ -70,6 +70,19 @@ pub struct Application {
     /// none; `None` on X11.
     #[cfg(target_os = "linux")]
     wayland_drop: Option<super::wayland_drop::WaylandDrop>,
+    /// What this process holds while it runs and gives back as it exits:
+    /// its control socket, which other `termeric` commands reach it by, and,
+    /// for a quick-access process, the lock that makes it the only one. Kept
+    /// here, not in `main`, because on macOS the process ends right after
+    /// [`ApplicationHandler::exiting`] without returning to `main`.
+    held_for_exit: HeldForExit,
+}
+
+/// See [`Application::held_for_exit`].
+#[derive(Default)]
+pub(crate) struct HeldForExit {
+    pub(crate) control_server: Option<crate::control::ControlServer>,
+    pub(crate) quick_access_guard: Option<crate::control::QuickAccessGuard>,
 }
 
 /// A tab released outside its window. On Wayland no window knows where the
@@ -429,6 +442,7 @@ impl Application {
             renderer_backend,
             #[cfg(target_os = "linux")]
             wayland_drop: None,
+            held_for_exit: HeldForExit::default(),
         })
     }
 
@@ -493,6 +507,11 @@ impl Application {
         if self.windows.is_empty() && self.pending.is_empty() && !errors.is_empty() {
             self.fatal_startup_error = Some(errors.join("\n"));
         }
+    }
+
+    /// Hold `held` until this process exits.
+    pub(crate) fn hold_for_exit(&mut self, held: HeldForExit) {
+        self.held_for_exit = held;
     }
 
     pub(crate) fn take_fatal_startup_error(&mut self) -> Option<String> {
@@ -1042,6 +1061,10 @@ impl ApplicationHandler<AppEvent> for Application {
         // An agent that keeps a conversation as soon as it opens is told to
         // forget one nothing was said in, which must not be cut short.
         crate::agent_view::session::wait_for_forgetting(std::time::Duration::from_secs(5));
+        // No window is left to answer for, so the socket goes (its endpoint
+        // files with it), and then the quick-access lock.
+        drop(self.held_for_exit.control_server.take());
+        drop(self.held_for_exit.quick_access_guard.take());
     }
 }
 

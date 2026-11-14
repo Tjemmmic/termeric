@@ -81,7 +81,7 @@ fn main() -> Result<std::process::ExitCode> {
         log::info!("Launch environment: {change}");
     }
 
-    let mut _quick_access_guard = None;
+    let mut quick_access_guard = None;
     // Recorded before anything can rebuild the executable, so a launch of a
     // newer build never joins this process; the environment is recorded
     // before anything in this process could change it.
@@ -113,7 +113,7 @@ fn main() -> Result<std::process::ExitCode> {
                 println!("{output}");
                 return Ok(std::process::ExitCode::SUCCESS);
             }
-            _quick_access_guard = Some(control::QuickAccessGuard::acquire()?);
+            quick_access_guard = Some(control::QuickAccessGuard::acquire()?);
             launch
         }
         cli::ParseOutcome::Control(command) => {
@@ -153,6 +153,15 @@ fn main() -> Result<std::process::ExitCode> {
     };
 
     log::info!("Starting Termeric terminal emulator");
+    if let Ok(executable) = paths::executable()
+        && paths::is_translocated(&executable)
+    {
+        log::warn!(
+            "macOS is running Termeric from a temporary copy ({}); move Termeric.app to \
+             Applications so agent hooks can name it",
+            executable.display()
+        );
+    }
 
     // Resolve configuration and validate every window/tab launch before winit
     // connects to a display server or creates native resources. CLI failures
@@ -163,13 +172,17 @@ fn main() -> Result<std::process::ExitCode> {
     let event_loop = EventLoop::<app::AppEvent>::with_user_event().build()?;
     let proxy = event_loop.create_proxy();
     app::install_event_loop_proxy(proxy.clone());
-    let _control_server = match control::ControlServer::start(proxy) {
+    let control_server = match control::ControlServer::start(proxy) {
         Ok(server) => Some(server),
         Err(error) => {
             log::warn!("Running-GUI control is unavailable: {error:#}");
             None
         }
     };
+    app.hold_for_exit(app::HeldForExit {
+        control_server,
+        quick_access_guard: quick_access_guard.take(),
+    });
 
     // Create and run the native windows.
     event_loop.run_app(&mut app)?;

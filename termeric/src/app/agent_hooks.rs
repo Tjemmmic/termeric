@@ -50,14 +50,23 @@ impl HookSetupSummary {
 }
 
 /// This Termeric's executable, as hooks and the supervisor's MCP server
-/// name it.
+/// name it. A translocated copy (see [`crate::paths::is_translocated`]) is
+/// refused: the hooks would name a path gone by the next launch.
 pub(super) fn termeric_executable() -> Result<PathBuf, String> {
-    crate::paths::executable().map_err(|error| {
+    let executable = crate::paths::executable().map_err(|error| {
         format!(
             "Could not locate the Termeric executable: {}",
             error.root_cause()
         )
-    })
+    })?;
+    if crate::paths::is_translocated(&executable) {
+        return Err(
+            "macOS is running Termeric from a temporary copy. Move Termeric to \
+             Applications and open it from there."
+                .to_owned(),
+        );
+    }
+    Ok(executable)
 }
 
 impl App {
