@@ -166,7 +166,10 @@ impl App {
             let start = self.context_picker.cwd().map(std::path::Path::to_path_buf);
             let opened = self.open_file_chooser(
                 super::file_chooser::FileChooserPurpose::ContextFiles { request_id },
-                move || crate::portal::choose_files("Choose files to send", start.as_deref()),
+                crate::file_chooser::FileRequest {
+                    title: "Choose files to send",
+                    pick: crate::file_chooser::Pick::Files { start },
+                },
             );
             if opened {
                 return;
@@ -190,13 +193,13 @@ impl App {
     pub(super) fn handle_context_files_chosen(
         &mut self,
         request_id: u64,
-        result: std::result::Result<crate::portal::FileChoice, String>,
+        result: std::result::Result<crate::file_chooser::FileChoice, String>,
     ) {
         match result {
-            Ok(crate::portal::FileChoice::Chosen(paths)) => {
+            Ok(crate::file_chooser::FileChoice::Chosen(paths)) => {
                 self.context_picker.use_chosen_files(request_id, &paths);
             }
-            Ok(crate::portal::FileChoice::Cancelled) => {}
+            Ok(crate::file_chooser::FileChoice::Cancelled) => {}
             Err(error) => {
                 log::info!("No file chooser ({error}); asking for paths instead");
                 self.context_picker

@@ -3,7 +3,7 @@
 
 use super::file_chooser::FileChooserPurpose;
 use super::*;
-use crate::portal::{FileChoice, FileFilter};
+use crate::file_chooser::{FileChoice, FileFilter, FileRequest, Pick};
 use crate::ui::dialog::{DialogBlock, DialogSpec, FieldSpec};
 
 /// What the chooser offers: the formats the background image decodes.
@@ -20,9 +20,13 @@ impl App {
     /// Open the desktop's file chooser for a background image, else ask for
     /// its path.
     pub(super) fn choose_background_image(&mut self) {
-        let opened = self.open_file_chooser(FileChooserPurpose::BackgroundImage, || {
-            crate::portal::choose_file("Choose a background image", &IMAGES)
-        });
+        let opened = self.open_file_chooser(
+            FileChooserPurpose::BackgroundImage,
+            FileRequest {
+                title: "Choose a background image",
+                pick: Pick::File(&IMAGES),
+            },
+        );
         if !opened {
             self.ask_background_image_path(String::new(), None);
         }

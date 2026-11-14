@@ -378,7 +378,7 @@ fn local_files(list: &[u8]) -> Result<Vec<PathBuf>, String> {
         .collect();
     let files: Vec<PathBuf> = uris
         .iter()
-        .filter_map(|uri| crate::portal::local_path(uri))
+        .filter_map(|uri| crate::file_chooser::local_path(uri))
         .collect();
     if !files.is_empty() {
         Ok(files)

@@ -224,7 +224,7 @@ pub(crate) enum WindowResult {
     /// The desktop's file chooser this window opened closed.
     FileChosen {
         purpose: file_chooser::FileChooserPurpose,
-        result: std::result::Result<crate::portal::FileChoice, String>,
+        result: std::result::Result<crate::file_chooser::FileChoice, String>,
     },
     LiveDomainTopology {
         domain_id: String,

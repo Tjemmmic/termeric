@@ -1361,7 +1361,7 @@ fn reloading_the_configuration_asks_only_when_it_would_discard_changes() {
 
 #[test]
 fn a_background_image_is_chosen_typed_or_removed_from_settings() {
-    use crate::portal::FileChoice;
+    use crate::file_chooser::FileChoice;
     let directory = tempfile::tempdir().unwrap();
     let image = directory.path().join("sky.png");
     std::fs::write(&image, b"").unwrap();

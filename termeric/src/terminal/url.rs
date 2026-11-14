@@ -83,6 +83,35 @@ const MACOS_RUNNABLE_EXTENSIONS: &[&str] = &[
     "workflow",
 ];
 
+/// The path of a `file:` URI for this machine (no host, or `localhost`),
+/// percent-decoded: the scheme matched without regard to case, as schemes
+/// are, and the short `file:/path` form (which `open` also accepts) included.
+/// This file is also built on its own by a test, so it decodes here rather
+/// than through the crate's file-chooser module.
+#[cfg(target_os = "macos")]
+fn local_file_uri_path(target: &str) -> Option<std::path::PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+    let rest = target
+        .get(..5)
+        .filter(|scheme| scheme.eq_ignore_ascii_case("file:"))
+        .map(|_| &target[5..])?;
+    let path = match rest.strip_prefix("//") {
+        Some(authority_and_path) => {
+            let (authority, path) = authority_and_path.split_at(authority_and_path.find('/')?);
+            if !(authority.is_empty() || authority.eq_ignore_ascii_case("localhost")) {
+                return None;
+            }
+            path
+        }
+        None => rest,
+    };
+    // The query and fragment are not part of the path.
+    let path = path.split(['?', '#']).next()?;
+    let bytes = termeric_core::uri::percent_decode(path.as_bytes())?;
+    (bytes.first() == Some(&b'/') && !bytes.contains(&0))
+        .then(|| std::path::PathBuf::from(std::ffi::OsString::from_vec(bytes)))
+}
+
 /// The local path `target` names, when opening it would run something
 /// rather than show it: a package or other directory with an extension
 /// (LaunchServices may launch it), an executable file, or a runnable kind of
@@ -111,43 +140,6 @@ fn macos_runnable_target(target: &str, directory: Option<&Path>) -> Option<std::
                 || (metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
         });
     runnable.then_some(path)
-}
-
-/// The path of a `file:` URI for this machine (no host, or `localhost`),
-/// percent-decoded.
-#[cfg(target_os = "macos")]
-fn local_file_uri_path(target: &str) -> Option<std::path::PathBuf> {
-    use std::os::unix::ffi::OsStringExt;
-    let (scheme, rest) = target.split_once(':')?;
-    if !scheme.eq_ignore_ascii_case("file") {
-        return None;
-    }
-    let path = match rest.strip_prefix("//") {
-        Some(authority_and_path) => {
-            let slash = authority_and_path.find('/')?;
-            let (authority, path) = authority_and_path.split_at(slash);
-            if !(authority.is_empty() || authority.eq_ignore_ascii_case("localhost")) {
-                return None;
-            }
-            path
-        }
-        None => rest,
-    };
-    // The query and fragment are not part of the path.
-    let path = path.split(['?', '#']).next()?;
-    let mut bytes = Vec::with_capacity(path.len());
-    let mut encoded = path.bytes();
-    while let Some(byte) = encoded.next() {
-        if byte == b'%' {
-            let high = (encoded.next()? as char).to_digit(16)?;
-            let low = (encoded.next()? as char).to_digit(16)?;
-            bytes.push(u8::try_from(high * 16 + low).ok()?);
-        } else {
-            bytes.push(byte);
-        }
-    }
-    (bytes.first() == Some(&b'/') && !bytes.contains(&0))
-        .then(|| std::path::PathBuf::from(std::ffi::OsString::from_vec(bytes)))
 }
 
 /// URL detector for terminal content
@@ -1308,6 +1300,14 @@ mod tests {
         assert_eq!(
             revealed("file:///x/Setup.PKG", None),
             Some("/x/Setup.PKG".into())
+        );
+        assert_eq!(
+            revealed("FILE:/x/run.command", None),
+            Some("/x/run.command".into())
+        );
+        assert_eq!(
+            revealed("file://localhost/x/a.app", None),
+            Some("/x/a.app".into())
         );
         for opened in [
             document.to_str().unwrap(),
