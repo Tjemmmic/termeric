@@ -67,20 +67,22 @@ pub(crate) fn runtime_directory() -> PathBuf {
     }
 }
 
-/// This user's runtime directory. On macOS: `termeric` in the user's own
-/// private directory under `/var/folders`, which every process of theirs
-/// finds whatever its environment (the Finder gives none of the shell's
-/// variables, and the supervisor's helper runs with almost none), and which
-/// the system never sweeps the way it sweeps `/tmp` and the temporary
-/// directory of files left untouched for days. `XDG_RUNTIME_DIR` is not
-/// consulted: a shell that sets it would disagree with the Finder about where
-/// the running Termeric is. `/tmp/termeric-{uid}` remains if the system
-/// can't say.
+/// This user's runtime directory. On macOS: `termeric` under
+/// `XDG_RUNTIME_DIR` when that is a private directory of theirs (it rarely is
+/// set there, but tests and the supervisor's helper name it), else in the
+/// user's own private directory under `/var/folders`. That one every process
+/// of theirs finds whatever its environment (the Finder gives none of a
+/// shell's variables), and the system never sweeps it the way it sweeps
+/// `/tmp` and the temporary directory of files left untouched for days.
+/// `/tmp/termeric-{uid}` remains if the system can't say.
 #[cfg(target_os = "macos")]
 pub(crate) fn runtime_directory() -> PathBuf {
     let uid = effective_uid();
-    darwin_user_directory()
-        .filter(|path| runtime_parent_is_safe(path, uid))
+    let safe = |path: &PathBuf| runtime_parent_is_safe(path, uid);
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(safe)
+        .or_else(|| darwin_user_directory().filter(safe))
         .map_or_else(
             || PathBuf::from(format!("/tmp/termeric-{uid}")),
             |base| base.join("termeric"),
@@ -501,6 +503,22 @@ mod tests {
     use super::*;
     use std::os::unix::fs::symlink;
     use std::time::Duration;
+
+    /// Where a Termeric started from the Finder keeps its sockets: the
+    /// user's own private directory, which the system makes on demand.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_darwin_user_directory_is_private_to_this_user() {
+        let directory = darwin_user_directory().expect("confstr(_CS_DARWIN_USER_DIR)");
+        assert!(
+            directory.starts_with("/var/folders") || directory.starts_with("/private/var/folders")
+        );
+        assert!(
+            runtime_parent_is_safe(&directory, effective_uid()),
+            "{}",
+            directory.display()
+        );
+    }
 
     #[test]
     fn runtime_directory_and_token_are_private_and_stable() {
