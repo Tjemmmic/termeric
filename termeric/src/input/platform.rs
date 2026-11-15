@@ -114,6 +114,16 @@ impl System {
         }
     }
 
+    /// The modifier a click opens the link under the pointer with, and
+    /// which turns the pointer into a hand over links: Ctrl on Linux, ⌘ on
+    /// macOS (where Ctrl-click is a secondary click).
+    pub const fn hyperlink(self) -> ModifiersState {
+        match self {
+            Self::Linux => ModifiersState::CONTROL,
+            Self::Mac => ModifiersState::SUPER,
+        }
+    }
+
     /// Whether ⌘ (Super) belongs to the system and Termeric alone, so that
     /// in a terminal's conventional key encoding a chord with it sends
     /// nothing: on macOS. Programs that ask for every modifier (the kitty
@@ -385,6 +395,12 @@ mod tests {
     fn the_command_modifier_is_ctrl_on_linux_and_command_on_macos() {
         assert_eq!(System::Linux.command(), CTRL);
         assert_eq!(System::Mac.command(), SUPER);
+    }
+
+    #[test]
+    fn links_open_with_ctrl_on_linux_and_command_on_macos() {
+        assert_eq!(System::Linux.hyperlink(), CTRL);
+        assert_eq!(System::Mac.hyperlink(), SUPER);
     }
 
     #[test]

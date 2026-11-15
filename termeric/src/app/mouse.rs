@@ -687,8 +687,9 @@ impl App {
 
         let grid_pos = self.focused_grid_position(position, metrics);
 
-        // Ctrl+Click opens links from the pane selected by this click.
-        if self.modifiers.control_key()
+        // A click with the link modifier (Ctrl, or ⌘ on macOS) opens links
+        // from the pane selected by this click.
+        if opens_links(self.modifiers)
             && let Some((url, directory)) = self.focused_hyperlink_open_context(grid_pos)
         {
             log::info!("Opening hyperlink: {}", url);
@@ -1301,13 +1302,13 @@ impl App {
         }
     }
 
-    /// Ctrl makes the pointer a hand over links, so pressing or releasing it
-    /// reshapes the pointer where it rests over a pane, through the same
-    /// check of what lies there as motion, so chrome over the pane keeps its
-    /// arrow. Over a divider or outside the panes the pointer belongs to
-    /// whatever drew it there.
+    /// The link modifier (Ctrl, or ⌘ on macOS) makes the pointer a hand over
+    /// links, so pressing or releasing it reshapes the pointer where it rests
+    /// over a pane, through the same check of what lies there as motion, so
+    /// chrome over the pane keeps its arrow. Over a divider or outside the
+    /// panes the pointer belongs to whatever drew it there.
     pub(super) fn refresh_pointer_after_modifiers(&self, previous: ModifiersState) {
-        if previous.control_key() == self.modifiers.control_key() {
+        if opens_links(previous) == opens_links(self.modifiers) {
             return;
         }
         let (Some(position), Some(_)) = (self.last_cursor_pos, &self.renderer) else {
@@ -1327,7 +1328,7 @@ impl App {
     }
 
     /// The pointer over the terminal area: an I-beam while selecting, a
-    /// hand over a link while Ctrl is held (Ctrl+click opens it), and
+    /// hand over a link while the link modifier is held (a click opens it), and
     /// otherwise the shape the program in the pane under it asked for.
     fn terminal_pointer_icon_at(
         &self,
@@ -1348,12 +1349,12 @@ impl App {
         let Some((identity, terminal, (col, row))) = hovered else {
             return terminal_pointer_icon(None, self.mouse_pressed, false);
         };
-        let ctrl_over_link = self.modifiers.control_key()
+        let opening_link = opens_links(self.modifiers)
             && self.hovered_link_at(identity, terminal, row, col).is_some();
         terminal_pointer_icon(
             Some(terminal.effective_pointer_shape()),
             self.mouse_pressed,
-            ctrl_over_link,
+            opening_link,
         )
     }
 
@@ -1823,19 +1824,25 @@ fn visible_link_at<'a>(
         .or_else(|| urls?.url_at(row, col).map(|url| url.url.as_str()))
 }
 
+/// Whether a click with `modifiers` held opens the link under the pointer:
+/// with the system's link modifier, Ctrl on Linux and ⌘ on macOS.
+fn opens_links(modifiers: ModifiersState) -> bool {
+    modifiers.contains(crate::input::platform::System::CURRENT.hyperlink())
+}
+
 /// The pointer over the terminal area given the program's shape for the
 /// pane under it (`None` when over no cell), whether a selection is being
-/// made, and whether Ctrl is held over a link.
+/// made, and whether the link modifier is held over a link.
 fn terminal_pointer_icon(
     program: Option<termeric_core::PointerShape>,
     selecting: bool,
-    ctrl_over_link: bool,
+    opening_link: bool,
 ) -> winit::window::CursorIcon {
     use winit::window::CursorIcon;
     match program {
         None => CursorIcon::Default,
         Some(_) if selecting => CursorIcon::Text,
-        Some(_) if ctrl_over_link => CursorIcon::Pointer,
+        Some(_) if opening_link => CursorIcon::Pointer,
         Some(shape) => native_pointer_icon(shape),
     }
 }
@@ -2739,7 +2746,7 @@ mod tests {
                 app.terminal_pointer_icon_at(link, TEST_METRICS),
                 CursorIcon::Text
             );
-            app.modifiers = ModifiersState::CONTROL;
+            app.modifiers = crate::input::platform::System::CURRENT.hyperlink();
             assert_eq!(
                 app.terminal_pointer_icon_at(link, TEST_METRICS),
                 CursorIcon::Pointer,
