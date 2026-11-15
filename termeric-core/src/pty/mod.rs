@@ -994,7 +994,9 @@ mod tests {
         let (mut handle, reader) = pty.take_reader();
         let rx = spawn_reader_thread(reader);
         let mut output = String::new();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        // Starting the interpreter can take seconds: macOS's /usr/bin/python3
+        // goes through xcrun first, and the suite runs tests in parallel.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         while !output.contains("startup=(27, 83, 913, 513)") && std::time::Instant::now() < deadline
         {
             match rx.recv_timeout(std::time::Duration::from_millis(20)) {
