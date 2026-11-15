@@ -71,7 +71,10 @@ const MACOS_RUNNABLE_EXTENSIONS: &[&str] = &[
     "mobileconfig",
     "mpkg",
     "pkg",
+    "osax",
     "prefpane",
+    "py",
+    "pyw",
     "qlgenerator",
     "saver",
     "scpt",
@@ -127,17 +130,22 @@ fn macos_runnable_target(target: &str, directory: Option<&Path>) -> Option<std::
     } else {
         local_file_uri_path(target)?
     };
-    let extension = path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(str::to_ascii_lowercase);
-    let runnable_kind = extension
-        .as_deref()
-        .is_some_and(|extension| MACOS_RUNNABLE_EXTENSIONS.contains(&extension));
-    let runnable = runnable_kind
-        || std::fs::metadata(&path).is_ok_and(|metadata| {
-            (metadata.is_dir() && extension.is_some())
-                || (metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+    // `open` follows links, so what counts is where the path leads: a link
+    // named `notes` can lead to an app.
+    let resolved = std::fs::canonicalize(&path).ok();
+    let runnable_name = |path: &Path| {
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase)
+            .is_some_and(|extension| MACOS_RUNNABLE_EXTENSIONS.contains(&extension.as_str()))
+    };
+    let runnable = runnable_name(&path)
+        || resolved.as_deref().is_some_and(|resolved| {
+            runnable_name(resolved)
+                || std::fs::metadata(resolved).is_ok_and(|metadata| {
+                    (metadata.is_dir() && resolved.extension().is_some())
+                        || (metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+                })
         });
     runnable.then_some(path)
 }
@@ -328,6 +336,19 @@ impl UrlDetector {
         } else {
             None
         };
+        // `open` may resolve a `file:` link for another computer to a path on
+        // this one; nothing of another computer is opened from here.
+        #[cfg(target_os = "macos")]
+        if url
+            .get(..5)
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"))
+            && local_file_uri_path(url).is_none()
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "a file link for another computer can't be opened here",
+            ));
+        }
         let mut command = std::process::Command::new(OPENER);
         #[cfg(target_os = "linux")]
         command.arg(url);
@@ -1309,11 +1330,17 @@ mod tests {
             revealed("file://localhost/x/a.app", None),
             Some("/x/a.app".into())
         );
+        // A link is judged by what it leads to.
+        let disguised = root.join("notes");
+        std::os::unix::fs::symlink(&bundle, &disguised).unwrap();
+        assert_eq!(
+            revealed(disguised.to_str().unwrap(), None),
+            Some(disguised.clone().into())
+        );
         for opened in [
             document.to_str().unwrap(),
             folder.to_str().unwrap(),
             "https://example.test/run.command",
-            "file://remote.example/x/run.command",
         ] {
             assert_eq!(revealed(opened, None), None, "{opened}");
         }
@@ -1340,6 +1367,21 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_refuses_file_links_for_other_computers() {
+        for target in [
+            "file://remote.example/home/user/Downloads",
+            "FILE://Remote.Example/share/file.txt",
+            "file://remote.example",
+        ] {
+            let error = UrlDetector::opener_command(target, None).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput, "{target}");
+        }
+        assert!(UrlDetector::opener_command("file://localhost/tmp/file.txt", None).is_ok());
+    }
+
+    #[cfg(target_os = "linux")]
     #[test]
     fn opener_preserves_file_uri_authorities() {
         for target in [
