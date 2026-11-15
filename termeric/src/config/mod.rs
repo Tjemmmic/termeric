@@ -166,6 +166,65 @@ impl XtermKeyboardTypeConfig {
 pub struct KeyboardConfig {
     /// `normal`, `legacy`, or `vt220`.
     pub xterm_type: XtermKeyboardTypeConfig,
+    /// Which Option keys are Alt (Meta) on macOS rather than composing
+    /// characters: `none`, `left`, `right`, or `both`. Other systems have no
+    /// Option key and ignore it.
+    pub macos_option_as_alt: MacosOptionAsAlt,
+}
+
+/// The Option keys macOS treats as Alt, which sends Escape before the key
+/// to the terminal, instead of letting them compose characters such as `é`
+/// and `@`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MacosOptionAsAlt {
+    /// Both Option keys compose characters, as everywhere else on a Mac.
+    #[default]
+    None,
+    Left,
+    Right,
+    Both,
+}
+
+impl MacosOptionAsAlt {
+    /// Every value, in the order Settings offers them.
+    #[cfg(target_os = "macos")]
+    pub const ALL: &[Self] = &[Self::None, Self::Left, Self::Right, Self::Both];
+
+    /// The value's name in Settings.
+    #[cfg(target_os = "macos")]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "Neither",
+            Self::Left => "Left Option",
+            Self::Right => "Right Option",
+            Self::Both => "Both Options",
+        }
+    }
+
+    /// Whether a held Option is Alt for a key pressed while the left and
+    /// right Option keys are held as given, as winit decides it: when one of
+    /// the configured Option keys is held, and always with both configured.
+    pub fn covers(self, left_held: bool, right_held: bool) -> bool {
+        match self {
+            Self::None => false,
+            Self::Left => left_held,
+            Self::Right => right_held,
+            Self::Both => true,
+        }
+    }
+
+    /// The setting as winit applies it to a window.
+    #[cfg(target_os = "macos")]
+    pub fn native(self) -> winit::platform::macos::OptionAsAlt {
+        use winit::platform::macos::OptionAsAlt;
+        match self {
+            Self::None => OptionAsAlt::None,
+            Self::Left => OptionAsAlt::OnlyLeft,
+            Self::Right => OptionAsAlt::OnlyRight,
+            Self::Both => OptionAsAlt::Both,
+        }
+    }
 }
 
 /// Renderer adapter selection policy.
@@ -1817,6 +1876,57 @@ mod tests {
             assert!(holds(&decoded), "{source} after a round trip");
         }
         assert!(toml::from_str::<Config>("[keyboard]\nxterm_type = \"sun\"").is_err());
+    }
+
+    #[test]
+    fn the_option_key_setting_parses_its_four_values_and_nothing_else() {
+        assert_eq!(
+            Config::default().keyboard.macos_option_as_alt,
+            MacosOptionAsAlt::None
+        );
+        for (source, value) in [
+            ("none", MacosOptionAsAlt::None),
+            ("left", MacosOptionAsAlt::Left),
+            ("right", MacosOptionAsAlt::Right),
+            ("both", MacosOptionAsAlt::Both),
+        ] {
+            let config: Config =
+                toml::from_str(&format!("[keyboard]\nmacos_option_as_alt = \"{source}\"")).unwrap();
+            assert_eq!(config.keyboard.macos_option_as_alt, value);
+            let decoded: Config = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+            assert_eq!(decoded.keyboard.macos_option_as_alt, value);
+        }
+        for invalid in ["\"Left\"", "\"only_left\"", "true", "1"] {
+            assert!(
+                toml::from_str::<Config>(&format!("[keyboard]\nmacos_option_as_alt = {invalid}"))
+                    .is_err(),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_option_key_is_alt_only_where_it_is_configured() {
+        use MacosOptionAsAlt::{Both, Left, None, Right};
+        for (setting, left, right, alt) in [
+            (None, true, true, false),
+            (Left, true, false, true),
+            (Left, false, true, false),
+            (Left, true, true, true),
+            (Right, true, false, false),
+            (Right, false, true, true),
+            (Both, true, false, true),
+            (Both, false, true, true),
+            // winit treats Option as Alt with both configured even when it
+            // could not tell which was held.
+            (Both, false, false, true),
+        ] {
+            assert_eq!(
+                setting.covers(left, right),
+                alt,
+                "{setting:?} {left} {right}"
+            );
+        }
     }
 
     #[test]

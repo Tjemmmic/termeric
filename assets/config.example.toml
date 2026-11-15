@@ -105,6 +105,10 @@ cwd = "focused"
 
 [keyboard]
 xterm_type = "normal"     # normal, legacy, vt220; programs can switch it
+# macOS: the Option keys that are Alt (Meta), sending Escape before the key,
+# instead of typing characters such as é and @: none, left, right, both.
+# Arrows and Backspace keep Alt either way, so Option+Left moves by word.
+macos_option_as_alt = "none"
 
 [copy_mode]
 bindings = "vi"           # keys in copy mode (Ctrl+Shift+X, macOS ⇧⌘X): vi, emacs

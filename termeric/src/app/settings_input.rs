@@ -24,7 +24,7 @@ impl App {
     pub(super) fn handle_settings_panel_key(&mut self, key: &Key) {
         // The same shortcut opens and closes Settings. Check it
         // before treating character keys as filter input.
-        if self.shortcut_registry.check(key, self.modifiers)
+        if self.pressed_shortcut(key)
             == Some(crate::input::keybindings::BindableAction::ToggleSettings)
         {
             self.toggle_settings_surface();

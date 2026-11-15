@@ -427,12 +427,16 @@ impl App {
             return true;
         }
         let pending_g = self.copy_mode.take_pending_g();
-        match copy_mode_command(
-            key,
-            self.modifiers,
-            self.alt_graph_active,
-            self.config.copy_mode.bindings,
-        ) {
+        let bindings = self.config.copy_mode.bindings;
+        // Emacs Alt chords match by the key they name, even where Option
+        // composes a character on it (macOS); typed vi keys match by the
+        // character typed.
+        let (chord_key, chord_modifiers) = self.chord_view(key);
+        let command =
+            copy_mode_command(chord_key, chord_modifiers, self.alt_graph_active, bindings).or_else(
+                || copy_mode_command(key, self.modifiers, self.alt_graph_active, bindings),
+            );
+        match command {
             Some(command) => self.run_copy_mode_command(command, pending_g),
             None => self.run_copy_mode_shortcut(key),
         }
@@ -483,7 +487,7 @@ impl App {
     /// never types into the terminal. A shortcut that moved to another tab or
     /// pane leaves copy mode through the usual target check.
     fn run_copy_mode_shortcut(&mut self, key: &Key) {
-        if self.shortcut_registry.check(key, self.modifiers) == Some(BindableAction::Paste) {
+        if self.pressed_shortcut(key) == Some(BindableAction::Paste) {
             return;
         }
         if self.run_app_shortcut(key) {

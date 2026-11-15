@@ -23,8 +23,10 @@ impl App {
                     Key::Named(
                         NamedKey::Control | NamedKey::Shift | NamedKey::Alt | NamedKey::Super,
                     ) => None,
-                    _ => KeyChord::from_key_event(key, self.modifiers)
-                        .map(ShortcutsKey::RecordedChord),
+                    _ => {
+                        let (key, modifiers) = self.chord_view(key);
+                        KeyChord::from_key_event(key, modifiers).map(ShortcutsKey::RecordedChord)
+                    }
                 },
             };
             if let Some(key) = shortcuts_key {

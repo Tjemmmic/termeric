@@ -157,6 +157,10 @@ impl App {
         {
             self.activation_token = None;
             window_attrs = window_attrs.with_transparent(true);
+            window_attrs = winit::platform::macos::WindowAttributesExtMacOS::with_option_as_alt(
+                window_attrs,
+                self.config.keyboard.macos_option_as_alt.native(),
+            );
         }
 
         // Load and set window icon if available
@@ -265,6 +269,7 @@ impl App {
             }
 
             WindowEvent::ModifiersChanged(modifiers) => {
+                self.held_modifiers = modifiers;
                 let previous = std::mem::replace(&mut self.modifiers, modifiers.state());
                 self.refresh_pointer_after_modifiers(previous);
             }
@@ -362,10 +367,66 @@ impl App {
 }
 
 impl App {
+    /// One key press or release, read as the system reads it (an Option key
+    /// that composed text types it without Alt, while chords still see Alt
+    /// with the physical key; see `System::read_key_press`), then handled.
+    fn handle_keyboard_event(&mut self, event: winit::event::KeyEvent) {
+        use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
+        let held = self.modifiers;
+        let press = crate::input::platform::System::CURRENT.read_key_press(
+            held,
+            self.option_is_alt(),
+            &event.logical_key,
+            event.text.as_deref(),
+            || event.key_without_modifiers(),
+        );
+        self.modifiers = press.typing_modifiers;
+        self.option_chord_key = press.chord_key;
+        self.dispatch_keyboard_event(event);
+        self.modifiers = held;
+        self.option_chord_key = None;
+    }
+
+    /// Whether the Option key held now is Alt, as `[keyboard]
+    /// macos_option_as_alt` configures it.
+    fn option_is_alt(&self) -> bool {
+        use winit::keyboard::ModifiersKeyState::Pressed;
+        self.config.keyboard.macos_option_as_alt.covers(
+            self.held_modifiers.lalt_state() == Pressed,
+            self.held_modifiers.ralt_state() == Pressed,
+        )
+    }
+
+    /// The key and modifiers a chord check reads for `key`, the key being
+    /// pressed: its physical key with Alt when its Option key composed
+    /// (macOS), so Termeric's Alt chords match the keys they name, and
+    /// otherwise the key with the modifiers in effect.
+    pub(super) fn chord_view<'a>(
+        &'a self,
+        key: &'a winit::keyboard::Key,
+    ) -> (&'a winit::keyboard::Key, winit::keyboard::ModifiersState) {
+        match &self.option_chord_key {
+            Some(physical) => (
+                physical,
+                self.modifiers | winit::keyboard::ModifiersState::ALT,
+            ),
+            None => (key, self.modifiers),
+        }
+    }
+
+    /// The application shortcut the key being pressed is bound to.
+    pub(super) fn pressed_shortcut(
+        &self,
+        key: &winit::keyboard::Key,
+    ) -> Option<crate::input::keybindings::BindableAction> {
+        let (key, modifiers) = self.chord_view(key);
+        self.shortcut_registry.check(key, modifiers)
+    }
+
     /// One key press or release, offered to each input owner in priority
     /// order: the top modal layer, tab rename, the agent view, search and copy
     /// mode, then application shortcuts and finally the focused terminal.
-    fn handle_keyboard_event(&mut self, event: winit::event::KeyEvent) {
+    fn dispatch_keyboard_event(&mut self, event: winit::event::KeyEvent) {
         if matches!(
             event.logical_key,
             winit::keyboard::Key::Named(winit::keyboard::NamedKey::AltGraph)
@@ -399,12 +460,15 @@ impl App {
         // composer edits with.
         if self.agent_view_has_keyboard() {
             if event.state == winit::event::ElementState::Pressed
-                && (super::agent_view_input::composer_chord(
-                    &event.logical_key,
-                    self.modifiers,
-                    self.alt_graph_active,
-                    crate::input::platform::System::CURRENT,
-                ) || !self.run_app_shortcut(&event.logical_key))
+                && ({
+                    let (key, modifiers) = self.chord_view(&event.logical_key);
+                    super::agent_view_input::composer_chord(
+                        key,
+                        modifiers,
+                        self.alt_graph_active,
+                        crate::input::platform::System::CURRENT,
+                    )
+                } || !self.run_app_shortcut(&event.logical_key))
             {
                 self.handle_agent_view_key(&event.logical_key, event.text.as_deref());
             }
@@ -514,7 +578,8 @@ impl App {
         if self.run_app_shortcut(key) {
             return true;
         }
-        let Some(key_action) = self.keybinding_manager.check(key, self.modifiers).cloned() else {
+        let (key, modifiers) = self.chord_view(key);
+        let Some(key_action) = self.keybinding_manager.check(key, modifiers).cloned() else {
             return false;
         };
         self.handle_key_action(key_action);
@@ -530,8 +595,7 @@ impl App {
     /// keybindings never run there: they type into, or run commands in, the
     /// terminal the surface is covering.
     pub(super) fn run_app_shortcut(&mut self, key: &winit::keyboard::Key) -> bool {
-        self.shortcut_registry
-            .check(key, self.modifiers)
+        self.pressed_shortcut(key)
             .is_some_and(|bindable| self.handle_action(bindable.to_action()))
     }
 
@@ -1030,5 +1094,74 @@ mod wheel_tests {
         app.dialog_layout();
         app.handle_mouse_wheel(MouseScrollDelta::LineDelta(0.0, -3.0));
         assert!(app.dialog.scroll_offset() > 0.0);
+    }
+}
+
+#[cfg(test)]
+mod option_key_tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::input::keybindings::{BindableAction, KeyChord};
+    use winit::keyboard::{Key, ModifiersState};
+
+    fn with_a_terminal() -> App {
+        App::new_headless_with_tabs(Config {
+            shell: crate::test_support::sleeping_shell(),
+            ..Config::default()
+        })
+    }
+
+    /// Reads a press as macOS reads ⌥W where Option composes "∑": typing
+    /// sees no Alt, chords see Alt on W.
+    fn compose_option_w(app: &mut App) -> Key {
+        app.modifiers = ModifiersState::empty();
+        app.option_chord_key = Some(Key::Character("w".into()));
+        Key::Character("∑".into())
+    }
+
+    #[test]
+    fn an_option_that_composed_still_runs_the_alt_chord_on_its_key() {
+        let mut app = with_a_terminal();
+        let alt_w = KeyChord::new("w", false, true, false, false);
+        app.shortcut_registry
+            .set_binding(BindableAction::ToggleSearch, Some(alt_w));
+        let composed = compose_option_w(&mut app);
+        assert_eq!(
+            app.pressed_shortcut(&composed),
+            Some(BindableAction::ToggleSearch)
+        );
+        assert_eq!(
+            app.chord_view(&composed),
+            (&Key::Character("w".into()), ModifiersState::ALT)
+        );
+        // The find box it opened takes the composed character as typed.
+        assert!(app.run_app_shortcut(&composed));
+        assert!(app.search.is_active());
+        app.option_chord_key = None;
+        assert!(app.handle_search_key(&composed));
+        assert_eq!(app.search.query(), "∑");
+
+        // A press read as reported has no other key to offer.
+        assert_eq!(app.pressed_shortcut(&composed), None);
+        assert_eq!(
+            app.chord_view(&composed),
+            (&composed, ModifiersState::empty())
+        );
+    }
+
+    #[test]
+    fn the_find_box_alt_chords_match_their_keys_where_option_composes() {
+        let mut app = with_a_terminal();
+        app.option_chord_key = None;
+        assert!(app.handle_action(crate::input::Action::ToggleSearch));
+        assert!(app.search.is_active());
+        // ⌥F composes "ƒ" on a US Mac layout: it toggles the filter rather
+        // than typing.
+        app.modifiers = ModifiersState::empty();
+        app.option_chord_key = Some(Key::Character("f".into()));
+        let filtering = app.search.is_filter_mode();
+        assert!(app.handle_search_key(&Key::Character("ƒ".into())));
+        assert_eq!(app.search.query(), "");
+        assert_ne!(app.search.is_filter_mode(), filtering);
     }
 }

@@ -461,6 +461,11 @@ impl App {
                     .level
                     .native_for_window(self.launch.quick_access),
             );
+            #[cfg(target_os = "macos")]
+            {
+                use winit::platform::macos::WindowExtMacOS;
+                window.set_option_as_alt(self.config.keyboard.macos_option_as_alt.native());
+            }
         }
         self.cursor_blink_half_period = cursor_blink_half_period(&self.config.cursor);
         self.reset_cursor_blink();
@@ -831,6 +836,10 @@ impl App {
             SettingsAction::SetWindowLevel(level) => config.window.level = level,
             SettingsAction::SetTabBarPosition(position) => {
                 config.window.tab_bar_position = position;
+            }
+            #[cfg(target_os = "macos")]
+            SettingsAction::SetMacosOptionAsAlt(option_as_alt) => {
+                config.keyboard.macos_option_as_alt = option_as_alt;
             }
             SettingsAction::SetCursorStyle(style) => config.cursor.style = style,
             SettingsAction::SetCursorBlink(enabled) => config.cursor.blink = enabled,

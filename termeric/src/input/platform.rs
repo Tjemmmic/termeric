@@ -6,7 +6,7 @@
 //! target itself, and code that decides with a rule takes the `System` it
 //! follows, so each system's tests also check the other's conventions.
 
-use winit::keyboard::ModifiersState;
+use winit::keyboard::{Key, ModifiersState};
 
 /// A system whose conventions Termeric follows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,6 +114,51 @@ impl System {
         }
     }
 
+    /// How a key press with `modifiers` held is read, given whether the
+    /// held Option key is Alt (`[keyboard] macos_option_as_alt`), the key and
+    /// text winit reported, and the key without any modifier.
+    ///
+    /// On macOS an Option key that isn't Alt composes characters (⌥2 types
+    /// `™`, ⌥L `@` on a German layout) unless Ctrl or ⌘ is held too, and winit
+    /// reports the composed character as the key. Such a press is read two
+    /// ways: chords match its physical key with Alt, so Termeric's own Alt
+    /// chords work wherever Option composes, and when it typed text that
+    /// isn't a control character, fields and the terminal receive that text
+    /// without Alt, rather than Escape and the text. Named keys such as the
+    /// arrows and Backspace keep Alt, so ⌥← still moves by word. Linux reads
+    /// every press as reported.
+    pub fn read_key_press(
+        self,
+        modifiers: ModifiersState,
+        option_is_alt: bool,
+        logical: &Key,
+        text: Option<&str>,
+        key_without_modifiers: impl FnOnce() -> Key,
+    ) -> KeyPress {
+        let as_reported = KeyPress {
+            typing_modifiers: modifiers,
+            chord_key: None,
+        };
+        let option_composes = self == Self::Mac
+            && modifiers.alt_key()
+            && !option_is_alt
+            && !modifiers.intersects(ModifiersState::CONTROL | ModifiersState::SUPER)
+            && !matches!(logical, Key::Named(_));
+        if !option_composes {
+            return as_reported;
+        }
+        let typed =
+            text.is_some_and(|text| !text.is_empty() && !text.chars().all(char::is_control));
+        KeyPress {
+            typing_modifiers: if typed {
+                modifiers.difference(ModifiersState::ALT)
+            } else {
+                modifiers
+            },
+            chord_key: Some(key_without_modifiers()),
+        }
+    }
+
     /// The label of a chord of `modifiers` and the key named `key` (a
     /// lowercase key name such as `"t"`, `"pageup"`, or `"f1"`): "Ctrl+Shift+T"
     /// on Linux, and "⇧⌘T" on macOS, whose glyphs follow Apple's order
@@ -199,6 +244,17 @@ impl System {
     }
 }
 
+/// How Termeric reads one key press; see [`System::read_key_press`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeyPress {
+    /// The modifiers typing reads: without Alt when Option composed the
+    /// text the key types.
+    pub typing_modifiers: ModifiersState,
+    /// When Option composed the key, its physical key, which chords read
+    /// with Alt held.
+    pub chord_key: Option<Key>,
+}
+
 /// How far an editing key reaches in a text field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Reach {
@@ -272,6 +328,7 @@ impl Modifier {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use winit::keyboard::NamedKey;
 
     const CTRL: ModifiersState = ModifiersState::CONTROL;
     const ALT: ModifiersState = ModifiersState::ALT;
@@ -356,6 +413,96 @@ mod tests {
         assert_eq!(System::Mac.edit_command("y", SUPER), None);
         assert_eq!(System::Mac.edit_command("c", CTRL), None);
         assert!(!System::Linux.is_exact_edit_command("y", CTRL | SHIFT));
+    }
+
+    fn press(
+        system: System,
+        modifiers: ModifiersState,
+        option_is_alt: bool,
+        logical: Key,
+        text: Option<&str>,
+    ) -> KeyPress {
+        system.read_key_press(modifiers, option_is_alt, &logical, text, || {
+            Key::Character("w".into())
+        })
+    }
+
+    #[test]
+    fn an_option_that_composes_types_its_text_and_still_matches_alt_chords() {
+        let composed = Key::Character("∑".into());
+        assert_eq!(
+            press(System::Mac, ALT, false, composed.clone(), Some("∑")),
+            KeyPress {
+                typing_modifiers: ModifiersState::empty(),
+                chord_key: Some(Key::Character("w".into())),
+            }
+        );
+        // Shift stays with the text.
+        assert_eq!(
+            press(System::Mac, ALT | SHIFT, false, composed.clone(), Some("„")).typing_modifiers,
+            SHIFT
+        );
+        // A dead key types nothing yet, so Alt stays; chords still see the
+        // physical key.
+        let dead = press(System::Mac, ALT, false, Key::Dead(Some('´')), None);
+        assert_eq!(dead.typing_modifiers, ALT);
+        assert_eq!(dead.chord_key, Some(Key::Character("w".into())));
+    }
+
+    #[test]
+    fn option_is_alt_where_configured_with_ctrl_or_command_and_on_named_keys() {
+        let composed = Key::Character("∑".into());
+        let as_reported = |modifiers| KeyPress {
+            typing_modifiers: modifiers,
+            chord_key: None,
+        };
+        // Configured as Alt: the key is read as reported (winit already
+        // reports the unmodified character).
+        assert_eq!(
+            press(
+                System::Mac,
+                ALT,
+                true,
+                Key::Character("w".into()),
+                Some("w")
+            ),
+            as_reported(ALT)
+        );
+        // With ⌘ or Ctrl, winit reports the key without Option's character.
+        for modifiers in [ALT | SUPER, ALT | CTRL] {
+            assert_eq!(
+                press(
+                    System::Mac,
+                    modifiers,
+                    false,
+                    Key::Character("w".into()),
+                    Some("w")
+                ),
+                as_reported(modifiers)
+            );
+        }
+        // ⌥← and ⌥⌫ keep Alt, so fields and shells move by word.
+        for named in [NamedKey::ArrowLeft, NamedKey::Backspace] {
+            assert_eq!(
+                press(System::Mac, ALT, false, Key::Named(named), Some("\u{8}")),
+                as_reported(ALT)
+            );
+        }
+        // Linux has no Option key: Alt is always Alt.
+        assert_eq!(
+            press(System::Linux, ALT, false, composed, Some("∑")),
+            as_reported(ALT)
+        );
+        assert_eq!(
+            press(
+                System::Mac,
+                SHIFT,
+                false,
+                Key::Character("W".into()),
+                Some("W")
+            ),
+            as_reported(SHIFT)
+        );
     }
 
     #[test]

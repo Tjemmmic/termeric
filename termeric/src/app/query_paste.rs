@@ -9,8 +9,7 @@ impl App {
     }
 
     pub(super) fn handle_query_paste_key(&mut self, key: &winit::keyboard::Key) -> bool {
-        if self.shortcut_registry.check(key, self.modifiers)
-            != Some(crate::input::keybindings::BindableAction::Paste)
+        if self.pressed_shortcut(key) != Some(crate::input::keybindings::BindableAction::Paste)
             || matches!(
                 self.text_target(),
                 TextTarget::Blocked | TextTarget::Terminal

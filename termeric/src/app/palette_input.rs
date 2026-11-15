@@ -182,7 +182,7 @@ impl App {
         let Some(modal) = self.open_palette_modal() else {
             return false;
         };
-        let toggles_palette = self.shortcut_registry.check(key, self.modifiers)
+        let toggles_palette = self.pressed_shortcut(key)
             == Some(crate::input::keybindings::BindableAction::ToggleCommandPalette);
         let typing = types_text(self.modifiers, self.alt_graph_active);
         let choice = match key {

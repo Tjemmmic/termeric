@@ -58,7 +58,14 @@ impl App {
             return true;
         }
         let plain = self.modifiers.is_empty() && !self.alt_graph_active;
-        let alt = self.modifiers == ModifiersState::ALT && !self.alt_graph_active;
+        // The find box's Alt chords, by the key they name even where Option
+        // composes a character on it (macOS).
+        let alt_chord = match self.chord_view(key) {
+            (Key::Character(text), ModifiersState::ALT) if !self.alt_graph_active => {
+                Some(text.to_ascii_lowercase())
+            }
+            _ => None,
+        };
         let shift = self.modifiers == ModifiersState::SHIFT && !self.alt_graph_active;
         let typing = types_text(self.modifiers, self.alt_graph_active);
         match key {
@@ -85,17 +92,17 @@ impl App {
                 self.search.next();
                 self.scroll_to_current_match();
             }
-            Key::Character(text) if alt && text.eq_ignore_ascii_case("c") => {
+            _ if alt_chord.as_deref() == Some("c") => {
                 self.with_search_and_active_grid(|search, grid| {
                     search.toggle_case_sensitive(grid);
                 });
             }
-            Key::Character(text) if alt && text.eq_ignore_ascii_case("r") => {
+            _ if alt_chord.as_deref() == Some("r") => {
                 self.with_search_and_active_grid(|search, grid| {
                     search.toggle_regex(grid);
                 });
             }
-            Key::Character(text) if alt && text.eq_ignore_ascii_case("f") => {
+            _ if alt_chord.as_deref() == Some("f") => {
                 if self.copy_mode.is_active() {
                     self.toasts.warning(
                         "Filter mode is unavailable inside copy mode; matches remain highlighted",

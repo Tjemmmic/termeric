@@ -750,8 +750,16 @@ pub struct App {
     last_cursor_terminal: Option<crate::tabs::TerminalIdentity>,
     /// Mouse input state
     mouse_state: MouseState,
-    /// Current keyboard modifiers
+    /// The keyboard modifiers in effect: the ones held, except while a key
+    /// press whose Option key composed text is handled, when typing reads
+    /// them without Alt (see `System::read_key_press`).
     modifiers: ModifiersState,
+    /// The modifiers held, with which side of each the system reports, for
+    /// telling the left Option key from the right.
+    held_modifiers: winit::event::Modifiers,
+    /// While a key press whose Option key composed is handled, its physical
+    /// key, which chord checks read with Alt held (`App::chord_view`).
+    option_chord_key: Option<winit::keyboard::Key>,
     /// Platform input-method state. Preedit remains local until commit.
     ime: ime::ImeState,
     /// Whether the layout's AltGraph modifier key is currently held.
@@ -1128,6 +1136,8 @@ impl App {
             last_cursor_terminal: None,
             mouse_state: MouseState::new(),
             modifiers: ModifiersState::empty(),
+            held_modifiers: winit::event::Modifiers::default(),
+            option_chord_key: None,
             ime: ime::ImeState::default(),
             alt_graph_active: false,
             clipboard,

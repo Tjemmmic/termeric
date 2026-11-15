@@ -897,6 +897,9 @@ pub enum SettingsAction {
     SetWindowLevel(WindowLevelConfig),
     /// Place tabs in the top toolbar or a vertical left rail.
     SetTabBarPosition(TabBarPosition),
+    /// Choose which Option keys are Alt rather than composing characters.
+    #[cfg(target_os = "macos")]
+    SetMacosOptionAsAlt(crate::config::MacosOptionAsAlt),
     /// Change scrollback lines
     SetScrollback(usize),
     /// Change the per-terminal scrollback memory budget in MiB
@@ -1713,19 +1716,26 @@ impl SettingsPanel {
         // Keyboard: the shortcuts editor is its own dialog.
         {
             let customized = registry.changed_count();
-            result.push((
-                SettingsSection::Keyboard,
-                vec![SettingItem {
-                    label: "Keyboard Shortcuts".into(),
-                    value: match customized {
-                        0 => "Defaults".to_string(),
-                        count => format!("{count} changed"),
-                    },
-                    kind: SettingKind::Action {
-                        action: SettingsAction::OpenKeyboardShortcuts,
-                    },
-                }],
+            #[cfg_attr(target_os = "linux", allow(unused_mut, reason = "macOS adds a row"))]
+            let mut items = vec![SettingItem {
+                label: "Keyboard Shortcuts".into(),
+                value: match customized {
+                    0 => "Defaults".to_string(),
+                    count => format!("{count} changed"),
+                },
+                kind: SettingKind::Action {
+                    action: SettingsAction::OpenKeyboardShortcuts,
+                },
+            }];
+            #[cfg(target_os = "macos")]
+            items.push(choice(
+                "Option Key as Alt",
+                crate::config::MacosOptionAsAlt::ALL,
+                config.keyboard.macos_option_as_alt,
+                crate::config::MacosOptionAsAlt::label,
+                SettingsAction::SetMacosOptionAsAlt,
             ));
+            result.push((SettingsSection::Keyboard, items));
         }
 
         // Sessions
@@ -3770,6 +3780,42 @@ mod tests {
                 SettingsAction::SetCursorStyle(chosen) if chosen == *expected
             ));
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_keyboard_page_chooses_which_option_keys_are_alt() {
+        use crate::config::MacosOptionAsAlt;
+        let panel = SettingsPanel::new();
+        let mut config = Config::default();
+        config.keyboard.macos_option_as_alt = MacosOptionAsAlt::Right;
+        let entries = panel.build_entries(&config, &default_registry());
+        let row = entries
+            .iter()
+            .find(|entry| entry.label == "Option Key as Alt")
+            .expect("Option key row");
+        assert_eq!(row.section, SettingsSection::Keyboard);
+        assert_eq!(row.value, "Right Option");
+        assert_eq!(
+            row.kind.option_labels(),
+            Some(vec![
+                "Neither".to_string(),
+                "Left Option".into(),
+                "Right Option".into(),
+                "Both Options".into(),
+            ])
+        );
+        assert!(matches!(
+            SettingsPanel::option_action(&row.kind, 3),
+            SettingsAction::SetMacosOptionAsAlt(MacosOptionAsAlt::Both)
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_has_no_option_key_row() {
+        let entries = SettingsPanel::new().build_entries(&Config::default(), &default_registry());
+        assert!(!entries.iter().any(|entry| entry.label.contains("Option")));
     }
 
     #[test]
