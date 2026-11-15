@@ -615,10 +615,13 @@ impl App {
                 };
                 self.scroll_agent_view_page(direction);
             }
-            // Ctrl+Home and Ctrl+End move the composer's caret while it has
-            // text to move through, and otherwise go to the page's ends.
+            // Home and End with the word modifier (Ctrl, or ⌥ on macOS) move
+            // the composer's caret while it has text to move through, as in
+            // `handle_agent_composer_key`, and otherwise go to the page's ends.
             Key::Named(NamedKey::Home | NamedKey::End)
-                if control && !shift && !self.agent_view_composer_has_text() =>
+                if modifiers.contains(System::CURRENT.word())
+                    && !shift
+                    && !self.agent_view_composer_has_text() =>
             {
                 self.scroll_agent_view_to_end(matches!(key, Key::Named(NamedKey::End)));
             }
