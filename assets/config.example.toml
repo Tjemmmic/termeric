@@ -66,7 +66,9 @@
 # lists them) or, on macOS, as Font Book does. "monospace" is the system's
 # default monospace font (Menlo on macOS). The main font sets the cell size,
 # so choose a true monospace font. On macOS a point of `size` is one logical
-# pixel, as in other Mac apps.
+# pixel, as in other Mac apps. A family without a face at `weight` or
+# `bold_weight` draws with its nearest one (a variable font draws at the exact
+# weight), and bold text in a family without a bold face is emboldened.
 family = "monospace"
 size = 12.0               # points, 8 to 72; Ctrl+= and Ctrl+- (⌘= and ⌘-) zoom one window
 weight = 400              # 1 to 1000
