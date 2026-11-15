@@ -2,6 +2,12 @@
 //! held destructive write.
 
 use super::*;
+use crate::input::platform::System;
+
+/// The label of the chord that confirms a guarded write.
+pub(super) fn guardrail_confirm_chord_label() -> String {
+    System::CURRENT.chord_label(System::CURRENT.command(), "enter")
+}
 
 impl App {
     /// The guardrail card's geometry, shared by drawing, pointer hits, and
@@ -17,12 +23,13 @@ impl App {
         )
     }
 
-    /// Ctrl+Enter confirms the guarded write; Enter or Escape cancels it.
+    /// The command modifier with Enter (Ctrl+Enter, ⌘↩) confirms the guarded
+    /// write; Enter or Escape cancels it.
     pub(super) fn handle_guardrail_key(&mut self, key: &winit::keyboard::Key) {
         use winit::keyboard::{Key, NamedKey};
         let request_id = self.guardrail.request_id();
         let action = match key {
-            Key::Named(NamedKey::Enter) if self.modifiers.control_key() => {
+            Key::Named(NamedKey::Enter) if self.modifiers.contains(System::CURRENT.command()) => {
                 crate::terminal::guardrails::GuardrailAction::Confirm { request_id }
             }
             Key::Named(NamedKey::Enter | NamedKey::Escape) => {

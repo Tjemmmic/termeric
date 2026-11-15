@@ -525,7 +525,7 @@ mod tests {
             args: vec![
                 "-c".into(),
                 "stty raw -echo; printf 'READY\r\n'; \
-                 dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 1"
+                 dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -s ' '; sleep 10"
                     .into(),
             ],
             env: Default::default(),
@@ -570,19 +570,47 @@ mod tests {
         };
         // Each pane shows READY once its input is raw and unechoed, then the
         // hex of the first byte it reads, and nothing else.
-        let first_byte_read = |app: &App, id: PaneId| {
+        // READY may scroll out of a small pane once the hex follows it, so
+        // what a pane read is everything else on its screen.
+        let screen = |app: &App, id: PaneId| {
             let manager = &app.tabs.as_ref().unwrap().active_tab().unwrap().panes;
-            let output = manager.get_pane(id).unwrap().terminal.rows_text(0, 7);
-            let mut words = output.split_whitespace();
-            (words.next() == Some("READY")).then(|| words.collect::<Vec<_>>().join(" "))
+            Some(manager.get_pane(id)?.terminal.rows_text(0, 7))
+        };
+        let first_byte_read = |app: &App, id: PaneId| {
+            screen(app, id).map(|output| {
+                output
+                    .split_whitespace()
+                    .filter(|word| *word != "READY")
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
         };
         let ready = crate::test_support::poll_until(Duration::from_secs(2), || {
             app.process_pty_events();
+            pane_ids.iter().all(|id| {
+                screen(&app, *id)
+                    .is_some_and(|output| output.split_whitespace().next() == Some("READY"))
+            })
+        });
+        assert!(ready, "every pane should be reading raw input: {:?}", {
+            let manager = &app.tabs.as_ref().unwrap().active_tab().unwrap().panes;
             pane_ids
                 .iter()
-                .all(|id| first_byte_read(&app, *id).is_some())
+                .map(|id| {
+                    let pane = manager.get_pane(*id);
+                    (
+                        *id,
+                        pane.map(|pane| pane.terminal.rows_text(0, 7)),
+                        pane.map(|pane| {
+                            pane.pty
+                                .child_observer()
+                                .poll()
+                                .map(|observed| observed.exit)
+                        }),
+                    )
+                })
+                .collect::<Vec<_>>()
         });
-        assert!(ready, "every pane should be reading raw input");
 
         app.toggle_broadcast();
         assert!(matches!(app.broadcast, BroadcastState::Armed { .. }));
@@ -622,7 +650,29 @@ mod tests {
                 .iter()
                 .all(|id| first_byte_read(&app, *id).as_deref() == Some("78"))
         });
-        assert!(reached, "the broadcast byte did not reach every target");
+        assert!(
+            reached,
+            "the broadcast byte did not reach every target: {:?}",
+            {
+                let manager = &app.tabs.as_ref().unwrap().active_tab().unwrap().panes;
+                targets
+                    .iter()
+                    .map(|id| {
+                        let pane = manager.get_pane(*id);
+                        (
+                            *id,
+                            pane.map(|pane| pane.terminal.rows_text(0, 7)),
+                            pane.map(|pane| {
+                                pane.pty
+                                    .child_observer()
+                                    .poll()
+                                    .map(|observed| observed.exit)
+                            }),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            }
+        );
         // Only now write the excluded pane's own marker: had anything earlier
         // reached it, the marker would not be the first byte it read.
         app.tabs

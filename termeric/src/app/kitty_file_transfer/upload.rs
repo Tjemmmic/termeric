@@ -1,10 +1,14 @@
-//! The host-read worker: pins each requested regular file, re-opens it
-//! through the pinned descriptor, and streams it back as Kitty data frames.
+//! The host-read worker: pins each requested regular file, opens it for
+//! reading only through what was pinned, and streams it back as Kitty data
+//! frames.
 
 use super::*;
 
-pub(super) fn reopen_upload_regular_file(pinned: &std::fs::File) -> std::io::Result<std::fs::File> {
-    use std::os::fd::AsRawFd;
+const NOT_SINGLE_LINK_REGULAR: &str = "approved path is not a single-link regular file";
+
+/// The handle an upload reads `pinned`'s inode through, refusing anything but
+/// a single-link regular file and any handle on another inode.
+pub(super) fn upload_read_handle(pinned: &std::fs::File) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::MetadataExt;
 
     let identity = pinned.metadata()?;
@@ -16,7 +20,7 @@ pub(super) fn reopen_upload_regular_file(pinned: &std::fs::File) -> std::io::Res
     }
     // Only the validated regular inode is opened for data. Never retry its
     // original name, which may now refer to a FIFO, device, link, or other file.
-    let file = std::fs::File::open(format!("/proc/self/fd/{}", pinned.as_raw_fd()))?;
+    let file = platform::upload_read_handle(pinned)?;
     let opened = file.metadata()?;
     if !opened.is_file()
         || opened.nlink() != 1
@@ -126,8 +130,15 @@ pub(super) fn run_upload_worker(
         // Nothing is sent until every path is pinned, so these failures
         // report no progress.
         let mut fail = |code, message: String| delivery.fail(&path.file_id, code, message, 0, 0);
-        let file = match openat2_no_symlinks(&path.path, libc::O_PATH) {
-            Ok(file) => file,
+        let file = match platform::pin_upload_source(&path.path) {
+            Ok(Some(file)) => file,
+            Ok(None) => {
+                fail(
+                    KittyFileTransferStatusCode::Invalid,
+                    NOT_SINGLE_LINK_REGULAR.into(),
+                );
+                return;
+            }
             Err(error) => {
                 let code = if error.kind() == std::io::ErrorKind::PermissionDenied {
                     KittyFileTransferStatusCode::PermissionDenied
@@ -146,7 +157,7 @@ pub(super) fn run_upload_worker(
             Ok(_) => {
                 fail(
                     KittyFileTransferStatusCode::Invalid,
-                    "approved path is not a single-link regular file".into(),
+                    NOT_SINGLE_LINK_REGULAR.into(),
                 );
                 return;
             }
@@ -198,7 +209,7 @@ pub(super) fn run_upload_worker(
             );
             return;
         };
-        let file = match reopen_upload_regular_file(&file) {
+        let file = match upload_read_handle(&file) {
             Ok(file) => file,
             Err(error) => {
                 let code = match error.kind() {

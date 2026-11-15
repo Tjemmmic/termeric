@@ -154,6 +154,11 @@ fn output_eof_failure_and_panic_join_idle_input_before_return() {
     }
 }
 
+/// The daemon end's `shutdown(SHUT_RD)` makes the bridge's writes fail with
+/// `EPIPE` on Linux. macOS, like the BSDs, keeps accepting them, so the
+/// failure this stands for (the daemon going away) can't be staged this way
+/// there; it gives `EPIPE` on both.
+#[cfg(target_os = "linux")]
 #[test]
 fn input_write_failure_stops_the_other_direction() {
     let (bridge, daemon) = UnixStream::pair().unwrap();
@@ -204,7 +209,8 @@ fn input_read_failure_and_panic_wake_output_and_are_reported() {
         });
         let result = rx.recv_timeout(Duration::from_secs(2));
         // Release even a regressed output reader before joining/asserting.
-        daemon.shutdown(Shutdown::Both).unwrap();
+        // macOS reports ENOTCONN when the other end has already gone.
+        let _ = daemon.shutdown(Shutdown::Both);
         worker.join().unwrap();
         let error = result
             .expect("input failure left output blocked")

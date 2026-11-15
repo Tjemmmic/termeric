@@ -140,17 +140,16 @@ impl TextArea {
                 | TextInputEdit::Delete
                 | TextInputEdit::BackspaceWord
                 | TextInputEdit::DeleteWord
+                | TextInputEdit::BackspaceLine
         );
         if deletes {
             if self.selection().is_some() {
                 self.checkpoint(EditKind::Other);
                 return self.delete_selection();
             }
-            let mut text = self.text.clone();
-            let mut caret = self.caret;
-            if !edit_grapheme(&mut text, &mut caret, edit) {
+            let Some((text, caret)) = self.deleted(edit) else {
                 return false;
-            }
+            };
             self.checkpoint(EditKind::Deleting);
             self.text = text;
             self.caret = caret;
@@ -184,6 +183,29 @@ impl TextArea {
         }
         self.last_edit = Some(EditKind::Other);
         false
+    }
+
+    /// The text and caret after the deletion `edit`, when it deletes
+    /// anything. Deleting to the line's start stays on the caret's line; at
+    /// that start it joins the line to the one before, as Backspace does.
+    fn deleted(&self, edit: TextInputEdit) -> Option<(String, usize)> {
+        if edit == TextInputEdit::BackspaceLine {
+            let line_start = self.line_start(self.caret);
+            if line_start == self.caret {
+                return self.deleted(TextInputEdit::Backspace);
+            }
+            let mut line = self.text[line_start..].to_owned();
+            let mut caret = self.caret - line_start;
+            return edit_grapheme(&mut line, &mut caret, edit).then(|| {
+                (
+                    format!("{}{line}", &self.text[..line_start]),
+                    line_start + caret,
+                )
+            });
+        }
+        let mut text = self.text.clone();
+        let mut caret = self.caret;
+        edit_grapheme(&mut text, &mut caret, edit).then_some((text, caret))
     }
 
     fn begin_move(&mut self, extend: bool) {
@@ -504,6 +526,21 @@ mod tests {
         let mut area = TextArea::new();
         area.insert("one\r\ntwo\rthree\u{1b}[31m\tend");
         assert_eq!(area.text(), "one\ntwo\nthree[31m\tend");
+    }
+
+    #[test]
+    fn deleting_to_the_line_start_stays_on_the_line_and_joins_at_its_start() {
+        let mut area = TextArea::new();
+        area.insert("first\nsecond line");
+        area.edit(TextInputEdit::Left, false);
+        area.edit(TextInputEdit::Left, false);
+        assert!(area.edit(TextInputEdit::BackspaceLine, false));
+        assert_eq!((area.text(), area.caret()), ("first\nne", 6));
+        assert!(area.edit(TextInputEdit::BackspaceLine, false));
+        assert_eq!((area.text(), area.caret()), ("firstne", 5));
+        // Deletions in a row undo together, as Backspace's do.
+        assert!(area.undo());
+        assert_eq!(area.text(), "first\nsecond line");
     }
 
     #[test]

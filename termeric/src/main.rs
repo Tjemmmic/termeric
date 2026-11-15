@@ -15,9 +15,12 @@ mod config;
 mod control;
 mod deadline_io;
 mod domain;
+mod file_chooser;
 mod git;
 mod harvest;
 mod input;
+#[cfg(target_os = "macos")]
+mod launch_environment;
 mod line_reader;
 mod local_socket;
 mod mcp;
@@ -25,8 +28,8 @@ mod notifications;
 mod panes;
 mod paths;
 mod plugin;
-mod portal;
 mod process_group;
+mod process_info;
 mod raw_terminal;
 mod renderer;
 mod safe_fs;
@@ -59,11 +62,28 @@ fn main() -> Result<std::process::ExitCode> {
         cli::Invocation::Command(outcome) => *outcome,
     };
 
+    // A Mac app started from the Finder, the Dock, or `open` has launchd's
+    // environment, not a login shell's. Nothing has started a thread yet.
+    #[cfg(target_os = "macos")]
+    let completed_environment = match outcome {
+        cli::ParseOutcome::Run(_) | cli::ParseOutcome::QuickAccess(_) => {
+            // SAFETY: parsing starts no threads, and nothing else has run.
+            let mut changes = unsafe { launch_environment::complete() };
+            changes.extend(launch_environment::raise_open_file_limit());
+            changes
+        }
+        _ => Vec::new(),
+    };
+
     // Initialize logging after deterministic parsing but before either GUI or
     // local-domain execution.
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    #[cfg(target_os = "macos")]
+    for change in completed_environment {
+        log::info!("Launch environment: {change}");
+    }
 
-    let mut _quick_access_guard = None;
+    let mut quick_access_guard = None;
     // Recorded before anything can rebuild the executable, so a launch of a
     // newer build never joins this process; the environment is recorded
     // before anything in this process could change it.
@@ -95,7 +115,12 @@ fn main() -> Result<std::process::ExitCode> {
                 println!("{output}");
                 return Ok(std::process::ExitCode::SUCCESS);
             }
-            _quick_access_guard = Some(control::QuickAccessGuard::acquire()?);
+            #[cfg(target_os = "macos")]
+            if let Some(bundle) = launch_environment::quick_access_relaunch_bundle() {
+                launch_environment::relaunch_through_launch_services(&bundle)?;
+                return Ok(std::process::ExitCode::SUCCESS);
+            }
+            quick_access_guard = Some(control::QuickAccessGuard::acquire()?);
             launch
         }
         cli::ParseOutcome::Control(command) => {
@@ -135,6 +160,15 @@ fn main() -> Result<std::process::ExitCode> {
     };
 
     log::info!("Starting Termeric terminal emulator");
+    if let Ok(executable) = paths::executable()
+        && paths::is_translocated(&executable)
+    {
+        log::warn!(
+            "macOS is running Termeric from a temporary copy ({}); move Termeric.app to \
+             Applications so agent hooks can name it",
+            executable.display()
+        );
+    }
 
     // Resolve configuration and validate every window/tab launch before winit
     // connects to a display server or creates native resources. CLI failures
@@ -142,25 +176,30 @@ fn main() -> Result<std::process::ExitCode> {
     let mut app = app::Application::new(launch)?;
 
     // Create event loop
-    let event_loop = EventLoop::<app::AppEvent>::with_user_event().build()?;
+    let mut event_loop = EventLoop::<app::AppEvent>::with_user_event();
+    #[cfg(target_os = "macos")]
+    app::macos::configure_event_loop(&mut event_loop, app.is_quick_access());
+    let event_loop = event_loop.build()?;
     let proxy = event_loop.create_proxy();
     app::install_event_loop_proxy(proxy.clone());
-    let _control_server = match control::ControlServer::start(proxy) {
+    let control_server = match control::ControlServer::start(proxy) {
         Ok(server) => Some(server),
         Err(error) => {
             log::warn!("Running-GUI control is unavailable: {error:#}");
             None
         }
     };
+    app.hold_for_exit(app::HeldForExit {
+        control_server,
+        quick_access_guard: quick_access_guard.take(),
+    });
 
     // Create and run the native windows.
     event_loop.run_app(&mut app)?;
+    // The windows have already closed and been saved as the event loop
+    // ended (`Application::exiting`).
     let fatal = app.take_fatal_startup_error();
-    // Closing the windows ends their agents; an agent that keeps a
-    // conversation as soon as it opens is told to forget one nothing was
-    // said in, which must not be cut short by exiting.
     drop(app);
-    agent_view::session::wait_for_forgetting(std::time::Duration::from_secs(5));
     if let Some(error) = fatal {
         anyhow::bail!(error);
     }

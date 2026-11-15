@@ -35,6 +35,8 @@ mod harvest_actions;
 mod ime;
 mod kitty_file_transfer;
 mod live_domain_control;
+#[cfg(target_os = "macos")]
+pub(crate) mod macos;
 mod modal_layer;
 mod mouse;
 mod mouse_selection;
@@ -67,6 +69,7 @@ mod text_target;
 mod theme_picker;
 mod transcripts;
 mod unicode_picker;
+#[cfg(target_os = "linux")]
 mod wayland_drop;
 mod workspace_actions;
 mod workspace_menu;
@@ -125,14 +128,18 @@ use crate::ui::text::plural;
 use crate::ui::unicode_picker::UnicodePicker;
 
 pub use application::Application;
+pub(crate) use application::HeldForExit;
 
 /// The Wayland app ID and X11 `WM_CLASS` of ordinary windows. Desktops match
 /// it to the installed desktop entry of the same name for the window's icon
-/// and taskbar grouping, so it never changes once released.
+/// and taskbar grouping, so it never changes once released. macOS names the
+/// app by the same identifier in its bundle instead.
+#[cfg(target_os = "linux")]
 pub const APP_ID: &str = "org.termeric.Termeric";
 /// The quick-access window's identity, separate so compositor rules can treat
 /// it apart from ordinary windows. A hidden desktop entry of the same name
 /// gives it the icon.
+#[cfg(target_os = "linux")]
 pub const QUICK_ACCESS_APP_ID: &str = "org.termeric.Termeric.QuickAccess";
 
 /// Window and cell sizes for laying out UI outside a frame. Before a
@@ -170,6 +177,12 @@ pub(crate) struct WindowKey(u64);
 
 #[derive(Debug)]
 pub(crate) enum AppEvent {
+    /// A menu-bar command, for the focused window (`macos/menu.rs`).
+    #[cfg(target_os = "macos")]
+    MenuCommand(Action),
+    /// The quick-access hotkey was pressed (`macos/hotkey.rs`).
+    #[cfg(target_os = "macos")]
+    QuickAccessHotkey,
     Pty,
     Git,
     Transcript,
@@ -201,6 +214,8 @@ pub(crate) enum AppEvent {
     StructuredPluginCompleted(crate::plugin::structured::StructuredHandlerCompletion),
     AccessKit(accesskit_winit::Event),
     SystemAccessibilityChanged(system_accessibility::SystemAccessibilityPreferences),
+    /// The desktop portal can't say (macOS always can).
+    #[cfg(target_os = "linux")]
     SystemAccessibilityUnavailable(String),
 }
 
@@ -216,13 +231,14 @@ pub(crate) enum WindowResult {
         path: PathBuf,
         result: std::result::Result<crate::renderer::DecodedBackgroundImage, String>,
     },
-    /// Files were dropped on this window under Wayland (on X11, winit
-    /// reports them as `WindowEvent::DroppedFile`).
+    /// Files were dropped on this window under Wayland (on X11 and macOS,
+    /// winit reports them as `WindowEvent::DroppedFile`).
+    #[cfg(target_os = "linux")]
     FilesDropped(std::result::Result<Vec<PathBuf>, String>),
     /// The desktop's file chooser this window opened closed.
     FileChosen {
         purpose: file_chooser::FileChooserPurpose,
-        result: std::result::Result<crate::portal::FileChoice, String>,
+        result: std::result::Result<crate::file_chooser::FileChoice, String>,
     },
     LiveDomainTopology {
         domain_id: String,
@@ -262,8 +278,9 @@ impl WindowResult {
     fn redraw_reason(&self) -> RedrawReason {
         match self {
             Self::RendererDeviceLost { .. } => RedrawReason::SurfaceRecovery,
+            #[cfg(target_os = "linux")]
+            Self::FilesDropped(_) => RedrawReason::BackgroundTask,
             Self::BackgroundImageLoaded { .. }
-            | Self::FilesDropped(_)
             | Self::FileChosen { .. }
             | Self::LiveDomainTopology { .. }
             | Self::DomainPickerLoaded { .. }
@@ -297,6 +314,7 @@ impl App {
                 path,
                 result,
             } => self.handle_background_image_loaded(generation, path, result),
+            #[cfg(target_os = "linux")]
             WindowResult::FilesDropped(result) => self.handle_files_dropped(result),
             WindowResult::FileChosen { purpose, result } => {
                 self.handle_file_chosen(purpose, result)
@@ -339,6 +357,23 @@ impl From<accesskit_winit::Event> for AppEvent {
 }
 
 static EVENT_LOOP_PROXY: OnceLock<EventLoopProxy<AppEvent>> = OnceLock::new();
+
+/// Tell the event loop the quick-access hotkey was pressed.
+#[cfg(target_os = "macos")]
+fn post_quick_access_hotkey() {
+    if let Some(proxy) = EVENT_LOOP_PROXY.get() {
+        let _ = proxy.send_event(AppEvent::QuickAccessHotkey);
+    }
+}
+
+/// Hand a menu-bar command to the event loop, which runs it in the focused
+/// window.
+#[cfg(target_os = "macos")]
+fn post_menu_command(action: Action) {
+    if let Some(proxy) = EVENT_LOOP_PROXY.get() {
+        let _ = proxy.send_event(AppEvent::MenuCommand(action));
+    }
+}
 static PTY_WAKE_PENDING: AtomicBool = AtomicBool::new(false);
 static TRANSCRIPT_WAKE_PENDING: AtomicBool = AtomicBool::new(false);
 static AGENT_VIEW_WAKE_PENDING: AtomicBool = AtomicBool::new(false);
@@ -715,8 +750,21 @@ pub struct App {
     last_cursor_terminal: Option<crate::tabs::TerminalIdentity>,
     /// Mouse input state
     mouse_state: MouseState,
-    /// Current keyboard modifiers
+    /// Trackpad scrolling over the terminals, in whole lines of the pane
+    /// it scrolls.
+    terminal_pixel_scroll: crate::input::PixelScroll<crate::tabs::TerminalIdentity>,
+    /// Trackpad scrolling of the modal surface on top, in whole rows.
+    modal_pixel_scroll: crate::input::PixelScroll<crate::ui::modal::ModalLayer>,
+    /// The keyboard modifiers in effect: the ones held, except while a key
+    /// press whose Option key composed text is handled, when typing reads
+    /// them without Alt (see `System::read_key_press`).
     modifiers: ModifiersState,
+    /// The modifiers held, with which side of each the system reports, for
+    /// telling the left Option key from the right.
+    held_modifiers: winit::event::Modifiers,
+    /// While a key press whose Option key composed is handled, its physical
+    /// key, which chord checks read with Alt held (`App::chord_view`).
+    option_chord_key: Option<winit::keyboard::Key>,
     /// Platform input-method state. Preedit remains local until commit.
     ime: ime::ImeState,
     /// Whether the layout's AltGraph modifier key is currently held.
@@ -1092,7 +1140,11 @@ impl App {
             max_seen_tab_id: None,
             last_cursor_terminal: None,
             mouse_state: MouseState::new(),
+            terminal_pixel_scroll: crate::input::PixelScroll::default(),
+            modal_pixel_scroll: crate::input::PixelScroll::default(),
             modifiers: ModifiersState::empty(),
+            held_modifiers: winit::event::Modifiers::default(),
+            option_chord_key: None,
             ime: ime::ImeState::default(),
             alt_graph_active: false,
             clipboard,
@@ -1277,6 +1329,9 @@ impl App {
             self.renderer_backend(),
             failure_callback,
         )?;
+        #[cfg(target_os = "macos")]
+        macos::prepare_window_surface(&window);
+        self.sync_native_appearance(&window);
 
         // Apply initial opacity from config
         renderer.set_opacity(self.config.window.opacity);
@@ -2583,6 +2638,20 @@ impl App {
         } else {
             self.toasts.info("No later failed command");
         }
+    }
+
+    /// Run a menu-bar command as its shortcut would run with the terminals
+    /// holding the keyboard. While anything else holds it (a modal layer,
+    /// tab rename, the agent view, the find box), that surface owns input,
+    /// as it does for keys, so the command does nothing; a paste still goes
+    /// where any paste goes (`text_target`).
+    #[cfg(target_os = "macos")]
+    pub(super) fn perform_menu_command(&mut self, action: Action) {
+        if !self.terminal_has_keyboard() && !matches!(action, Action::Paste) {
+            return;
+        }
+        self.handle_action(action);
+        self.request_redraw(RedrawReason::Action);
     }
 
     /// Handle an action from a key binding or the command palette.

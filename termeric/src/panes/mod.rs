@@ -2676,10 +2676,13 @@ mod tests {
     #[test]
     fn each_new_pane_cwd_policy_uses_its_declared_process_source() {
         let temporary = tempfile::tempdir().unwrap();
-        let primary_dir = temporary.path().join("primary");
-        let focused_dir = temporary.path().join("focused");
-        let reported_primary_dir = temporary.path().join("reported-primary");
-        let reported_focused_dir = temporary.path().join("reported-focused");
+        // The kernel reports directories with links resolved (on macOS the
+        // temporary directory is under the `/var` link).
+        let root = temporary.path().canonicalize().unwrap();
+        let primary_dir = root.join("primary");
+        let focused_dir = root.join("focused");
+        let reported_primary_dir = root.join("reported-primary");
+        let reported_focused_dir = root.join("reported-focused");
         std::fs::create_dir_all(&primary_dir).unwrap();
         std::fs::create_dir_all(&focused_dir).unwrap();
         std::fs::create_dir_all(&reported_primary_dir).unwrap();
@@ -2836,7 +2839,7 @@ mod tests {
             "printf '\\033[6n'; ",
             "reply=$(dd bs=1 count=6 2>/dev/null); ",
             "printf '\\rreply='; ",
-            "printf '%s' \"$reply\" | od -An -tx1; ",
+            "printf '%s' \"$reply\" | od -An -tx1 | tr -s ' '; ",
             "printf '\\r\\n'"
         );
         let shell = ShellConfig {

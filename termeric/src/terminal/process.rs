@@ -1,6 +1,6 @@
 //! What a terminal's processes report about themselves: the directory they
 //! work in and the program in front, from the shell's own reports and from
-//! `/proc`.
+//! the operating system (`process_info`).
 
 use termeric_core::Terminal;
 use termeric_core::pty::PtyHandle;
@@ -13,10 +13,7 @@ pub(crate) fn working_directory(terminal: &Terminal, pty: &PtyHandle) -> Option<
 
 /// Get the current working directory of a process by its PID
 pub(crate) fn get_process_cwd(pid: u32) -> Option<String> {
-    let cwd_path = format!("/proc/{}/cwd", pid);
-    std::fs::read_link(&cwd_path)
-        .ok()
-        .and_then(|p| p.to_str().map(|s| s.to_string()))
+    crate::process_info::working_directory(pid).and_then(|path| path.to_str().map(str::to_owned))
 }
 
 /// Return a shell-reported directory only when its OSC 7 authority identifies
@@ -73,15 +70,8 @@ fn local_hostname() -> Option<String> {
 
 /// Get the name of the foreground process running in the shell
 pub(crate) fn get_foreground_process(shell_pid: u32) -> Option<String> {
-    // Read child processes from /proc/<pid>/task/<pid>/children
-    let children_path = format!("/proc/{}/task/{}/children", shell_pid, shell_pid);
-    let children = std::fs::read_to_string(&children_path).ok()?;
-    let child_pid: u32 = children.split_whitespace().last()?.parse().ok()?;
-
-    // Read the comm (command name) of the child process
-    let comm_path = format!("/proc/{}/comm", child_pid);
-    let comm = std::fs::read_to_string(&comm_path).ok()?;
-    let name = comm.trim().to_string();
+    let child_pid = crate::process_info::newest_child(shell_pid)?;
+    let name = crate::process_info::name(child_pid)?;
 
     // Don't return shell names as foreground processes
     if name.is_empty() || ["bash", "zsh", "sh", "fish"].contains(&name.as_str()) {

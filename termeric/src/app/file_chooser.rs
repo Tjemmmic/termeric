@@ -1,8 +1,9 @@
-//! The desktop's own file chooser, opened off the event loop for one window
-//! and answered back to it.
+//! The system's own file chooser (`crate::file_chooser`), opened for one
+//! window and answered back to it: asked off the event loop on Linux, shown
+//! as a sheet from it on macOS.
 
 use super::*;
-use crate::portal::FileChoice;
+use crate::file_chooser::{FileChoice, FileRequest};
 
 /// What a window opened the file chooser for, so its answer reaches the
 /// flow that asked.
@@ -17,14 +18,14 @@ pub(crate) enum FileChooserPurpose {
 }
 
 impl App {
-    /// Show the chooser `ask` opens, off the event loop, and answer it back
-    /// to this window as `purpose`. While one is open, another request does
-    /// nothing. Returns false when no chooser could be started, so the
-    /// caller can ask another way.
+    /// Show the chooser for `request` and answer it back to this window as
+    /// `purpose`. While one is open, another request does nothing. Returns
+    /// false when no chooser could be started, so the caller can ask
+    /// another way.
     pub(super) fn open_file_chooser(
         &mut self,
         purpose: FileChooserPurpose,
-        ask: impl FnOnce() -> std::result::Result<FileChoice, String> + Send + 'static,
+        request: FileRequest,
     ) -> bool {
         if self.file_chooser_open {
             return true;
@@ -32,18 +33,15 @@ impl App {
         let Some(proxy) = EVENT_LOOP_PROXY.get().cloned() else {
             return false;
         };
-        let window_key = self.window_key();
-        let spawn = std::thread::Builder::new()
-            .name("termeric-file-chooser".into())
-            .spawn(move || {
-                let result = ask();
-                let _ = proxy.send_event(AppEvent::WindowResult {
-                    window: window_key,
-                    result: WindowResult::FileChosen { purpose, result },
-                });
+        let window = self.window_key();
+        let answer = move |result| {
+            let _ = proxy.send_event(AppEvent::WindowResult {
+                window,
+                result: WindowResult::FileChosen { purpose, result },
             });
-        match spawn {
-            Ok(_) => {
+        };
+        match self.start_file_chooser(request, answer) {
+            Ok(()) => {
                 self.file_chooser_open = true;
                 true
             }
@@ -52,6 +50,32 @@ impl App {
                 false
             }
         }
+    }
+
+    /// The portal blocks until the person answers, so it is asked on a
+    /// thread of its own.
+    #[cfg(target_os = "linux")]
+    fn start_file_chooser(
+        &self,
+        request: FileRequest,
+        answer: impl FnOnce(std::result::Result<FileChoice, String>) + Send + 'static,
+    ) -> std::result::Result<(), String> {
+        std::thread::Builder::new()
+            .name("termeric-file-chooser".into())
+            .spawn(move || answer(crate::file_chooser::choose(&request)))
+            .map(drop)
+            .map_err(|error| error.to_string())
+    }
+
+    /// An `NSOpenPanel` sheet on this window, shown from the event loop.
+    #[cfg(target_os = "macos")]
+    fn start_file_chooser(
+        &self,
+        request: FileRequest,
+        answer: impl FnOnce(std::result::Result<FileChoice, String>) + 'static,
+    ) -> std::result::Result<(), String> {
+        let window = self.window.as_ref().ok_or("the window is not open")?;
+        crate::file_chooser::present(window, request, answer)
     }
 
     /// Hand the chooser's answer to the flow that opened it.

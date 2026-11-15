@@ -9,6 +9,7 @@ use super::*;
 use crate::agent_view::present;
 use crate::agent_view::session::{AgentSession, QuestionAnswer};
 use crate::agent_view::transcript::{Attachment, DecidedBy, Item};
+use crate::input::platform::{EditCommand, Reach, System};
 use crate::ui::agent_view::commands;
 use crate::ui::agent_view::scene::{HitRole, MenuAction, MenuKind, Target};
 use crate::ui::agent_view::{ComposerIntent, Focus, OpenMenu, Screen};
@@ -614,10 +615,13 @@ impl App {
                 };
                 self.scroll_agent_view_page(direction);
             }
-            // Ctrl+Home and Ctrl+End move the composer's caret while it has
-            // text to move through, and otherwise go to the page's ends.
+            // Home and End with the word modifier (Ctrl, or ⌥ on macOS) move
+            // the composer's caret while it has text to move through, as in
+            // `handle_agent_composer_key`, and otherwise go to the page's ends.
             Key::Named(NamedKey::Home | NamedKey::End)
-                if control && !shift && !self.agent_view_composer_has_text() =>
+                if modifiers.contains(System::CURRENT.word())
+                    && !shift
+                    && !self.agent_view_composer_has_text() =>
             {
                 self.scroll_agent_view_to_end(matches!(key, Key::Named(NamedKey::End)));
             }
@@ -1121,25 +1125,35 @@ impl App {
     /// Edits the composer. Returns false when the key did nothing.
     fn handle_agent_composer_key(&mut self, key: &Key, text: Option<&str>) -> bool {
         let modifiers = self.modifiers;
-        let control = modifiers.control_key();
+        let system = System::CURRENT;
         let shift = modifiers.shift_key();
         let alt = modifiers.alt_key();
+        // The system's line modifier (⌘ on macOS) reaches the line's ends,
+        // its word modifier (Ctrl, or ⌥ on macOS) the next word; Shift
+        // extends the selection. Other modifiers move as plain keys do.
+        let by_line = system.line().is_some_and(|line| modifiers.contains(line));
+        let by_word = !by_line && modifiers.contains(system.word());
         let screen = self.agent_view.state.screen;
         if screen == Screen::Sessions {
             return false;
         }
         let edit = |edit| Some((edit, shift));
         let grapheme_edit = match key {
-            Key::Named(NamedKey::ArrowLeft) if control => edit(TextInputEdit::WordLeft),
-            Key::Named(NamedKey::ArrowRight) if control => edit(TextInputEdit::WordRight),
+            Key::Named(NamedKey::ArrowLeft) if by_line => edit(TextInputEdit::Home),
+            Key::Named(NamedKey::ArrowRight) if by_line => edit(TextInputEdit::End),
+            Key::Named(NamedKey::ArrowLeft) if by_word => edit(TextInputEdit::WordLeft),
+            Key::Named(NamedKey::ArrowRight) if by_word => edit(TextInputEdit::WordRight),
             Key::Named(NamedKey::ArrowLeft) => edit(TextInputEdit::Left),
             Key::Named(NamedKey::ArrowRight) => edit(TextInputEdit::Right),
-            Key::Named(NamedKey::Home) if !control => edit(TextInputEdit::Home),
-            Key::Named(NamedKey::End) if !control => edit(TextInputEdit::End),
-            Key::Named(NamedKey::Backspace) if control => {
+            Key::Named(NamedKey::Home) if !by_word => edit(TextInputEdit::Home),
+            Key::Named(NamedKey::End) if !by_word => edit(TextInputEdit::End),
+            Key::Named(NamedKey::Backspace) if by_line => {
+                Some((TextInputEdit::BackspaceLine, false))
+            }
+            Key::Named(NamedKey::Backspace) if by_word => {
                 Some((TextInputEdit::BackspaceWord, false))
             }
-            Key::Named(NamedKey::Delete) if control => Some((TextInputEdit::DeleteWord, false)),
+            Key::Named(NamedKey::Delete) if by_word => Some((TextInputEdit::DeleteWord, false)),
             Key::Named(NamedKey::Backspace) => Some((TextInputEdit::Backspace, false)),
             Key::Named(NamedKey::Delete) => Some((TextInputEdit::Delete, false)),
             _ => None,
@@ -1148,8 +1162,13 @@ impl App {
             self.agent_view.state.composer_mut().edit(edit, extend);
             return true;
         }
+        if let Key::Character(character) = key
+            && let Some(command) = system.edit_command(character, modifiers)
+        {
+            return self.run_agent_composer_command(command);
+        }
         match key {
-            Key::Named(NamedKey::Home | NamedKey::End) if control => {
+            Key::Named(NamedKey::Home | NamedKey::End) if by_word => {
                 let end = matches!(key, Key::Named(NamedKey::End));
                 self.agent_view
                     .state
@@ -1189,43 +1208,6 @@ impl App {
                 self.move_agent_composer_vertically(direction, shift);
                 true
             }
-            Key::Character(character) if control && !alt => match character.to_lowercase().as_str()
-            {
-                "a" => {
-                    self.agent_view.state.composer_mut().select_all();
-                    true
-                }
-                "c" => {
-                    if let Some(selected) = self
-                        .agent_view
-                        .state
-                        .composer_mut()
-                        .selected_text()
-                        .map(str::to_owned)
-                    {
-                        self.copy_agent_view_text(&selected, "");
-                    }
-                    true
-                }
-                "x" => {
-                    let composer = self.agent_view.state.composer_mut();
-                    if let Some(selected) = composer.selected_text().map(str::to_owned) {
-                        composer.edit(TextInputEdit::Delete, false);
-                        self.copy_agent_view_text(&selected, "");
-                    }
-                    true
-                }
-                "v" => {
-                    if let Some(pasted) = self.agent_view_clipboard_text() {
-                        self.agent_view.state.composer_mut().insert(&pasted);
-                    }
-                    true
-                }
-                "z" if shift => self.agent_view.state.composer_mut().redo(),
-                "z" => self.agent_view.state.composer_mut().undo(),
-                "y" => self.agent_view.state.composer_mut().redo(),
-                _ => false,
-            },
             _ => match text {
                 Some(text)
                     if types_text(modifiers, self.alt_graph_active)
@@ -1237,6 +1219,45 @@ impl App {
                 }
                 _ => false,
             },
+        }
+    }
+
+    /// Runs one of the composer's editing commands. Returns false when it
+    /// did nothing.
+    fn run_agent_composer_command(&mut self, command: EditCommand) -> bool {
+        match command {
+            EditCommand::SelectAll => {
+                self.agent_view.state.composer_mut().select_all();
+                true
+            }
+            EditCommand::Copy => {
+                if let Some(selected) = self
+                    .agent_view
+                    .state
+                    .composer_mut()
+                    .selected_text()
+                    .map(str::to_owned)
+                {
+                    self.copy_agent_view_text(&selected, "");
+                }
+                true
+            }
+            EditCommand::Cut => {
+                let composer = self.agent_view.state.composer_mut();
+                if let Some(selected) = composer.selected_text().map(str::to_owned) {
+                    composer.edit(TextInputEdit::Delete, false);
+                    self.copy_agent_view_text(&selected, "");
+                }
+                true
+            }
+            EditCommand::Paste => {
+                if let Some(pasted) = self.agent_view_clipboard_text() {
+                    self.agent_view.state.composer_mut().insert(&pasted);
+                }
+                true
+            }
+            EditCommand::Undo => self.agent_view.state.composer_mut().undo(),
+            EditCommand::Redo => self.agent_view.state.composer_mut().redo(),
         }
     }
 
@@ -1598,21 +1619,21 @@ impl App {
 }
 
 /// Chords the composer edits with, and the keys it types, which global
-/// shortcuts must not take while it has the keyboard.
+/// shortcuts must not take while it has the keyboard: typed text, the
+/// editing keys alone or with `system`'s word modifier (Shift extending the
+/// selection), its line modifier with ← → ⌫ (macOS), and its editing
+/// commands (select all, copy, cut, paste, undo, redo).
 pub(super) fn composer_chord(
     key: &Key,
     modifiers: winit::keyboard::ModifiersState,
     alt_graph_active: bool,
+    system: System,
 ) -> bool {
+    use winit::keyboard::ModifiersState;
     if matches!(key, Key::Character(_) | Key::Named(NamedKey::Space))
         && types_text(modifiers, alt_graph_active)
     {
         return true;
-    }
-    let control = modifiers.control_key();
-    let others = modifiers.alt_key() || modifiers.super_key();
-    if others {
-        return false;
     }
     match key {
         Key::Named(named) => {
@@ -1633,29 +1654,32 @@ pub(super) fn composer_chord(
                     | NamedKey::PageDown
                     | NamedKey::Space
             );
-            // Scrolling the terminal to its ends and jumping between
-            // prompts stay global even while typing.
-            let global = control
-                && modifiers.shift_key()
-                && matches!(
+            let shift = modifiers.shift_key();
+            let held = modifiers.difference(ModifiersState::SHIFT);
+            let ours = match system.reach(held) {
+                Some(Reach::Character) => true,
+                // Scrolling the terminal to its ends and jumping between
+                // prompts stay global even while typing.
+                Some(Reach::Word) => {
+                    !(shift
+                        && matches!(
+                            named,
+                            NamedKey::Home
+                                | NamedKey::End
+                                | NamedKey::ArrowUp
+                                | NamedKey::ArrowDown
+                                | NamedKey::Tab
+                        ))
+                }
+                Some(Reach::Line) => matches!(
                     named,
-                    NamedKey::Home
-                        | NamedKey::End
-                        | NamedKey::ArrowUp
-                        | NamedKey::ArrowDown
-                        | NamedKey::Tab
-                );
-            editing && !global
+                    NamedKey::ArrowLeft | NamedKey::ArrowRight | NamedKey::Backspace
+                ),
+                None => false,
+            };
+            editing && ours
         }
-        // Typing returned above, so Ctrl is held.
-        Key::Character(text) => {
-            let lower = text.to_lowercase();
-            if modifiers.shift_key() {
-                lower == "z"
-            } else {
-                matches!(lower.as_str(), "a" | "c" | "v" | "x" | "y" | "z")
-            }
-        }
+        Key::Character(text) => system.is_exact_edit_command(text, modifiers),
         _ => false,
     }
 }
@@ -1770,26 +1794,67 @@ mod tests {
     }
 
     #[test]
+    fn the_composer_keeps_each_systems_editing_chords_from_global_shortcuts() {
+        use winit::keyboard::ModifiersState as M;
+        let named = |key| Key::Named(key);
+        let character = |text: &str| Key::Character(text.into());
+        let linux = |key: Key, modifiers| composer_chord(&key, modifiers, false, System::Linux);
+        let mac = |key: Key, modifiers| composer_chord(&key, modifiers, false, System::Mac);
+
+        for key in [NamedKey::ArrowLeft, NamedKey::Backspace, NamedKey::Delete] {
+            assert!(linux(named(key), M::CONTROL));
+            assert!(linux(named(key), M::CONTROL | M::SHIFT));
+            assert!(!linux(named(key), M::ALT));
+            assert!(mac(named(key), M::ALT));
+            assert!(mac(named(key), M::ALT | M::SHIFT));
+            assert!(!mac(named(key), M::CONTROL));
+        }
+        // ⌘ reaches the line's ends on a Mac, but ⌘↑, ⌘↓, ⌘Home, and ⌘End
+        // jump between prompts and scroll the terminal.
+        for key in [
+            NamedKey::ArrowLeft,
+            NamedKey::ArrowRight,
+            NamedKey::Backspace,
+        ] {
+            assert!(mac(named(key), M::SUPER), "{key:?}");
+            assert!(!linux(named(key), M::SUPER), "{key:?}");
+        }
+        for key in [
+            NamedKey::ArrowUp,
+            NamedKey::ArrowDown,
+            NamedKey::Home,
+            NamedKey::End,
+        ] {
+            assert!(!mac(named(key), M::SUPER), "{key:?}");
+            assert!(!linux(named(key), M::CONTROL | M::SHIFT), "{key:?}");
+        }
+        // Each system's editing commands.
+        for text in ["a", "c", "x", "v", "z"] {
+            assert!(linux(character(text), M::CONTROL), "{text}");
+            assert!(mac(character(text), M::SUPER), "{text}");
+            assert!(!mac(character(text), M::CONTROL), "{text}");
+        }
+        assert!(linux(character("y"), M::CONTROL));
+        assert!(!mac(character("y"), M::SUPER));
+        assert!(linux(character("Z"), M::CONTROL | M::SHIFT));
+        assert!(mac(character("Z"), M::SUPER | M::SHIFT));
+        assert!(!mac(character("T"), M::SUPER | M::SHIFT));
+        assert!(!mac(character("w"), M::SUPER));
+    }
+
+    #[test]
     fn the_composer_types_by_the_shared_rule_and_keeps_its_ctrl_chords() {
         let ctrl_alt = ModifiersState::CONTROL | ModifiersState::ALT;
+        let chord = |key: Key, modifiers, alt_graph| {
+            composer_chord(&key, modifiers, alt_graph, System::Linux)
+        };
+        let character = |text: &str| Key::Character(text.into());
         // AltGr text is the composer's, kept from global shortcuts, even on
         // layouts that report Ctrl+Alt with it.
-        assert!(composer_chord(&Key::Character("€".into()), ctrl_alt, true));
-        assert!(!composer_chord(
-            &Key::Character("e".into()),
-            ctrl_alt,
-            false
-        ));
-        assert!(composer_chord(
-            &Key::Character("z".into()),
-            ModifiersState::CONTROL,
-            false
-        ));
-        assert!(!composer_chord(
-            &Key::Character("k".into()),
-            ModifiersState::CONTROL,
-            false
-        ));
+        assert!(chord(character("€"), ctrl_alt, true));
+        assert!(!chord(character("e"), ctrl_alt, false));
+        assert!(chord(character("z"), ModifiersState::CONTROL, false));
+        assert!(!chord(character("k"), ModifiersState::CONTROL, false));
 
         let mut app = App::new_headless(Config::default()).unwrap();
         app.open_agent_view(true);

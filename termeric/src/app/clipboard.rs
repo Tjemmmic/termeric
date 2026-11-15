@@ -10,6 +10,7 @@ pub(super) trait ClipboardBackend {
     fn set_text(&mut self, selection: ClipboardRequest, text: &str) -> Result<(), String>;
 }
 
+#[cfg(target_os = "linux")]
 impl ClipboardBackend for arboard::Clipboard {
     fn text(&mut self, selection: ClipboardRequest) -> Result<String, String> {
         use arboard::GetExtLinux;
@@ -28,10 +29,45 @@ impl ClipboardBackend for arboard::Clipboard {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn linux_kind(selection: ClipboardRequest) -> arboard::LinuxClipboardKind {
     match selection {
         ClipboardRequest::Primary => arboard::LinuxClipboardKind::Primary,
         ClipboardRequest::Clipboard => arboard::LinuxClipboardKind::Clipboard,
+    }
+}
+
+/// macOS has one pasteboard and no primary selection. The primary selection
+/// is kept in this process instead, so selecting and middle-clicking (and a
+/// program's OSC 52 writes to it) work inside Termeric without ever
+/// replacing what a person copied.
+#[cfg(target_os = "macos")]
+static MACOS_PRIMARY_SELECTION: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+#[cfg(target_os = "macos")]
+impl ClipboardBackend for arboard::Clipboard {
+    fn text(&mut self, selection: ClipboardRequest) -> Result<String, String> {
+        match selection {
+            ClipboardRequest::Clipboard => self.get_text().map_err(|error| error.to_string()),
+            ClipboardRequest::Primary => Ok(MACOS_PRIMARY_SELECTION
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()),
+        }
+    }
+
+    fn set_text(&mut self, selection: ClipboardRequest, text: &str) -> Result<(), String> {
+        match selection {
+            ClipboardRequest::Clipboard => self.set_text(text).map_err(|error| error.to_string()),
+            ClipboardRequest::Primary => {
+                text.clone_into(
+                    &mut MACOS_PRIMARY_SELECTION
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner),
+                );
+                Ok(())
+            }
+        }
     }
 }
 

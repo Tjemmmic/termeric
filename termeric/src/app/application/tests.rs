@@ -825,7 +825,7 @@ fn control_launch_window_prepares_one_exact_local_command_and_real_pty() {
     let missing_cwd = application
         .prepare_control_launch_window(
             7,
-            "/bin/true",
+            "/usr/bin/true",
             &[],
             Some("/definitely/missing/termeric-launch-window-cwd"),
             None,
@@ -957,7 +957,7 @@ fn control_launch_window_preparation_is_atomic_for_stale_and_spawn_failures() {
     let error = application
         .prepare_control_launch_window(
             7,
-            "/bin/true",
+            "/usr/bin/true",
             &[],
             temp.path().to_str(),
             None,
@@ -971,7 +971,7 @@ fn control_launch_window_preparation_is_atomic_for_stale_and_spawn_failures() {
     let error = application
         .prepare_control_launch_window(
             8,
-            "/bin/true",
+            "/usr/bin/true",
             &[],
             temp.path().to_str(),
             None,
@@ -1122,7 +1122,7 @@ fn live_domain_creation_completion_returns_authoritative_gui_ids_and_replays() {
         |active_tab, tabs| DomainSnapshot::fixture("domain-control-ack", active_tab, tabs);
 
     let initial = snapshot(10, vec![tab(10, 100)]);
-    let relay = crate::domain::DomainRelayCommand::local("/bin/true");
+    let relay = crate::domain::DomainRelayCommand::local("/usr/bin/true");
     let mut tabs = TabManager::new(80, 24, Config::default().shell, 1_000, 1024 * 1024);
     tabs.attach_domain(&initial, &relay).unwrap();
     let mut window = App::new_headless(Config::default()).unwrap();
@@ -1136,7 +1136,7 @@ fn live_domain_creation_completion_returns_authoritative_gui_ids_and_replays() {
     let local_launch = window
         .launch_control_tab(
             false,
-            "/bin/true",
+            "/usr/bin/true",
             &[],
             None,
             Some("must not launch"),
@@ -3325,13 +3325,10 @@ fn cli_cwds_and_terminal_profiles_are_validated_before_windows_are_queued() {
 
 #[test]
 fn non_utf8_cli_cwd_fails_before_windows_are_queued() {
-    use std::os::unix::ffi::OsStringExt;
-
     let temp = tempfile::tempdir().unwrap();
-    let path = temp
-        .path()
-        .join(std::ffi::OsString::from_vec(vec![b'c', b'w', b'd', 0xff]));
-    std::fs::create_dir(&path).unwrap();
+    let Some(path) = crate::test_support::non_utf8_directory(temp.path()) else {
+        return;
+    };
     let mut launch = LaunchPlan::default();
     launch.windows[0].tabs[0].working_directory = Some(path);
     let error = Application::from_config(Config::default(), None, launch)
@@ -3389,6 +3386,43 @@ fn automatic_restore_expands_each_remembered_window_workspace() {
     assert_eq!(application.pending.len(), 1);
     assert!(application.pending[0].launch.workspace.is_none());
     assert!(!application.pending[0].allow_workspace_fallback);
+}
+
+/// Quitting (on macOS: the menu, the Dock, logging out) ends every window at
+/// once, and every one of them comes back at the next start.
+#[test]
+fn exiting_keeps_every_open_window_for_the_next_start() {
+    let temp = tempfile::tempdir().unwrap();
+    crate::workspace::set_test_workspaces_base_dir(Some(temp.path().join("workspaces")));
+    super::super::state::AppState::set_test_state_path(Some(temp.path().join("state.json")));
+    let outcome = std::panic::catch_unwind(|| {
+        let config = Config {
+            shell: crate::test_support::sleeping_shell(),
+            ..Config::default()
+        };
+        assert!(config.session.enabled && config.session.auto_save);
+        let mut application =
+            Application::from_config(config.clone(), None, LaunchPlan::default()).unwrap();
+        application.pending.clear();
+        for id in [1, 2] {
+            let mut window = App::new_headless_with_tabs(config.clone());
+            window.automatic_persistence = true;
+            application.windows.insert(WindowId::from(id), window);
+        }
+        application.close_every_window();
+        assert!(application.windows.is_empty());
+        assert_eq!(
+            super::super::state::AppState::load()
+                .last_workspace_ids
+                .len(),
+            2
+        );
+    });
+    crate::workspace::set_test_workspaces_base_dir(None);
+    super::super::state::AppState::set_test_state_path(None);
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
 }
 
 #[test]

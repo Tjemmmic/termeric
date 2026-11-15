@@ -1022,6 +1022,7 @@ fn ctrl_r_in_settings_does_not_reset() {
 
 /// Record `key` with `modifiers` for `action` in the shortcuts editor
 /// through the keyboard, as a person does.
+#[cfg(target_os = "linux")]
 fn record_shortcut(
     app: &mut App,
     action: crate::input::keybindings::BindableAction,
@@ -1039,6 +1040,7 @@ fn record_shortcut(
     app.modifiers = ModifiersState::empty();
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn recording_a_chord_another_action_uses_asks_before_changing_anything() {
     use crate::input::keybindings::{BindableAction, KeyChord};
@@ -1131,6 +1133,7 @@ fn recording_a_chord_another_action_uses_asks_before_changing_anything() {
     );
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn a_reassignment_answered_after_a_reload_moved_the_chord_asks_again() {
     use crate::input::keybindings::{BindableAction, KeyChord};
@@ -1170,6 +1173,7 @@ fn a_reassignment_answered_after_a_reload_moved_the_chord_asks_again() {
     assert!(app.dialog_text().contains("Copy Selection"));
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn an_entry_taking_a_default_shortcut_is_noted_once_until_that_changes() {
     use crate::input::keybindings::{BindableAction, KeyChord};
@@ -1216,6 +1220,7 @@ fn an_entry_taking_a_default_shortcut_is_noted_once_until_that_changes() {
     assert!(notices(&app).is_empty());
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn agent_shortcuts_are_no_conflict_while_agent_features_are_off() {
     use crate::input::keybindings::{BindableAction, KeyChord};
@@ -1252,6 +1257,7 @@ fn agent_shortcuts_are_no_conflict_while_agent_features_are_off() {
     );
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn agent_shortcuts_come_back_with_agent_features() {
     use crate::input::keybindings::BindableAction;
@@ -1269,6 +1275,7 @@ fn agent_shortcuts_come_back_with_agent_features() {
     assert_eq!(pressed(&app), None);
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn a_displaced_agent_shortcut_is_noted_only_while_agent_features_are_on() {
     let notices = |app: &App| -> Vec<String> {
@@ -1361,7 +1368,7 @@ fn reloading_the_configuration_asks_only_when_it_would_discard_changes() {
 
 #[test]
 fn a_background_image_is_chosen_typed_or_removed_from_settings() {
-    use crate::portal::FileChoice;
+    use crate::file_chooser::FileChoice;
     let directory = tempfile::tempdir().unwrap();
     let image = directory.path().join("sky.png");
     std::fs::write(&image, b"").unwrap();

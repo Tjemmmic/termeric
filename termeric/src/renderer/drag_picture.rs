@@ -33,7 +33,8 @@ impl ChannelOrder {
 enum StoredAlpha {
     /// Colors are already multiplied by alpha.
     Premultiplied,
-    /// Colors are independent of alpha.
+    /// Colors are independent of alpha (Metal has no such mode).
+    #[cfg(target_os = "linux")]
     Straight,
     /// The compositor ignores alpha: the window is opaque.
     Ignored,
@@ -43,6 +44,11 @@ impl StoredAlpha {
     fn of(mode: wgpu::CompositeAlphaMode) -> Self {
         match mode {
             wgpu::CompositeAlphaMode::PreMultiplied => Self::Premultiplied,
+            // Metal's PostMultiplied only makes the layer non-opaque; Core
+            // Animation reads its colours as premultiplied.
+            #[cfg(target_os = "macos")]
+            wgpu::CompositeAlphaMode::PostMultiplied => Self::Premultiplied,
+            #[cfg(target_os = "linux")]
             wgpu::CompositeAlphaMode::PostMultiplied => Self::Straight,
             _ => Self::Ignored,
         }
@@ -192,6 +198,7 @@ fn straight_rgba(bytes: &[u8], layout: CopiedRows) -> Vec<u8> {
             };
             let [r, g, b, a] = match layout.alpha {
                 StoredAlpha::Premultiplied => unpremultiply([r, g, b, a]),
+                #[cfg(target_os = "linux")]
                 StoredAlpha::Straight => [r, g, b, a],
                 StoredAlpha::Ignored => [r, g, b, u8::MAX],
             };

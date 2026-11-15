@@ -17,8 +17,13 @@ accepted = [
     "Zlib",
 ]
 
-# Only what ships in the Linux release binaries.
-targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+# Only what ships in the Linux release binaries and Termeric.app.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
 ignore-build-dependencies = true
 ignore-dev-dependencies = true
 private = { ignore = true }

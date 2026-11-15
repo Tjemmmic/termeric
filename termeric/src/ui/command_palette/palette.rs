@@ -877,7 +877,7 @@ fn core_command_table() -> Vec<CoreCommand> {
     use CoreCategory::*;
     use CoreRun::{Agent, Bound, Unbound};
     vec![
-        command("core.new-window", "New Window", Core, Unbound(Action::NewWindow)),
+        command("core.new-window", "New Window", Core, Bound(Key::NewWindow)),
         command("core.toggle-fullscreen", "Toggle Fullscreen", Core, Bound(Key::ToggleFullscreen)),
         command("core.attach-domain", "Attach Live Domain…", Experimental, Unbound(Action::AttachDomain)),
         destructive("core.cancel-file-upload", "Cancel Upload", Core, Unbound(Action::CancelFileUpload)),
@@ -1265,6 +1265,7 @@ mod tests {
         }));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn command_shortcut_hints_follow_user_overrides() {
         let split_shortcut = |registry: &ShortcutRegistry| {
@@ -1569,6 +1570,7 @@ mod tests {
         assert!(info.entries.iter().any(|e| e.category == "Config"));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn test_shortcut_search() {
         let mut palette = test_palette();

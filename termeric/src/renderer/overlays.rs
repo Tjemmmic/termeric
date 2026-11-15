@@ -489,7 +489,7 @@ impl Renderer {
         );
 
         // Enter and Escape cancel, so Cancel shows the focus ring; only
-        // Ctrl+Enter or a press runs the command.
+        // the command modifier with Enter (Ctrl+Enter, ⌘↩) or a press runs it.
         self.draw_button(
             layout.cancel_button,
             "Cancel",

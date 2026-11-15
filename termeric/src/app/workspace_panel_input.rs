@@ -248,7 +248,7 @@ mod tests {
             app.workspace_panel
                 .accessibility_set_rename("one e\u{301} 👩\u{200d}💻 tail")
         );
-        app.modifiers = ModifiersState::CONTROL;
+        app.modifiers = crate::input::platform::System::CURRENT.word();
         for (key, expected, cursor) in [
             (NamedKey::ArrowLeft, "one e\u{301} 👩\u{200d}💻 tail", 20),
             (NamedKey::Backspace, "one e\u{301} tail", 8),
@@ -278,12 +278,7 @@ mod tests {
     fn rename_rejected_modifiers_and_text_preserve_draft_caret_and_composition() {
         let mut app = rename_app();
         app.handle_ime_event(Ime::Preedit("draft".into(), None));
-        for modifiers in [
-            ModifiersState::ALT,
-            ModifiersState::SUPER,
-            ModifiersState::SHIFT,
-            ModifiersState::CONTROL | ModifiersState::SHIFT,
-        ] {
+        for modifiers in crate::test_support::unsupported_field_modifiers() {
             app.modifiers = modifiers;
             for key in [
                 NamedKey::Home,
@@ -300,7 +295,7 @@ mod tests {
                 assert!(app.ime.preedit().is_some());
             }
         }
-        app.modifiers = ModifiersState::CONTROL;
+        app.modifiers = crate::input::platform::System::CURRENT.word();
         for key in [
             NamedKey::Home,
             NamedKey::End,

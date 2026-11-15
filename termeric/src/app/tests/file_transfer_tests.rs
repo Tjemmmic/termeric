@@ -50,6 +50,7 @@ fn local_file_drop_is_quoted_and_refuses_unsafe_terminal_routes() {
     );
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn a_wayland_drop_handles_each_file_and_says_why_one_was_refused() {
     let config = Config {
@@ -97,8 +98,8 @@ fn local_file_drop_writes_one_bracketed_payload_without_enter() {
     expected.extend_from_slice(b"\x1b[201~");
     let script = format!(
         "stty raw -echo; printf '\rREADY\r\n'; \
-         bytes=$(dd bs=1 count={} 2>/dev/null | od -An -tx1); \
-         next=$(dd bs=1 count=1 2>/dev/null | od -An -tx1); \
+         bytes=$(dd bs=1 count={} 2>/dev/null | od -An -tx1 | tr -s ' '); \
+         next=$(dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -s ' '); \
          printf '\rdrop=%s next=%s\r\n' \"$bytes\" \"$next\"; sleep 2",
         expected.len()
     );

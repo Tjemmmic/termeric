@@ -33,7 +33,7 @@ complete -c termeric -n "__fish_termeric_needs_command" -l profile -d 'Launch a 
 complete -c termeric -n "__fish_termeric_needs_command" -l workspace -d 'Restore one complete workspace into this window' -r
 complete -c termeric -n "__fish_termeric_needs_command" -l title -d 'Set the current tab title' -r
 complete -c termeric -n "__fish_termeric_needs_command" -l geometry -d 'Initial physical-pixel window size' -r
-complete -c termeric -n "__fish_termeric_needs_command" -l app-id -l class -d 'Set the X11 WM_CLASS and Wayland application ID' -r
+complete -c termeric -n "__fish_termeric_needs_command" -l app-id -l class -d 'Set the X11 WM_CLASS and Wayland application ID; macOS names the app by its bundle identifier instead' -r
 complete -c termeric -n "__fish_termeric_needs_command" -l renderer -d 'Choose the renderer for every window of this process' -r -f -a "auto\t'Try the GPU, then software rendering'
 gpu\t'Insist on the GPU'
 software\t'Insist on software rendering'"

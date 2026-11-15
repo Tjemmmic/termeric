@@ -129,7 +129,8 @@ impl ConfiguredDevice {
         let fd = file.as_raw_fd();
         // SAFETY: fd is a live descriptor. TIOCEXCL asks the kernel to
         // reject competing opens until this descriptor closes.
-        if unsafe { libc::ioctl(fd, libc::TIOCEXCL) } != 0 {
+        // The request's integer type differs between systems.
+        if unsafe { libc::ioctl(fd, libc::TIOCEXCL as _) } != 0 {
             return Err(io::Error::last_os_error()).with_context(|| {
                 format!(
                     "claim serial device {} exclusively",
@@ -208,8 +209,9 @@ fn configure(fd: RawFd, mut value: libc::termios, config: &SerialProfileConfig) 
     }
     value.c_cc[libc::VMIN] = 1;
     value.c_cc[libc::VTIME] = 0;
-    let speed = baud_constant(config.baud)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "unsupported baud rate"))?;
+    let unsupported = || io::Error::new(io::ErrorKind::InvalidInput, "unsupported baud rate");
+    let setting = baud_setting(config.baud).ok_or_else(unsupported)?;
+    let speed = setting.termios_speed();
     // SAFETY: value is initialized and speed is a platform termios rate.
     if unsafe { libc::cfsetispeed(&mut value, speed) } != 0
         || unsafe { libc::cfsetospeed(&mut value, speed) } != 0
@@ -220,11 +222,64 @@ fn configure(fd: RawFd, mut value: libc::termios, config: &SerialProfileConfig) 
     if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &value) } != 0 {
         return Err(io::Error::last_os_error());
     }
+    #[cfg(target_os = "macos")]
+    if setting == BaudSetting::Driver {
+        set_driver_speed(fd, config.baud).map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("unsupported baud rate for this device: {error}"),
+            )
+        })?;
+    }
     Ok(())
 }
 
-fn baud_constant(baud: u32) -> Option<libc::speed_t> {
-    Some(match baud {
+/// How a baud rate is set on this system.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BaudSetting {
+    /// Through the termios speed.
+    Termios(libc::speed_t),
+    /// Through the serial driver, after the termios attributes: macOS's
+    /// termios goes no higher than 230400.
+    #[cfg(target_os = "macos")]
+    Driver,
+}
+
+impl BaudSetting {
+    /// The termios speed to set the attributes with.
+    fn termios_speed(self) -> libc::speed_t {
+        match self {
+            Self::Termios(speed) => speed,
+            // The attributes go in at a standard rate first, because setting
+            // them resets the speed; the real rate follows.
+            #[cfg(target_os = "macos")]
+            Self::Driver => libc::B9600,
+        }
+    }
+}
+
+/// The serial driver's own speed request, `IOSSIOSPEED` from IOKit's
+/// `IOSerialKeys.h`: `_IOW('T', 2, speed_t)`.
+#[cfg(target_os = "macos")]
+const IOSSIOSPEED: libc::c_ulong = 0x8008_5402;
+
+/// Ask the serial driver for exactly `baud`. A driver that can't run at it
+/// refuses, and the device is never left at another rate unknowingly: the
+/// caller fails the connection.
+#[cfg(target_os = "macos")]
+fn set_driver_speed(fd: RawFd, baud: u32) -> io::Result<()> {
+    let speed = libc::speed_t::from(baud);
+    // SAFETY: fd is live, and IOSSIOSPEED reads one speed_t from the pointer
+    // for the duration of the call.
+    if unsafe { libc::ioctl(fd, IOSSIOSPEED, &speed) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// How to set `baud`, or `None` for a rate this system can't set.
+fn baud_setting(baud: u32) -> Option<BaudSetting> {
+    let speed = match baud {
         50 => libc::B50,
         75 => libc::B75,
         110 => libc::B110,
@@ -243,20 +298,38 @@ fn baud_constant(baud: u32) -> Option<libc::speed_t> {
         57_600 => libc::B57600,
         115_200 => libc::B115200,
         230_400 => libc::B230400,
+        #[cfg(target_os = "linux")]
         460_800 => libc::B460800,
+        #[cfg(target_os = "linux")]
         500_000 => libc::B500000,
+        #[cfg(target_os = "linux")]
         576_000 => libc::B576000,
+        #[cfg(target_os = "linux")]
         921_600 => libc::B921600,
+        #[cfg(target_os = "linux")]
         1_000_000 => libc::B1000000,
+        #[cfg(target_os = "linux")]
         1_152_000 => libc::B1152000,
+        #[cfg(target_os = "linux")]
         1_500_000 => libc::B1500000,
+        #[cfg(target_os = "linux")]
         2_000_000 => libc::B2000000,
+        #[cfg(target_os = "linux")]
         2_500_000 => libc::B2500000,
+        #[cfg(target_os = "linux")]
         3_000_000 => libc::B3000000,
+        #[cfg(target_os = "linux")]
         3_500_000 => libc::B3500000,
+        #[cfg(target_os = "linux")]
         4_000_000 => libc::B4000000,
+        #[cfg(target_os = "macos")]
+        460_800 | 500_000 | 576_000 | 921_600 | 1_000_000 | 1_152_000 | 1_500_000 | 2_000_000
+        | 2_500_000 | 3_000_000 | 3_500_000 | 4_000_000 => {
+            return Some(BaudSetting::Driver);
+        }
         _ => return None,
-    })
+    };
+    Some(BaudSetting::Termios(speed))
 }
 
 fn relay_between(
@@ -267,31 +340,16 @@ fn relay_between(
 ) -> io::Result<()> {
     let mut buffer = [0u8; RELAY_BUFFER_BYTES];
     loop {
-        let mut polls = [
-            libc::pollfd {
-                fd: terminal_input.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            },
-            libc::pollfd {
-                fd: device_input.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            },
-        ];
-        // SAFETY: polls is valid for its exact two-element length.
-        let ready = unsafe { libc::poll(polls.as_mut_ptr(), polls.len() as _, -1) };
-        if ready < 0 {
-            let error = io::Error::last_os_error();
-            if error.kind() == io::ErrorKind::Interrupted {
-                continue;
-            }
-            return Err(error);
-        }
-        // An interrupted read polls again; write_all retries on its own.
-        if polls[0].revents & libc::POLLIN != 0 {
+        let [terminal_ready, device_ready] = crate::deadline_io::ready_to_read(
+            [terminal_input.as_raw_fd(), device_input.as_raw_fd()],
+            -1,
+        )?;
+        // An interrupted read waits again; write_all retries on its own. A
+        // hangup or an error reads as the end of its side.
+        if terminal_ready {
             let read = match terminal_input.read(&mut buffer) {
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) if error.raw_os_error() == Some(libc::EIO) => return Ok(()),
                 read => read?,
             };
             if read == 0 {
@@ -299,10 +357,16 @@ fn relay_between(
             }
             device_output.write_all(&buffer[..read])?;
         }
-        if polls[1].revents & libc::POLLIN != 0 {
+        if device_ready {
             let read = match device_input.read(&mut buffer) {
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                read => read?,
+                Err(error) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        format!("serial device disconnected: {error}"),
+                    ));
+                }
+                Ok(read) => read,
             };
             if read == 0 {
                 return Err(io::Error::new(
@@ -311,15 +375,6 @@ fn relay_between(
                 ));
             }
             terminal_output.write_all(&buffer[..read])?;
-        }
-        if polls[0].revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
-            return Ok(());
-        }
-        if polls[1].revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "serial device disconnected",
-            ));
         }
     }
 }
@@ -366,33 +421,24 @@ mod tests {
     #[test]
     fn relay_is_binary_transparent_in_both_directions() {
         use std::io::{Read, Write};
-        use std::os::fd::{AsRawFd, FromRawFd};
+        use std::os::fd::AsRawFd;
 
         let pipe = || {
-            let mut fds = [-1; 2];
-            // SAFETY: fds points to two integers populated by pipe2.
-            assert_eq!(unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) }, 0);
-            // SAFETY: each returned descriptor is uniquely adopted once.
-            unsafe {
-                (
-                    std::fs::File::from_raw_fd(fds[0]),
-                    std::fs::File::from_raw_fd(fds[1]),
-                )
-            }
+            let (reader, writer) = std::io::pipe().expect("create pipe");
+            (
+                std::fs::File::from(std::os::fd::OwnedFd::from(reader)),
+                std::fs::File::from(std::os::fd::OwnedFd::from(writer)),
+            )
         };
         let (bridge_terminal_input, mut client_terminal_output) = pipe();
         let (mut client_terminal_input, bridge_terminal_output) = pipe();
         let (bridge_device_input, mut client_device_output) = pipe();
         let (mut client_device_input, bridge_device_output) = pipe();
         let assert_readable = |fd| {
-            let mut poll = libc::pollfd {
-                fd,
-                events: libc::POLLIN,
-                revents: 0,
-            };
-            // SAFETY: poll points to one initialized pollfd for this call.
-            assert_eq!(unsafe { libc::poll(&mut poll, 1, 1_000) }, 1);
-            assert_ne!(poll.revents & libc::POLLIN, 0);
+            assert_eq!(
+                crate::deadline_io::ready_to_read([fd], 1_000).unwrap(),
+                [true]
+            );
         };
         let relay = std::thread::spawn(move || {
             relay_between(

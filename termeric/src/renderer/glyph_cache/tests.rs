@@ -769,6 +769,79 @@ fn cell_height_uses_configured_line_height() {
     assert!(cell.baseline > 0.0 && cell.baseline <= cell.height);
 }
 
+/// The family that draws `text` in `font_system`, glyph by glyph.
+fn drawing_families(font_system: &mut FontSystem, text: &str, attrs: &Attrs<'_>) -> Vec<String> {
+    let mut buffer = Buffer::new(font_system, Metrics::new(16.0, 20.0));
+    buffer.set_text(text, attrs, Shaping::Advanced, None);
+    buffer.shape_until_scroll(font_system, false);
+    buffer
+        .layout_runs()
+        .flat_map(|run| run.glyphs.iter())
+        .map(|glyph| {
+            font_system.db().face(glyph.font_id).unwrap().families[0]
+                .0
+                .clone()
+        })
+        .collect()
+}
+
+/// The fixture is Fira Mono's Medium face alone. Asked for a named family
+/// at a weight it lacks, cosmic-text passes it over for the system's
+/// fallback fonts (Noto Sans or DejaVu Sans on Linux, the system face on
+/// macOS), so the family is asked for at the weight it has. The machine's
+/// fonts are loaded on purpose: they are what cosmic-text would choose.
+#[test]
+fn a_family_without_the_configured_weight_still_draws_at_its_nearest() {
+    let mut font_system = super::fonts::desktop_font_system();
+    font_system
+        .db_mut()
+        .load_font_data(deterministic_test_font_data());
+    let fira = Family::Name("Fira Mono");
+    for style in MATCHED_WEIGHT_STYLES {
+        let requested = if style.bold {
+            Weight::BOLD
+        } else {
+            Weight::NORMAL
+        };
+        let weight = matched_family_weight(&mut font_system, fira, requested, style.italic);
+        assert_eq!(weight, Weight::MEDIUM, "{style:?}");
+        let attrs = font_attrs(fira, style, weight);
+        let families = drawing_families(&mut font_system, "ffi M", &attrs);
+        assert!(
+            !families.is_empty() && families.iter().all(|family| family == "Fira Mono"),
+            "{style:?}: {families:?}"
+        );
+    }
+    let metrics = Metrics::new(16.0, 20.0);
+    assert_eq!(
+        measure_cell(&mut font_system, &metrics, "Fira Mono", Weight::NORMAL),
+        measure_cell(&mut font_system, &metrics, "Fira Mono", Weight::MEDIUM),
+        "cells are measured in the configured family"
+    );
+}
+
+#[test]
+fn variable_generic_and_missing_families_keep_the_configured_weight() {
+    let mut font_system = fixture_font_system([cosmic_text::fontdb::Source::Binary(Arc::new(
+        deterministic_test_font_data_named("InterVariable.ttf"),
+    ))]);
+    // A variable face is asked for any weight its axis covers; a generic or
+    // missing family is left to cosmic-text's own matching.
+    let inter = Family::Name("Inter Variable");
+    for weight in [Weight::THIN, Weight::BOLD, Weight::BLACK] {
+        assert_eq!(
+            matched_family_weight(&mut font_system, inter, weight, false),
+            weight
+        );
+    }
+    for family in [Family::Monospace, Family::Name("Not Installed")] {
+        assert_eq!(
+            matched_family_weight(&mut font_system, family, Weight(450), false),
+            Weight(450)
+        );
+    }
+}
+
 #[test]
 fn rgba_glyphs_preserve_color_while_masks_remain_compact() {
     let rgba = [10, 20, 30, 40, 50, 60, 70, 80];
@@ -820,7 +893,7 @@ fn sgr_face_requests_are_part_of_every_glyph_cache_key() {
         grid(GlyphPlacement::Shaped),
         "cell-grid and shaped offsets must not share a cached run"
     );
-    let attrs = font_attrs(Family::Monospace, bold_italic, Weight(350), Weight(775));
+    let attrs = font_attrs(Family::Monospace, bold_italic, Weight(775));
     assert_eq!(attrs.weight, Weight(775));
     assert_eq!(attrs.style, Style::Italic);
 

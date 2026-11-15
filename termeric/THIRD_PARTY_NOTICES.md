@@ -1823,7 +1823,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 ## Rust crates
 
-The Linux binaries are built from the Rust crates below. Each license section lists the crates that use it, with a link to each crate's source.
+Termeric's binaries for Linux and macOS are built from the Rust crates below (some only on one of them). Each license section lists the crates that use it, with a link to each crate's source.
 
 - Apache License 2.0
 - MIT License
@@ -3149,6 +3149,7 @@ Used by:
 
 Used by:
 
+- [zerocopy-derive 0.8.33](https://github.com/google/zerocopy)
 - [zerocopy 0.8.33](https://github.com/google/zerocopy)
 
 ```text
@@ -4222,8 +4223,12 @@ Used by:
 - [crc32fast 1.5.0](https://github.com/srijs/rust-crc32fast)
 - [env_filter 0.1.4](https://github.com/rust-cli/env_logger)
 - [env_logger 0.11.8](https://github.com/rust-cli/env_logger)
+- [foreign-types-macros 0.2.3](https://github.com/sfackler/foreign-types)
+- [foreign-types-shared 0.3.1](https://github.com/sfackler/foreign-types)
+- [foreign-types 0.5.0](https://github.com/sfackler/foreign-types)
 - [hex 0.4.3](https://github.com/KokaKiwi/rust-hex)
 - [is_terminal_polyfill 1.70.2](https://github.com/polyfill-rs/is_terminal_polyfill)
+- [quick-error 2.0.1](http://github.com/tailhook/quick-error)
 - [serde_spanned 0.6.9](https://github.com/toml-rs/toml)
 - [toml 0.8.23](https://github.com/toml-rs/toml)
 - [toml_datetime 0.6.11](https://github.com/toml-rs/toml)
@@ -5925,10 +5930,15 @@ Used by:
 - [async-task 4.7.1](https://github.com/smol-rs/async-task)
 - [atomic-waker 1.1.2](https://github.com/smol-rs/atomic-waker)
 - [base64 0.22.1](https://github.com/marshallpierce/rust-base64)
+- [bitflags 1.3.2](https://github.com/bitflags/bitflags)
 - [bitflags 2.10.0](https://github.com/bitflags/bitflags)
 - [blocking 1.7.0](https://github.com/smol-rs/blocking)
 - [cfg-if 1.0.4](https://github.com/rust-lang/cfg-if)
 - [concurrent-queue 2.5.0](https://github.com/smol-rs/concurrent-queue)
+- [core-foundation-sys 0.8.7](https://github.com/servo/core-foundation-rs)
+- [core-foundation 0.9.4](https://github.com/servo/core-foundation-rs)
+- [core-graphics-types 0.1.3](https://github.com/servo/core-foundation-rs)
+- [core-graphics 0.23.2](https://github.com/servo/core-foundation-rs)
 - [crossbeam-utils 0.8.21](https://github.com/crossbeam-rs/crossbeam)
 - [equivalent 1.0.2](https://github.com/indexmap-rs/equivalent)
 - [errno 0.3.14](https://github.com/lambda-fairy/rust-errno)
@@ -5951,6 +5961,7 @@ Used by:
 - [linux-raw-sys 0.4.15](https://github.com/sunfishcode/linux-raw-sys)
 - [lock_api 0.4.14](https://github.com/Amanieu/parking_lot)
 - [log 0.4.29](https://github.com/rust-lang/log)
+- [metal 0.31.0](https://github.com/gfx-rs/metal-rs)
 - [num-traits 0.2.19](https://github.com/rust-num/num-traits)
 - [once_cell 1.21.3](https://github.com/matklad/once_cell)
 - [ordered-stream 0.2.0](https://github.com/danieldg/ordered-stream)
@@ -8498,6 +8509,7 @@ Used by:
 - [accesskit 0.24.1](https://github.com/AccessKit/accesskit)
 - [accesskit_atspi_common 0.19.1](https://github.com/AccessKit/accesskit)
 - [accesskit_consumer 0.38.0](https://github.com/AccessKit/accesskit)
+- [accesskit_macos 0.26.3](https://github.com/AccessKit/accesskit)
 - [accesskit_unix 0.22.1](https://github.com/AccessKit/accesskit)
 - [accesskit_winit 0.33.2](https://github.com/AccessKit/accesskit)
 - [anyhow 1.0.104](https://github.com/dtolnay/anyhow)
@@ -8514,6 +8526,7 @@ Used by:
 - [gpu-alloc 0.6.0](https://github.com/zakarumych/gpu-alloc)
 - [gpu-descriptor-types 0.2.0](https://github.com/zakarumych/gpu-descriptor)
 - [gpu-descriptor 0.3.2](https://github.com/zakarumych/gpu-descriptor)
+- [half 2.7.1](https://github.com/VoidStarKat/half-rs)
 - [image 0.25.9](https://github.com/image-rs/image)
 - [itoa 1.0.17](https://github.com/dtolnay/itoa)
 - [libc 0.2.180](https://github.com/rust-lang/libc)
@@ -8521,7 +8534,13 @@ Used by:
 - [litrs 1.0.0](https://github.com/LukasKalbertodt/litrs)
 - [miniz_oxide 0.8.9](https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide)
 - [naga 24.0.0](https://github.com/gfx-rs/wgpu/tree/trunk/naga)
+- [objc2-app-kit 0.3.2](https://github.com/madsmtm/objc2)
+- [objc2-core-foundation 0.3.2](https://github.com/madsmtm/objc2)
+- [objc2-core-graphics 0.3.2](https://github.com/madsmtm/objc2)
+- [objc2-quartz-core 0.3.2](https://github.com/madsmtm/objc2)
+- [objc2-user-notifications 0.3.2](https://github.com/madsmtm/objc2)
 - [owned_ttf_parser 0.25.1](https://github.com/alexheretic/owned-ttf-parser)
+- [paste 1.0.15](https://github.com/dtolnay/paste)
 - [pin-project-lite 0.2.16](https://github.com/taiki-e/pin-project-lite)
 - [proc-macro2 1.0.107](https://github.com/dtolnay/proc-macro2)
 - [profiling 1.0.17](https://github.com/aclysma/profiling)
@@ -8551,6 +8570,8 @@ Used by:
 - [wgpu-hal 24.0.4](https://github.com/gfx-rs/wgpu)
 - [wgpu-types 24.0.0](https://github.com/gfx-rs/wgpu)
 - [wgpu 24.0.5](https://github.com/gfx-rs/wgpu)
+- [zune-core 0.4.12](https://crates.io/crates/zune-core)
+- [zune-jpeg 0.4.21](https://github.com/etemesi254/zune-image/tree/dev/crates/zune-jpeg)
 
 ```text
 Apache License
@@ -9404,6 +9425,37 @@ SOFTWARE.
 
 Used by:
 
+- [tiff 0.10.3](https://github.com/image-rs/image-tiff)
+
+```text
+MIT License
+
+Copyright (c) 2018 PistonDevelopers
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+```
+
+### MIT License
+
+Used by:
+
 - [filedescriptor 0.8.3](https://github.com/wezterm/wezterm)
 - [portable-pty 0.9.0](https://github.com/wezterm/wezterm)
 
@@ -9591,8 +9643,22 @@ SOFTWARE.
 
 Used by:
 
+- [block2 0.5.1](https://github.com/madsmtm/objc2)
+- [block2 0.6.2](https://github.com/madsmtm/objc2)
+- [block 0.1.6](http://github.com/SSheldon/rust-block)
+- [dispatch 0.2.0](http://github.com/SSheldon/rust-dispatch)
 - [dpi 0.1.2](https://github.com/rust-windowing/winit)
+- [fax 0.2.6](https://github.com/pdf-rs/fax)
+- [fax_derive 0.2.0](https://github.com/pdf-rs/fax)
 - [libm 0.2.15](https://github.com/rust-lang/compiler-builtins)
+- [malloc_buf 0.0.6](https://github.com/SSheldon/malloc_buf)
+- [objc-sys 0.3.5](https://github.com/madsmtm/objc2)
+- [objc2-app-kit 0.2.2](https://github.com/madsmtm/objc2)
+- [objc2-encode 4.1.0](https://github.com/madsmtm/objc2)
+- [objc2-foundation 0.2.2](https://github.com/madsmtm/objc2)
+- [objc2-foundation 0.3.2](https://github.com/madsmtm/objc2)
+- [objc2 0.5.2](https://github.com/madsmtm/objc2)
+- [objc2 0.6.3](https://github.com/madsmtm/objc2)
 
 ```text
 MIT License
@@ -9613,6 +9679,37 @@ LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE A
 EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+```
+
+### MIT License
+
+Used by:
+
+- [objc 0.2.7](http://github.com/SSheldon/rust-objc)
+
+```text
+MIT License
+
+Copyright (c) Steven Sheldon
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 ```
 

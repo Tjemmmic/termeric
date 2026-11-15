@@ -286,14 +286,16 @@ pub(super) fn read_and_unlink_shared_memory(
     normalized_name.extend_from_slice(component);
     let name = std::ffi::CString::new(normalized_name)
         .map_err(|_| ProtocolError::invalid("shared-memory name contains NUL"))?;
-    let mut file = open_graphics_shared_memory(&name)
+    // A name longer than the system allows (31 bytes on macOS) fails here
+    // like any other unavailable object.
+    let file = open_graphics_shared_memory(&name)
         .map_err(|error| filesystem_error(error, "shared-memory object is unavailable"))?;
     let metadata = file
         .metadata()
         .map_err(|error| filesystem_error(error, "shared-memory metadata is unavailable"))?;
     // SAFETY: `geteuid` has no preconditions and does not access Rust memory.
     let effective_uid = unsafe { libc::geteuid() };
-    if !metadata.file_type().is_file()
+    if !is_shared_memory_object(&metadata)
         || metadata.uid() != effective_uid
         || metadata.mode() & 0o077 != 0
     {
@@ -304,6 +306,8 @@ pub(super) fn read_and_unlink_shared_memory(
 
     unlink_shared_memory_if_unchanged(&name, &metadata)?;
 
+    // The object's size, which macOS rounds up to whole pages, is only the
+    // limit; S, the size the program declared, says how much is image data.
     let available = metadata
         .len()
         .checked_sub(offset)
@@ -314,19 +318,41 @@ pub(super) fn read_and_unlink_shared_memory(
     }
     // S is a read ceiling. A short object supplies all remaining bytes.
 
-    read_shared_memory_range(&mut file, offset, size)
+    read_shared_memory_range(&file, offset, size)
 }
 
+/// Whether what `shm_open` returned is a shared-memory object. Linux's live
+/// in `/dev/shm`, where a regular file is one and anything else (a FIFO) was
+/// put there instead.
+#[cfg(target_os = "linux")]
+pub(super) fn is_shared_memory_object(metadata: &std::fs::Metadata) -> bool {
+    metadata.file_type().is_file()
+}
+
+/// Whether what `shm_open` returned is a shared-memory object. macOS's are
+/// not filesystem entries, so nothing else can stand in for one, and its
+/// `fstat` may report one with no file type at all.
+#[cfg(target_os = "macos")]
+pub(super) fn is_shared_memory_object(metadata: &std::fs::Metadata) -> bool {
+    let file_type = metadata.mode() & u32::from(libc::S_IFMT);
+    file_type == 0 || file_type == u32::from(libc::S_IFREG)
+}
+
+/// Read `size` bytes at `offset`, which the caller bounded by the object's
+/// size. Linux reads through the descriptor rather than mapping the object:
+/// the program that made it can still shrink it, and touching a mapped page
+/// past the new end would kill Termeric with SIGBUS, where a read just ends
+/// short.
+#[cfg(target_os = "linux")]
 fn read_shared_memory_range(
-    file: &mut std::fs::File,
+    mut file: &std::fs::File,
     offset: u64,
     size: u64,
 ) -> Result<Vec<u8>, ProtocolError> {
     file.seek(SeekFrom::Start(offset))
         .map_err(|_| ProtocolError::io("shared-memory object could not be positioned"))?;
     let mut data = Vec::with_capacity(size as usize);
-    file.by_ref()
-        .take(size)
+    file.take(size)
         .read_to_end(&mut data)
         .map_err(|_| ProtocolError::io("shared-memory object could not be read"))?;
     if data.len() as u64 != size {
@@ -335,6 +361,81 @@ fn read_shared_memory_range(
         ));
     }
     Ok(data)
+}
+
+/// Read `size` bytes at `offset`, which the caller bounded by the object's
+/// size. macOS shared memory cannot be read, only mapped; its size is fixed
+/// once set, so the mapped pages stay valid while they are copied.
+#[cfg(target_os = "macos")]
+fn read_shared_memory_range(
+    file: &std::fs::File,
+    offset: u64,
+    size: u64,
+) -> Result<Vec<u8>, ProtocolError> {
+    use std::os::fd::AsRawFd;
+
+    /// Unmaps on drop, so every return path releases the mapping.
+    struct Mapping {
+        address: *mut libc::c_void,
+        length: usize,
+    }
+
+    impl Drop for Mapping {
+        fn drop(&mut self) {
+            // SAFETY: `address` and `length` describe a live mapping this
+            // value made and nothing else unmaps.
+            unsafe {
+                libc::munmap(self.address, self.length);
+            }
+        }
+    }
+
+    if size == 0 {
+        return Ok(Vec::new());
+    }
+    let (Ok(start), Some(length)) = (
+        usize::try_from(offset),
+        offset
+            .checked_add(size)
+            .and_then(|end| usize::try_from(end).ok()),
+    ) else {
+        return Err(ProtocolError::too_large("shared-memory data is too large"));
+    };
+    // Map from the start, as mmap offsets must be page-aligned and O need not
+    // be; the caller bounded offset + size by the object's size.
+    // SAFETY: a new read-only shared mapping of the descriptor's first
+    // `length` bytes at an address the kernel chooses; no Rust memory is
+    // involved until the mapping succeeds.
+    let address = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            length,
+            libc::PROT_READ,
+            libc::MAP_SHARED,
+            file.as_raw_fd(),
+            0,
+        )
+    };
+    if address == libc::MAP_FAILED {
+        return Err(ProtocolError::io(
+            "shared-memory object could not be mapped",
+        ));
+    }
+    let mapping = Mapping { address, length };
+    // The program that made the object may still write to it, so its bytes
+    // are copied out through raw pointers rather than borrowed as a slice,
+    // which would promise Rust they can't change.
+    let mut copied = vec![0u8; length - start];
+    // SAFETY: the mapping is `length` readable bytes and outlives the copy;
+    // `start <= length`, and the destination holds `length - start` bytes.
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            mapping.address.cast::<u8>().add(start),
+            copied.as_mut_ptr(),
+            length - start,
+        );
+    }
+    Ok(copied)
 }
 
 pub(super) fn unlink_shared_memory_if_unchanged(
@@ -347,7 +448,7 @@ pub(super) fn unlink_shared_memory_if_unchanged(
     let current_metadata = current
         .metadata()
         .map_err(|error| filesystem_error(error, "shared-memory metadata is unavailable"))?;
-    if !same_file(opened, &current_metadata) {
+    if !same_shared_memory_object(opened, &current_metadata) {
         return Err(ProtocolError::invalid(
             "shared-memory object changed before cleanup",
         ));
@@ -364,17 +465,36 @@ pub(super) fn unlink_shared_memory_if_unchanged(
     Ok(())
 }
 
-fn open_graphics_shared_memory(name: &std::ffi::CStr) -> std::io::Result<std::fs::File> {
+#[cfg(target_os = "linux")]
+fn same_shared_memory_object(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
+    same_file(left, right)
+}
+
+/// macOS's `fstat` may leave a shared-memory object's device and inode zero,
+/// so also compare what it does report. A replacement made between the two
+/// opens with the same owner, mode, and size still passes; it was made by
+/// this user under the name the program gave.
+#[cfg(target_os = "macos")]
+fn same_shared_memory_object(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
+    same_file(left, right)
+        && left.uid() == right.uid()
+        && left.mode() == right.mode()
+        && left.len() == right.len()
+}
+
+/// Open the named object read-only, never creating or truncating one.
+pub(super) fn open_graphics_shared_memory(name: &std::ffi::CStr) -> std::io::Result<std::fs::File> {
     // Linux shm names refer to /dev/shm entries: initial and cleanup opens
     // must reject FIFO/symlink substitutions without waiting for a writer.
+    #[cfg(target_os = "linux")]
+    let flags = libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NONBLOCK | libc::O_NOFOLLOW;
+    // macOS shm names are not filesystem entries, so no FIFO or link can
+    // stand in for one. Its shm_open documents only the access and creation
+    // flags; a test checks that close-on-exec takes effect too.
+    #[cfg(target_os = "macos")]
+    let flags = libc::O_RDONLY | libc::O_CLOEXEC;
     // SAFETY: name is a live C string; flags never create or truncate an object.
-    let descriptor = unsafe {
-        libc::shm_open(
-            name.as_ptr(),
-            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NONBLOCK | libc::O_NOFOLLOW,
-            0,
-        )
-    };
+    let descriptor = unsafe { libc::shm_open(name.as_ptr(), flags, 0) };
     if descriptor < 0 {
         return Err(std::io::Error::last_os_error());
     }

@@ -10,4 +10,10 @@ if [[ ${TERMERIC_ZSH_HAD_ZDOTDIR-} == 1 ]]; then
 elif [[ ${TERMERIC_ZSH_HAD_ZDOTDIR-} == 0 ]]; then
     unset ZDOTDIR
 fi
+# A system startup file that ran while ZDOTDIR was the transport may have put
+# history there: macOS's /etc/zshrc sets HISTFILE=${ZDOTDIR:-$HOME}/.zsh_history.
+# Point it back at the person's own directory, as it would be without us.
+if [[ -n ${TERMERIC_ZSH_INTEGRATION_DIR-} && ${HISTFILE-} == "$TERMERIC_ZSH_INTEGRATION_DIR/.zsh_history" ]]; then
+    HISTFILE="${ZDOTDIR:-$HOME}/.zsh_history"
+fi
 unset TERMERIC_ORIGINAL_ZDOTDIR TERMERIC_ZSH_HAD_ZDOTDIR TERMERIC_ZSH_INTEGRATION_DIR TERMERIC_ZSH_ZDOTDIR_EXPORTED

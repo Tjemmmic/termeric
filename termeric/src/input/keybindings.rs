@@ -5,6 +5,7 @@
 //! for dynamic bindings (SendText, RunCommand, PluginCommand).
 
 use crate::input::Action;
+use crate::input::platform::System;
 use crate::panes::PaneDir;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -14,10 +15,12 @@ use winit::keyboard::{Key, ModifiersState, NamedKey};
 // ── BindableAction ──────────────────────────────────────────────────────────
 
 /// Declares every bindable action once: its variant, config id, Settings
-/// label, category, default chord, and the app `Action` it runs.
+/// label, category, default chord on Linux and on macOS, and the app
+/// `Action` it runs.
 macro_rules! bindable_actions {
     ($(
-        $variant:ident => $id:literal, $label:literal, $category:ident, $binding:expr, $action:expr;
+        $variant:ident => $id:literal, $label:literal, $category:ident,
+            linux: $linux:expr, mac: $mac:expr, $action:expr;
     )*) => {
         /// Every operation that can be bound to a keyboard shortcut.
         ///
@@ -34,14 +37,25 @@ macro_rules! bindable_actions {
                 &[$(Self::$variant,)*]
             }
 
-            /// Metadata: string id, display label, category, and default binding.
+            /// Metadata: string id, display label, category, and default
+            /// binding on this system.
             pub fn meta(self) -> ActionMeta {
                 match self {
                     $(Self::$variant => ActionMeta {
                         id: $id,
                         label: $label,
                         category: ShortcutCategory::$category,
-                        default_binding: $binding,
+                        default_binding: self.default_binding_on(System::CURRENT),
+                    },)*
+                }
+            }
+
+            /// The chord the action has by default on `system`.
+            pub fn default_binding_on(self, system: System) -> Option<KeyChord> {
+                match self {
+                    $(Self::$variant => match system {
+                        System::Linux => $linux,
+                        System::Mac => $mac,
                     },)*
                 }
             }
@@ -60,6 +74,8 @@ const NO_MODIFIERS: ModifiersState = ModifiersState::empty();
 const CTRL: ModifiersState = ModifiersState::CONTROL;
 const ALT: ModifiersState = ModifiersState::ALT;
 const SHIFT: ModifiersState = ModifiersState::SHIFT;
+/// ⌘ on macOS.
+const CMD: ModifiersState = ModifiersState::SUPER;
 
 fn chord(key: &str, modifiers: ModifiersState) -> Option<KeyChord> {
     Some(KeyChord::new(
@@ -71,127 +87,158 @@ fn chord(key: &str, modifiers: ModifiersState) -> Option<KeyChord> {
     ))
 }
 
+// macOS keeps its own chords away from what the system takes first (⌘Q,
+// ⌘H, ⌘M, ⌘Space, ⌘Tab, ⌘`; see `MAC_SYSTEM_CHORDS` in the tests) and from
+// ⌃⇥, which AppKit's key-view loop may keep from the window. Next and
+// previous tab are ⇧⌘] and ⇧⌘[, which winit reports as ⌘} and ⌘{.
 bindable_actions! {
     // General
-    Copy => "copy", "Copy Selection", General, chord("c", CTRL | SHIFT), Action::Copy;
-    Paste => "paste", "Paste", General, chord("v", CTRL | SHIFT), Action::Paste;
+    Copy => "copy", "Copy Selection", General,
+        linux: chord("c", CTRL | SHIFT), mac: chord("c", CMD), Action::Copy;
+    Paste => "paste", "Paste", General,
+        linux: chord("v", CTRL | SHIFT), mac: chord("v", CMD), Action::Paste;
     ToggleSearch => "toggle_search", "Find", General,
-        chord("f", CTRL | SHIFT), Action::ToggleSearch;
-    NewAgent => "new_agent", "New Agent", General, chord("i", CTRL | SHIFT), Action::NewAgent;
+        linux: chord("f", CTRL | SHIFT), mac: chord("f", CMD), Action::ToggleSearch;
+    NewAgent => "new_agent", "New Agent", General,
+        linux: chord("i", CTRL | SHIFT), mac: chord("i", CMD | SHIFT), Action::NewAgent;
     ToggleAgentView => "toggle_agent_view", "Agent View", General,
-        chord("a", CTRL | SHIFT), Action::ToggleAgentView;
+        linux: chord("a", CTRL | SHIFT), mac: chord("a", CMD | SHIFT), Action::ToggleAgentView;
     ToggleCopyMode => "toggle_copy_mode", "Keyboard Copy Mode", Navigation,
-        chord("x", CTRL | SHIFT), Action::ToggleCopyMode;
+        linux: chord("x", CTRL | SHIFT), mac: chord("x", CMD | SHIFT), Action::ToggleCopyMode;
     QuickSelect => "quick_select", "Quick Select Links and Matches", Navigation,
-        chord("o", CTRL | SHIFT), Action::QuickSelect;
+        linux: chord("o", CTRL | SHIFT), mac: chord("o", CMD | SHIFT), Action::QuickSelect;
     OpenUnicodePicker => "open_unicode_picker", "Insert Unicode Character", General,
-        None, Action::OpenUnicodePicker;
+        linux: None, mac: None, Action::OpenUnicodePicker;
     ToggleCommandPalette => "toggle_command_palette", "Command Palette", General,
-        chord("p", CTRL | SHIFT), Action::ToggleCommandPalette;
+        linux: chord("p", CTRL | SHIFT), mac: chord("p", CMD | SHIFT), Action::ToggleCommandPalette;
     ToggleSettings => "toggle_settings", "Open Settings", General,
-        chord(",", CTRL), Action::ToggleSettings;
+        linux: chord(",", CTRL), mac: chord(",", CMD), Action::ToggleSettings;
     ToggleFullscreen => "toggle_fullscreen", "Toggle Fullscreen", General,
-        chord("F11", NO_MODIFIERS), Action::ToggleFullscreen;
+        linux: chord("F11", NO_MODIFIERS), mac: chord("f", CTRL | CMD), Action::ToggleFullscreen;
+    NewWindow => "new_window", "New Window", General,
+        linux: None, mac: chord("n", CMD), Action::NewWindow;
     ClearSelection => "clear_selection", "Clear Selection", General,
-        chord("Escape", NO_MODIFIERS), Action::ClearSelection;
+        linux: chord("Escape", NO_MODIFIERS), mac: chord("Escape", NO_MODIFIERS),
+        Action::ClearSelection;
 
     // Font
     IncreaseFontSize => "increase_font_size", "Increase Font Size", Font,
-        chord("=", CTRL), Action::IncreaseFontSize;
+        linux: chord("=", CTRL), mac: chord("=", CMD), Action::IncreaseFontSize;
     DecreaseFontSize => "decrease_font_size", "Decrease Font Size", Font,
-        chord("-", CTRL), Action::DecreaseFontSize;
+        linux: chord("-", CTRL), mac: chord("-", CMD), Action::DecreaseFontSize;
     ResetFontSize => "reset_font_size", "Reset Font Size", Font,
-        chord("0", CTRL), Action::ResetFontSize;
+        linux: chord("0", CTRL), mac: chord("0", CMD), Action::ResetFontSize;
 
     // Tabs
-    NewTab => "new_tab", "New Tab", Tabs, chord("t", CTRL | SHIFT), Action::NewTab;
-    CloseTab => "close_tab", "Close Tab", Tabs, chord("w", CTRL | SHIFT), Action::CloseTab;
-    NextTab => "next_tab", "Next Tab", Tabs, chord("Tab", CTRL), Action::NextTab;
-    PrevTab => "prev_tab", "Previous Tab", Tabs, chord("Tab", CTRL | SHIFT), Action::PrevTab;
+    NewTab => "new_tab", "New Tab", Tabs,
+        linux: chord("t", CTRL | SHIFT), mac: chord("t", CMD), Action::NewTab;
+    CloseTab => "close_tab", "Close Tab", Tabs,
+        linux: chord("w", CTRL | SHIFT), mac: chord("w", CMD), Action::CloseTab;
+    NextTab => "next_tab", "Next Tab", Tabs,
+        linux: chord("Tab", CTRL), mac: chord("}", CMD), Action::NextTab;
+    PrevTab => "prev_tab", "Previous Tab", Tabs,
+        linux: chord("Tab", CTRL | SHIFT), mac: chord("{", CMD), Action::PrevTab;
     SwitchToTab1 => "switch_to_tab_1", "Switch to Tab 1", Tabs,
-        chord("1", CTRL), Action::SwitchToTab(0);
+        linux: chord("1", CTRL), mac: chord("1", CMD), Action::SwitchToTab(0);
     SwitchToTab2 => "switch_to_tab_2", "Switch to Tab 2", Tabs,
-        chord("2", CTRL), Action::SwitchToTab(1);
+        linux: chord("2", CTRL), mac: chord("2", CMD), Action::SwitchToTab(1);
     SwitchToTab3 => "switch_to_tab_3", "Switch to Tab 3", Tabs,
-        chord("3", CTRL), Action::SwitchToTab(2);
+        linux: chord("3", CTRL), mac: chord("3", CMD), Action::SwitchToTab(2);
     SwitchToTab4 => "switch_to_tab_4", "Switch to Tab 4", Tabs,
-        chord("4", CTRL), Action::SwitchToTab(3);
+        linux: chord("4", CTRL), mac: chord("4", CMD), Action::SwitchToTab(3);
     SwitchToTab5 => "switch_to_tab_5", "Switch to Tab 5", Tabs,
-        chord("5", CTRL), Action::SwitchToTab(4);
+        linux: chord("5", CTRL), mac: chord("5", CMD), Action::SwitchToTab(4);
     SwitchToTab6 => "switch_to_tab_6", "Switch to Tab 6", Tabs,
-        chord("6", CTRL), Action::SwitchToTab(5);
+        linux: chord("6", CTRL), mac: chord("6", CMD), Action::SwitchToTab(5);
     SwitchToTab7 => "switch_to_tab_7", "Switch to Tab 7", Tabs,
-        chord("7", CTRL), Action::SwitchToTab(6);
+        linux: chord("7", CTRL), mac: chord("7", CMD), Action::SwitchToTab(6);
     SwitchToTab8 => "switch_to_tab_8", "Switch to Tab 8", Tabs,
-        chord("8", CTRL), Action::SwitchToTab(7);
+        linux: chord("8", CTRL), mac: chord("8", CMD), Action::SwitchToTab(7);
     SwitchToTab9 => "switch_to_tab_9", "Switch to Tab 9", Tabs,
-        chord("9", CTRL), Action::SwitchToTab(8);
+        linux: chord("9", CTRL), mac: chord("9", CMD), Action::SwitchToTab(8);
 
     // Panes
     SplitVertical => "split_vertical", "Split Pane Right", Panes,
-        chord("right", ALT | SHIFT), Action::SplitVertical;
+        linux: chord("right", ALT | SHIFT), mac: chord("d", CMD), Action::SplitVertical;
     SplitHorizontal => "split_horizontal", "Split Pane Down", Panes,
-        chord("down", ALT | SHIFT), Action::SplitHorizontal;
+        linux: chord("down", ALT | SHIFT), mac: chord("d", CMD | SHIFT), Action::SplitHorizontal;
     NavigatePaneUp => "navigate_pane_up", "Navigate Pane Up", Panes,
-        chord("up", ALT), Action::NavigatePane(PaneDir::Up);
+        linux: chord("up", ALT), mac: chord("up", ALT | CMD), Action::NavigatePane(PaneDir::Up);
     NavigatePaneDown => "navigate_pane_down", "Navigate Pane Down", Panes,
-        chord("down", ALT), Action::NavigatePane(PaneDir::Down);
+        linux: chord("down", ALT), mac: chord("down", ALT | CMD),
+        Action::NavigatePane(PaneDir::Down);
     NavigatePaneLeft => "navigate_pane_left", "Navigate Pane Left", Panes,
-        chord("left", ALT), Action::NavigatePane(PaneDir::Left);
+        linux: chord("left", ALT), mac: chord("left", ALT | CMD),
+        Action::NavigatePane(PaneDir::Left);
     NavigatePaneRight => "navigate_pane_right", "Navigate Pane Right", Panes,
-        chord("right", ALT), Action::NavigatePane(PaneDir::Right);
-    ClosePane => "close_pane", "Close Pane", Panes, chord("w", ALT | SHIFT), Action::ClosePane;
+        linux: chord("right", ALT), mac: chord("right", ALT | CMD),
+        Action::NavigatePane(PaneDir::Right);
+    ClosePane => "close_pane", "Close Pane", Panes,
+        linux: chord("w", ALT | SHIFT), mac: chord("w", ALT | CMD), Action::ClosePane;
     RenameTab => "rename_tab", "Rename Tab", Tabs,
-        chord("t", CTRL | ALT | SHIFT), Action::RenameTab;
-    MoveTabLeft => "move_tab_left", "Move Tab Left", Tabs, None, Action::MoveTabLeft;
-    MoveTabRight => "move_tab_right", "Move Tab Right", Tabs, None, Action::MoveTabRight;
+        linux: chord("t", CTRL | ALT | SHIFT), mac: chord("t", ALT | SHIFT | CMD),
+        Action::RenameTab;
+    MoveTabLeft => "move_tab_left", "Move Tab Left", Tabs,
+        linux: None, mac: None, Action::MoveTabLeft;
+    MoveTabRight => "move_tab_right", "Move Tab Right", Tabs,
+        linux: None, mac: None, Action::MoveTabRight;
     MoveTabToNextWindow => "move_tab_to_next_window", "Move Tab to Next Window", Tabs,
-        None, Action::MoveTabToNextWindow;
-    TogglePinTab => "toggle_pin_tab", "Pin or Unpin Tab", Tabs, None, Action::TogglePinTab;
-    TogglePaneZoom => "toggle_pane_zoom", "Zoom Pane", Panes, None, Action::TogglePaneZoom;
+        linux: None, mac: None, Action::MoveTabToNextWindow;
+    TogglePinTab => "toggle_pin_tab", "Pin or Unpin Tab", Tabs,
+        linux: None, mac: None, Action::TogglePinTab;
+    TogglePaneZoom => "toggle_pane_zoom", "Zoom Pane", Panes,
+        linux: None, mac: None, Action::TogglePaneZoom;
     TogglePaneReadOnly => "toggle_pane_read_only", "Toggle Pane Read-only", Panes,
-        None, Action::TogglePaneReadOnly;
-    SwapPaneNext => "swap_pane_next", "Swap Pane with Next", Panes, None, Action::SwapPaneNext;
-    BalancePanes => "balance_panes", "Balance Panes", Panes, None, Action::BalancePanes;
+        linux: None, mac: None, Action::TogglePaneReadOnly;
+    SwapPaneNext => "swap_pane_next", "Swap Pane with Next", Panes,
+        linux: None, mac: None, Action::SwapPaneNext;
+    BalancePanes => "balance_panes", "Balance Panes", Panes,
+        linux: None, mac: None, Action::BalancePanes;
     MovePaneToNextTab => "move_pane_to_next_tab", "Move Pane to Next Tab", Panes,
-        None, Action::MovePaneToNextTab;
+        linux: None, mac: None, Action::MovePaneToNextTab;
     MovePaneToNextWindow => "move_pane_to_next_window", "Move Pane to Next Window", Panes,
-        None, Action::MovePaneToNextWindow;
-    LayoutColumns => "layout_columns", "Layout: Columns", Panes, None, Action::LayoutColumns;
-    LayoutRows => "layout_rows", "Layout: Rows", Panes, None, Action::LayoutRows;
-    LayoutGrid => "layout_grid", "Layout: Grid", Panes, None, Action::LayoutGrid;
-    LayoutTall => "layout_tall", "Layout: Tall", Panes, None, Action::LayoutTall;
-    LayoutFat => "layout_fat", "Layout: Fat", Panes, None, Action::LayoutFat;
+        linux: None, mac: None, Action::MovePaneToNextWindow;
+    LayoutColumns => "layout_columns", "Layout: Columns", Panes,
+        linux: None, mac: None, Action::LayoutColumns;
+    LayoutRows => "layout_rows", "Layout: Rows", Panes,
+        linux: None, mac: None, Action::LayoutRows;
+    LayoutGrid => "layout_grid", "Layout: Grid", Panes,
+        linux: None, mac: None, Action::LayoutGrid;
+    LayoutTall => "layout_tall", "Layout: Tall", Panes,
+        linux: None, mac: None, Action::LayoutTall;
+    LayoutFat => "layout_fat", "Layout: Fat", Panes,
+        linux: None, mac: None, Action::LayoutFat;
     CyclePaneCwdMode => "cycle_pane_cwd_mode", "Cycle New Pane Directory", Panes,
-        None, Action::CyclePaneCwdMode;
+        linux: None, mac: None, Action::CyclePaneCwdMode;
     ToggleBroadcast => "toggle_broadcast", "Toggle Broadcast Input", Panes,
-        None, Action::ToggleBroadcast;
+        linux: None, mac: None, Action::ToggleBroadcast;
 
     // Scrolling
     ScrollPageUp => "scroll_page_up", "Scroll Page Up", Scrolling,
-        chord("PageUp", SHIFT), Action::ScrollPageUp;
+        linux: chord("PageUp", SHIFT), mac: chord("PageUp", SHIFT), Action::ScrollPageUp;
     ScrollPageDown => "scroll_page_down", "Scroll Page Down", Scrolling,
-        chord("PageDown", SHIFT), Action::ScrollPageDown;
+        linux: chord("PageDown", SHIFT), mac: chord("PageDown", SHIFT), Action::ScrollPageDown;
     ScrollToTop => "scroll_to_top", "Scroll to Top", Scrolling,
-        chord("Home", CTRL | SHIFT), Action::ScrollToTop;
+        linux: chord("Home", CTRL | SHIFT), mac: chord("Home", CMD), Action::ScrollToTop;
     ScrollToBottom => "scroll_to_bottom", "Scroll to Bottom", Scrolling,
-        chord("End", CTRL | SHIFT), Action::ScrollToBottom;
+        linux: chord("End", CTRL | SHIFT), mac: chord("End", CMD), Action::ScrollToBottom;
 
     // Navigation
     PreviousPrompt => "previous_prompt", "Previous Prompt", Navigation,
-        chord("Up", CTRL | SHIFT), Action::PreviousPrompt;
+        linux: chord("Up", CTRL | SHIFT), mac: chord("Up", CMD), Action::PreviousPrompt;
     NextPrompt => "next_prompt", "Next Prompt", Navigation,
-        chord("Down", CTRL | SHIFT), Action::NextPrompt;
+        linux: chord("Down", CTRL | SHIFT), mac: chord("Down", CMD), Action::NextPrompt;
     PreviousFailedCommand =>
         "previous_failed_command", "Jump to Previous Failed Command", Navigation,
-        None, Action::PreviousFailedCommand;
+        linux: None, mac: None, Action::PreviousFailedCommand;
     NextFailedCommand => "next_failed_command", "Jump to Next Failed Command", Navigation,
-        None, Action::NextFailedCommand;
+        linux: None, mac: None, Action::NextFailedCommand;
 
     // Terminal
     ClearScrollback => "clear_scrollback", "Clear Scrollback", Terminal,
-        None, Action::ClearScrollback;
-    ResetTerminal => "reset_terminal", "Reset Terminal", Terminal, None, Action::ResetTerminal;
+        linux: None, mac: chord("k", CMD), Action::ClearScrollback;
+    ResetTerminal => "reset_terminal", "Reset Terminal", Terminal,
+        linux: None, mac: None, Action::ResetTerminal;
 }
 
 impl BindableAction {
@@ -312,25 +359,30 @@ impl KeyChord {
         ))
     }
 
-    /// Human-readable string for settings UI: "Ctrl+Shift+C"
+    /// The modifiers the chord holds.
+    pub fn modifiers(&self) -> ModifiersState {
+        let mut modifiers = ModifiersState::empty();
+        modifiers.set(ModifiersState::CONTROL, self.ctrl);
+        modifiers.set(ModifiersState::ALT, self.alt);
+        modifiers.set(ModifiersState::SHIFT, self.shift);
+        modifiers.set(ModifiersState::SUPER, self.super_key);
+        modifiers
+    }
+
+    /// The chord's label in this system's style: "Ctrl+Shift+C" on Linux,
+    /// "⇧⌘C" on macOS.
     pub fn display_string(&self) -> String {
-        let mut parts = Vec::new();
-        if self.ctrl {
-            parts.push("Ctrl");
-        }
-        if self.alt {
-            parts.push("Alt");
-        }
-        if self.shift {
-            parts.push("Shift");
-        }
-        if self.super_key {
-            parts.push("Super");
-        }
-        // Capitalize first letter of the key for display
-        let key_display = capitalize_key(&self.key);
-        parts.push(&key_display);
-        parts.join("+")
+        self.label_on(System::CURRENT)
+    }
+
+    /// The chord's label in `system`'s style.
+    pub fn label_on(&self, system: System) -> String {
+        system.chord_label(self.modifiers(), &self.key)
+    }
+
+    /// Whether the Shortcuts panel's `filter`, in lowercase, finds the chord.
+    pub fn matches_filter(&self, filter: &str) -> bool {
+        System::CURRENT.chord_matches_filter(self.modifiers(), &self.key, filter)
     }
 }
 
@@ -346,38 +398,6 @@ fn is_caseless_character(key: &str) -> bool {
     match (chars.next(), chars.next()) {
         (Some(character), None) => character.to_lowercase().eq(character.to_uppercase()),
         _ => false,
-    }
-}
-
-/// Capitalize a key name for display (e.g. "pageup" → "PageUp", "c" → "C")
-fn capitalize_key(key: &str) -> String {
-    match key {
-        "pageup" => "PageUp".to_string(),
-        "pagedown" => "PageDown".to_string(),
-        "escape" => "Esc".to_string(),
-        "backspace" => "Backspace".to_string(),
-        "delete" => "Delete".to_string(),
-        "insert" => "Insert".to_string(),
-        "enter" => "Enter".to_string(),
-        "space" => "Space".to_string(),
-        "tab" => "Tab".to_string(),
-        "home" => "Home".to_string(),
-        "end" => "End".to_string(),
-        "up" => "Up".to_string(),
-        "down" => "Down".to_string(),
-        "left" => "Left".to_string(),
-        "right" => "Right".to_string(),
-        k if k.starts_with('f') && k.len() <= 3 && k[1..].parse::<u8>().is_ok() => k.to_uppercase(),
-        k => {
-            let mut c = k.chars();
-            match c.next() {
-                None => String::new(),
-                Some(first) => {
-                    let upper: String = first.to_uppercase().collect();
-                    upper + c.as_str()
-                }
-            }
-        }
     }
 }
 
@@ -853,6 +873,41 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_chords_match_the_keys_winit_reports_with_command_held() {
+        let reg = ShortcutRegistry::new();
+        let cmd = ModifiersState::SUPER;
+        let cmd_shift = ModifiersState::SUPER | ModifiersState::SHIFT;
+        let pressed = |key: &str, modifiers| reg.check(&Key::Character(key.into()), modifiers);
+        // With ⌘ held, winit's logical key follows Shift: ⇧⌘] is "}".
+        assert_eq!(pressed("}", cmd_shift), Some(BindableAction::NextTab));
+        assert_eq!(pressed("{", cmd_shift), Some(BindableAction::PrevTab));
+        assert_eq!(
+            pressed("+", cmd_shift),
+            Some(BindableAction::IncreaseFontSize)
+        );
+        assert_eq!(pressed("=", cmd), Some(BindableAction::IncreaseFontSize));
+        assert_eq!(pressed("-", cmd), Some(BindableAction::DecreaseFontSize));
+        assert_eq!(pressed("c", cmd), Some(BindableAction::Copy));
+        assert_eq!(pressed("C", cmd_shift), None);
+        assert_eq!(
+            pressed("P", cmd_shift),
+            Some(BindableAction::ToggleCommandPalette)
+        );
+        assert_eq!(
+            pressed("T", ModifiersState::ALT | cmd_shift),
+            Some(BindableAction::RenameTab)
+        );
+        assert_eq!(
+            reg.check(&Key::Named(NamedKey::ArrowLeft), ModifiersState::ALT | cmd),
+            Some(BindableAction::NavigatePaneLeft)
+        );
+        // Ctrl stays the terminal's.
+        assert_eq!(pressed("c", ModifiersState::CONTROL), None);
+    }
+
+    #[cfg(target_os = "linux")]
     #[test]
     fn shift_is_part_of_the_character_on_symbol_and_digit_keys() {
         let reg = ShortcutRegistry::new();
@@ -890,7 +945,7 @@ mod tests {
             Some(BindableAction::PrevTab)
         );
         assert_eq!(
-            KeyChord::new("?", true, false, true, false).display_string(),
+            KeyChord::new("?", true, false, true, false).label_on(System::Linux),
             "Ctrl+?"
         );
     }
@@ -961,48 +1016,88 @@ mod tests {
     }
 
     #[test]
-    fn test_registry_defaults() {
-        let reg = ShortcutRegistry::new();
-        // Copy should be Ctrl+Shift+C
-        let chord = reg.binding_for(BindableAction::Copy).unwrap();
-        assert_eq!(chord.key, "c");
-        assert!(chord.ctrl);
-        assert!(chord.shift);
-        assert!(!chord.alt);
-
+    fn default_bindings_name_the_documented_chords_on_each_system() {
+        let label = |action: BindableAction, system| {
+            action
+                .default_binding_on(system)
+                .map(|chord| chord.label_on(system))
+        };
+        let linux = |action| label(action, System::Linux);
+        let mac = |action| label(action, System::Mac);
+        assert_eq!(linux(BindableAction::Copy).as_deref(), Some("Ctrl+Shift+C"));
         // Pane actions should be usable without first configuring shortcuts.
         assert_eq!(
-            reg.binding_for(BindableAction::SplitVertical)
-                .unwrap()
-                .display_string(),
-            "Alt+Shift+Right"
+            linux(BindableAction::SplitVertical).as_deref(),
+            Some("Alt+Shift+Right")
         );
         assert_eq!(
-            reg.binding_for(BindableAction::NavigatePaneLeft)
-                .unwrap()
-                .display_string(),
-            "Alt+Left"
+            linux(BindableAction::NavigatePaneLeft).as_deref(),
+            Some("Alt+Left")
         );
         assert_eq!(
-            reg.binding_for(BindableAction::ToggleFullscreen)
-                .unwrap()
-                .display_string(),
-            "F11"
+            linux(BindableAction::ToggleFullscreen).as_deref(),
+            Some("F11")
+        );
+        assert_eq!(linux(BindableAction::NewWindow), None);
+        assert_eq!(linux(BindableAction::ClearScrollback), None);
+
+        for (action, chord) in [
+            (BindableAction::Copy, "⌘C"),
+            (BindableAction::Paste, "⌘V"),
+            (BindableAction::ToggleSearch, "⌘F"),
+            (BindableAction::ToggleCommandPalette, "⇧⌘P"),
+            (BindableAction::ToggleSettings, "⌘,"),
+            (BindableAction::ToggleFullscreen, "⌃⌘F"),
+            (BindableAction::NewWindow, "⌘N"),
+            (BindableAction::IncreaseFontSize, "⌘="),
+            (BindableAction::DecreaseFontSize, "⌘-"),
+            (BindableAction::ResetFontSize, "⌘0"),
+            (BindableAction::NewAgent, "⇧⌘I"),
+            (BindableAction::ToggleAgentView, "⇧⌘A"),
+            (BindableAction::ToggleCopyMode, "⇧⌘X"),
+            (BindableAction::QuickSelect, "⇧⌘O"),
+            (BindableAction::PreviousPrompt, "⌘↑"),
+            (BindableAction::NextPrompt, "⌘↓"),
+            (BindableAction::ClearScrollback, "⌘K"),
+            (BindableAction::NewTab, "⌘T"),
+            (BindableAction::CloseTab, "⌘W"),
+            (BindableAction::NextTab, "⌘}"),
+            (BindableAction::PrevTab, "⌘{"),
+            (BindableAction::SwitchToTab1, "⌘1"),
+            (BindableAction::SwitchToTab9, "⌘9"),
+            (BindableAction::RenameTab, "⌥⇧⌘T"),
+            (BindableAction::SplitVertical, "⌘D"),
+            (BindableAction::SplitHorizontal, "⇧⌘D"),
+            (BindableAction::NavigatePaneUp, "⌥⌘↑"),
+            (BindableAction::NavigatePaneLeft, "⌥⌘←"),
+            (BindableAction::ClosePane, "⌥⌘W"),
+            (BindableAction::ScrollToTop, "⌘↖"),
+            (BindableAction::ScrollToBottom, "⌘↘"),
+            (BindableAction::ScrollPageUp, "⇧⇞"),
+            (BindableAction::ScrollPageDown, "⇧⇟"),
+        ] {
+            assert_eq!(mac(action).as_deref(), Some(chord), "{action:?}");
+        }
+        assert_eq!(
+            BindableAction::Copy.meta().default_binding,
+            BindableAction::Copy.default_binding_on(System::CURRENT)
         );
     }
 
     #[test]
-    fn default_bindings_are_unique() {
-        let mut seen = HashMap::new();
-        for &action in BindableAction::all() {
-            let Some(chord) = action.meta().default_binding else {
-                continue;
-            };
-            assert!(
-                seen.insert(chord.clone(), action).is_none(),
-                "duplicate default binding {}",
-                chord.display_string()
-            );
+    fn default_bindings_are_unique_on_each_system() {
+        for system in [System::Linux, System::Mac] {
+            let mut seen = HashMap::new();
+            for &action in BindableAction::all() {
+                let Some(chord) = action.default_binding_on(system) else {
+                    continue;
+                };
+                assert!(
+                    seen.insert(chord.clone(), action).is_none(),
+                    "duplicate default binding {} on {system:?}",
+                    chord.label_on(system)
+                );
+            }
         }
     }
 
@@ -1017,19 +1112,67 @@ mod tests {
             KeyChord::new("space", true, false, false, false),
         ];
         for &action in BindableAction::all() {
-            if let Some(chord) = action.meta().default_binding {
+            if let Some(chord) = action.default_binding_on(System::Linux) {
                 assert!(
                     !reserved.contains(&chord),
                     "{} defaults to {}, which input methods take first",
                     action.meta().id,
-                    chord.display_string()
+                    chord.label_on(System::Linux)
                 );
             }
         }
         assert_eq!(
-            BindableAction::QuickSelect.meta().default_binding,
+            BindableAction::QuickSelect.default_binding_on(System::Linux),
             Some(KeyChord::new("o", true, false, true, false))
         );
+    }
+
+    /// Chords macOS, its input sources, or AppKit take before a window sees
+    /// them: quitting and hiding, minimizing, the input-source and Spotlight
+    /// switches, the application and window switchers, the Character Viewer,
+    /// Force Quit, screenshots, locking the screen, hiding the Dock, and ⌃⇥,
+    /// which the key-view loop may keep.
+    const MAC_SYSTEM_CHORDS: &[(&str, ModifiersState)] = &[
+        ("q", CMD),
+        ("h", CMD),
+        ("h", ALT.union(CMD)),
+        ("m", CMD),
+        ("m", ALT.union(CMD)),
+        ("space", CMD),
+        ("space", CTRL),
+        ("space", CTRL.union(CMD)),
+        ("space", ALT.union(CMD)),
+        ("tab", CMD),
+        ("tab", CMD.union(SHIFT)),
+        ("tab", CTRL),
+        ("tab", CTRL.union(SHIFT)),
+        ("`", CMD),
+        ("~", CMD),
+        ("escape", ALT.union(CMD)),
+        // ⇧⌘3, ⇧⌘4, and ⇧⌘5 on a US layout, as winit reports them.
+        ("#", CMD),
+        ("$", CMD),
+        ("%", CMD),
+        ("q", CTRL.union(CMD)),
+        ("d", ALT.union(CMD)),
+    ];
+
+    #[test]
+    fn mac_defaults_leave_the_systems_own_chords_alone() {
+        let reserved: Vec<KeyChord> = MAC_SYSTEM_CHORDS
+            .iter()
+            .map(|(key, modifiers)| chord(key, *modifiers).unwrap())
+            .collect();
+        for &action in BindableAction::all() {
+            if let Some(chord) = action.default_binding_on(System::Mac) {
+                assert!(
+                    !reserved.contains(&chord),
+                    "{} defaults to {}, which macOS takes first",
+                    action.meta().id,
+                    chord.label_on(System::Mac)
+                );
+            }
+        }
     }
 
     #[test]
@@ -1041,6 +1184,7 @@ mod tests {
         assert!(BindableAction::all().contains(&BindableAction::OpenUnicodePicker));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn test_registry_lookup() {
         let reg = ShortcutRegistry::new();
@@ -1055,11 +1199,10 @@ mod tests {
     #[test]
     fn test_set_binding_with_conflict() {
         let mut reg = ShortcutRegistry::new();
-        // Rebind Copy's chord (Ctrl+Shift+C) to Paste
-        let chord = KeyChord::new("c", true, false, true, false);
+        // Give Copy's chord to Paste.
+        let chord = BindableAction::Copy.meta().default_binding.unwrap();
         reg.set_binding(BindableAction::Paste, Some(chord.clone()));
 
-        // Paste now has Ctrl+Shift+C
         assert_eq!(reg.binding_for(BindableAction::Paste), Some(&chord));
         // Copy was auto-unbound due to conflict
         assert!(reg.binding_for(BindableAction::Copy).is_none());
@@ -1068,14 +1211,10 @@ mod tests {
     #[test]
     fn unbinding_an_action_removes_its_chord() {
         let mut reg = ShortcutRegistry::new();
+        let chord = BindableAction::Copy.meta().default_binding.unwrap();
         reg.set_binding(BindableAction::Copy, None);
         assert!(reg.binding_for(BindableAction::Copy).is_none());
-        // Lookup should return None
-        let key = Key::Character("c".into());
-        let mut mods = ModifiersState::empty();
-        mods |= ModifiersState::CONTROL;
-        mods |= ModifiersState::SHIFT;
-        assert!(reg.check(&key, mods).is_none());
+        assert_eq!(reg.conflict_for(&chord), None);
     }
 
     /// The bindings of every action, to compare two registries.
@@ -1153,6 +1292,7 @@ mod tests {
         assert_eq!(entries.len(), 4);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn recording_keeps_the_bindings_an_entry_took_from_others() {
         // Copy took Paste's chord, which left Paste unbound.
@@ -1266,6 +1406,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn agent_actions_held_back_have_no_shortcut_until_agent_features_return() {
         let agent_view = KeyChord::new("a", true, false, true, false);
@@ -1305,6 +1446,7 @@ mod tests {
         assert_eq!(pressed(&reg), Some(BindableAction::RenameTab));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn held_back_agent_actions_are_left_out_of_displaced_defaults() {
         // Rename Tab takes Agent View's default.
@@ -1328,6 +1470,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn an_entry_taking_a_default_names_the_action_that_lost_it() {
         // Rename Tab takes New Tab's Ctrl+Shift+T.
@@ -1458,6 +1601,7 @@ mod tests {
         assert!(chord.ctrl);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_conflicting_override_from_config_matches_setting_it_in_settings() {
         let paste = ShortcutRegistry::new()
@@ -1496,17 +1640,42 @@ mod tests {
     }
 
     #[test]
-    fn test_display_string() {
-        let chord = KeyChord::new("c", true, false, true, false);
-        assert_eq!(chord.display_string(), "Ctrl+Shift+C");
-
-        let chord2 = KeyChord::new("pageup", false, false, true, false);
-        assert_eq!(chord2.display_string(), "Shift+PageUp");
-
-        let chord3 = KeyChord::new("f1", false, false, false, false);
-        assert_eq!(chord3.display_string(), "F1");
+    fn chords_are_labelled_in_each_systems_style() {
+        for (chord, linux, mac) in [
+            (
+                KeyChord::new("c", true, false, true, false),
+                "Ctrl+Shift+C",
+                "⌃⇧C",
+            ),
+            (
+                KeyChord::new("C", false, false, true, true),
+                "Shift+Super+C",
+                "⇧⌘C",
+            ),
+            (
+                KeyChord::new("pageup", false, false, true, false),
+                "Shift+PageUp",
+                "⇧⇞",
+            ),
+            (KeyChord::new("f1", false, false, false, false), "F1", "F1"),
+            (
+                KeyChord::new("}", false, false, true, true),
+                "Super+}",
+                "⌘}",
+            ),
+            (
+                KeyChord::new("Left", false, true, false, true),
+                "Alt+Super+Left",
+                "⌥⌘←",
+            ),
+        ] {
+            assert_eq!(chord.label_on(System::Linux), linux);
+            assert_eq!(chord.label_on(System::Mac), mac);
+            assert_eq!(chord.display_string(), chord.label_on(System::CURRENT));
+        }
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn test_plus_equals_normalization() {
         let reg = ShortcutRegistry::new();

@@ -1640,7 +1640,7 @@ fn control_input_is_opt_in_exact_paste_aware_and_guarded_without_provider_execut
     let script = concat!(
         "stty raw -echo; ",
         "printf '\rREADY\r\n'; ",
-        "bytes=$(dd bs=1 count=17 2>/dev/null | od -An -tx1); ",
+        "bytes=$(dd bs=1 count=17 2>/dev/null | od -An -tx1 | tr -s ' '); ",
         "printf '\rinput=%s\r\n' \"$bytes\"; ",
         "sleep 0.1"
     );

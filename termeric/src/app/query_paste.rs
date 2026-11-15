@@ -9,8 +9,7 @@ impl App {
     }
 
     pub(super) fn handle_query_paste_key(&mut self, key: &winit::keyboard::Key) -> bool {
-        if self.shortcut_registry.check(key, self.modifiers)
-            != Some(crate::input::keybindings::BindableAction::Paste)
+        if self.pressed_shortcut(key) != Some(crate::input::keybindings::BindableAction::Paste)
             || matches!(
                 self.text_target(),
                 TextTarget::Blocked | TextTarget::Terminal
@@ -189,8 +188,9 @@ mod tests {
     /// is still consumed instead of inserting its letter or reaching a PTY.
     /// Leaves Paste bound to F8 with no modifiers held, and returns that key.
     fn assert_paste_binding_follows_registry(app: &mut App) -> Key {
-        let default = Key::Character("v".into());
-        app.modifiers = ModifiersState::CONTROL | ModifiersState::SHIFT;
+        let (default, modifiers) =
+            crate::test_support::default_shortcut_press(BindableAction::Paste);
+        app.modifiers = modifiers;
         assert!(app.handle_query_paste_key(&default));
         let rebound = Key::Named(NamedKey::F8);
         let chord = KeyChord::from_key_event(&rebound, ModifiersState::empty());

@@ -166,7 +166,10 @@ impl App {
             let start = self.context_picker.cwd().map(std::path::Path::to_path_buf);
             let opened = self.open_file_chooser(
                 super::file_chooser::FileChooserPurpose::ContextFiles { request_id },
-                move || crate::portal::choose_files("Choose files to send", start.as_deref()),
+                crate::file_chooser::FileRequest {
+                    title: "Choose files to send",
+                    pick: crate::file_chooser::Pick::Files { start },
+                },
             );
             if opened {
                 return;
@@ -190,13 +193,13 @@ impl App {
     pub(super) fn handle_context_files_chosen(
         &mut self,
         request_id: u64,
-        result: std::result::Result<crate::portal::FileChoice, String>,
+        result: std::result::Result<crate::file_chooser::FileChoice, String>,
     ) {
         match result {
-            Ok(crate::portal::FileChoice::Chosen(paths)) => {
+            Ok(crate::file_chooser::FileChoice::Chosen(paths)) => {
                 self.context_picker.use_chosen_files(request_id, &paths);
             }
-            Ok(crate::portal::FileChoice::Cancelled) => {}
+            Ok(crate::file_chooser::FileChoice::Cancelled) => {}
             Err(error) => {
                 log::info!("No file chooser ({error}); asking for paths instead");
                 self.context_picker
@@ -376,7 +379,7 @@ mod tests {
         press(&mut app, NamedKey::Backspace);
         press(&mut app, NamedKey::Home);
         type_text(&mut app, "docs/");
-        app.modifiers = ModifiersState::CONTROL;
+        app.modifiers = crate::input::platform::System::CURRENT.word();
         press(&mut app, NamedKey::ArrowRight);
         app.handle_context_picker_key(&Key::Character("a".into()), false);
         app.handle_context_picker_key(&Key::Named(NamedKey::Space), false);
@@ -385,7 +388,7 @@ mod tests {
         assert_eq!(
             app.context_picker.snapshot().file_input,
             "docs/my🌱 notes.md",
-            "Ctrl moves by word and types nothing"
+            "the word modifier moves by word and types nothing"
         );
         press(&mut app, NamedKey::Backspace);
         press(&mut app, NamedKey::Delete);

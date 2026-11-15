@@ -111,11 +111,17 @@ fn discover_terminfo_root() -> Option<PathBuf> {
     if let Some(dirs) = env::var_os("TERMINFO_DIRS") {
         roots.extend(env::split_paths(&dirs).filter(|path| !path.as_os_str().is_empty()));
     }
-    if let Ok(executable) = env::current_exe()
+    // Links resolved, so a `termeric` linked into a `bin` directory finds the
+    // entry its install carries and advertises what the app it may join does.
+    if let Ok(executable) = env::current_exe().and_then(|path| path.canonicalize())
         && let Some(bin_dir) = executable.parent()
         && let Some(prefix) = bin_dir.parent()
     {
         roots.push(prefix.join("share/terminfo"));
+        // Inside a macOS app: `Contents/MacOS/termeric` and
+        // `Contents/Resources/terminfo`.
+        #[cfg(target_os = "macos")]
+        roots.push(prefix.join("Resources/terminfo"));
     }
 
     for root in default_terminfo_roots() {
@@ -131,13 +137,21 @@ fn push_env_path(roots: &mut Vec<PathBuf>, key: &str) {
     }
 }
 
+/// Whether `root` holds Termeric's entry where this system's ncurses looks:
+/// under its first letter, or (on case-insensitive file systems) under that
+/// letter's hexadecimal code. macOS's own ncurses reads only the hexadecimal
+/// directory, so an entry only under `x/` there would be advertised and then
+/// not found.
 fn terminfo_entry_exists(root: &Path) -> bool {
-    let initial = &TERMERIC_TERM[..1];
-    root.join(initial).join(TERMERIC_TERM).is_file()
-        || root
-            .join(format!("{:x}", TERMERIC_TERM.as_bytes()[0]))
-            .join(TERMERIC_TERM)
-            .is_file()
+    let hexadecimal = root
+        .join(format!("{:x}", TERMERIC_TERM.as_bytes()[0]))
+        .join(TERMERIC_TERM)
+        .is_file();
+    #[cfg(target_os = "linux")]
+    let found = hexadecimal || root.join(&TERMERIC_TERM[..1]).join(TERMERIC_TERM).is_file();
+    #[cfg(target_os = "macos")]
+    let found = hexadecimal;
+    found
 }
 
 /// `root` first, then `existing` without it again, so a terminal started
@@ -208,14 +222,16 @@ mod tests {
         assert_eq!(selected_term(TermPreference::Termeric, true), TERMERIC_TERM);
     }
 
+    /// Linux's ncurses reads either layout; macOS's own reads only the
+    /// hexadecimal one, so an entry only under `x/` is not advertised there.
     #[test]
-    fn discovery_accepts_character_and_hex_database_layouts() {
-        for directory in ["x", "78"] {
+    fn discovery_accepts_the_database_layouts_this_system_reads() {
+        for (directory, readable) in [("x", cfg!(target_os = "linux")), ("78", true)] {
             let temp = tempfile::tempdir().unwrap();
             let entry_dir = temp.path().join(directory);
             std::fs::create_dir(&entry_dir).unwrap();
             std::fs::write(entry_dir.join(TERMERIC_TERM), b"compiled entry").unwrap();
-            assert!(terminfo_entry_exists(temp.path()));
+            assert_eq!(terminfo_entry_exists(temp.path()), readable, "{directory}");
         }
     }
 

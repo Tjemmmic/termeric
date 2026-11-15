@@ -1,23 +1,28 @@
 # Termeric configuration example.
 #
 # Copy this file to ~/.config/termeric/config.toml (or
-# $XDG_CONFIG_HOME/termeric/config.toml) and change what you like. It lists
-# every setting: the values that aren't commented out are the defaults, and
-# the commented entries show settings that have none. Every key is optional; a
+# $XDG_CONFIG_HOME/termeric/config.toml; the same place on macOS) and change
+# what you like. It lists every setting: the values that aren't commented
+# out are the defaults, and the commented entries show settings that have
+# none. Every key is optional; a
 # key you leave out keeps its default, and Termeric runs fine with no file.
 #
 # Termeric reloads the file within a second of a save. A key it doesn't know,
 # a value outside its range, or a file over 1 MiB (the limit for theme files
 # too) is an error that names the key and its line, or the file:
 # Termeric keeps the settings it had (or starts with the defaults), shows a
-# notice until the file loads, and never saves over it. Settings (Ctrl+,)
-# changes most of these too, and keeps your comments and layout when it saves.
-# Reset Configuration to Defaults in the command palette (Ctrl+Shift+P) keeps
-# the old file beside the new one as config.toml.<seconds>.bak.
+# notice until the file loads, and never saves over it. Settings (Ctrl+,, or
+# ⌘, on macOS) changes most of these too, and keeps your comments and layout
+# when it saves. Reset Configuration to Defaults in the command palette
+# (Ctrl+Shift+P, or ⇧⌘P) keeps the old file beside the new one as
+# config.toml.<seconds>.bak.
 
 [shell]
 # The program new tabs and panes run. Unset, it is $SHELL, or your account's
-# login shell. Changes here apply to tabs and panes opened afterwards.
+# login shell; on macOS it then starts as a login shell, as in Terminal.app,
+# unless `args` are set here, which replace that. A program set here runs
+# with exactly the `args` set here. Changes apply to
+# tabs and panes opened afterwards.
 # program = "/bin/zsh"
 # args = ["-l"]
 # Extra environment variables for new shells. TERM, COLORTERM, TERMINFO,
@@ -57,11 +62,15 @@
 # flow_control = "none"   # none, software (XON/XOFF), hardware (RTS/CTS)
 
 [font]
-# The main font family, as fontconfig names it; `fc-list :spacing=mono family`
-# lists them. "monospace" is the system's default monospace font. The main font
-# sets the cell size, so choose a true monospace font.
+# The main font family, as fontconfig names it (`fc-list :spacing=mono family`
+# lists them) or, on macOS, as Font Book does. "monospace" is the system's
+# default monospace font (Menlo on macOS). The main font sets the cell size,
+# so choose a true monospace font. On macOS a point of `size` is one logical
+# pixel, as in other Mac apps. A family without a face at `weight` or
+# `bold_weight` draws with its nearest one (a variable font draws at the exact
+# weight), and bold text in a family without a bold face is emboldened.
 family = "monospace"
-size = 12.0               # points, 8 to 72; Ctrl+= and Ctrl+- zoom one window
+size = 12.0               # points, 8 to 72; Ctrl+= and Ctrl+- (⌘= and ⌘-) zoom one window
 weight = 400              # 1 to 1000
 bold_weight = 700         # 1 to 1000, at least `weight`
 line_height = 1.2         # a multiple of the font size, 0.8 to 3.0
@@ -91,7 +100,8 @@ bold_is_bright = false    # bold also brightens ANSI colors 0 to 7
 [scrollback]
 lines = 10000             # per terminal, 100 to 1000000
 max_memory_mib = 128      # per terminal, 8 to 4096; the oldest lines go first
-scroll_speed = 6.0        # lines per wheel step, 0.1 to 100
+scroll_speed = 6.0        # lines per mouse wheel step, 0.1 to 100; trackpads
+                          # scroll a line per cell height of swipe
 
 [panes]
 # Where a new split starts: the focused pane's directory (focused), the tab's
@@ -100,13 +110,17 @@ cwd = "focused"
 
 [keyboard]
 xterm_type = "normal"     # normal, legacy, vt220; programs can switch it
+# macOS: the Option keys that are Alt (Meta), sending Escape before the key,
+# instead of typing characters such as é and @: none, left, right, both.
+# Arrows and Backspace keep Alt either way, so Option+Left moves by word.
+macos_option_as_alt = "none"
 
 [copy_mode]
-bindings = "vi"           # keys in keyboard copy mode (Ctrl+Shift+X): vi, emacs
+bindings = "vi"           # keys in copy mode (Ctrl+Shift+X, macOS ⇧⌘X): vi, emacs
 
-# What quick select (Ctrl+Shift+O) labels: up to 32 Rust regular expressions.
-# Setting any replaces the built-in URL, path, and commit-hash patterns, so
-# list the ones you want to keep. OSC 8 links are always included.
+# What quick select (Ctrl+Shift+O, macOS ⇧⌘O) labels: up to 32 Rust regular
+# expressions. Setting any replaces the built-in URL, path, and commit-hash
+# patterns, so list the ones you want to keep. OSC 8 links are always included.
 # [[copy_mode.patterns]]
 # name = "ticket"
 # regex = "PROJ-[0-9]+"
@@ -134,12 +148,15 @@ name = "turmeric"
 
 [renderer]
 # auto tries the GPU, then software rendering; gpu and software insist on one.
-# Applies the next time Termeric starts; `termeric --renderer` overrides it.
+# macOS has no software renderer (Metal is always there), so software can't
+# start there. Applies the next time Termeric starts; `termeric --renderer`
+# overrides it.
 backend = "auto"
 
 [accessibility]
-# "system" follows the desktop's setting through the XDG desktop portal, and
-# is off when the desktop publishes none. High contrast changes Termeric's own
+# "system" follows the desktop's setting (through the XDG desktop portal on
+# Linux, and System Settings → Accessibility → Display on macOS), and is off
+# when the desktop publishes none. High contrast changes Termeric's own
 # interface, not the terminal's colors.
 reduce_motion = "system"  # system, on, off
 high_contrast = "system"  # system, on, off
@@ -147,13 +164,14 @@ high_contrast = "system"  # system, on, off
 [window]
 width = 800               # pixels, 320 to 16384; windows opened later
 height = 600              # pixels, 200 to 16384; windows opened later
-opacity = 1.0             # 0.1 to 1.0; needs a compositor with transparency
+opacity = 1.0             # 0.1 to 1.0; on Linux, needs a compositor with transparency
 padding = 8               # pixels around the terminal, 0 to 256
 decorations = true        # the desktop's title bar and borders
 level = "normal"          # normal, always_on_top, always_on_bottom (a request)
 tab_bar_position = "top"  # top, or left for a vertical rail
-# New windows open in the Termeric already running on this display, so tabs
-# can move between them. Applies to windows opened later.
+# New windows open in the Termeric already running on this display (on macOS,
+# in this login session), so tabs can move between them. Applies to windows
+# opened later.
 share_process = true
 
 # A static PNG or JPEG behind the terminal text, at most 16 MiB and 8192
@@ -173,8 +191,18 @@ blink_rate = 530          # milliseconds on, then off, 100 to 5000
 
 [bell]
 visual = true             # flash the terminal
-audio = false             # play a sound through paplay
+audio = false             # play a sound: through paplay on Linux, your alert sound on macOS
 visual_duration_ms = 100  # 10 to 5000
+
+[quick_access]
+# macOS only: a system-wide key that shows and hides the quick-access
+# terminal (`termeric --quick-access`) while it runs, whichever app is in
+# front. The key is the one at that place on a US keyboard: a letter, a
+# digit, one of ` - = [ ] ; ' , . /, a backslash (written "\\" here), space,
+# return, tab, escape, or f1 to f20; it needs ctrl, alt, or super unless it
+# is a function key. It takes effect when the quick-access terminal starts.
+# On Linux, bind `termeric --quick-access` to a desktop shortcut instead.
+# macos_hotkey = { key = "`", ctrl = true }
 
 [splash]
 mode = "firstboot"        # never, firstboot (the first launch ever), newwindow, newtab
@@ -223,20 +251,21 @@ save_scrollback = true
 # A change to a built-in shortcut; the shortcut editor (Settings, Keyboard)
 # writes these for you. Only shortcuts that differ from the defaults need an
 # entry, and an entry without `key` unbinds its action. ctrl, alt, shift, and
-# super default to false. A key is a character ("t", "5", "/") or one of enter,
-# tab, space, backspace, escape, delete, insert, home, end, pageup, pagedown,
-# up, down, left, right, f1 to f12. On digit and symbol keys Shift is part of
-# the character, so write the character you type ("?") and leave shift out.
+# super default to false; on macOS, alt is Option and super is Command. A key
+# is a character ("t", "5", "/") or one of enter, tab, space, backspace,
+# escape, delete, insert, home, end, pageup, pagedown, up, down, left, right,
+# f1 to f12. On digit and symbol keys Shift is part of the character, so write
+# the character you type ("?", or "}" for Shift+]) and leave shift out.
 # Two entries can't give one combination to different actions.
 # [[shortcuts]]
 # action = "new_tab"
 # key = "t"
 # ctrl = true
 #
-# Action IDs, with their default keys:
+# Action IDs, with their default keys on Linux:
 #   General: copy (Ctrl+Shift+C), paste (Ctrl+Shift+V), toggle_search
 #     (Ctrl+Shift+F), toggle_command_palette (Ctrl+Shift+P), toggle_settings
-#     (Ctrl+,), toggle_fullscreen (F11), clear_selection (Escape),
+#     (Ctrl+,), toggle_fullscreen (F11), new_window, clear_selection (Escape),
 #     open_unicode_picker, new_agent (Ctrl+Shift+I), toggle_agent_view
 #     (Ctrl+Shift+A)
 #   Font: increase_font_size (Ctrl+=), decrease_font_size (Ctrl+-),
@@ -259,6 +288,18 @@ save_scrollback = true
 #     previous_prompt (Ctrl+Shift+Up), next_prompt (Ctrl+Shift+Down),
 #     previous_failed_command, next_failed_command
 #   Terminal: clear_scrollback, reset_terminal
+# On macOS the defaults are copy ⌘C, paste ⌘V, toggle_search ⌘F,
+# toggle_command_palette ⇧⌘P, toggle_settings ⌘,, toggle_fullscreen ⌃⌘F,
+# new_window ⌘N, new_agent ⇧⌘I, toggle_agent_view ⇧⌘A, increase_font_size ⌘=,
+# decrease_font_size ⌘-, reset_font_size ⌘0, new_tab ⌘T, close_tab ⌘W,
+# next_tab ⇧⌘] (key "}"), prev_tab ⇧⌘[ (key "{"), switch_to_tab_1 to
+# switch_to_tab_9 ⌘1 to ⌘9, rename_tab ⌥⇧⌘T, split_vertical ⌘D,
+# split_horizontal ⇧⌘D, close_pane ⌥⌘W, navigate_pane_* ⌥⌘arrow,
+# scroll_page_up ⇧PageUp, scroll_page_down ⇧PageDown, scroll_to_top ⌘Home,
+# scroll_to_bottom ⌘End, toggle_copy_mode ⇧⌘X, quick_select ⇧⌘O,
+# previous_prompt ⌘↑, next_prompt ⌘↓, clear_scrollback ⌘K, and
+# clear_selection Escape; the others have none. ⌘Q, ⌘H, ⌘M, ⌘Tab, ⌘Space,
+# and the other chords macOS takes first are left alone.
 # F6 and Shift+F6, which move keyboard focus to the tab bar, can't be changed.
 
 # Extra keys that type text, run a command, or run a plugin command. ctrl, alt,

@@ -3140,10 +3140,10 @@ mod tests {
             "da1=$(dd bs=1 count=7 2>/dev/null); ",
             "da2=$(dd bs=1 count=9 2>/dev/null); ",
             "kitty=$(dd bs=1 count=12 2>/dev/null); ",
-            "printf '\\rdsr='; printf '%s' \"$dsr\" | od -An -tx1; ",
-            "printf '\\r\\nda1='; printf '%s' \"$da1\" | od -An -tx1; ",
-            "printf '\\r\\nda2='; printf '%s' \"$da2\" | od -An -tx1; ",
-            "printf '\\r\\nkitty='; printf '%s' \"$kitty\" | od -An -tx1; ",
+            "printf '\\rdsr='; printf '%s' \"$dsr\" | od -An -tx1 | tr -s ' '; ",
+            "printf '\\r\\nda1='; printf '%s' \"$da1\" | od -An -tx1 | tr -s ' '; ",
+            "printf '\\r\\nda2='; printf '%s' \"$da2\" | od -An -tx1 | tr -s ' '; ",
+            "printf '\\r\\nkitty='; printf '%s' \"$kitty\" | od -An -tx1 | tr -s ' '; ",
             "printf '\\r\\n'"
         );
         let shell = ShellConfig {
@@ -3255,7 +3255,7 @@ mod tests {
         manager
             .attach_domain(
                 &snapshot,
-                &crate::domain::DomainRelayCommand::local("/bin/true"),
+                &crate::domain::DomainRelayCommand::local("/usr/bin/true"),
             )
             .unwrap();
         let local_tab_id = {
@@ -3324,7 +3324,7 @@ mod tests {
     #[test]
     fn a_tabs_first_relay_starts_like_every_later_one() {
         use crate::domain::model::{DomainSnapshot, DomainTopology, LivePaneLayout, LiveTab};
-        let relay = crate::domain::DomainRelayCommand::local("/bin/true");
+        let relay = crate::domain::DomainRelayCommand::local("/usr/bin/true");
         let snapshot = DomainSnapshot::fixture(
             "relays",
             7,
@@ -3399,7 +3399,7 @@ mod tests {
         manager
             .attach_domain(
                 &snapshot,
-                &crate::domain::DomainRelayCommand::local("/bin/true"),
+                &crate::domain::DomainRelayCommand::local("/usr/bin/true"),
             )
             .unwrap();
         let stable_first_tab = manager.active_tab().unwrap().id;
@@ -3417,7 +3417,7 @@ mod tests {
         manager
             .reconcile_live_domain(
                 &crate::domain::model::DomainTopology::from(&snapshot),
-                &crate::domain::DomainRelayCommand::local("/bin/true"),
+                &crate::domain::DomainRelayCommand::local("/usr/bin/true"),
             )
             .unwrap();
         let first = manager
@@ -3438,7 +3438,7 @@ mod tests {
         manager
             .reconcile_live_domain(
                 &crate::domain::model::DomainTopology::from(&snapshot),
-                &crate::domain::DomainRelayCommand::local("/bin/true"),
+                &crate::domain::DomainRelayCommand::local("/usr/bin/true"),
             )
             .unwrap();
         assert_eq!(manager.tabs.len(), 2);
@@ -3453,7 +3453,7 @@ mod tests {
         manager
             .reconcile_live_domain(
                 &crate::domain::model::DomainTopology::from(&snapshot),
-                &crate::domain::DomainRelayCommand::local("/bin/true"),
+                &crate::domain::DomainRelayCommand::local("/usr/bin/true"),
             )
             .unwrap();
         let first = manager
@@ -3471,7 +3471,7 @@ mod tests {
         manager
             .reconcile_live_domain(
                 &crate::domain::model::DomainTopology::from(&snapshot),
-                &crate::domain::DomainRelayCommand::local("/bin/true"),
+                &crate::domain::DomainRelayCommand::local("/usr/bin/true"),
             )
             .unwrap();
         assert!(

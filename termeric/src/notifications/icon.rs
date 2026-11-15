@@ -148,32 +148,6 @@ pub(super) fn resolve_transmitted_icon(
     }
 }
 
-pub(super) fn first_available_icon_name(names: &[String]) -> Option<String> {
-    first_available_icon_name_with(names, |mapped| {
-        freedesktop_icons::lookup(mapped)
-            .with_size(256)
-            .find()
-            .is_some()
-    })
-}
-
-pub(super) fn is_safe_icon_name(name: &str) -> bool {
-    !name.is_empty() && !name.starts_with('.') && !name.contains('/') && !name.contains('\\')
-}
-
-fn first_available_icon_name_with(
-    names: &[String],
-    mut available: impl FnMut(&str) -> bool,
-) -> Option<String> {
-    names
-        .iter()
-        .filter(|name| is_safe_icon_name(name))
-        .find_map(|name| {
-            let mapped = super::freedesktop_icon_name(name);
-            available(mapped).then(|| mapped.to_owned())
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,24 +264,5 @@ mod tests {
         }
         assert!(cache.retained_bytes <= MAX_ICON_CACHE_BYTES);
         assert!(!cache.entries.contains_key("large-0"));
-    }
-
-    #[test]
-    fn local_icon_names_keep_protocol_order_and_universal_aliases() {
-        let names = vec![
-            "/tmp/untrusted.png".to_string(),
-            "warning".to_string(),
-            "second".to_string(),
-        ];
-        let mut checked = Vec::new();
-        let selected = first_available_icon_name_with(&names, |name| {
-            checked.push(name.to_owned());
-            name == "second"
-        });
-        assert_eq!(selected.as_deref(), Some("second"));
-        assert_eq!(checked, ["dialog-warning", "second"]);
-
-        let selected = first_available_icon_name_with(&names, |_| true);
-        assert_eq!(selected.as_deref(), Some("dialog-warning"));
     }
 }

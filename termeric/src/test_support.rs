@@ -17,18 +17,85 @@ mod soak;
 /// An `sh -c` script that shows what input reached its terminal: with no
 /// echo or line editing it prints `READY`, then the first `count` bytes it
 /// reads, in hex, and stays a moment so its output is read before it exits.
+/// The hex goes through `tr -s ' '` because BSD `od` (macOS) pads its columns
+/// wider than GNU `od`; squeezed, both read ` 1b 5b 41`.
 /// Write to it only once it shows `READY`.
 pub(crate) fn byte_probe(count: usize) -> String {
     format!(
-        "stty raw -echo; printf READY; dd bs=1 count={count} 2>/dev/null | od -An -tx1 -v; sleep 0.2"
+        "stty raw -echo; printf READY; dd bs=1 count={count} 2>/dev/null | od -An -tx1 -v | tr -s ' '; sleep 0.2"
     )
+}
+
+/// The key and modifiers that press `action`'s default shortcut on this
+/// system, as winit reports them: a letter typed with Shift comes in upper
+/// case, and named keys come by name. Tests press shortcuts through it so
+/// they hold on every system.
+pub(crate) fn default_shortcut_press(
+    action: crate::input::keybindings::BindableAction,
+) -> (winit::keyboard::Key, winit::keyboard::ModifiersState) {
+    use winit::keyboard::{Key, NamedKey};
+    let chord = action
+        .meta()
+        .default_binding
+        .unwrap_or_else(|| panic!("{action:?} has a default shortcut"));
+    let named = match chord.key.as_str() {
+        "tab" => Some(NamedKey::Tab),
+        "enter" => Some(NamedKey::Enter),
+        "escape" => Some(NamedKey::Escape),
+        "space" => Some(NamedKey::Space),
+        "backspace" => Some(NamedKey::Backspace),
+        "delete" => Some(NamedKey::Delete),
+        "home" => Some(NamedKey::Home),
+        "end" => Some(NamedKey::End),
+        "pageup" => Some(NamedKey::PageUp),
+        "pagedown" => Some(NamedKey::PageDown),
+        "up" => Some(NamedKey::ArrowUp),
+        "down" => Some(NamedKey::ArrowDown),
+        "left" => Some(NamedKey::ArrowLeft),
+        "right" => Some(NamedKey::ArrowRight),
+        "f11" => Some(NamedKey::F11),
+        _ => None,
+    };
+    let key = match named {
+        Some(named) => Key::Named(named),
+        None if chord.shift => Key::Character(chord.key.to_uppercase().into()),
+        None => Key::Character(chord.key.as_str().into()),
+    };
+    let press = (key, chord.modifiers());
+    assert_eq!(
+        crate::input::keybindings::KeyChord::from_key_event(&press.0, press.1),
+        Some(chord),
+        "{action:?}'s default is pressed as it is bound"
+    );
+    press
+}
+
+/// Modifiers no text field edits with on this system (its word and line
+/// modifiers aside) and that no default shortcut uses with an editing key,
+/// for tests that check fields swallow them.
+pub(crate) fn unsupported_field_modifiers() -> Vec<winit::keyboard::ModifiersState> {
+    use winit::keyboard::ModifiersState as M;
+    [
+        M::SHIFT,
+        M::CONTROL,
+        M::ALT,
+        M::SUPER,
+        M::CONTROL | M::SHIFT,
+        M::CONTROL | M::ALT,
+    ]
+    .into_iter()
+    .filter(|modifiers| {
+        crate::input::platform::System::CURRENT
+            .reach(*modifiers)
+            .is_none()
+    })
+    .collect()
 }
 
 /// [`byte_probe`] for one byte, which shows whether input reached its
 /// terminal at all. `App::assert_pty_untouched` writes the byte it expects
 /// first.
-pub(crate) const FIRST_BYTE_PROBE: &str =
-    "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1 -v; sleep 0.2";
+pub(crate) const FIRST_BYTE_PROBE: &str = "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1 -v | tr -s ' '; sleep 0.2";
 
 /// `sh -c` arguments for a child that stays alive through a test without
 /// printing anything: a real PTY whose process is still running when the
@@ -342,4 +409,20 @@ fn plugin_quick_exit_crosses_pty_tab_and_diagnostic_capture() {
 #[test]
 fn the_first_byte_probe_is_the_one_byte_probe() {
     assert_eq!(FIRST_BYTE_PROBE, byte_probe(1));
+}
+
+/// A new directory under `parent` whose name is not valid UTF-8, or `None`
+/// where the file system refuses such names (macOS's APFS only stores valid
+/// UTF-8), so a test of what Termeric does with one skips where none can
+/// exist.
+pub(crate) fn non_utf8_directory(parent: &std::path::Path) -> Option<std::path::PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+    let path = parent.join(std::ffi::OsString::from_vec(b"not-utf8-\xff".to_vec()));
+    match std::fs::create_dir(&path) {
+        Ok(()) => Some(path),
+        Err(error) if cfg!(target_os = "macos") && error.raw_os_error() == Some(libc::EILSEQ) => {
+            None
+        }
+        Err(error) => panic!("cannot create {}: {error}", path.display()),
+    }
 }

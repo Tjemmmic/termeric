@@ -18,6 +18,16 @@ pub fn executable() -> anyhow::Result<PathBuf> {
         .context("locate the Termeric executable")
 }
 
+/// Whether `executable` runs from App Translocation's temporary copy, which
+/// macOS uses for an app opened from where it was downloaded while it is
+/// still quarantined. The copy's path changes from launch to launch, so
+/// nothing that outlives this run (agent hooks) may name it.
+pub fn is_translocated(executable: &std::path::Path) -> bool {
+    executable
+        .components()
+        .any(|component| component.as_os_str() == "AppTranslocation")
+}
+
 /// [`executable`] as UTF-8, for command lines kept as text.
 pub fn executable_text() -> anyhow::Result<String> {
     executable()?
@@ -39,7 +49,7 @@ pub fn config_dir() -> Option<PathBuf> {
     }
     #[cfg(not(test))]
     {
-        directories::ProjectDirs::from("", "", "termeric").map(|dirs| dirs.config_dir().into())
+        xdg_directory("XDG_CONFIG_HOME", ".config")
     }
 }
 
@@ -51,8 +61,31 @@ pub fn data_dir() -> Option<PathBuf> {
     }
     #[cfg(not(test))]
     {
-        directories::ProjectDirs::from("", "", "termeric").map(|dirs| dirs.data_dir().into())
+        xdg_directory("XDG_DATA_HOME", ".local/share")
     }
+}
+
+/// `termeric` under the XDG base directory `variable` names, else under
+/// `fallback` in the home directory. macOS uses the same places as Linux, as
+/// other terminals do there, so dotfiles carry over between the two.
+#[cfg(not(test))]
+fn xdg_directory(variable: &str, fallback: &str) -> Option<PathBuf> {
+    let home = directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf());
+    xdg_directory_from(std::env::var_os(variable), home.as_deref(), fallback)
+}
+
+/// [`xdg_directory`] for a given variable value and home directory. The XDG
+/// specification ignores a relative value.
+fn xdg_directory_from(
+    value: Option<std::ffi::OsString>,
+    home: Option<&std::path::Path>,
+    fallback: &str,
+) -> Option<PathBuf> {
+    value
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| home.map(|home| home.join(fallback)))
+        .map(|base| base.join("termeric"))
 }
 
 /// Tests never read or write the person's own configuration or data: every
@@ -101,6 +134,37 @@ mod tests {
         ] {
             assert!(path.starts_with(&root), "{}", path.display());
         }
+    }
+
+    #[test]
+    fn translocated_copies_are_recognized() {
+        assert!(super::is_translocated(std::path::Path::new(
+            "/private/var/folders/ab/cd/T/AppTranslocation/0F3A/d/Termeric.app/Contents/MacOS/termeric"
+        )));
+        assert!(!super::is_translocated(std::path::Path::new(
+            "/Applications/Termeric.app/Contents/MacOS/termeric"
+        )));
+    }
+
+    #[test]
+    fn xdg_directories_follow_the_specification_on_every_system() {
+        let home = Some(std::path::Path::new("/home/person"));
+        assert_eq!(
+            super::xdg_directory_from(None, home, ".config"),
+            Some(std::path::PathBuf::from("/home/person/.config/termeric"))
+        );
+        assert_eq!(
+            super::xdg_directory_from(Some("/elsewhere".into()), home, ".config"),
+            Some(std::path::PathBuf::from("/elsewhere/termeric"))
+        );
+        // A relative value is ignored, as the specification asks.
+        assert_eq!(
+            super::xdg_directory_from(Some("relative".into()), home, ".local/share"),
+            Some(std::path::PathBuf::from(
+                "/home/person/.local/share/termeric"
+            ))
+        );
+        assert_eq!(super::xdg_directory_from(None, None, ".config"), None);
     }
 
     #[test]

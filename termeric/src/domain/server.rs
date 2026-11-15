@@ -2036,7 +2036,9 @@ fn serve_topology_subscription(
 }
 
 fn topology_subscription_input_loop(mut stream: UnixStream) {
-    while let Ok(frame) = protocol::read_frame::<ClientFrame>(&mut stream) {
+    while let Ok(frame) =
+        protocol::read_frame::<ClientFrame>(&mut crate::deadline_io::WaitingReader(&mut stream))
+    {
         if matches!(frame, ClientFrame::Detach) {
             return;
         }
@@ -2050,7 +2052,9 @@ fn attachment_input_loop(
     pane_id: u32,
     attachment_id: u64,
 ) {
-    while let Ok(frame) = protocol::read_frame::<ClientFrame>(&mut stream) {
+    while let Ok(frame) =
+        protocol::read_frame::<ClientFrame>(&mut crate::deadline_io::WaitingReader(&mut stream))
+    {
         let mut state = state.lock().unwrap();
         let Ok(pane) = find_pane_mut(&mut state, domain_id, pane_id) else {
             return;
@@ -3118,7 +3122,7 @@ mod tests {
     #[test]
     fn domain_panes_inherit_the_server_checksum_policy() {
         let spec = SpawnSpec {
-            program: Some("/bin/true".into()),
+            program: Some("/usr/bin/true".into()),
             ..SpawnSpec::default()
         };
         let (disabled, _reader) =
@@ -3177,7 +3181,7 @@ mod tests {
             panic!("expected created domain");
         };
         let missing = || SpawnSpec {
-            program: Some("/bin/true".into()),
+            program: Some("/usr/bin/true".into()),
             working_directory: Some("/path/that/does/not/exist/here".into()),
             ..SpawnSpec::default()
         };
@@ -3221,7 +3225,7 @@ mod tests {
             .unwrap()
             .next_split = u32::MAX;
         let spawn = SpawnSpec {
-            program: Some("/bin/true".into()),
+            program: Some("/usr/bin/true".into()),
             ..SpawnSpec::default()
         };
         assert!(split_pane(&state, &domain.id, 0, SplitDirection::Vertical, spawn).is_err());
@@ -4199,9 +4203,9 @@ mod tests {
             let remaining = deadline
                 .checked_duration_since(std::time::Instant::now())
                 .expect("attachment did not close before the deadline");
-            closing_attachment
-                .set_read_timeout(Some(remaining))
-                .unwrap();
+            // macOS refuses socket options once the other end has shut
+            // down; what it sent is still there to read.
+            let _ = closing_attachment.set_read_timeout(Some(remaining));
             match protocol::read_frame::<ServerFrame>(&mut closing_attachment).unwrap() {
                 ServerFrame::Output { sequence, data } => {
                     assert_eq!(sequence, next_sequence, "output must remain ordered");
@@ -4221,9 +4225,8 @@ mod tests {
                 .windows(CLOSURE_MARKER.len())
                 .any(|bytes| bytes == CLOSURE_MARKER.as_bytes())
         );
-        closing_attachment
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
+        // As above: macOS refuses the option once the other end has shut down.
+        let _ = closing_attachment.set_read_timeout(Some(Duration::from_secs(2)));
         assert_eq!(closing_attachment.read(&mut [0; 1]).unwrap(), 0);
         for request in [
             Request::SwapPaneNext {

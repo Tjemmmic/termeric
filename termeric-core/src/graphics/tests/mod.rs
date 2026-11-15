@@ -63,6 +63,8 @@ fn ordinary_graphics_fifo_is_rejected_without_waiting_for_a_writer() {
     assert!(path.exists(), "rejected FIFO was deleted");
 }
 
+// macOS shared memory is not in the filesystem, so no FIFO can stand in.
+#[cfg(target_os = "linux")]
 #[test]
 fn shared_memory_graphics_fifo_is_rejected_without_waiting_for_a_writer() {
     let path = fifo_fixture(Path::new("/dev/shm"));
@@ -103,6 +105,8 @@ fn temporary_graphics_open_rejects_fifo_and_symlink_substitution() {
     );
 }
 
+// macOS shared memory is not in the filesystem, so no FIFO can stand in.
+#[cfg(target_os = "linux")]
 #[test]
 fn shared_memory_cleanup_rejects_substituted_fifo_without_waiting_or_unlinking() {
     let file = tempfile::Builder::new()
@@ -120,6 +124,8 @@ fn shared_memory_cleanup_rejects_substituted_fifo_without_waiting_or_unlinking()
     assert!(path.exists(), "cleanup removed a substituted FIFO");
 }
 
+// macOS shared memory is not in the filesystem, so no FIFO can stand in.
+#[cfg(target_os = "linux")]
 #[test]
 fn fifo_protocol_errors_preserve_quiet_policy_and_next_image_progress() {
     let path = fifo_fixture(Path::new("/dev/shm"));
@@ -147,9 +153,11 @@ fn fifo_protocol_errors_preserve_quiet_policy_and_next_image_progress() {
     assert!(path.exists());
 }
 use super::placement_geometry::crop_axis;
+#[cfg(target_os = "linux")]
+use super::transmission::unlink_shared_memory_if_unchanged;
 use super::transmission::{
-    ensure_ordinary_file_unchanged, open_unchanged_temporary_file, read_and_unlink_shared_memory,
-    read_ordinary_file, unlink_shared_memory_if_unchanged,
+    ensure_ordinary_file_unchanged, is_shared_memory_object, open_graphics_shared_memory,
+    open_unchanged_temporary_file, read_and_unlink_shared_memory, read_ordinary_file,
 };
 use super::*;
 
@@ -525,26 +533,32 @@ struct TestSharedMemory {
 
 impl TestSharedMemory {
     fn new(data: &[u8]) -> Self {
-        use std::io::Write;
+        Self::create(data, data.len() as u64, 0o600)
+    }
+
+    /// A new object `length` bytes long that starts with `data`, created
+    /// with permissions `mode`. Its size is set once and the data goes in
+    /// through a mapping: macOS shared memory can be neither resized nor
+    /// written with write(2). Names stay within macOS's 31 bytes.
+    fn create(data: &[u8], length: u64, mode: u16) -> Self {
         use std::os::unix::io::FromRawFd;
         use std::sync::atomic::{AtomicU64, Ordering};
 
+        assert!(data.len() as u64 <= length);
         static NEXT_NAME: AtomicU64 = AtomicU64::new(1);
         loop {
             let sequence = NEXT_NAME.fetch_add(1, Ordering::Relaxed);
-            let name = std::ffi::CString::new(format!(
-                "/termeric-kitty-test-{}-{sequence}",
-                std::process::id()
-            ))
-            .unwrap();
-            // SAFETY: `name` is a live C string, creation uses private
-            // permissions, and a successful descriptor is transferred
+            let name =
+                std::ffi::CString::new(format!("/termeric-{}-{sequence}", std::process::id()))
+                    .unwrap();
+            // SAFETY: `name` is a live C string, O_CREAT reads the one mode
+            // argument passed, and a successful descriptor is transferred
             // exactly once into `File` ownership below.
             let descriptor = unsafe {
                 libc::shm_open(
                     name.as_ptr(),
                     libc::O_CREAT | libc::O_EXCL | libc::O_RDWR | libc::O_CLOEXEC,
-                    0o600,
+                    libc::c_uint::from(mode),
                 )
             };
             if descriptor < 0 {
@@ -559,12 +573,27 @@ impl TestSharedMemory {
             // SAFETY: this is the sole owner transfer for the newly
             // returned descriptor.
             let file = unsafe { std::fs::File::from_raw_fd(descriptor) };
-            file.set_len(data.len() as u64).unwrap();
-            let mut writer = &file;
-            writer.write_all(data).unwrap();
-            writer.flush().unwrap();
+            // Creation applies the umask. Linux can then set exactly `mode`;
+            // macOS cannot change a shared-memory object's mode at all.
+            #[cfg(target_os = "linux")]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                file.set_permissions(std::fs::Permissions::from_mode(mode.into()))
+                    .unwrap();
+            }
+            if length > 0 {
+                file.set_len(length).unwrap();
+            }
+            if !data.is_empty() {
+                write_through_mapping(&file, data);
+            }
             return Self { name, file };
         }
+    }
+
+    /// The object's permission and type bits, as `fstat` reports them.
+    fn mode(&self) -> u32 {
+        self.file.metadata().unwrap().mode()
     }
 
     fn encoded_name(&self) -> String {
@@ -593,6 +622,36 @@ impl TestSharedMemory {
             drop(unsafe { std::fs::File::from_raw_fd(descriptor) });
             true
         }
+    }
+}
+
+/// Copy `data` to the start of the shared-memory object `file`.
+fn write_through_mapping(file: &std::fs::File, data: &[u8]) {
+    use std::os::fd::AsRawFd;
+
+    // SAFETY: a new writable shared mapping of the first `data.len()` bytes
+    // of an object at least that long, at an address the kernel chooses.
+    let address = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            data.len(),
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            file.as_raw_fd(),
+            0,
+        )
+    };
+    assert_ne!(
+        address,
+        libc::MAP_FAILED,
+        "could not map test shared memory: {}",
+        std::io::Error::last_os_error()
+    );
+    // SAFETY: the mapping holds `data.len()` writable bytes that no Rust
+    // value aliases, and it is unmapped exactly once after the copy.
+    unsafe {
+        std::ptr::copy_nonoverlapping(data.as_ptr(), address.cast::<u8>(), data.len());
+        libc::munmap(address, data.len());
     }
 }
 
@@ -982,13 +1041,13 @@ fn compressed_local_media_uses_format_specific_size_semantics() {
 
 #[test]
 fn shared_memory_policy_rejects_public_and_invalid_names() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let public = TestSharedMemory::new(&[1, 2, 3, 4]);
-    public
-        .file
-        .set_permissions(std::fs::Permissions::from_mode(0o644))
-        .unwrap();
+    let public = TestSharedMemory::create(&[1, 2, 3, 4], 4, 0o644);
+    // On macOS only the umask decides, as the mode cannot be changed later.
+    assert_ne!(
+        public.mode() & 0o077,
+        0,
+        "umask removed the group and other access this test needs"
+    );
     let payload = format!("a=q,t=s,f=32,s=1,v=1,S=4,i=52;{}", public.encoded_name());
     let mut manager = GraphicsManager::new();
     let result = manager.handle_command(command(payload.as_bytes()), false);
@@ -1004,11 +1063,7 @@ fn shared_memory_policy_rejects_public_and_invalid_names() {
 
 #[test]
 fn oversized_private_shared_memory_is_rejected_and_unlinked() {
-    let object = TestSharedMemory::new(&[]);
-    object
-        .file
-        .set_len(MAX_TRANSMISSION_BYTES as u64 + 1)
-        .unwrap();
+    let object = TestSharedMemory::create(&[], MAX_TRANSMISSION_BYTES as u64 + 1, 0o600);
     let payload = format!("a=q,t=s,f=32,s=1,v=1,i=54;{}", object.encoded_name());
 
     let mut manager = GraphicsManager::new();
@@ -1016,6 +1071,59 @@ fn oversized_private_shared_memory_is_rejected_and_unlinked() {
     assert_eq!(result.response.unwrap().error_code, Some("E2BIG"));
     assert!(!object.is_linked());
     assert!(manager.storage.is_empty());
+}
+
+/// What the system reports for a real shared-memory object, which differs:
+/// macOS rounds its size up to whole pages and may give it no file type.
+#[test]
+fn shared_memory_object_is_private_owned_close_on_exec_and_bounded_by_its_declared_size() {
+    use std::os::fd::AsRawFd;
+
+    let data = [5, 6, 7, 8, 9];
+    let object = TestSharedMemory::new(&data);
+    let opened = open_graphics_shared_memory(&object.name).unwrap();
+    // SAFETY: opened owns a live descriptor; F_GETFD has no third argument.
+    let descriptor_flags = unsafe { libc::fcntl(opened.as_raw_fd(), libc::F_GETFD) };
+    assert!(descriptor_flags >= 0);
+    assert_ne!(
+        descriptor_flags & libc::FD_CLOEXEC,
+        0,
+        "shm_open ignored O_CLOEXEC"
+    );
+    let metadata = opened.metadata().unwrap();
+    assert!(
+        is_shared_memory_object(&metadata),
+        "fstat reported st_mode {:o} for a shared-memory object",
+        metadata.mode()
+    );
+    // SAFETY: `geteuid` has no preconditions and does not access Rust memory.
+    assert_eq!(metadata.uid(), unsafe { libc::geteuid() });
+    assert_eq!(metadata.mode() & 0o077, 0, "st_mode {:o}", metadata.mode());
+    assert!(
+        metadata.len() >= data.len() as u64,
+        "st_size {} for {} bytes",
+        metadata.len(),
+        data.len()
+    );
+    drop(opened);
+    assert_eq!(
+        read_and_unlink_shared_memory(object.name.as_bytes(), 1, Some(3)).unwrap(),
+        [6, 7, 8]
+    );
+    assert!(!object.is_linked());
+}
+
+/// macOS allows shared-memory names of at most 31 bytes; a longer one is
+/// refused like any object that is not there, not as a malformed command.
+#[cfg(target_os = "macos")]
+#[test]
+fn shared_memory_names_beyond_the_macos_limit_fail_as_unavailable() {
+    let name = format!("/{}", "n".repeat(40));
+    let error = read_and_unlink_shared_memory(name.as_bytes(), 0, Some(4)).unwrap_err();
+    assert_eq!(
+        (error.code, error.message.as_str()),
+        ("EIO", "shared-memory object is unavailable")
+    );
 }
 
 #[test]

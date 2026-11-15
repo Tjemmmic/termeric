@@ -15,6 +15,8 @@ pub enum TextInputEdit {
     WordRight,
     BackspaceWord,
     DeleteWord,
+    /// Delete from the start of the line to the caret (⌘⌫ on macOS).
+    BackspaceLine,
 }
 
 /// How much one field holds: characters for what people read, bytes for
@@ -171,7 +173,8 @@ impl TextInput {
                 TextInputEdit::Backspace
                 | TextInputEdit::Delete
                 | TextInputEdit::BackspaceWord
-                | TextInputEdit::DeleteWord => {
+                | TextInputEdit::DeleteWord
+                | TextInputEdit::BackspaceLine => {
                     self.clear();
                     true
                 }
@@ -242,6 +245,17 @@ pub(crate) fn edit_grapheme(buffer: &mut String, cursor: &mut usize, edit: TextI
             }
             buffer.drain(start..end);
             *cursor = start;
+            return true;
+        }
+        TextInputEdit::BackspaceLine => {
+            // A single-line buffer's line is all of it. A caret inside a
+            // cluster takes the whole cluster with it.
+            let end = grapheme_boundary(buffer, *cursor, false);
+            if end == 0 {
+                return false;
+            }
+            buffer.drain(..end);
+            *cursor = 0;
             return true;
         }
         TextInputEdit::Backspace | TextInputEdit::Delete => {
@@ -336,6 +350,19 @@ mod tests {
         assert_eq!(input.cursor(), input.text().len() - 1);
         assert!(input.edit_grapheme(TextInputEdit::Backspace));
         assert_eq!(input.text(), "界e\u{301}z");
+    }
+
+    #[test]
+    fn deleting_to_the_line_start_takes_everything_before_the_caret() {
+        let mut input = input("one two");
+        assert!(input.place_caret("one".len()));
+        assert!(input.edit_grapheme(TextInputEdit::BackspaceLine));
+        assert_eq!((input.text(), input.cursor()), (" two", 0));
+        assert!(!input.edit_grapheme(TextInputEdit::BackspaceLine));
+        // A whole selection goes, as with any deletion.
+        input.select_all();
+        assert!(input.edit_grapheme(TextInputEdit::BackspaceLine));
+        assert_eq!(input.text(), "");
     }
 
     #[test]

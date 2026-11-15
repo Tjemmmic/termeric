@@ -78,7 +78,19 @@ impl App {
             })
             .flatten();
         let quick_geometry = quick_monitor.as_ref().map(|monitor| {
-            quick_access_geometry(monitor.position(), monitor.size(), self.launch.pixel_size)
+            #[cfg(target_os = "linux")]
+            let (position, size) = (monitor.position(), monitor.size());
+            // Below the menu bar (and the notch), where a borderless window
+            // at the very top would be hidden.
+            #[cfg(target_os = "macos")]
+            let (position, size) = {
+                let (mut position, mut size) = (monitor.position(), monitor.size());
+                let inset = super::macos::primary_display_top_inset();
+                position.y = position.y.saturating_add(i32::try_from(inset).unwrap_or(0));
+                size.height = size.height.saturating_sub(inset);
+                (position, size)
+            };
+            quick_access_geometry(position, size, self.launch.pixel_size)
         });
         let mut window_attrs = Window::default_attributes()
             .with_title(self.desired_native_window_title())
@@ -103,6 +115,7 @@ impl App {
             window_attrs = window_attrs.with_inner_size(PhysicalSize::new(width, height));
         }
 
+        #[cfg(target_os = "linux")]
         {
             use winit::platform::startup_notify::{
                 EventLoopExtStartupNotify, WindowAttributesExtStartupNotify,
@@ -136,6 +149,19 @@ impl App {
                 winit::platform::startup_notify::reset_activation_token_env();
             }
         }
+        // macOS has no activation tokens: a window takes focus when it is
+        // shown, so a joining launch's token has nothing to do. Windows are
+        // transparent so that `window.opacity` can show what is behind them
+        // (see the renderer's alpha mode).
+        #[cfg(target_os = "macos")]
+        {
+            self.activation_token = None;
+            window_attrs = window_attrs.with_transparent(true);
+            window_attrs = winit::platform::macos::WindowAttributesExtMacOS::with_option_as_alt(
+                window_attrs,
+                self.config.keyboard.macos_option_as_alt.native(),
+            );
+        }
 
         // Load and set window icon if available
         if let Some(icon) = Self::load_icon() {
@@ -144,6 +170,10 @@ impl App {
 
         let window = Arc::new(event_loop.create_window(window_attrs)?);
         log::info!("Window created");
+        #[cfg(target_os = "macos")]
+        if self.launch.quick_access {
+            super::macos::prepare_quick_access_window(&window);
+        }
         // Winit leaves IME disabled by default.
         window.set_ime_allowed(true);
         self.accessibility_adapter = Some(accesskit_winit::Adapter::with_event_loop_proxy(
@@ -204,6 +234,10 @@ impl App {
             self.redraw_scheduler.request(reason);
         }
 
+        // `WindowEvent::Destroyed` is deliberately not handled: when macOS
+        // quits the app, winit closes every native window before the event
+        // loop's `exiting`, which is where windows are saved
+        // (`Application::exiting`); acting on it would end them unsaved.
         match event {
             WindowEvent::CloseRequested => {
                 log::info!("Close requested");
@@ -235,6 +269,7 @@ impl App {
             }
 
             WindowEvent::ModifiersChanged(modifiers) => {
+                self.held_modifiers = modifiers;
                 let previous = std::mem::replace(&mut self.modifiers, modifiers.state());
                 self.refresh_pointer_after_modifiers(previous);
             }
@@ -291,7 +326,12 @@ impl App {
                 self.tab_drag_scroll = None;
             }
 
-            WindowEvent::MouseWheel { delta, .. } => {
+            WindowEvent::MouseWheel { delta, phase, .. } => {
+                // A trackpad gesture's pixels add up from its first delta.
+                if phase == winit::event::TouchPhase::Started {
+                    self.terminal_pixel_scroll.begin_gesture();
+                    self.modal_pixel_scroll.begin_gesture();
+                }
                 self.handle_mouse_wheel(delta);
             }
 
@@ -332,10 +372,66 @@ impl App {
 }
 
 impl App {
+    /// One key press or release, read as the system reads it (an Option key
+    /// that composed text types it without Alt, while chords still see Alt
+    /// with the physical key; see `System::read_key_press`), then handled.
+    fn handle_keyboard_event(&mut self, event: winit::event::KeyEvent) {
+        use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
+        let held = self.modifiers;
+        let press = crate::input::platform::System::CURRENT.read_key_press(
+            held,
+            self.option_is_alt(),
+            &event.logical_key,
+            event.text.as_deref(),
+            || event.key_without_modifiers(),
+        );
+        self.modifiers = press.typing_modifiers;
+        self.option_chord_key = press.chord_key;
+        self.dispatch_keyboard_event(event);
+        self.modifiers = held;
+        self.option_chord_key = None;
+    }
+
+    /// Whether the Option key held now is Alt, as `[keyboard]
+    /// macos_option_as_alt` configures it.
+    fn option_is_alt(&self) -> bool {
+        use winit::keyboard::ModifiersKeyState::Pressed;
+        self.config.keyboard.macos_option_as_alt.covers(
+            self.held_modifiers.lalt_state() == Pressed,
+            self.held_modifiers.ralt_state() == Pressed,
+        )
+    }
+
+    /// The key and modifiers a chord check reads for `key`, the key being
+    /// pressed: its physical key with Alt when its Option key composed
+    /// (macOS), so Termeric's Alt chords match the keys they name, and
+    /// otherwise the key with the modifiers in effect.
+    pub(super) fn chord_view<'a>(
+        &'a self,
+        key: &'a winit::keyboard::Key,
+    ) -> (&'a winit::keyboard::Key, winit::keyboard::ModifiersState) {
+        match &self.option_chord_key {
+            Some(physical) => (
+                physical,
+                self.modifiers | winit::keyboard::ModifiersState::ALT,
+            ),
+            None => (key, self.modifiers),
+        }
+    }
+
+    /// The application shortcut the key being pressed is bound to.
+    pub(super) fn pressed_shortcut(
+        &self,
+        key: &winit::keyboard::Key,
+    ) -> Option<crate::input::keybindings::BindableAction> {
+        let (key, modifiers) = self.chord_view(key);
+        self.shortcut_registry.check(key, modifiers)
+    }
+
     /// One key press or release, offered to each input owner in priority
     /// order: the top modal layer, tab rename, the agent view, search and copy
     /// mode, then application shortcuts and finally the focused terminal.
-    fn handle_keyboard_event(&mut self, event: winit::event::KeyEvent) {
+    fn dispatch_keyboard_event(&mut self, event: winit::event::KeyEvent) {
         if matches!(
             event.logical_key,
             winit::keyboard::Key::Named(winit::keyboard::NamedKey::AltGraph)
@@ -369,11 +465,15 @@ impl App {
         // composer edits with.
         if self.agent_view_has_keyboard() {
             if event.state == winit::event::ElementState::Pressed
-                && (super::agent_view_input::composer_chord(
-                    &event.logical_key,
-                    self.modifiers,
-                    self.alt_graph_active,
-                ) || !self.run_app_shortcut(&event.logical_key))
+                && ({
+                    let (key, modifiers) = self.chord_view(&event.logical_key);
+                    super::agent_view_input::composer_chord(
+                        key,
+                        modifiers,
+                        self.alt_graph_active,
+                        crate::input::platform::System::CURRENT,
+                    )
+                } || !self.run_app_shortcut(&event.logical_key))
             {
                 self.handle_agent_view_key(&event.logical_key, event.text.as_deref());
             }
@@ -483,7 +583,8 @@ impl App {
         if self.run_app_shortcut(key) {
             return true;
         }
-        let Some(key_action) = self.keybinding_manager.check(key, self.modifiers).cloned() else {
+        let (key, modifiers) = self.chord_view(key);
+        let Some(key_action) = self.keybinding_manager.check(key, modifiers).cloned() else {
             return false;
         };
         self.handle_key_action(key_action);
@@ -499,8 +600,7 @@ impl App {
     /// keybindings never run there: they type into, or run commands in, the
     /// terminal the surface is covering.
     pub(super) fn run_app_shortcut(&mut self, key: &winit::keyboard::Key) -> bool {
-        self.shortcut_registry
-            .check(key, self.modifiers)
+        self.pressed_shortcut(key)
             .is_some_and(|bindable| self.handle_action(bindable.to_action()))
     }
 
@@ -681,32 +781,54 @@ impl App {
     }
 }
 
-/// Whole columns and rows a modal surface scrolls for one wheel event,
-/// positive toward the end; a pixel delta counts 20 pixels to a line. The
-/// terminal's own scrolling follows `scrollback.scroll_speed` instead.
-pub(super) fn modal_wheel_steps(delta: winit::event::MouseScrollDelta) -> (isize, isize) {
-    let (x, y) = match delta {
-        winit::event::MouseScrollDelta::LineDelta(x, y) => (f64::from(x), f64::from(y)),
-        winit::event::MouseScrollDelta::PixelDelta(position) => {
-            (position.x / 20.0, position.y / 20.0)
-        }
-    };
-    // A turn away from the person (positive) moves toward the start.
-    let steps = |lines: f64| {
-        if lines.is_finite() && lines != 0.0 {
-            -(lines.signum() * lines.abs().ceil()) as isize
-        } else {
-            0
-        }
-    };
-    (steps(x), steps(y))
+/// Logical pixels of a trackpad swipe that scroll a modal surface one step.
+const MODAL_PIXELS_PER_STEP: f64 = 20.0;
+
+/// Whole steps a line delta (a mouse wheel's notches) scrolls a modal
+/// surface on one axis, positive toward the end: at least one per notch. A
+/// turn away from the person (positive) moves toward the start.
+fn modal_line_steps(lines: f32) -> isize {
+    let lines = f64::from(lines);
+    if lines.is_finite() && lines != 0.0 {
+        -(lines.signum() * lines.abs().ceil()) as isize
+    } else {
+        0
+    }
 }
 
 impl App {
+    /// Whole columns and rows the modal surface `layer` scrolls for one
+    /// wheel event, positive toward the end. A trackpad's pixel deltas count
+    /// `MODAL_PIXELS_PER_STEP` logical pixels to a step, what is left
+    /// waiting for the next delta. The terminal's own scrolling follows
+    /// `scrollback.scroll_speed` and its cell height instead.
+    fn modal_wheel_steps(
+        &mut self,
+        layer: ModalLayer,
+        delta: winit::event::MouseScrollDelta,
+    ) -> (isize, isize) {
+        match delta {
+            winit::event::MouseScrollDelta::LineDelta(x, y) => {
+                (modal_line_steps(x), modal_line_steps(y))
+            }
+            winit::event::MouseScrollDelta::PixelDelta(position) => {
+                let step = MODAL_PIXELS_PER_STEP * f64::from(self.ui_metrics().scale_factor);
+                let (columns, rows) =
+                    self.modal_pixel_scroll
+                        .add(layer, (position.x, position.y), (step, step));
+                (-columns as isize, -rows as isize)
+            }
+        }
+    }
+
     /// Scroll whatever owns the wheel: the frontmost modal surface, a
     /// side panel, the agent view, or the terminal.
     pub(super) fn handle_mouse_wheel(&mut self, delta: winit::event::MouseScrollDelta) {
-        let (columns, rows) = modal_wheel_steps(delta);
+        let Some(layer) = self.top_modal_layer() else {
+            self.scroll_beneath_modal_layers(delta);
+            return;
+        };
+        let (columns, rows) = self.modal_wheel_steps(layer, delta);
         // Shift turns a vertical wheel sideways, but only in the views that
         // scroll both ways; every other surface keeps scrolling vertically.
         let (two_axis_columns, two_axis_rows) = if self.modifiers.shift_key() && columns == 0 {
@@ -715,16 +837,16 @@ impl App {
             (columns, rows)
         };
         let sideways = two_axis_columns.abs() > two_axis_rows.abs();
-        match self.top_modal_layer() {
+        match layer {
             // Only the dialog's body scrolls, and only up and down.
-            Some(ModalLayer::Dialog) => {
+            ModalLayer::Dialog => {
                 let request_id = self.dialog.request_id();
                 self.apply_dialog_action(crate::ui::dialog::DialogAction::Scroll {
                     request_id,
                     by: crate::ui::dialog::DialogScroll::Lines(rows),
                 });
             }
-            Some(ModalLayer::DiffReview) => {
+            ModalLayer::DiffReview => {
                 use crate::ui::diff_review::DiffReviewAction;
                 let request_id = self.diff_review.request_id();
                 self.apply_diff_review_action(if sideways {
@@ -739,37 +861,33 @@ impl App {
                     }
                 });
             }
-            Some(ModalLayer::ContextPicker) => self.apply_context_picker_action(
+            ModalLayer::ContextPicker => self.apply_context_picker_action(
                 crate::ui::context_picker::ContextPickerAction::Scroll {
                     request_id: self.context_picker.request_id(),
                     delta: rows,
                 },
             ),
-            Some(ModalLayer::WorkspacePanel) if rows < 0 => {
+            ModalLayer::WorkspacePanel if rows < 0 => {
                 self.workspace_panel.scroll_up(rows.unsigned_abs());
             }
-            Some(ModalLayer::WorkspacePanel) => {
-                self.workspace_panel.scroll_down(rows.unsigned_abs())
-            }
-            Some(ModalLayer::Settings) if rows < 0 => {
+            ModalLayer::WorkspacePanel => self.workspace_panel.scroll_down(rows.unsigned_abs()),
+            ModalLayer::Settings if rows < 0 => {
                 self.settings_panel.scroll_up(rows.unsigned_abs());
             }
-            Some(ModalLayer::Settings) => {
+            ModalLayer::Settings => {
                 let total = self
                     .settings_panel
                     .build_entries(&self.config, &self.shortcut_registry)
                     .len();
                 self.settings_panel.scroll_down(rows.unsigned_abs(), total);
             }
-            Some(ModalLayer::ShortcutsPanel) if rows < 0 => {
+            ModalLayer::ShortcutsPanel if rows < 0 => {
                 self.shortcuts_panel.scroll_up(rows.unsigned_abs());
             }
-            Some(ModalLayer::ShortcutsPanel) => self
+            ModalLayer::ShortcutsPanel => self
                 .shortcuts_panel
                 .scroll_down(rows.unsigned_abs(), &self.shortcut_registry),
-            Some(
-                ModalLayer::DomainPicker | ModalLayer::UnicodePicker | ModalLayer::CommandPalette,
-            ) => {
+            ModalLayer::DomainPicker | ModalLayer::UnicodePicker | ModalLayer::CommandPalette => {
                 if let Some(modal) = self.open_palette_modal() {
                     let palette = self.palette_owner_mut(modal).palette_mut();
                     if rows < 0 {
@@ -779,20 +897,16 @@ impl App {
                     }
                 }
             }
-            Some(ModalLayer::Cellar) => {
+            ModalLayer::Cellar => {
                 if let Some(harvest) = &mut self.harvest {
                     harvest.cellar.scroll_by(rows);
                 }
             }
-            Some(ModalLayer::CommandsPanel) => self.scroll_commands_panel(rows),
-            Some(ModalLayer::AgentsPanel) => self.scroll_agents_panel(rows),
+            ModalLayer::CommandsPanel => self.scroll_commands_panel(rows),
+            ModalLayer::AgentsPanel => self.scroll_agents_panel(rows),
             // Every other layer owns the wheel while on top, even with no
             // scroll action of its own.
-            Some(ModalLayer::Guardrail | ModalLayer::SproutMenu | ModalLayer::WorkspaceMenu) => {}
-            None => {
-                self.scroll_beneath_modal_layers(delta);
-                return;
-            }
+            ModalLayer::Guardrail | ModalLayer::SproutMenu | ModalLayer::WorkspaceMenu => {}
         }
         self.request_redraw(RedrawReason::PointerInput);
     }
@@ -804,17 +918,19 @@ impl App {
         {
             return;
         }
-        let scroll_speed = self.config.scrollback.scroll_speed;
-        let (x_delta, y_delta) = match delta {
+        match delta {
             winit::event::MouseScrollDelta::LineDelta(x, y) => {
-                (x as f64 * scroll_speed, y as f64 * scroll_speed)
+                let scroll_speed = self.config.scrollback.scroll_speed;
+                let (x_delta, y_delta) = (x as f64 * scroll_speed, y as f64 * scroll_speed);
+                if x_delta.abs() > y_delta.abs() {
+                    self.handle_horizontal_scroll(x_delta);
+                } else {
+                    self.handle_scroll(y_delta);
+                }
             }
-            winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.x / 10.0, pos.y / 10.0),
-        };
-        if x_delta.abs() > y_delta.abs() {
-            self.handle_horizontal_scroll(x_delta);
-        } else {
-            self.handle_scroll(y_delta);
+            winit::event::MouseScrollDelta::PixelDelta(position) => {
+                self.handle_pixel_scroll(position.x, position.y);
+            }
         }
     }
 }
@@ -893,7 +1009,7 @@ mod quick_access_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod app_id_tests {
     use crate::app::{APP_ID, QUICK_ACCESS_APP_ID};
 
@@ -978,6 +1094,32 @@ mod wheel_tests {
     }
 
     #[test]
+    fn trackpad_pixels_scroll_modal_lists_by_whole_rows() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.settings_panel.toggle();
+        let offset = |app: &mut App| {
+            app.settings_panel
+                .build_info(&app.config, &app.shortcut_registry)
+                .scroll_offset
+        };
+        let swipe = |pixels: f64| {
+            MouseScrollDelta::PixelDelta(winit::dpi::PhysicalPosition::new(0.0, pixels))
+        };
+        // A row is 20 px: half a row each time scrolls one row on the second.
+        app.handle_mouse_wheel(swipe(-10.0));
+        assert_eq!(offset(&mut app), 0);
+        app.handle_mouse_wheel(swipe(-10.0));
+        assert_eq!(offset(&mut app), 1);
+        // A new gesture forgets what was left over.
+        app.handle_mouse_wheel(swipe(-15.0));
+        app.modal_pixel_scroll.begin_gesture();
+        app.handle_mouse_wheel(swipe(-15.0));
+        assert_eq!(offset(&mut app), 1);
+        app.handle_mouse_wheel(swipe(-5.0));
+        assert_eq!(offset(&mut app), 2);
+    }
+
+    #[test]
     fn shift_turns_the_wheel_sideways_only_in_views_that_scroll_both_ways() {
         let mut app = App::new_headless(Config::default()).unwrap();
         app.modifiers = winit::keyboard::ModifiersState::SHIFT;
@@ -999,5 +1141,74 @@ mod wheel_tests {
         app.dialog_layout();
         app.handle_mouse_wheel(MouseScrollDelta::LineDelta(0.0, -3.0));
         assert!(app.dialog.scroll_offset() > 0.0);
+    }
+}
+
+#[cfg(test)]
+mod option_key_tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::input::keybindings::{BindableAction, KeyChord};
+    use winit::keyboard::{Key, ModifiersState};
+
+    fn with_a_terminal() -> App {
+        App::new_headless_with_tabs(Config {
+            shell: crate::test_support::sleeping_shell(),
+            ..Config::default()
+        })
+    }
+
+    /// Reads a press as macOS reads ⌥W where Option composes "∑": typing
+    /// sees no Alt, chords see Alt on W.
+    fn compose_option_w(app: &mut App) -> Key {
+        app.modifiers = ModifiersState::empty();
+        app.option_chord_key = Some(Key::Character("w".into()));
+        Key::Character("∑".into())
+    }
+
+    #[test]
+    fn an_option_that_composed_still_runs_the_alt_chord_on_its_key() {
+        let mut app = with_a_terminal();
+        let alt_w = KeyChord::new("w", false, true, false, false);
+        app.shortcut_registry
+            .set_binding(BindableAction::ToggleSearch, Some(alt_w));
+        let composed = compose_option_w(&mut app);
+        assert_eq!(
+            app.pressed_shortcut(&composed),
+            Some(BindableAction::ToggleSearch)
+        );
+        assert_eq!(
+            app.chord_view(&composed),
+            (&Key::Character("w".into()), ModifiersState::ALT)
+        );
+        // The find box it opened takes the composed character as typed.
+        assert!(app.run_app_shortcut(&composed));
+        assert!(app.search.is_active());
+        app.option_chord_key = None;
+        assert!(app.handle_search_key(&composed));
+        assert_eq!(app.search.query(), "∑");
+
+        // A press read as reported has no other key to offer.
+        assert_eq!(app.pressed_shortcut(&composed), None);
+        assert_eq!(
+            app.chord_view(&composed),
+            (&composed, ModifiersState::empty())
+        );
+    }
+
+    #[test]
+    fn the_find_box_alt_chords_match_their_keys_where_option_composes() {
+        let mut app = with_a_terminal();
+        app.option_chord_key = None;
+        assert!(app.handle_action(crate::input::Action::ToggleSearch));
+        assert!(app.search.is_active());
+        // ⌥F composes "ƒ" on a US Mac layout: it toggles the filter rather
+        // than typing.
+        app.modifiers = ModifiersState::empty();
+        app.option_chord_key = Some(Key::Character("f".into()));
+        let filtering = app.search.is_filter_mode();
+        assert!(app.handle_search_key(&Key::Character("ƒ".into())));
+        assert_eq!(app.search.query(), "");
+        assert_ne!(app.search.is_filter_mode(), filtering);
     }
 }

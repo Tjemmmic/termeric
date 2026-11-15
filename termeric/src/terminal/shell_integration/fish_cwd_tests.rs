@@ -73,6 +73,9 @@ fn fish_cwd_prompt_event_round_trips_utf8_percent_and_uri_punctuation() {
     assert_round_trips(&bytes, path.to_str().unwrap());
 }
 
+/// Linux only: macOS's file systems store only valid UTF-8 names, so a
+/// directory named by every byte can't exist there.
+#[cfg(target_os = "linux")]
 #[test]
 fn fish_cwd_prompt_event_encodes_every_nonzero_byte() {
     use std::os::unix::ffi::{OsStrExt, OsStringExt};
@@ -88,6 +91,9 @@ fn fish_cwd_prompt_event_encodes_every_nonzero_byte() {
     assert_every_byte_encoded(&bytes, path.as_os_str().as_bytes(), AFTER_REPORT);
 }
 
+/// Linux only: a path past the report's bound is longer than macOS lets a
+/// path be (1024 bytes).
+#[cfg(target_os = "linux")]
 #[test]
 fn fish_cwd_oversized_prompt_report_does_not_stop_other_handlers() {
     let temp = tempfile::tempdir().unwrap();

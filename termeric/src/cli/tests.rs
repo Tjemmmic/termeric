@@ -13,7 +13,7 @@ fn exact_launch_environment_flags_are_explicit_and_order_independent() {
         ] {
             let mut args = vec!["control", verb, "42", "7"];
             args.extend(flags);
-            args.extend(["--", "/bin/true"]);
+            args.extend(["--", "/usr/bin/true"]);
             let outcome = parse(args.into_iter().map(OsString::from)).unwrap();
             let ParseOutcome::Control(crate::control::ControlCommand::Launch {
                 request:
@@ -49,7 +49,7 @@ fn exact_launch_environment_flags_are_explicit_and_order_independent() {
         ] {
             let mut args = vec!["control", verb, "42", "7"];
             args.extend(flags);
-            args.extend(["--", "/bin/true"]);
+            args.extend(["--", "/usr/bin/true"]);
             assert!(parse(args.into_iter().map(OsString::from)).is_err());
         }
     }
@@ -61,7 +61,7 @@ fn background_command_tab_launch_flag_is_available() {
         if wait {
             args.push("--wait");
         }
-        args.extend(["--", "/bin/true", "--background"]);
+        args.extend(["--", "/usr/bin/true", "--background"]);
         let ParseOutcome::Control(crate::control::ControlCommand::Launch {
             request:
                 crate::control::protocol::Request::LaunchTab {
@@ -87,7 +87,7 @@ fn background_command_tab_launch_flag_is_available() {
             "--background",
             "--background",
             "--",
-            "/bin/true",
+            "/usr/bin/true",
         ],
         vec![
             "control",
@@ -96,7 +96,7 @@ fn background_command_tab_launch_flag_is_available() {
             "7",
             "--background",
             "--",
-            "/bin/true",
+            "/usr/bin/true",
         ],
         vec!["control", "new-tab", "42", "7", "--background"],
     ] {
@@ -112,7 +112,7 @@ fn stdin_environment_launch_flag_is_available() {
             if wait {
                 args.push("--wait");
             }
-            args.extend(["--", "/bin/true", "--env-stdin"]);
+            args.extend(["--", "/usr/bin/true", "--env-stdin"]);
             assert!(parse(args.into_iter().map(OsString::from)).is_ok());
         }
     }
@@ -132,7 +132,7 @@ fn combined_launch_wait_options_and_child_arguments() {
                 "1",
                 "--json",
                 "--",
-                "/bin/true",
+                "/usr/bin/true",
                 "--wait",
                 "--timeout",
                 "0",
@@ -172,13 +172,13 @@ fn combined_launch_wait_options_and_child_arguments() {
         ] {
             let mut arguments = vec!["control", target, "42", "7"];
             arguments.extend(flags);
-            arguments.extend(["--", "/bin/true"]);
+            arguments.extend(["--", "/usr/bin/true"]);
             assert!(parse(arguments.into_iter().map(OsString::from)).is_err());
         }
         for flags in [vec!["--wait"], vec!["--timeout", "86400", "--wait"]] {
             let mut arguments = vec!["control", target, "42", "7"];
             arguments.extend(flags);
-            arguments.extend(["--", "/bin/true"]);
+            arguments.extend(["--", "/usr/bin/true"]);
             assert!(parse(arguments.into_iter().map(OsString::from)).is_ok());
         }
     }
@@ -1738,7 +1738,7 @@ fn free_text_values_may_start_with_a_hyphen() {
         "--title",
         "-foo",
         "--",
-        "/bin/true",
+        "/usr/bin/true",
     ])
     else {
         panic!("expected control launch-tab");

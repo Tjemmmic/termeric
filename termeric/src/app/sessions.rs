@@ -364,7 +364,6 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::ffi::OsStrExt;
 
     #[test]
     fn a_working_directory_must_be_an_existing_utf8_directory() {
@@ -387,8 +386,9 @@ mod tests {
             directory.to_str().unwrap()
         );
 
-        let not_utf8 = temp.path().join(std::ffi::OsStr::from_bytes(b"r\xffot"));
-        std::fs::create_dir(&not_utf8).unwrap();
+        let Some(not_utf8) = crate::test_support::non_utf8_directory(temp.path()) else {
+            return;
+        };
         let error = existing_utf8_dir(&not_utf8, what).unwrap_err();
         assert_eq!(error.to_string(), format!("{what} must be valid UTF-8"));
     }

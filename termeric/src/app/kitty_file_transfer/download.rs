@@ -1,16 +1,18 @@
 //! The download transaction: staging, publishing, and rolling back files
 //! beneath a pinned destination.
 
+use super::platform::{PinnedDirectory, StagedFile};
 use super::*;
 use flate2::{Decompress, FlushDecompress, Status};
 use std::collections::{HashMap, HashSet};
+#[cfg(test)]
 use std::ffi::CString;
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, Permissions};
 use std::io::{self, Write};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
-use tempfile::{NamedTempFile, TempPath};
 
 const DECOMPRESS_BUFFER_BYTES: usize = 64 * 1024;
 
@@ -753,7 +755,9 @@ fn validate_destination(path: &Path) -> io::Result<()> {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
-                    "destination ancestor is a symbolic link",
+                    // On macOS this is also what a destination under /tmp,
+                    // /var, or /etc meets: each is a link into /private.
+                    "destination path goes through a symbolic link",
                 ));
             }
             Ok(metadata) if !metadata.is_dir() => {
@@ -792,7 +796,7 @@ fn create_hard_link(
             "source handle does not match its recorded regular-file identity",
         ));
     }
-    let published = PublicationTarget::open(destination)?.link_file(file)?;
+    let published = PublicationTarget::open(destination)?.link_file(file, source)?;
     // Record directly from the known source, not a fresh destination
     // lookup that could observe an intervening replacement.
     created.push(CreatedPath {
@@ -805,85 +809,62 @@ fn create_hard_link(
     Ok(())
 }
 
-struct StagedFile {
-    file: File,
-    path: TempPath,
-    // Must remain open through Drop's identity check and unlink.
-    _parent: Option<File>,
+/// The kind of a filesystem entry, observed without following it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum EntryType {
+    Directory,
+    Regular,
+    Symlink,
+    Other,
 }
 
-impl From<NamedTempFile> for StagedFile {
-    fn from(temporary: NamedTempFile) -> Self {
-        let (file, mut path) = temporary.into_parts();
-        // Never let TempPath blindly unlink a replacement during failure,
-        // cancellation, or successful publication. Our Drop checks identity.
-        path.disable_cleanup(true);
+/// Which inode an entry is and what kind, observed without following it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct EntryIdentity {
+    pub(super) device: u64,
+    pub(super) inode: u64,
+    pub(super) kind: EntryType,
+}
+
+impl EntryIdentity {
+    pub(super) fn of(metadata: &fs::Metadata) -> Self {
+        let file_type = metadata.file_type();
+        let kind = if file_type.is_symlink() {
+            EntryType::Symlink
+        } else if file_type.is_dir() {
+            EntryType::Directory
+        } else if file_type.is_file() {
+            EntryType::Regular
+        } else {
+            EntryType::Other
+        };
         Self {
-            file,
-            path,
-            _parent: None,
-        }
-    }
-}
-
-impl StagedFile {
-    fn as_file(&self) -> &File {
-        &self.file
-    }
-
-    fn as_file_mut(&mut self) -> &mut File {
-        &mut self.file
-    }
-}
-
-impl Drop for StagedFile {
-    fn drop(&mut self) {
-        let Ok(owned) = self.file.metadata() else {
-            return;
-        };
-        let Ok(named) = fs::symlink_metadata(&self.path) else {
-            return;
-        };
-        if owned.is_file()
-            && named.is_file()
-            && (owned.dev(), owned.ino()) == (named.dev(), named.ino())
-        {
-            // Best effort, not an atomic compare-and-unlink. A moved source
-            // is not searched for, and an unknown/replaced name is retained.
-            let _ = fs::remove_file(&self.path);
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            kind,
         }
     }
 }
 
 struct StagingDirectory {
-    parent: File,
-    path: PathBuf,
+    parent: PinnedDirectory,
 }
 
 impl StagingDirectory {
     fn open(path: &Path) -> io::Result<Self> {
-        use std::os::fd::AsRawFd;
-
-        let parent = openat2_no_symlinks(path, libc::O_PATH | libc::O_DIRECTORY)?;
-        let path = PathBuf::from(format!("/proc/self/fd/{}", parent.as_raw_fd()));
-        Ok(Self { parent, path })
+        Ok(Self {
+            parent: PinnedDirectory::open(path)?,
+        })
     }
 
     fn create_file(self) -> io::Result<StagedFile> {
-        let temporary = tempfile::Builder::new()
-            .prefix(".termeric-transfer-")
-            .tempfile_in(&self.path)?;
-        let mut staged = StagedFile::from(temporary);
-        // TempPath preserves this trusted procfs path. Keep its parent
-        // descriptor alive until StagedFile::drop finishes cleanup.
-        staged._parent = Some(self.parent);
-        Ok(staged)
+        StagedFile::create_in(self.parent)
     }
 }
 
 struct PublicationTarget {
-    parent: File,
-    path: PathBuf,
+    parent: PinnedDirectory,
+    name: OsString,
     original_path: PathBuf,
 }
 
@@ -906,71 +887,54 @@ impl PublicationTarget {
                 "invalid publication destination",
             ));
         }
-        use std::os::fd::AsRawFd;
-
-        let parent = openat2_no_symlinks(path.parent().unwrap(), libc::O_PATH | libc::O_DIRECTORY)?;
-        let original_path = path.to_owned();
-        let path = PathBuf::from(format!("/proc/self/fd/{}", parent.as_raw_fd())).join(name);
         Ok(Self {
-            parent,
-            path,
-            original_path,
+            parent: PinnedDirectory::open(path.parent().unwrap())?,
+            name: name.to_owned(),
+            original_path: path.to_owned(),
         })
     }
 
     fn create_symlink(self, target: &Path, created: &mut Vec<CreatedPath>) -> io::Result<()> {
         ensure_creation_capacity(created)?;
-        // Keep the pinned parent alive through both creation and identity
-        // capture. The original path is only a rollback lookup key, never
-        // a fallback if the trusted procfs reference fails.
-        std::os::unix::fs::symlink(target, &self.path)?;
-        record_created(&self.path, CreatedKind::Symlink, created)?;
-        created.last_mut().expect("link was recorded").path = self.original_path;
-        Ok(())
+        // Creation and identity capture share the pinned parent. The
+        // original path is only a rollback lookup key, never a fallback if
+        // working through the parent fails.
+        self.parent.create_symlink(target, &self.name)?;
+        record_created_at(
+            &self.parent,
+            &self.name,
+            &self.original_path,
+            CreatedKind::Symlink,
+            created,
+        )
     }
 
     fn create_directory(self, created: &mut Vec<CreatedPath>) -> io::Result<()> {
         ensure_creation_capacity(created)?;
-        // Creation and identity capture share the retained parent. Restore
+        // Creation and identity capture share the pinned parent. Restore
         // access through the new directory's handle, never its old pathname.
-        fs::DirBuilder::new().mode(0o700).create(&self.path)?;
-        record_created(&self.path, CreatedKind::Directory, created)?;
-        let entry = created.last_mut().expect("created directory was recorded");
-        entry.path = self.original_path;
-        ensure_directory_access(entry)
+        self.parent.create_directory(&self.name)?;
+        record_created_at(
+            &self.parent,
+            &self.name,
+            &self.original_path,
+            CreatedKind::Directory,
+            created,
+        )?;
+        ensure_directory_access(created.last_mut().expect("created directory was recorded"))
     }
 
-    fn publish(self, temporary: StagedFile) -> io::Result<File> {
-        self.link_file(temporary.as_file())
+    /// Make the staged file visible at this destination, refusing one that
+    /// already exists, and return a handle on the published inode.
+    fn publish(self, staged: StagedFile) -> io::Result<File> {
+        self.parent.publish(&self.name, staged)
     }
 
-    fn link_file(self, file: &File) -> io::Result<File> {
-        use std::os::fd::AsRawFd;
-
-        // Acquire the returned handle before publication so a descriptor
-        // allocation failure cannot leave an unrecorded destination behind.
-        let published = file.try_clone()?;
-        let source = CString::new(format!("/proc/self/fd/{}", file.as_raw_fd()))
-            .expect("descriptor path contains no NUL");
-        let destination =
-            CString::new(self.path.as_os_str().as_bytes()).expect("publication path was validated");
-        // SAFETY: both CString pointers and both retained descriptors
-        // stay live through linkat. Only our trusted procfs source link
-        // is followed. linkat atomically refuses an existing destination.
-        let result = unsafe {
-            libc::linkat(
-                libc::AT_FDCWD,
-                source.as_ptr(),
-                libc::AT_FDCWD,
-                destination.as_ptr(),
-                libc::AT_SYMLINK_FOLLOW,
-            )
-        };
-        if result != 0 {
-            return Err(io::Error::last_os_error());
-        }
-        drop(self.parent);
-        Ok(published)
+    /// Hard-link `source`, which this transaction published at
+    /// `source_path`, here, refusing an existing destination, and return a
+    /// handle on the linked inode.
+    fn link_file(self, source: &File, source_path: &Path) -> io::Result<File> {
+        self.parent.link_file(&self.name, source, source_path)
     }
 }
 
@@ -1147,27 +1111,16 @@ fn create_missing_parents(
     Ok(())
 }
 
+/// A directory handle on `path`, for tests to hand a transaction a handle on
+/// some other directory.
+#[cfg(test)]
 fn open_directory(path: &Path) -> io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
     fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
-}
-
-fn open_directory_identity(path: &Path) -> io::Result<File> {
-    let result = open_directory(path);
-    if result
-        .as_ref()
-        .is_err_and(|error| error.kind() == io::ErrorKind::PermissionDenied)
-    {
-        // O_PATH can pin a directory whose initial permissions were
-        // removed by umask, without reading it or following a symlink.
-        return fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW)
-            .open(path);
-    }
-    result
 }
 
 fn create_directory(path: &Path, created: &mut Vec<CreatedPath>) -> io::Result<()> {
@@ -1175,8 +1128,6 @@ fn create_directory(path: &Path, created: &mut Vec<CreatedPath>) -> io::Result<(
 }
 
 fn ensure_directory_access(entry: &mut CreatedPath) -> io::Result<()> {
-    use std::os::fd::AsRawFd;
-
     let directory = entry._identity_guard.as_ref().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -1194,23 +1145,7 @@ fn ensure_directory_access(entry: &mut CreatedPath) -> io::Result<()> {
             "directory handle does not match its recorded identity",
         ));
     }
-    // SAFETY: directory owns a live descriptor; F_GETFL takes no
-    // additional argument and does not mutate descriptor state.
-    let flags = unsafe { libc::fcntl(directory.as_raw_fd(), libc::F_GETFL) };
-    if flags < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    if flags & libc::O_PATH != 0 {
-        // This trusted procfs magic link names the retained inode,
-        // even if the destination/ancestor pathname was replaced.
-        // Keep directory borrowed until reopening is complete. If
-        // procfs is unavailable, fail without a destination fallback.
-        let proc_path = format!("/proc/self/fd/{}", directory.as_raw_fd());
-        fs::set_permissions(&proc_path, Permissions::from_mode(0o700))?;
-        let upgraded = fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_DIRECTORY | libc::O_NONBLOCK)
-            .open(&proc_path)?;
+    if let Some(upgraded) = platform::usable_directory_handle(directory)? {
         let metadata = upgraded.metadata()?;
         if !metadata.is_dir() || metadata.dev() != entry.device || metadata.ino() != entry.inode {
             return Err(io::Error::new(
@@ -1279,31 +1214,50 @@ fn apply_file_mtime(file: &File, mtime_ns: Option<i64>) -> io::Result<()> {
     Ok(())
 }
 
+/// Record `name`, just created inside `directory`, as `path` for rollback.
+fn record_created_at(
+    directory: &PinnedDirectory,
+    name: &OsStr,
+    path: &Path,
+    kind: CreatedKind,
+    created: &mut Vec<CreatedPath>,
+) -> io::Result<()> {
+    record_created_with(directory, name, path, kind, created, |directory, name| {
+        directory.entry_identity(name)
+    })
+}
+
+/// [`record_created_at`] for a path's last component, pinning its parent.
+#[cfg(test)]
 fn record_created(
     path: &Path,
     kind: CreatedKind,
     created: &mut Vec<CreatedPath>,
 ) -> io::Result<()> {
-    record_created_with(path, kind, created, |path| fs::symlink_metadata(path))
+    let directory = PinnedDirectory::open(path.parent().expect("recorded path has a parent"))?;
+    let name = path.file_name().expect("recorded path has a name");
+    record_created_at(&directory, name, path, kind, created)
 }
 
-/// [`record_created`], observing the path's identity with `inspect`, which
-/// tests use to fail the observation while the path is being replaced.
+/// [`record_created_at`], observing the entry's identity with `inspect`,
+/// which tests use to fail the observation while the entry is replaced.
 fn record_created_with(
+    directory: &PinnedDirectory,
+    name: &OsStr,
     path: &Path,
     kind: CreatedKind,
     created: &mut Vec<CreatedPath>,
-    inspect: impl FnOnce(&Path) -> io::Result<fs::Metadata>,
+    inspect: impl FnOnce(&PinnedDirectory, &OsStr) -> io::Result<EntryIdentity>,
 ) -> io::Result<()> {
     // Without an observed identity there is no safe cleanup authority: the
-    // pathname might already refer to somebody else's replacement.
-    let metadata = inspect(path)?;
-    let kind_matches = match kind {
-        CreatedKind::Directory => metadata.is_dir(),
-        CreatedKind::File => metadata.is_file(),
-        CreatedKind::Symlink => metadata.file_type().is_symlink(),
+    // name might already refer to somebody else's replacement.
+    let identity = inspect(directory, name)?;
+    let expected = match kind {
+        CreatedKind::Directory => EntryType::Directory,
+        CreatedKind::File => EntryType::Regular,
+        CreatedKind::Symlink => EntryType::Symlink,
     };
-    if !kind_matches {
+    if identity.kind != expected {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "created path changed type before its identity was recorded",
@@ -1311,28 +1265,23 @@ fn record_created_with(
     }
     // Bookkeeping must never open a symbolic link's target: it could be a
     // FIFO/device, and a followed handle would not pin the link's inode
-    // anyway. Linux O_PATH pins even dangling symlinks without opening their
-    // contents or requiring readers.
-    let identity_guard = if kind == CreatedKind::Directory {
+    // anyway, so each kind has a handle that pins the entry itself.
+    let identity_guard = match kind {
         // Retain an fchmod-capable handle before final permissions can
         // remove owner access needed by rollback.
-        open_directory_identity(path)
-    } else {
-        let flags = libc::O_PATH | libc::O_NOFOLLOW;
-        fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(flags)
-            .open(path)
+        CreatedKind::Directory => directory.open_directory_guard(name),
+        CreatedKind::File => directory.open_file_guard(name),
+        CreatedKind::Symlink => directory.open_symlink_guard(name),
     }
     .ok()
     .filter(|file| {
         file.metadata()
-            .is_ok_and(|opened| opened.dev() == metadata.dev() && opened.ino() == metadata.ino())
+            .is_ok_and(|opened| opened.dev() == identity.device && opened.ino() == identity.inode)
     });
     created.push(CreatedPath {
         path: path.to_path_buf(),
-        device: metadata.dev(),
-        inode: metadata.ino(),
+        device: identity.device,
+        inode: identity.inode,
         kind,
         _identity_guard: identity_guard,
     });
@@ -1394,8 +1343,6 @@ fn check_cancel(cancellation: &AtomicBool, file_id: &str) -> Result<(), Transact
 }
 
 fn apply_link_mtime(entry: &CreatedPath, mtime_ns: Option<i64>) -> io::Result<()> {
-    use std::os::fd::AsRawFd;
-
     let Some(mtime_ns) = mtime_ns else {
         return Ok(());
     };
@@ -1415,25 +1362,7 @@ fn apply_link_mtime(entry: &CreatedPath, mtime_ns: Option<i64>) -> io::Result<()
             "link handle does not match its recorded identity",
         ));
     }
-    let times = timestamp_times(mtime_ns)?;
-    // SAFETY: file owns the live descriptor, c"" is NUL-terminated,
-    // and times contains exactly two initialized timespec values.
-    // AT_EMPTY_PATH operates on the pinned O_PATH inode; NOFOLLOW
-    // keeps symlink timestamps on the link, never its target. Do not
-    // fall back to a pathname if this requires a newer kernel.
-    let result = unsafe {
-        libc::utimensat(
-            file.as_raw_fd(),
-            c"".as_ptr(),
-            times.as_ptr(),
-            libc::AT_EMPTY_PATH | libc::AT_SYMLINK_NOFOLLOW,
-        )
-    };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
-    }
+    platform::set_link_times(file, &timestamp_times(mtime_ns)?)
 }
 
 #[cfg(test)]

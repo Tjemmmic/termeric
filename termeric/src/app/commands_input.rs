@@ -330,7 +330,7 @@ mod tests {
             "pointer-input"
         );
         app.handle_mouse_wheel(MouseScrollDelta::PixelDelta(PhysicalPosition::new(
-            0.0, 21.0,
+            0.0, 41.0,
         )));
         assert_eq!(app.commands_panel_layout().scroll_offset, 1);
         for delta in [
@@ -503,12 +503,7 @@ mod tests {
         app.commands_panel.toggle();
         app.commands_panel.start_add();
         app.commands_panel.accessibility_set_name("two words");
-        for modifiers in [
-            ModifiersState::ALT,
-            ModifiersState::SUPER,
-            ModifiersState::SHIFT,
-            ModifiersState::CONTROL | ModifiersState::SHIFT,
-        ] {
+        for modifiers in crate::test_support::unsupported_field_modifiers() {
             app.modifiers = modifiers;
             for key in [
                 NamedKey::Home,
@@ -605,7 +600,7 @@ mod tests {
         assert!(
             app.handle_commands_form_key(&Key::Character("one e\u{301} 👩\u{200d}💻 tail".into()))
         );
-        app.modifiers = ModifiersState::CONTROL;
+        app.modifiers = crate::input::platform::System::CURRENT.word();
         for key in [NamedKey::ArrowLeft, NamedKey::Backspace, NamedKey::Delete] {
             assert!(app.handle_commands_form_key(&Key::Named(key)));
         }

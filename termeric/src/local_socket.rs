@@ -50,8 +50,10 @@ impl SocketPaths {
     }
 }
 
-/// This user's runtime directory: `termeric` under `XDG_RUNTIME_DIR` when
-/// that is a private directory of theirs, else `/tmp/termeric-{uid}`.
+/// This user's runtime directory. On Linux: `termeric` under
+/// `XDG_RUNTIME_DIR` when that is a private directory of theirs, else
+/// `/tmp/termeric-{uid}`.
+#[cfg(target_os = "linux")]
 pub(crate) fn runtime_directory() -> PathBuf {
     let uid = effective_uid();
     let base = std::env::var_os("XDG_RUNTIME_DIR")
@@ -63,6 +65,67 @@ pub(crate) fn runtime_directory() -> PathBuf {
     } else {
         base.join("termeric")
     }
+}
+
+/// This user's runtime directory. On macOS: `termeric` under
+/// `XDG_RUNTIME_DIR` when that is a private directory of theirs (it rarely is
+/// set there, but tests and the supervisor's helper name it), else in the
+/// user's own private directory under `/var/folders`. That one every process
+/// of theirs finds whatever its environment (the Finder gives none of a
+/// shell's variables), and the system never sweeps it the way it sweeps
+/// `/tmp` and the temporary directory of files left untouched for days.
+/// `/tmp/termeric-{uid}` remains if the system can't say.
+#[cfg(target_os = "macos")]
+pub(crate) fn runtime_directory() -> PathBuf {
+    let uid = effective_uid();
+    let safe = |path: &PathBuf| runtime_parent_is_safe(path, uid);
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(safe)
+        .or_else(|| darwin_user_directory().filter(|path| darwin_parent_is_safe(path, uid)))
+        .map_or_else(
+            || PathBuf::from(format!("/tmp/termeric-{uid}")),
+            |base| base.join("termeric"),
+        )
+}
+
+/// Whether the user's Darwin directory may hold the runtime directory: the
+/// system makes it the user's own and readable by others (0755), but
+/// writable only by them, so nobody else can put or replace anything there;
+/// the `termeric` directory inside it is made private (0700) before use.
+#[cfg(target_os = "macos")]
+fn darwin_parent_is_safe(path: &Path, uid: u32) -> bool {
+    path.is_absolute()
+        && fs::symlink_metadata(path).is_ok_and(|metadata| {
+            metadata.file_type().is_dir()
+                && metadata.uid() == uid
+                && metadata.permissions().mode() & 0o022 == 0
+        })
+}
+
+/// The user's private per-user directory (`confstr(_CS_DARWIN_USER_DIR)`),
+/// created on demand by the system.
+#[cfg(target_os = "macos")]
+fn darwin_user_directory() -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    let mut buffer = vec![0u8; libc::PATH_MAX as usize];
+    // SAFETY: the buffer is writable for its whole length, which is passed
+    // with it; confstr writes at most that many bytes, NUL included.
+    let needed = unsafe {
+        libc::confstr(
+            libc::_CS_DARWIN_USER_DIR,
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+        )
+    };
+    if needed == 0 || needed > buffer.len() {
+        return None;
+    }
+    // `needed` counts the terminating NUL.
+    buffer.truncate(needed - 1);
+    let path = PathBuf::from(std::ffi::OsStr::from_bytes(&buffer));
+    // The answer ends in a slash; a path without one compares the same.
+    Some(path.components().collect())
 }
 
 pub fn effective_uid() -> u32 {
@@ -179,6 +242,17 @@ fn token_temporary_path(path: &Path, process_id: u32, nonce: &str) -> PathBuf {
 /// the kernel reports one (a peer in another PID namespace reads as 0).
 /// `peer` names the other end in errors.
 pub(crate) fn same_user_peer(stream: &UnixStream, peer: &str) -> anyhow::Result<Option<u32>> {
+    let (uid, pid) = peer_credentials(stream).with_context(|| format!("authenticate {peer}"))?;
+    if uid != effective_uid() {
+        anyhow::bail!("{peer} belongs to a different user");
+    }
+    Ok(pid)
+}
+
+/// The peer's effective user ID and, when known, its process ID, as the
+/// kernel recorded them when the connection was made.
+#[cfg(target_os = "linux")]
+fn peer_credentials(stream: &UnixStream) -> std::io::Result<(u32, Option<u32>)> {
     let mut credentials = libc::ucred {
         pid: 0,
         uid: 0,
@@ -197,13 +271,41 @@ pub(crate) fn same_user_peer(stream: &UnixStream, peer: &str) -> anyhow::Result<
         )
     };
     if result != 0 {
-        return Err(std::io::Error::last_os_error())
-            .with_context(|| format!("authenticate {peer}"));
+        return Err(std::io::Error::last_os_error());
     }
-    if credentials.uid != effective_uid() {
-        anyhow::bail!("{peer} belongs to a different user");
+    Ok((
+        credentials.uid,
+        u32::try_from(credentials.pid).ok().filter(|pid| *pid > 0),
+    ))
+}
+
+/// The peer's effective user ID and, when known, its process ID, as the
+/// kernel recorded them when the connection was made.
+#[cfg(target_os = "macos")]
+fn peer_credentials(stream: &UnixStream) -> std::io::Result<(u32, Option<u32>)> {
+    let descriptor = std::os::fd::AsRawFd::as_raw_fd(stream);
+    let (mut uid, mut gid) = (0, 0);
+    // SAFETY: the connected descriptor and both output locations remain valid
+    // for the duration of the call.
+    if unsafe { libc::getpeereid(descriptor, &mut uid, &mut gid) } != 0 {
+        return Err(std::io::Error::last_os_error());
     }
-    Ok(u32::try_from(credentials.pid).ok().filter(|pid| *pid > 0))
+    let mut pid: libc::pid_t = 0;
+    let mut length = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+    // SAFETY: as above; LOCAL_PEERPID writes one pid_t.
+    let result = unsafe {
+        libc::getsockopt(
+            descriptor,
+            libc::SOL_LOCAL,
+            libc::LOCAL_PEERPID,
+            (&mut pid as *mut libc::pid_t).cast(),
+            &mut length,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok((uid, u32::try_from(pid).ok().filter(|pid| *pid > 0)))
 }
 
 /// Admits a client that speaks `server_version` and presents
@@ -415,6 +517,25 @@ mod tests {
     use super::*;
     use std::os::unix::fs::symlink;
     use std::time::Duration;
+
+    /// Where a Termeric started from the Finder keeps its sockets: the
+    /// user's own private directory, which the system makes on demand.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_darwin_user_directory_is_this_users_alone_to_change() {
+        let directory = darwin_user_directory().expect("confstr(_CS_DARWIN_USER_DIR)");
+        assert!(
+            directory.starts_with("/var/folders") || directory.starts_with("/private/var/folders")
+        );
+        let metadata = fs::symlink_metadata(&directory).unwrap();
+        assert!(
+            darwin_parent_is_safe(&directory, effective_uid()),
+            "{} has owner {} and mode {:o}",
+            directory.display(),
+            metadata.uid(),
+            metadata.permissions().mode()
+        );
+    }
 
     #[test]
     fn runtime_directory_and_token_are_private_and_stable() {

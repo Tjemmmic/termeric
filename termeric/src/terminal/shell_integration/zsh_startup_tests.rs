@@ -373,3 +373,59 @@ print -r -- "MARKERS:${+TERMERIC_ORIGINAL_ZDOTDIR}:${+TERMERIC_ZSH_HAD_ZDOTDIR}:
         }
     }
 }
+
+/// A system startup file that runs while ZDOTDIR is still the transport, as
+/// macOS's /etc/zshrc does with `HISTFILE=${ZDOTDIR:-$HOME}/.zsh_history`,
+/// must not leave history in Termeric's generated directory. The fixture sets
+/// that same HISTFILE before startup, which is what such a file leaves behind.
+#[test]
+fn zsh_history_set_while_zdotdir_is_the_transport_returns_to_the_user() {
+    let Some(program) = super::tests::test_shell("zsh") else {
+        return;
+    };
+    for user_directory in [None, Some("custom config")] {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let mut config = super::tests::shell(&program, &["-d", "-i"]);
+        config
+            .env
+            .insert("HOME".into(), home.to_str().unwrap().into());
+        let expected_directory = match user_directory {
+            Some(name) => {
+                let directory = temp.path().join(name);
+                std::fs::create_dir_all(&directory).unwrap();
+                config
+                    .env
+                    .insert("ZDOTDIR".into(), directory.to_str().unwrap().into());
+                directory
+            }
+            None => home.clone(),
+        };
+        let launch = prepare_shell_launch_in(&config, &temp.path().join("generated")).unwrap();
+        let transport = launch
+            .env
+            .iter()
+            .find(|(key, _)| key == "ZDOTDIR")
+            .map(|(_, value)| value.clone())
+            .unwrap();
+        let output = Command::new(&program)
+            .args(&launch.args)
+            .args(["-c", r#"print -r -- "HISTFILE:$HISTFILE""#])
+            .env_clear()
+            .envs(launch.env.iter().cloned())
+            .env("HISTFILE", format!("{transport}/.zsh_history"))
+            .current_dir(&home)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{:?}", output.stderr);
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            format!(
+                "HISTFILE:{}",
+                expected_directory.join(".zsh_history").display()
+            ),
+            "{user_directory:?}"
+        );
+    }
+}

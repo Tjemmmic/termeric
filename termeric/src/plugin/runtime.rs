@@ -2312,7 +2312,7 @@ working_directory = "inherit"
     #[test]
     fn every_built_in_agent_id_is_reserved() {
         for (id, _) in crate::agents::builtin_agent_names() {
-            let source = manifest("1.0.0", "", "/bin/true")
+            let source = manifest("1.0.0", "", "/usr/bin/true")
                 .replace(r#"id = "sample-tools""#, &format!("id = {id:?}"));
             let parsed: PluginManifest = toml::from_str(&source).unwrap();
             let error = parsed.validate().unwrap_err().to_string();

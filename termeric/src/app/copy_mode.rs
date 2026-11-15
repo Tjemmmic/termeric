@@ -6,6 +6,7 @@ use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 use crate::config::CopyModeBindings;
 use crate::input::keybindings::BindableAction;
+use crate::input::platform::System;
 use crate::terminal::copy_mode::{CopyMotion, HintAction};
 
 use super::{App, CopyOutcome};
@@ -426,12 +427,16 @@ impl App {
             return true;
         }
         let pending_g = self.copy_mode.take_pending_g();
-        match copy_mode_command(
-            key,
-            self.modifiers,
-            self.alt_graph_active,
-            self.config.copy_mode.bindings,
-        ) {
+        let bindings = self.config.copy_mode.bindings;
+        // Emacs Alt chords match by the key they name, even where Option
+        // composes a character on it (macOS); typed vi keys match by the
+        // character typed.
+        let (chord_key, chord_modifiers) = self.chord_view(key);
+        let command =
+            copy_mode_command(chord_key, chord_modifiers, self.alt_graph_active, bindings).or_else(
+                || copy_mode_command(key, self.modifiers, self.alt_graph_active, bindings),
+            );
+        match command {
             Some(command) => self.run_copy_mode_command(command, pending_g),
             None => self.run_copy_mode_shortcut(key),
         }
@@ -482,7 +487,7 @@ impl App {
     /// never types into the terminal. A shortcut that moved to another tab or
     /// pane leaves copy mode through the usual target check.
     fn run_copy_mode_shortcut(&mut self, key: &Key) {
-        if self.shortcut_registry.check(key, self.modifiers) == Some(BindableAction::Paste) {
+        if self.pressed_shortcut(key) == Some(BindableAction::Paste) {
             return;
         }
         if self.run_app_shortcut(key) {
@@ -508,19 +513,20 @@ enum CopyModeCommand {
 
 /// The keys copy mode's status line and entry notice name for moving,
 /// selecting, copying, and searching, in the configured key set.
-fn copy_mode_key_hints(bindings: CopyModeBindings) -> [(&'static str, &'static str); 4] {
+fn copy_mode_key_hints(bindings: CopyModeBindings) -> [(String, &'static str); 4] {
+    let chord = |modifiers, key| System::CURRENT.chord_label(modifiers, key);
     match bindings {
         CopyModeBindings::Vi => [
-            ("hjkl", "move"),
-            ("v", "select"),
-            ("y", "copy"),
-            ("/", "search"),
+            ("hjkl".into(), "move"),
+            ("v".into(), "select"),
+            ("y".into(), "copy"),
+            ("/".into(), "search"),
         ],
         CopyModeBindings::Emacs => [
-            ("Arrows", "move"),
-            ("Space", "select"),
-            ("Alt+W", "copy"),
-            ("Ctrl+S", "search"),
+            ("Arrows".into(), "move"),
+            ("Space".into(), "select"),
+            (chord(ModifiersState::ALT, "w"), "copy"),
+            (chord(ModifiersState::CONTROL, "s"), "search"),
         ],
     }
 }
@@ -627,6 +633,12 @@ fn copy_mode_command(
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
+    const EMACS_NOTICE: &str =
+        "Copy mode: Arrows move, Space select, Alt+W copy, Ctrl+S search, Esc exit";
+    #[cfg(target_os = "macos")]
+    const EMACS_NOTICE: &str = "Copy mode: Arrows move, Space select, ⌥W copy, ⌃S search, Esc exit";
+
     #[test]
     fn the_entry_notice_names_the_configured_keys() {
         for (bindings, notice) in [
@@ -634,10 +646,7 @@ mod tests {
                 CopyModeBindings::Vi,
                 "Copy mode: hjkl move, v select, y copy, / search, Esc exit",
             ),
-            (
-                CopyModeBindings::Emacs,
-                "Copy mode: Arrows move, Space select, Alt+W copy, Ctrl+S search, Esc exit",
-            ),
+            (CopyModeBindings::Emacs, EMACS_NOTICE),
         ] {
             let mut config = crate::config::Config {
                 shell: crate::test_support::sleeping_shell(),

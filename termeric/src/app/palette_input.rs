@@ -182,7 +182,7 @@ impl App {
         let Some(modal) = self.open_palette_modal() else {
             return false;
         };
-        let toggles_palette = self.shortcut_registry.check(key, self.modifiers)
+        let toggles_palette = self.pressed_shortcut(key)
             == Some(crate::input::keybindings::BindableAction::ToggleCommandPalette);
         let typing = types_text(self.modifiers, self.alt_graph_active);
         let choice = match key {
@@ -278,7 +278,7 @@ mod tests {
     }
 
     #[test]
-    fn every_palette_modal_types_whole_text_and_closes_on_ctrl_shift_p() {
+    fn every_palette_modal_types_whole_text_and_closes_on_its_shortcut() {
         for modal in [
             PaletteModal::Commands,
             PaletteModal::Unicode,
@@ -294,8 +294,11 @@ mod tests {
                 "ab ",
                 "{modal:?}"
             );
-            app.modifiers = ModifiersState::CONTROL | ModifiersState::SHIFT;
-            assert!(app.handle_palette_modal_key(&Key::Character("P".into())));
+            let (toggle, modifiers) = crate::test_support::default_shortcut_press(
+                crate::input::keybindings::BindableAction::ToggleCommandPalette,
+            );
+            app.modifiers = modifiers;
+            assert!(app.handle_palette_modal_key(&toggle));
             assert_eq!(app.open_palette_modal(), None, "{modal:?}");
             assert!(!app.handle_palette_modal_key(&Key::Character("x".into())));
         }
@@ -446,13 +449,7 @@ mod tests {
         let mut app = App::new_headless(Config::default()).unwrap();
         app.command_palette.open();
         app.command_palette.accessibility_set_input("two words");
-        for modifier in [
-            ModifiersState::ALT,
-            ModifiersState::SHIFT,
-            ModifiersState::SUPER,
-            ModifiersState::CONTROL | ModifiersState::SHIFT,
-            ModifiersState::CONTROL | ModifiersState::ALT,
-        ] {
+        for modifier in crate::test_support::unsupported_field_modifiers() {
             app.modifiers = modifier;
             for key in [
                 NamedKey::ArrowLeft,
@@ -494,7 +491,7 @@ mod tests {
                     app.domain_picker.set_query(query);
                 }
             }
-            app.modifiers = ModifiersState::CONTROL;
+            app.modifiers = crate::input::platform::System::CURRENT.word();
             app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
             for (key, expected, cursor) in [
                 (

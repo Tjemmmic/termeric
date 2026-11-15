@@ -38,8 +38,8 @@ use coverage::{
 use fonts::{
     CellMetrics, collect_configured_families, collect_configured_range_overrides,
     compile_font_feature_overrides, desktop_font_system, family_for, font_attrs,
-    font_has_weight_axis, measure_cell, resolve_configured_family, should_synthesize_bold,
-    terminal_font_features, ui_face_attrs, ui_text_metrics,
+    font_has_weight_axis, matched_family_weight, measure_cell, resolve_configured_family,
+    should_synthesize_bold, terminal_font_features, ui_face_attrs, ui_text_metrics,
 };
 
 /// Size of each glyph-atlas page. Mask storage is capped at 8 MiB and color
@@ -82,6 +82,30 @@ impl GlyphRasterizer {
 pub(super) struct FontStyle {
     pub bold: bool,
     pub italic: bool,
+}
+
+/// Every terminal style, in the order `matched_family_weights` keeps them.
+const MATCHED_WEIGHT_STYLES: [FontStyle; 4] = [
+    FontStyle {
+        bold: false,
+        italic: false,
+    },
+    FontStyle {
+        bold: false,
+        italic: true,
+    },
+    FontStyle {
+        bold: true,
+        italic: false,
+    },
+    FontStyle {
+        bold: true,
+        italic: true,
+    },
+];
+
+fn matched_weight_index(style: FontStyle) -> usize {
+    usize::from(style.bold) * 2 + usize::from(style.italic)
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -439,6 +463,11 @@ pub struct GlyphCache {
     /// Parsed `wght`-axis capability by resolved face. Variation axes are
     /// intrinsic to a face, so this avoids reparsing `fvar` on glyph misses.
     weight_axis_faces: HashMap<cosmic_text::fontdb::ID, bool>,
+    /// The weight each named family is asked for in each style at the
+    /// configured weights (`matched_family_weight`), indexed by
+    /// `matched_weight_index`. Cleared when those weights or the font
+    /// database change.
+    matched_family_weights: HashMap<String, [Weight; 4]>,
     /// UI text widths by pixel size and face, bounded by
     /// `MAX_UI_WIDTH_ENTRIES`.
     ui_widths: HashMap<(u32, UiFace), HashMap<Box<str>, f32>>,
@@ -446,6 +475,12 @@ pub struct GlyphCache {
     ui_metrics: HashMap<u32, UiFontMetrics>,
     /// Wrapped UI paragraphs kept between frames.
     ui_layouts: UiLayoutCache,
+}
+
+/// A family the system keeps out of font menus: macOS names its own UI
+/// faces with a leading dot (`.SF NS`), which other apps never list.
+fn is_hidden_family(name: &str) -> bool {
+    name.starts_with('.')
 }
 
 impl GlyphCache {
@@ -651,6 +686,7 @@ impl GlyphCache {
             font_feature_overrides: FontFeatures::new(),
             reported_synthetic_styles: HashSet::new(),
             weight_axis_faces: HashMap::new(),
+            matched_family_weights: HashMap::new(),
             ui_widths: HashMap::new(),
             ui_metrics: HashMap::new(),
             ui_layouts: UiLayoutCache::default(),
@@ -852,7 +888,7 @@ impl GlyphCache {
         style: FontStyle,
         shaping: Shaping,
     ) -> Option<ResolvedChar> {
-        let attrs = font_attrs(family, style, self.font_weight, self.bold_font_weight);
+        let attrs = font_attrs(family, style, self.family_weight(family, style));
         let (cache_key, font_id) =
             char_glyph(&mut self.font_system, self.metrics, c, &attrs, shaping)?;
 
@@ -863,20 +899,23 @@ impl GlyphCache {
         if self.deferred_shaped_entries.contains(&shaped_key) {
             return Some(ResolvedChar::Deferred);
         }
-        self.rasterize_glyph(cache_key, font_id, style)
+        self.rasterize_glyph(cache_key, font_id, style, self.effective_weight(style))
             .map(ResolvedChar::Rasterized)
     }
 
     /// Rasterize one glyph, emboldening its mask when the selected face is
-    /// too light for a bold request. `None` when the rasterizer produces no
-    /// image or malformed pixels.
+    /// too light for a bold request. `requested_weight` is the weight the
+    /// text asked for, which the face's own weight in `cache_key` may not
+    /// reach. `None` when the rasterizer produces no image or malformed
+    /// pixels.
     fn rasterize_glyph(
         &mut self,
         cache_key: CacheKey,
         font_id: cosmic_text::fontdb::ID,
         style: FontStyle,
+        requested_weight: Weight,
     ) -> Option<RasterizedGlyph> {
-        let synthesize_bold = self.needs_synthetic_bold(font_id, cache_key.font_weight, style);
+        let synthesize_bold = self.needs_synthetic_bold(font_id, requested_weight, style);
         let image = self
             .rasterizer
             .rasterize(&mut self.font_system, cache_key)?;
@@ -1411,6 +1450,7 @@ impl GlyphCache {
     pub(crate) fn install_test_font(&mut self, data: Vec<u8>, family: &str, queue: &Queue) {
         self.font_system.db_mut().load_font_data(data);
         self.weight_axis_faces.clear();
+        self.matched_family_weights.clear();
         self.font_family = family.to_string();
         self.fallback_families.clear();
         self.range_overrides.clear();
@@ -1450,18 +1490,20 @@ impl GlyphCache {
     ) -> (LigatureRun, bool) {
         let mut placed = Vec::new();
 
-        if matches!(face, TextFace::UiSans | TextFace::UiMono) {
+        let requested_weight = if matches!(face, TextFace::UiSans | TextFace::UiMono) {
             let mut buffer = Buffer::new(&mut self.font_system, metrics);
             let face = UiFace {
                 mono: face == TextFace::UiMono,
                 bold: style.bold,
                 italic: style.italic,
             };
-            buffer.set_text(text, &ui_face_attrs(face), Shaping::Advanced, None);
+            let attrs = ui_face_attrs(face);
+            buffer.set_text(text, &attrs, Shaping::Advanced, None);
             buffer.shape_until_scroll(&mut self.font_system, false);
             for run in buffer.layout_runs() {
                 placed.extend(place_glyphs(text, run.glyphs, placement));
             }
+            attrs.weight
         } else {
             let mut buffer = Buffer::new(&mut self.font_system, metrics);
 
@@ -1479,32 +1521,31 @@ impl GlyphCache {
             );
             let font_features =
                 terminal_font_features(self.ligatures_enabled, &self.font_feature_overrides);
-            let attrs = font_attrs(
-                family_for(&default_family),
-                style,
-                self.font_weight,
-                self.bold_font_weight,
-            )
-            .font_features(font_features.clone());
-            let spans = span_specs.iter().map(|(range, family)| {
-                (
-                    &text[range.clone()],
-                    font_attrs(
-                        family_for(family),
-                        style,
-                        self.font_weight,
-                        self.bold_font_weight,
+            let default_weight = self.family_weight(family_for(&default_family), style);
+            let attrs = font_attrs(family_for(&default_family), style, default_weight)
+                .font_features(font_features.clone());
+            let span_weights = span_specs
+                .iter()
+                .map(|(_, family)| self.family_weight(family_for(family), style))
+                .collect::<Vec<_>>();
+            let spans = span_specs
+                .iter()
+                .zip(span_weights)
+                .map(|((range, family), weight)| {
+                    (
+                        &text[range.clone()],
+                        font_attrs(family_for(family), style, weight)
+                            .font_features(font_features.clone()),
                     )
-                    .font_features(font_features.clone()),
-                )
-            });
+                });
             buffer.set_rich_text(spans, &attrs, Shaping::Advanced, None);
             buffer.shape_until_scroll(&mut self.font_system, false);
 
             for run in buffer.layout_runs() {
                 placed.extend(place_glyphs(text, run.glyphs, placement));
             }
-        }
+            self.effective_weight(style)
+        };
 
         let mut glyphs = Vec::new();
         let mut retry_next_frame = false;
@@ -1525,7 +1566,9 @@ impl GlyphCache {
                 retry_next_frame = true;
                 self.pin_entry(self.fallback_entry);
                 self.fallback_entry
-            } else if let Some(glyph) = self.rasterize_glyph(cache_key, font_id, style) {
+            } else if let Some(glyph) =
+                self.rasterize_glyph(cache_key, font_id, style, requested_weight)
+            {
                 self.atlas_misses += 1;
                 match self.upload_glyph(&glyph, queue) {
                     Ok(entry) => {
@@ -1568,6 +1611,26 @@ impl GlyphCache {
         } else {
             self.font_weight
         }
+    }
+
+    /// The weight terminal text in `style` asks `family` for: the configured
+    /// one, or the nearest the family has (`matched_family_weight`).
+    fn family_weight(&mut self, family: Family<'_>, style: FontStyle) -> Weight {
+        let Family::Name(name) = family else {
+            return self.effective_weight(style);
+        };
+        if let Some(weights) = self.matched_family_weights.get(name) {
+            return weights[matched_weight_index(style)];
+        }
+        let (regular, bold) = (self.font_weight, self.bold_font_weight);
+        let font_system = &mut self.font_system;
+        let weights = MATCHED_WEIGHT_STYLES.map(|style| {
+            let requested = if style.bold { bold } else { regular };
+            matched_family_weight(font_system, family, requested, style.italic)
+        });
+        let weight = weights[matched_weight_index(style)];
+        self.matched_family_weights.insert(name.to_owned(), weights);
+        weight
     }
 
     fn needs_synthetic_bold(
@@ -1654,6 +1717,7 @@ impl GlyphCache {
                 !name.contains("Emoji") && !name.contains("Symbol") && !name.contains("Icons")
             })
             .filter_map(|face| face.families.first().map(|(name, _)| name.clone()))
+            .filter(|name| !is_hidden_family(name))
             .filter(|name| seen.insert(name.clone())) // Deduplicate
             .collect();
 
@@ -1678,6 +1742,7 @@ impl GlyphCache {
             .db()
             .faces()
             .filter_map(|face| face.families.first().map(|(name, _)| name.clone()))
+            .filter(|name| !is_hidden_family(name))
             .collect();
         families.sort_by_key(|family| family.to_lowercase());
         families.dedup_by(|next, kept| next.eq_ignore_ascii_case(kept));
@@ -1813,6 +1878,7 @@ impl GlyphCache {
         }
         self.font_weight = font_weight;
         self.bold_font_weight = bold_font_weight;
+        self.matched_family_weights.clear();
         let cell = measure_cell(
             &mut self.font_system,
             &self.metrics,

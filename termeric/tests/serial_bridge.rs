@@ -18,8 +18,8 @@ fn pty_pair() -> (File, File, PathBuf) {
                 &mut master,
                 &mut slave,
                 name.as_mut_ptr(),
-                std::ptr::null(),
-                std::ptr::null(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
             )
         },
         0
@@ -160,5 +160,10 @@ fn executable_bridge_configures_a_pseudoterminal_and_relays_exact_bytes() {
     assert_eq!(restored.c_iflag, original_device_attributes.c_iflag);
     assert_eq!(restored.c_oflag, original_device_attributes.c_oflag);
     assert_eq!(restored.c_cflag, original_device_attributes.c_cflag);
-    assert_eq!(restored.c_lflag, original_device_attributes.c_lflag);
+    // BSD terminals, macOS's among them, set PENDIN themselves when they turn
+    // canonical again, to retype pending input; that one is theirs.
+    assert_eq!(
+        restored.c_lflag & !libc::PENDIN,
+        original_device_attributes.c_lflag & !libc::PENDIN
+    );
 }

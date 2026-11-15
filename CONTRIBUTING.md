@@ -4,7 +4,7 @@ Thanks for your interest in Termeric. This page covers building from source, the
 
 ## Building
 
-You need a stable Rust toolchain (1.95 or newer, the `rust-version` in `Cargo.toml`) and the development packages for fontconfig, Wayland, xkbcommon, XCB, and Vulkan; [Build from source](README.md#build-from-source) lists them for Debian, Ubuntu, and Arch Linux. Then:
+You need a stable Rust toolchain (1.95 or newer, the `rust-version` in `Cargo.toml`). On Linux you also need the development packages for fontconfig, Wayland, xkbcommon, XCB, and Vulkan; [Build from source](README.md#build-from-source) lists them for Debian, Ubuntu, and Arch Linux. On macOS the Xcode Command Line Tools are enough (see [macOS](README.md#macos)). Then:
 
 ```bash
 cargo build --locked
@@ -38,13 +38,13 @@ Most of Termeric's tests are ordinary Rust unit and integration tests that run a
 
 ### CI
 
-`.github/workflows/ci.yml` runs the checks above on pull requests and pushes to `main`. It sets `TERMERIC_REQUIRE_SHELL_ACCEPTANCE=1`, so the Bash, Zsh, and Fish integration tests fail instead of skipping when one of those shells is missing; set it locally to match.
+`.github/workflows/ci.yml` runs the checks above on pull requests and pushes to `main`, in two jobs. The Linux job (Ubuntu) runs everything listed under Testing. The macOS job (Apple silicon) runs Clippy and the tests with Homebrew's Bash, fish, and tmux; the GPU smokes on Metal; the terminfo check against macOS's own ncurses (`check_terminfo.py --macos-system`); `scripts/macos_gui_smoke.py`, which starts the app with debug assertions, drives it over the control socket, and quits it through Apple Events (if macOS refuses the Apple Event, it closes the window instead and leaves a warning on the run); and an Intel build run under Rosetta. It then uploads the release `Termeric.app` as `Termeric-macos-arm64` (kept 14 days) for testing on a Mac. Both jobs set `TERMERIC_REQUIRE_SHELL_ACCEPTANCE=1`, so the Bash, Zsh, and Fish integration tests fail instead of skipping when one of those shells is missing; set it locally to match. Platform code is written for `target_os = "linux"` and `target_os = "macos"` by name; nothing assumes a system it doesn't name. To run the tests on a Mac, resolve the temporary directory first, as CI does: `TMPDIR=$(cd "$TMPDIR" && pwd -P)/ cargo test --workspace --locked`. macOS's lies under the `/var` link, and many tests compare the paths they create with the ones the kernel reports, which have links resolved.
 
 `.github/workflows/fuzz.yml` runs the three fuzz targets (see [Fuzzing](#fuzzing)) every Monday against `main`, and whenever it's started from the Actions tab.
 
 `.github/workflows/release.yml` runs for each `v*` tag: it builds the tarball and `.deb` for x86_64 and arm64, runs `check_debian_package.py` on each `.deb`, and drafts the GitHub release (see [PACKAGING.md](PACKAGING.md#releases)).
 
-The GPU smoke, the soak, benchmarks, the Arch package check, and the packages' `--system-lifecycle` checks don't run in CI. Run them by hand before a release.
+The soak, benchmarks, the Arch package check, and the packages' `--system-lifecycle` checks don't run in CI, nor does the GPU smoke on Linux. Run them by hand before a release.
 
 Every action the workflows use is pinned to a commit SHA, with its release in a comment (`# v7.0.1`), so a moved tag can't change what runs. To update one, take the commit of the new release's tag (`git ls-remote --tags https://github.com/OWNER/ACTION`) and change the SHA and the comment together. `dtolnay/rust-toolchain` has no releases: it is pinned to the head of its `stable` or `nightly` branch, which selects the toolchain.
 
@@ -55,6 +55,8 @@ The GPU smoke runs the renderer's offscreen checks (text, emoji, ligatures, inli
 ```bash
 WGPU_BACKEND=vulkan cargo test -p termeric --locked -- --ignored gpu_render_smoke
 ```
+
+On macOS, Metal has no software adapter: run it with `WGPU_BACKEND=metal TERMERIC_GPU_SMOKE_HARDWARE=1`, as CI does.
 
 Set `TERMERIC_GUI_VISUAL_OUTPUT=path.png` to save the frame, `TERMERIC_GPU_SMOKE_HARDWARE=1` to require a hardware adapter instead, and `TERMERIC_GUI_VISUAL_UPDATE=1` to rewrite the signature after an intended visual change.
 

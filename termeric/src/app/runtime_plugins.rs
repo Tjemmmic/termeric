@@ -576,7 +576,10 @@ impl App {
             .map(std::path::Path::to_path_buf);
         let opened = self.open_file_chooser(
             super::file_chooser::FileChooserPurpose::PluginFolder,
-            move || crate::portal::choose_folder("Choose a plugin folder", start.as_deref()),
+            crate::file_chooser::FileRequest {
+                title: "Choose a plugin folder",
+                pick: crate::file_chooser::Pick::Folder { start },
+            },
         );
         if !opened {
             let folder = previous
@@ -590,10 +593,10 @@ impl App {
     /// path when no chooser could open.
     pub(super) fn handle_plugin_folder_chosen(
         &mut self,
-        result: std::result::Result<crate::portal::FileChoice, String>,
+        result: std::result::Result<crate::file_chooser::FileChoice, String>,
     ) {
         match result {
-            Ok(crate::portal::FileChoice::Chosen(folders)) => {
+            Ok(crate::file_chooser::FileChoice::Chosen(folders)) => {
                 let Some(folder) = folders.into_iter().next() else {
                     return;
                 };
@@ -606,7 +609,7 @@ impl App {
                     ),
                 }
             }
-            Ok(crate::portal::FileChoice::Cancelled) => {}
+            Ok(crate::file_chooser::FileChoice::Cancelled) => {}
             Err(error) => {
                 log::info!("No folder chooser ({error}); asking for a path instead");
                 self.ask_plugin(PluginQuestion::InstallPath, String::new(), None);
@@ -1410,7 +1413,7 @@ program = "termeric-test-fixture-must-not-run"
             "local-tool".into(),
             crate::agents::AgentConfig {
                 name: Some("Local Agent".into()),
-                program: Some("/bin/true".into()),
+                program: Some("/usr/bin/true".into()),
                 ..Default::default()
             },
         );
@@ -1479,7 +1482,7 @@ program = "termeric-test-fixture-must-not-run"
 
     #[test]
     fn a_folder_chosen_in_the_desktops_chooser_is_reviewed() {
-        use crate::portal::FileChoice;
+        use crate::file_chooser::FileChoice;
         let fixture = Fixture::new();
         let source = fixture.base().join("source-chosen-tool");
         std::fs::create_dir_all(&source).unwrap();

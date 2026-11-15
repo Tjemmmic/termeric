@@ -17,6 +17,64 @@ pub(super) fn font_has_weight_axis(
         })
 }
 
+/// The weight to ask cosmic-text for when drawing `family` at `requested`.
+///
+/// Cosmic-text draws with a named family only at a face of exactly the
+/// requested weight, or a variable face whose `wght` axis covers it; at any
+/// other weight it skips the family and shapes with the system's fallback
+/// fonts, which are usually proportional. So a family without that weight is
+/// asked for the weight of the face CSS font matching picks within it, as
+/// fontdb's query does. A bold request that lands on a lighter face is then
+/// emboldened (`should_synthesize_bold`), which compares against the weight
+/// that was configured, not this one.
+pub(super) fn matched_family_weight(
+    font_system: &mut FontSystem,
+    family: Family<'_>,
+    requested: Weight,
+    italic: bool,
+) -> Weight {
+    let Family::Name(_) = family else {
+        // The one generic family terminal text names, monospace, is
+        // matched at any weight by cosmic-text itself.
+        return requested;
+    };
+    let families = [family];
+    let query = cosmic_text::fontdb::Query {
+        families: &families,
+        weight: requested,
+        stretch: cosmic_text::fontdb::Stretch::Normal,
+        style: if italic { Style::Italic } else { Style::Normal },
+    };
+    let Some((id, face_weight)) = font_system
+        .db()
+        .query(&query)
+        .and_then(|id| font_system.db().face(id).map(|face| (id, face.weight)))
+    else {
+        return requested;
+    };
+    if face_weight == requested || weight_axis_covers(font_system, id, requested) {
+        requested
+    } else {
+        face_weight
+    }
+}
+
+/// Whether the face has a `wght` axis whose range includes `weight`, the
+/// test cosmic-text makes before it varies a face to a weight it isn't.
+fn weight_axis_covers(
+    font_system: &mut FontSystem,
+    font_id: cosmic_text::fontdb::ID,
+    weight: Weight,
+) -> bool {
+    let value = f32::from(weight.0);
+    font_system.get_font(font_id, weight).is_some_and(|font| {
+        font.as_swash().variations().any(|axis| {
+            axis.tag().to_be_bytes() == *b"wght"
+                && (axis.min_value()..=axis.max_value()).contains(&value)
+        })
+    })
+}
+
 pub(super) fn should_synthesize_bold(
     style: FontStyle,
     requested_weight: Weight,
@@ -36,11 +94,44 @@ pub(super) fn should_synthesize_bold(
 /// alias, so chrome text uses the desktop's UI face. `FontSystem::new` would
 /// replace that alias with a fixed family; its monospace and serif defaults
 /// are kept so terminal text resolves exactly as before.
+#[cfg(target_os = "linux")]
+fn set_generic_families(database: &mut cosmic_text::fontdb::Database) {
+    database.set_monospace_family("Noto Sans Mono");
+    database.set_serif_family("DejaVu Serif");
+}
+
+/// macOS has no fontconfig, so the generic families name the system's own
+/// faces: the first installed of each list. The system UI face (`.SF NS`)
+/// is hidden from font lists but loaded like any other.
+#[cfg(target_os = "macos")]
+fn set_generic_families(database: &mut cosmic_text::fontdb::Database) {
+    let first_installed = |database: &cosmic_text::fontdb::Database, families: &[&str]| {
+        families
+            .iter()
+            .find(|family| {
+                database
+                    .faces()
+                    .any(|face| face.families.iter().any(|(name, _)| name == *family))
+            })
+            .map(|family| (*family).to_owned())
+    };
+    // SF Mono ships inside Terminal.app rather than as a system font, so it
+    // is not among the installed families unless the person installed it.
+    if let Some(family) = first_installed(database, &["Menlo", "Monaco"]) {
+        database.set_monospace_family(family);
+    }
+    if let Some(family) = first_installed(database, &[".SF NS", "Helvetica Neue", "Helvetica"]) {
+        database.set_sans_serif_family(family);
+    }
+    if let Some(family) = first_installed(database, &["New York", "Times New Roman", "Times"]) {
+        database.set_serif_family(family);
+    }
+}
+
 pub(super) fn desktop_font_system() -> FontSystem {
     let mut database = cosmic_text::fontdb::Database::new();
     database.load_system_fonts();
-    database.set_monospace_family("Noto Sans Mono");
-    database.set_serif_family("DejaVu Serif");
+    set_generic_families(&mut database);
     let locale = sys_locale::get_locale().unwrap_or_else(|| {
         log::warn!("failed to get system locale, falling back to en-US");
         String::from("en-US")
@@ -71,19 +162,12 @@ pub(super) fn ui_text_metrics(size_px: f32) -> Metrics {
     Metrics::new(size_px, (size_px * 1.25).ceil())
 }
 
-pub(super) fn font_attrs(
-    family: Family<'_>,
-    style: FontStyle,
-    font_weight: Weight,
-    bold_font_weight: Weight,
-) -> Attrs<'_> {
+/// Terminal text attributes for `family` in `style`, at `weight`: the one
+/// [`matched_family_weight`] gives for the configured weight.
+pub(super) fn font_attrs(family: Family<'_>, style: FontStyle, weight: Weight) -> Attrs<'_> {
     Attrs::new()
         .family(family)
-        .weight(if style.bold {
-            bold_font_weight
-        } else {
-            font_weight
-        })
+        .weight(weight)
         .style(if style.italic {
             Style::Italic
         } else {
@@ -188,7 +272,8 @@ pub(super) fn measure_cell(
     font_weight: Weight,
 ) -> CellMetrics {
     let family = family_for(font_family);
-    let attrs = Attrs::new().family(family).weight(font_weight);
+    let weight = matched_family_weight(font_system, family, font_weight, false);
+    let attrs = Attrs::new().family(family).weight(weight);
 
     // Measure a single 'M' character to get the natural width
     let mut buffer = Buffer::new(font_system, *metrics);
@@ -348,4 +433,30 @@ pub(super) fn resolve_configured_family(
         .find(|name| is_generic(name) || installed(name))
         .unwrap_or("monospace")
         .to_string()
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_tests {
+    use cosmic_text::fontdb::Family;
+
+    /// What the generic families resolve to on a real Mac: the faces every
+    /// supported macOS installs.
+    #[test]
+    fn generic_families_resolve_to_installed_mac_faces() {
+        let system = super::desktop_font_system();
+        let database = system.db();
+        assert_eq!(database.family_name(&Family::Monospace), "Menlo");
+        let sans = database.family_name(&Family::SansSerif);
+        assert!(
+            [".SF NS", "Helvetica Neue", "Helvetica"].contains(&sans),
+            "{sans}"
+        );
+        assert!(
+            database.faces().any(|face| face
+                .families
+                .iter()
+                .any(|(name, _)| name == "Apple Color Emoji")),
+            "Apple Color Emoji is loaded for emoji fallback"
+        );
+    }
 }

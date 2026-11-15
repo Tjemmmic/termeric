@@ -50,7 +50,7 @@ pub fn build_directory_archive(
     let source_device = source_metadata.dev();
     let file = match anonymous_archive_file() {
         Some(file) => file,
-        // Without O_TMPFILE support, a named file unlinked at once.
+        // Without a nameless file, a named file unlinked at once.
         None => {
             let (path, file) = super::io_util::create_unique(
                 &std::env::temp_dir(),
@@ -92,6 +92,8 @@ pub fn build_directory_archive(
     Ok(archive)
 }
 
+/// A file with no name at all, which only Linux can make (`O_TMPFILE`).
+#[cfg(target_os = "linux")]
 fn anonymous_archive_file() -> Option<File> {
     OpenOptions::new()
         .read(true)
@@ -100,6 +102,13 @@ fn anonymous_archive_file() -> Option<File> {
         .custom_flags(libc::O_TMPFILE)
         .open(std::env::temp_dir())
         .ok()
+}
+
+/// macOS has no nameless files; its temporary directory is private to the
+/// user, so the named file unlinked at once is seen by nobody else.
+#[cfg(target_os = "macos")]
+fn anonymous_archive_file() -> Option<File> {
+    None
 }
 
 fn append_directory(

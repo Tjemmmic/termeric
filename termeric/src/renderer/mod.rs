@@ -99,9 +99,30 @@ use crate::ui::shortcuts_panel::ShortcutsPanelInfo;
 /// Logical height of the tab bar, sized for 10pt UI labels.
 const TAB_BAR_HEIGHT: f32 = 34.0;
 
-/// Desktop reference density: a point is 1/72 inch and a logical pixel 1/96
-/// inch, so configured sizes match other applications' point sizes.
+/// Desktop reference density for chrome text: a point is 1/72 inch and a
+/// logical pixel 1/96 inch. Chrome sizes are Termeric's own, so they stay
+/// the same on every system (10 pt is 13.3 px, near the macOS system size).
 const PIXELS_PER_POINT: f32 = 96.0 / 72.0;
+
+/// Logical pixels per point of the configured `font.size`, so a size means
+/// what it does in the system's other applications: on Linux a point is
+/// 1/72 inch at 96 logical pixels per inch, and on macOS, as in every Mac
+/// app, a point is one logical pixel.
+#[cfg(target_os = "linux")]
+const TERMINAL_PIXELS_PER_POINT: f32 = PIXELS_PER_POINT;
+#[cfg(target_os = "macos")]
+const TERMINAL_PIXELS_PER_POINT: f32 = 1.0;
+
+/// The surface alpha mode that lets `window.opacity` show what is behind the
+/// window. Termeric draws premultiplied colours. Metal offers only `Opaque`
+/// and `PostMultiplied`, and its `PostMultiplied` only makes the layer
+/// non-opaque: Core Animation composites the layer's colours as
+/// premultiplied, so that is the mode on macOS (where every window is made
+/// transparent for it).
+#[cfg(target_os = "linux")]
+const TRANSLUCENT_ALPHA_MODE: wgpu::CompositeAlphaMode = wgpu::CompositeAlphaMode::PreMultiplied;
+#[cfg(target_os = "macos")]
+const TRANSLUCENT_ALPHA_MODE: wgpu::CompositeAlphaMode = wgpu::CompositeAlphaMode::PostMultiplied;
 
 /// Physical rasterization size for a configured `font.size` in points.
 /// A logical chrome length at `scale_factor`, in whole physical pixels and
@@ -114,6 +135,11 @@ fn physical_font_size(points: f32, scale_factor: f32) -> f32 {
     (points * PIXELS_PER_POINT * scale_factor).max(1.0)
 }
 
+/// Physical rasterization size for the configured terminal `font.size`.
+fn physical_terminal_font_size(points: f32, scale_factor: f32) -> f32 {
+    (points * TERMINAL_PIXELS_PER_POINT * scale_factor).max(1.0)
+}
+
 #[cfg(test)]
 #[test]
 fn configured_points_convert_to_physical_pixels() {
@@ -121,6 +147,11 @@ fn configured_points_convert_to_physical_pixels() {
     assert_eq!(physical_font_size(12.0, 2.0), 32.0);
     assert_eq!(physical_font_size(9.0, 1.25), 15.0);
     assert_eq!(physical_font_size(0.1, 1.0), 1.0);
+    #[cfg(target_os = "linux")]
+    assert_eq!(physical_terminal_font_size(12.0, 1.0), 16.0);
+    #[cfg(target_os = "macos")]
+    assert_eq!(physical_terminal_font_size(12.0, 2.0), 24.0);
+    assert_eq!(physical_terminal_font_size(0.1, 1.0), 1.0);
 }
 
 /// Main renderer that manages all GPU resources
@@ -244,11 +275,8 @@ impl Renderer {
         let formats = select_surface_formats(&surface_caps.formats)
             .ok_or_else(|| anyhow::anyhow!("selected adapter exposes no presentation format"))?;
         let alpha_mode =
-            if surface_caps
-                .alpha_modes
-                .contains(&wgpu::CompositeAlphaMode::PreMultiplied)
-            {
-                wgpu::CompositeAlphaMode::PreMultiplied
+            if surface_caps.alpha_modes.contains(&TRANSLUCENT_ALPHA_MODE) {
+                TRANSLUCENT_ALPHA_MODE
             } else {
                 surface_caps.alpha_modes.first().copied().ok_or_else(|| {
                     anyhow::anyhow!("selected adapter exposes no surface alpha mode")
@@ -279,7 +307,7 @@ impl Renderer {
         surface.configure(&device, &config);
 
         // Create glyph cache
-        let scaled_font_size = physical_font_size(font_size, scale_factor);
+        let scaled_font_size = physical_terminal_font_size(font_size, scale_factor);
         let mut glyph_cache = GlyphCache::new(
             &device,
             &queue,
@@ -433,7 +461,7 @@ impl Renderer {
     pub fn set_font_size(&mut self, font_size: f32) {
         self.invalidate_terminal_rows();
         self.font_size = font_size;
-        let scaled = physical_font_size(font_size, self.scale_factor);
+        let scaled = physical_terminal_font_size(font_size, self.scale_factor);
         self.glyph_cache.set_font_size(scaled, &self.queue);
     }
 
@@ -539,7 +567,7 @@ impl Renderer {
     pub fn set_scale_factor(&mut self, scale_factor: f32) {
         self.invalidate_terminal_rows();
         self.scale_factor = scale_factor.max(0.1);
-        let scaled = physical_font_size(self.font_size, self.scale_factor);
+        let scaled = physical_terminal_font_size(self.font_size, self.scale_factor);
         self.glyph_cache.set_font_size(scaled, &self.queue);
         self.padding = (self.padding_logical * self.scale_factor).round().max(0.0);
     }

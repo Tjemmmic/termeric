@@ -89,12 +89,11 @@ fn read_stdin() -> anyhow::Result<Vec<u8>> {
     read_file(std::fs::File::from(input), INPUT_TIMEOUT)
 }
 
-fn read_file(mut input: std::fs::File, timeout: std::time::Duration) -> anyhow::Result<Vec<u8>> {
+fn read_file(input: std::fs::File, timeout: std::time::Duration) -> anyhow::Result<Vec<u8>> {
     use std::io::{IsTerminal, Read};
-    use std::os::{
-        fd::AsRawFd,
-        unix::fs::{FileTypeExt, OpenOptionsExt},
-    };
+    #[cfg(target_os = "linux")]
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::{fd::AsRawFd, unix::fs::FileTypeExt};
     use std::time::Instant;
     if input.is_terminal() {
         anyhow::bail!("--env-stdin requires redirected input, not an interactive terminal");
@@ -107,17 +106,23 @@ fn read_file(mut input: std::fs::File, timeout: std::time::Duration) -> anyhow::
     let metadata = input
         .metadata()
         .map_err(|_| anyhow::anyhow!("cannot inspect --env-stdin input"))?;
-    if metadata.file_type().is_fifo() {
-        // Reopen this pinned pipe through procfs to obtain a separate open-file
-        // description. NONBLOCK must not change the invoking shell's stdin flags.
-        input = std::fs::OpenOptions::new()
+    let is_pipe = metadata.file_type().is_fifo();
+    if !is_pipe && !metadata.is_file() {
+        anyhow::bail!("--env-stdin requires a regular file or pipe");
+    }
+    // Reopen this pinned pipe through procfs to obtain a separate open-file
+    // description. NONBLOCK must not change the invoking shell's stdin flags.
+    #[cfg(target_os = "linux")]
+    let input = if is_pipe {
+        std::fs::OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC | libc::O_NOCTTY)
             .open(format!("/proc/self/fd/{}", input.as_raw_fd()))
-            .map_err(|_| anyhow::anyhow!("cannot acquire nonblocking --env-stdin pipe"))?;
-    } else if !metadata.is_file() {
-        anyhow::bail!("--env-stdin requires a regular file or pipe");
-    }
+            .map_err(|_| anyhow::anyhow!("cannot acquire nonblocking --env-stdin pipe"))?
+    } else {
+        input
+    };
+    let mut input = input;
     let deadline = Instant::now() + timeout;
     let mut bytes = Vec::new();
     loop {
@@ -149,6 +154,15 @@ fn read_file(mut input: std::fs::File, timeout: std::time::Duration) -> anyhow::
         }
         let mut chunk = [0u8; 4096];
         let limit = chunk.len().min(MAX_INPUT_BYTES + 1 - bytes.len());
+        // macOS can't reopen the pipe as a description of its own, so it stays
+        // blocking; reading no more than the pipe holds keeps the read from
+        // waiting. Nothing held after a ready poll means the writer is gone.
+        #[cfg(target_os = "macos")]
+        let limit = if is_pipe {
+            limit.min(pipe_bytes_available(input.as_raw_fd())?)
+        } else {
+            limit
+        };
         let result = input.read(&mut chunk[..limit]);
         if Instant::now() >= deadline {
             anyhow::bail!("--env-stdin input timed out before launch");
@@ -172,22 +186,27 @@ fn read_file(mut input: std::fs::File, timeout: std::time::Duration) -> anyhow::
     }
 }
 
+/// How many bytes the pipe at `descriptor` holds.
+#[cfg(target_os = "macos")]
+fn pipe_bytes_available(descriptor: std::os::fd::RawFd) -> anyhow::Result<usize> {
+    let mut available: libc::c_int = 0;
+    // SAFETY: FIONREAD writes one int to the live storage for this call.
+    if unsafe { libc::ioctl(descriptor, libc::FIONREAD, &mut available) } != 0 {
+        anyhow::bail!("cannot inspect --env-stdin input");
+    }
+    Ok(usize::try_from(available).unwrap_or(0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn pipe() -> (std::fs::File, std::fs::File) {
-        use std::os::fd::FromRawFd;
-        let mut fds = [-1; 2];
-        // SAFETY: pipe2 initializes two descriptors in the supplied array.
-        assert_eq!(unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) }, 0);
-        // SAFETY: adopt each newly allocated descriptor exactly once.
-        unsafe {
-            (
-                std::fs::File::from_raw_fd(fds[0]),
-                std::fs::File::from_raw_fd(fds[1]),
-            )
-        }
+        let (reader, writer) = std::io::pipe().expect("create pipe");
+        (
+            std::fs::File::from(std::os::fd::OwnedFd::from(reader)),
+            std::fs::File::from(std::os::fd::OwnedFd::from(writer)),
+        )
     }
 
     #[test]
@@ -278,8 +297,8 @@ mod tests {
                     &mut master,
                     &mut slave,
                     std::ptr::null_mut(),
-                    std::ptr::null(),
-                    std::ptr::null(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
                 )
             },
             0

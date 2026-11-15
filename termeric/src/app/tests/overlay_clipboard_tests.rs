@@ -62,7 +62,7 @@ fn app_mediated_clipboard_reply_returns_to_requesting_pane_not_focus() {
         "stty raw -echo; ",
         "reply=$(dd bs=1 count=9 2>/dev/null); ",
         "printf '\\rreply='; ",
-        "printf '%s' \"$reply\" | od -An -tx1; ",
+        "printf '%s' \"$reply\" | od -An -tx1 | tr -s ' '; ",
         "printf '\\r\\n'"
     );
     let shell = ShellConfig {
@@ -352,15 +352,16 @@ fn select_first_word(app: &mut App) {
 
 #[test]
 fn a_copy_the_clipboard_refuses_keeps_its_key_and_says_why() {
-    use winit::keyboard::Key;
     let mut app = scrollbar_owner_fixture();
     app.active_terminal_mut()
         .unwrap()
         .process(b"\x1b[H\x1b[2Jcopied text");
-    app.modifiers = ModifiersState::CONTROL | ModifiersState::SHIFT;
-    let copy = Key::Character("C".into());
+    let (copy, modifiers) = crate::test_support::default_shortcut_press(
+        crate::input::keybindings::BindableAction::Copy,
+    );
+    app.modifiers = modifiers;
 
-    // With nothing selected, Ctrl+Shift+C still reaches the program.
+    // With nothing selected, the copy shortcut still reaches the program.
     assert!(!app.handle_bound_key(&copy));
 
     // The headless clipboard cannot be reached: the key must not become ^C.

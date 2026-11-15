@@ -9,12 +9,21 @@ fn desktop_delivery_failures_become_deduplicated_visible_toasts() {
         ..Config::default()
     };
     let mut app = App::new_headless_with_tabs(config);
-    app.bell.set_config(crate::config::BellConfigFile {
-        audio: true,
-        ..Default::default()
-    });
-    app.bell
-        .set_audio_command_for_test("/definitely/missing/termeric-audio-helper", &[]);
+    // Linux plays the bell through a sound player, which can fail; the
+    // macOS alert sound reports nothing.
+    #[cfg(target_os = "linux")]
+    {
+        app.bell.set_config(crate::config::BellConfigFile {
+            audio: true,
+            ..Default::default()
+        });
+        app.bell
+            .set_audio_command_for_test("/definitely/missing/termeric-audio-helper", &[]);
+    }
+    #[cfg(target_os = "linux")]
+    let expected = ["Audio bell unavailable", "Desktop notification unavailable"];
+    #[cfg(target_os = "macos")]
+    let expected = ["Desktop notification unavailable"];
     app.notifications
         .fail_delivery_for_test("synthetic notification service failure");
     let origin = TerminalEventOrigin {
@@ -46,22 +55,23 @@ fn desktop_delivery_failures_become_deduplicated_visible_toasts() {
         event: TerminalEvent::Bell,
     });
     notify(&mut app, "Finished");
-    settle(&mut app, 2);
+    settle(&mut app, expected.len());
     let messages = app
         .toasts
         .iter()
         .map(|toast| toast.message.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(messages.len(), 2);
-    assert!(messages[0].contains("Audio bell unavailable"));
-    assert!(messages[1].contains("Desktop notification unavailable"));
+    assert_eq!(messages.len(), expected.len(), "{messages:?}");
+    for (message, expected) in messages.iter().zip(expected) {
+        assert!(message.contains(expected), "{message}");
+    }
 
     // The manager suppresses repeats of the same integration failure instead
     // of letting a hostile terminal fill the bounded toast stack.
     notify(&mut app, "Again");
     assert_eq!(app.notifications.settle_for_test(), []);
     app.process_pty_events();
-    assert_eq!(app.toasts.iter().count(), 2);
+    assert_eq!(app.toasts.iter().count(), expected.len());
 }
 
 #[test]
@@ -188,7 +198,7 @@ fn delayed_notification_reply_returns_to_requesting_pane_without_a_focus_fallbac
     let data = b"\x1b]99;i=build;2\x1b\\".to_vec();
     let script = format!(
         "stty raw -echo; reply=$(dd bs=1 count={} 2>/dev/null); \
-         printf '\\rnotification='; printf '%s' \"$reply\" | od -An -tx1; printf '\\r\\n'",
+         printf '\\rnotification='; printf '%s' \"$reply\" | od -An -tx1 | tr -s ' '; printf '\\r\\n'",
         data.len()
     );
     let shell = ShellConfig {

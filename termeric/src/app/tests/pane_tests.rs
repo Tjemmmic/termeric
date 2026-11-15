@@ -265,7 +265,7 @@ fn mouse_focus_and_bracketed_paste_reach_the_focused_pane_in_order() {
     let script = concat!(
         "stty raw -echo; ",
         "printf '\rREADY\r\n'; ",
-        "bytes=$(dd bs=1 count=38 2>/dev/null | od -An -tx1); ",
+        "bytes=$(dd bs=1 count=38 2>/dev/null | od -An -tx1 | tr -s ' '); ",
         "printf '\rprotocol=%s\r\n' \"$bytes\"; ",
         "sleep 0.1"
     );
@@ -410,7 +410,7 @@ fn splitting_and_closing_back_to_one_pane_keep_the_first_terminal_without_orphan
         .lone_pane()
         .and_then(|pane| pane.pty.child_id())
         .unwrap();
-    let original_cwd = std::fs::read_link(format!("/proc/{original_pid}/cwd")).unwrap();
+    let original_cwd = crate::process_info::working_directory(original_pid).unwrap();
 
     let before_deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < before_deadline
@@ -457,7 +457,7 @@ fn splitting_and_closing_back_to_one_pane_keep_the_first_terminal_without_orphan
         let added_pid = panes.get_pane(added).unwrap().pty.child_id().unwrap();
         assert_ne!(added_pid, original_pid);
         assert_eq!(
-            std::fs::read_link(format!("/proc/{added_pid}/cwd")).unwrap(),
+            crate::process_info::working_directory(added_pid).unwrap(),
             original_cwd
         );
 
@@ -490,12 +490,14 @@ fn splitting_and_closing_back_to_one_pane_keep_the_first_terminal_without_orphan
         );
 
         let exit_deadline = Instant::now() + Duration::from_secs(1);
-        while std::path::Path::new(&format!("/proc/{added_pid}")).exists()
+        while crate::test_support::process_is_alive(added_pid as libc::pid_t)
             && Instant::now() < exit_deadline
         {
             std::thread::sleep(Duration::from_millis(2));
         }
-        assert!(!std::path::Path::new(&format!("/proc/{added_pid}")).exists());
+        assert!(!crate::test_support::process_is_alive(
+            added_pid as libc::pid_t
+        ));
     }
 
     assert!(
@@ -506,12 +508,14 @@ fn splitting_and_closing_back_to_one_pane_keep_the_first_terminal_without_orphan
     );
     drop(tab);
     let exit_deadline = Instant::now() + Duration::from_secs(1);
-    while std::path::Path::new(&format!("/proc/{original_pid}")).exists()
+    while crate::test_support::process_is_alive(original_pid as libc::pid_t)
         && Instant::now() < exit_deadline
     {
         std::thread::sleep(Duration::from_millis(2));
     }
-    assert!(!std::path::Path::new(&format!("/proc/{original_pid}")).exists());
+    assert!(!crate::test_support::process_is_alive(
+        original_pid as libc::pid_t
+    ));
 }
 
 #[test]
@@ -876,8 +880,11 @@ fn read_only_focused_pane_rejects_keyboard_and_running_gui_control_input() {
 #[test]
 fn a_closed_split_tab_keeps_every_pane_and_is_named_for_the_focused_one() {
     let workspace = tempfile::tempdir().unwrap();
-    let left_dir = workspace.path().join("left");
-    let right_dir = workspace.path().join("right");
+    // The kernel reports directories with links resolved (on macOS the
+    // temporary directory is under the `/var` link).
+    let root = workspace.path().canonicalize().unwrap();
+    let left_dir = root.join("left");
+    let right_dir = root.join("right");
     std::fs::create_dir_all(&left_dir).unwrap();
     std::fs::create_dir_all(&right_dir).unwrap();
 

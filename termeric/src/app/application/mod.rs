@@ -68,7 +68,21 @@ pub struct Application {
     renderer_backend: Option<crate::config::RendererBackend>,
     /// Takes files dropped on the windows under Wayland, where winit reports
     /// none; `None` on X11.
+    #[cfg(target_os = "linux")]
     wayland_drop: Option<super::wayland_drop::WaylandDrop>,
+    /// What this process holds while it runs and gives back as it exits:
+    /// its control socket, which other `termeric` commands reach it by, and,
+    /// for a quick-access process, the lock that makes it the only one. Kept
+    /// here, not in `main`, because on macOS the process ends right after
+    /// [`ApplicationHandler::exiting`] without returning to `main`.
+    held_for_exit: HeldForExit,
+}
+
+/// See [`Application::held_for_exit`].
+#[derive(Default)]
+pub(crate) struct HeldForExit {
+    pub(crate) control_server: Option<crate::control::ControlServer>,
+    pub(crate) quick_access_guard: Option<crate::control::QuickAccessGuard>,
 }
 
 /// A tab released outside its window. On Wayland no window knows where the
@@ -426,7 +440,9 @@ impl Application {
             last_plugin_registry_check: Instant::now(),
             plugin_paths,
             renderer_backend,
+            #[cfg(target_os = "linux")]
             wayland_drop: None,
+            held_for_exit: HeldForExit::default(),
         })
     }
 
@@ -445,7 +461,7 @@ impl Application {
     ) -> Vec<std::result::Result<CreatedWindow, String>> {
         let mut startup_errors = Vec::new();
         let mut results = Vec::with_capacity(self.pending.len());
-        for mut window in self.pending.drain(..) {
+        for mut window in std::mem::take(&mut self.pending) {
             // Starting a window already hands its stable ID to plugins (in
             // app-ready and in restored plugin panes' launch context), so the
             // ID is assigned first. A window that fails to start keeps its ID
@@ -466,9 +482,7 @@ impl Application {
                     .or(window.launch.adopts_tab.then_some(0))
             {
                 let control_id = window.control_window_id;
-                if let (Some(listener), Some(native)) = (&self.wayland_drop, &window.window) {
-                    listener.register(native, window.window_key());
-                }
+                self.register_drop_target(window.window.as_deref(), window.window_key());
                 self.window_order.push(id);
                 self.control_window_ids.insert(id, control_id);
                 self.windows.insert(id, window);
@@ -493,6 +507,38 @@ impl Application {
         if self.windows.is_empty() && self.pending.is_empty() && !errors.is_empty() {
             self.fatal_startup_error = Some(errors.join("\n"));
         }
+    }
+
+    /// Whether this is a quick-access process (it opens that one window).
+    #[cfg(target_os = "macos")]
+    pub(crate) fn is_quick_access(&self) -> bool {
+        self.pending
+            .iter()
+            .chain(self.windows.values())
+            .any(|window| window.launch.quick_access)
+    }
+
+    /// Show the quick-access terminal if hidden, else hide it.
+    #[cfg(target_os = "macos")]
+    fn toggle_quick_access(&mut self, event_loop: &ActiveEventLoop) {
+        let Some((native_id, control_id, shown)) = self
+            .windows
+            .iter()
+            .find(|(_, window)| window.launch.quick_access && !window.should_exit)
+            .map(|(id, window)| (*id, window.control_window_id, window.window.is_some()))
+        else {
+            return;
+        };
+        if let Err(error) =
+            self.set_quick_access_visible(event_loop, native_id, control_id, !shown, None)
+        {
+            log::warn!("Could not toggle the quick-access terminal: {error}");
+        }
+    }
+
+    /// Hold `held` until this process exits.
+    pub(crate) fn hold_for_exit(&mut self, held: HeldForExit) {
+        self.held_for_exit = held;
     }
 
     pub(crate) fn take_fatal_startup_error(&mut self) -> Option<String> {
@@ -617,6 +663,101 @@ impl Application {
         self.complete_live_domain_control(key, control, result);
     }
 
+    /// Carry out what handling an event asked of the whole application on
+    /// behalf of window `window_id`: a new window, a launch, moving a pane
+    /// or tab to the next window, or a tab dropped outside it.
+    fn fulfill_window_requests(&mut self, event_loop: &ActiveEventLoop, window_id: WindowId) {
+        let mut create_window = false;
+        let mut requested_window_launch = None;
+        let mut move_pane_to_next_window = false;
+        let mut move_tab_to_next_window = false;
+        let mut dropped_outside = None;
+        if let Some(window) = self.windows.get_mut(&window_id) {
+            create_window = std::mem::take(&mut window.request_new_window);
+            requested_window_launch = window.requested_window_launch.take();
+            move_pane_to_next_window = std::mem::take(&mut window.request_move_pane_to_next_window);
+            move_tab_to_next_window = std::mem::take(&mut window.request_move_tab_to_next_window);
+            dropped_outside = window.tab_dropped_outside.take();
+        }
+        if let Some(tab_id) = dropped_outside {
+            self.tab_drop = Some(PendingTabDrop {
+                source: window_id,
+                tab_id,
+                deadline: Instant::now() + TAB_DROP_CLAIM,
+            });
+        }
+        if move_pane_to_next_window {
+            self.fulfill_pane_window_move(window_id);
+        }
+        if move_tab_to_next_window {
+            self.fulfill_tab_window_move(window_id);
+        }
+        if let Some(launch) = requested_window_launch {
+            let result = self
+                .windows
+                .get(&window_id)
+                .ok_or_else(|| anyhow::anyhow!("source window closed during domain attachment"))
+                .map(|source| source.config.clone())
+                .and_then(|config| self.queue_window(config, launch));
+            if let Err(error) = result {
+                log::error!("Could not create requested window: {error:#}");
+            }
+            let _ = self.create_pending_windows(event_loop);
+        }
+        if create_window {
+            let result = self
+                .windows
+                .get(&window_id)
+                .ok_or_else(|| anyhow::anyhow!("source window closed during new-window request"))
+                .map(|source| {
+                    (
+                        source.config.clone(),
+                        source
+                            .tabs
+                            .as_ref()
+                            .and_then(|tabs| tabs.active_tab())
+                            .and_then(|tab| tab.working_directory()),
+                    )
+                })
+                .and_then(|(config, cwd)| self.queue_default_window(config, cwd));
+            if let Err(error) = result {
+                log::error!("Could not create a new window: {error:#}");
+            }
+            let _ = self.create_pending_windows(event_loop);
+        }
+    }
+
+    /// End every window as part of one exit. Each keeps its workspace for
+    /// the next start, as the last window closing does: dropping a window
+    /// saves it and ends its terminals.
+    fn close_every_window(&mut self) {
+        self.pending.clear();
+        self.window_order.clear();
+        self.control_window_ids.clear();
+        self.windows.clear();
+    }
+
+    /// Start hearing file drops on `window`. Wayland reports them on a
+    /// connection of their own (`wayland_drop.rs`); X11 and macOS report them
+    /// through winit, so there is nothing to register there.
+    fn register_drop_target(&self, native: Option<&winit::window::Window>, key: WindowKey) {
+        #[cfg(target_os = "linux")]
+        if let (Some(listener), Some(native)) = (&self.wayland_drop, native) {
+            listener.register(native, key);
+        }
+        #[cfg(target_os = "macos")]
+        let _ = (native, key);
+    }
+
+    fn unregister_drop_target(&self, key: WindowKey) {
+        #[cfg(target_os = "linux")]
+        if let Some(listener) = &self.wayland_drop {
+            listener.unregister(key);
+        }
+        #[cfg(target_os = "macos")]
+        let _ = key;
+    }
+
     fn remove_closed_windows(&mut self, event_loop: &ActiveEventLoop) {
         let surviving = self
             .windows
@@ -639,10 +780,8 @@ impl Application {
                 }
             }
         }
-        if let Some(listener) = &self.wayland_drop {
-            for window in self.windows.values().filter(|window| window.should_exit) {
-                listener.unregister(window.window_key());
-            }
+        for window in self.windows.values().filter(|window| window.should_exit) {
+            self.unregister_drop_target(window.window_key());
         }
         self.windows.retain(|_, window| !window.should_exit);
         self.window_order.retain(|id| self.windows.contains_key(id));
@@ -741,10 +880,23 @@ impl ApplicationHandler<AppEvent> for Application {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if !self.system_accessibility_monitor_started {
             self.system_accessibility_monitor_started = true;
+            #[cfg(target_os = "macos")]
+            {
+                super::macos::finish_launching(event_loop);
+                if let Some(hotkey) = self
+                    .pending
+                    .iter()
+                    .find(|window| window.launch.quick_access)
+                    .and_then(|window| window.config.quick_access.macos_hotkey.clone())
+                {
+                    super::macos::register_quick_access_hotkey(&hotkey);
+                }
+            }
             if let Some(proxy) = super::EVENT_LOOP_PROXY.get().cloned() {
                 super::system_accessibility::start_monitor(proxy);
             }
         }
+        #[cfg(target_os = "linux")]
         if self.wayland_drop.is_none()
             && let Some(proxy) = super::EVENT_LOOP_PROXY.get().cloned()
         {
@@ -760,11 +912,6 @@ impl ApplicationHandler<AppEvent> for Application {
         window_id: WindowId,
         event: WindowEvent,
     ) {
-        let mut create_window = false;
-        let mut requested_window_launch = None;
-        let mut move_pane_to_next_window = false;
-        let mut move_tab_to_next_window = false;
-        let mut dropped_outside = None;
         // The first pointer position another window hears after a release
         // outside the source is where the tab was dropped.
         if let WindowEvent::CursorMoved { position, .. } = &event
@@ -777,58 +924,8 @@ impl ApplicationHandler<AppEvent> for Application {
         if let Some(window) = self.windows.get_mut(&window_id) {
             window.window_event(event);
             window.sync_tab_drag_pointer(event_loop);
-            create_window = std::mem::take(&mut window.request_new_window);
-            requested_window_launch = window.requested_window_launch.take();
-            move_pane_to_next_window = std::mem::take(&mut window.request_move_pane_to_next_window);
-            move_tab_to_next_window = std::mem::take(&mut window.request_move_tab_to_next_window);
-            dropped_outside = window.tab_dropped_outside.take();
         }
-        if let Some(tab_id) = dropped_outside {
-            self.tab_drop = Some(PendingTabDrop {
-                source: window_id,
-                tab_id,
-                deadline: Instant::now() + TAB_DROP_CLAIM,
-            });
-        }
-        if move_pane_to_next_window {
-            self.fulfill_pane_window_move(window_id);
-        }
-        if move_tab_to_next_window {
-            self.fulfill_tab_window_move(window_id);
-        }
-        if let Some(launch) = requested_window_launch {
-            let result = self
-                .windows
-                .get(&window_id)
-                .ok_or_else(|| anyhow::anyhow!("source window closed during domain attachment"))
-                .map(|source| source.config.clone())
-                .and_then(|config| self.queue_window(config, launch));
-            if let Err(error) = result {
-                log::error!("Could not create requested window: {error:#}");
-            }
-            let _ = self.create_pending_windows(event_loop);
-        }
-        if create_window {
-            let result = self
-                .windows
-                .get(&window_id)
-                .ok_or_else(|| anyhow::anyhow!("source window closed during new-window request"))
-                .map(|source| {
-                    (
-                        source.config.clone(),
-                        source
-                            .tabs
-                            .as_ref()
-                            .and_then(|tabs| tabs.active_tab())
-                            .and_then(|tab| tab.working_directory()),
-                    )
-                })
-                .and_then(|(config, cwd)| self.queue_default_window(config, cwd));
-            if let Err(error) = result {
-                log::error!("Could not create a new window: {error:#}");
-            }
-            let _ = self.create_pending_windows(event_loop);
-        }
+        self.fulfill_window_requests(event_loop, window_id);
         self.remove_closed_windows(event_loop);
     }
 
@@ -850,6 +947,35 @@ impl ApplicationHandler<AppEvent> for Application {
                 self.remove_closed_windows(event_loop);
                 return;
             }
+            #[cfg(target_os = "macos")]
+            AppEvent::QuickAccessHotkey => {
+                self.toggle_quick_access(event_loop);
+                self.remove_closed_windows(event_loop);
+                return;
+            }
+            #[cfg(target_os = "macos")]
+            AppEvent::MenuCommand(action) => {
+                // The window with keyboard focus, else the one opened last.
+                let focused = self
+                    .window_order
+                    .iter()
+                    .rev()
+                    .copied()
+                    .find(|id| {
+                        self.windows
+                            .get(id)
+                            .is_some_and(|window| window.window_focused)
+                    })
+                    .or_else(|| self.window_order.last().copied());
+                if let Some(id) = focused {
+                    if let Some(window) = self.windows.get_mut(&id) {
+                        window.perform_menu_command(action);
+                    }
+                    self.fulfill_window_requests(event_loop, id);
+                }
+                self.remove_closed_windows(event_loop);
+                return;
+            }
             AppEvent::SystemAccessibilityChanged(preferences) => {
                 self.system_accessibility = preferences;
                 for window in self.windows.values_mut() {
@@ -860,6 +986,7 @@ impl ApplicationHandler<AppEvent> for Application {
                 }
                 return;
             }
+            #[cfg(target_os = "linux")]
             AppEvent::SystemAccessibilityUnavailable(error) => {
                 log::debug!("Desktop accessibility preferences are unavailable: {error}");
                 return;
@@ -997,10 +1124,26 @@ impl ApplicationHandler<AppEvent> for Application {
         }
     }
 
+    /// The last thing the event loop runs, and on macOS the last thing the
+    /// process runs at all: quitting from the menu, the Dock, logging out, or
+    /// shutting down ends the process as soon as this returns, so `run_app`
+    /// never returns there (it does when the last window closes).
+    /// Everything that must happen at exit happens here.
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         // The drop listener reads from winit's connection, which closes as
         // the event loop ends, right after this.
-        self.wayland_drop = None;
+        #[cfg(target_os = "linux")]
+        {
+            self.wayland_drop = None;
+        }
+        self.close_every_window();
+        // An agent that keeps a conversation as soon as it opens is told to
+        // forget one nothing was said in, which must not be cut short.
+        crate::agent_view::session::wait_for_forgetting(std::time::Duration::from_secs(5));
+        // No window is left to answer for, so the socket goes (its endpoint
+        // files with it), and then the quick-access lock.
+        drop(self.held_for_exit.control_server.take());
+        drop(self.held_for_exit.quick_access_guard.take());
     }
 }
 

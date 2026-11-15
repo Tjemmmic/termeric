@@ -33,7 +33,23 @@ impl App {
                 });
             output.contains(expected)
         });
-        assert!(shown, "{identity:?} is missing {expected}: {output}");
+        // Whether the terminal is still there and its program still runs
+        // tells a slow program from one that ended or never started.
+        let child = self
+            .tabs
+            .as_ref()
+            .and_then(|tabs| tabs.tab_by_id(identity.tab_id))
+            .and_then(|tab| tab.pane(identity.pane_id))
+            .map(|pane| {
+                pane.pty
+                    .child_observer()
+                    .poll()
+                    .map(|observed| observed.exit)
+            });
+        assert!(
+            shown,
+            "{identity:?} is missing {expected:?} (program: {child:?}): {output}"
+        );
     }
 }
 
@@ -135,7 +151,7 @@ fn domain_divider_pending_fixture() -> App {
     );
     tab.focused_pane = 100;
     let snapshot = DomainSnapshot::fixture("divider-pending", 10, vec![tab]);
-    let relay = crate::domain::DomainRelayCommand::local("/bin/true");
+    let relay = crate::domain::DomainRelayCommand::local("/usr/bin/true");
     let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 100, 1024 * 1024);
     tabs.attach_domain(&snapshot, &relay).unwrap();
     let tab = tabs.active_tab_mut().unwrap();
@@ -182,7 +198,7 @@ fn restoring_a_refused_live_domain_change_refreshes_the_restored_focus() {
             LiveTab::fixture(11, LivePaneLayout::pane(101)),
         ],
     );
-    let relay = crate::domain::DomainRelayCommand::local("/bin/true");
+    let relay = crate::domain::DomainRelayCommand::local("/usr/bin/true");
     let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 100, 1024 * 1024);
     tabs.attach_domain(&snapshot, &relay).unwrap();
     let mut app = App::new_headless(Config::default()).unwrap();

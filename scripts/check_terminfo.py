@@ -8,6 +8,7 @@ import fcntl
 import os
 from pathlib import Path
 import pty
+import re
 import select
 import shutil
 import struct
@@ -26,6 +27,65 @@ TERM = "xterm-termeric"
 
 class CheckError(RuntimeError):
     pass
+
+
+# Numeric capabilities, compared by value: ncurses 6 prints them in
+# hexadecimal, macOS's ncurses 5.7 in decimal.
+REQUIRED_NUMBERS = {"colors": 256, "pairs": 32767}
+
+
+def number_capability(listing: str, name: str) -> int | None:
+    match = re.search(rf"(?:^|[\s,]){re.escape(name)}#(0x[0-9a-fA-F]+|\d+)", listing)
+    return int(match.group(1), 0) if match else None
+
+
+def check_layouts_match() -> None:
+    """The entry is committed under its letter (Linux) and its hexadecimal
+    code (macOS's ncurses reads only that one); both must be the same."""
+    letter = CHECKED_DATABASE / TERM[0] / TERM
+    hexadecimal = CHECKED_DATABASE / f"{ord(TERM[0]):x}" / TERM
+    if letter.read_bytes() != hexadecimal.read_bytes():
+        raise CheckError(
+            f"{hexadecimal.relative_to(ROOT)} differs from {letter.relative_to(ROOT)}; "
+            "copy the compiled entry to both"
+        )
+    print("ok both database layouts hold the same entry")
+
+
+def check_macos_system(require_apps: bool, temp: Path) -> None:
+    """macOS's own ncurses 5.7, and the vim and less built on it, read the
+    committed entry."""
+    env = dict(os.environ)
+    env.update(
+        {
+            "TERM": TERM,
+            "COLORTERM": "truecolor",
+            "TERMINFO": str(CHECKED_DATABASE),
+            "TERMINFO_DIRS": str(CHECKED_DATABASE),
+        }
+    )
+    listing = run(["/usr/bin/infocmp", "-x", TERM], env).stdout.decode()
+    for name, expected in REQUIRED_NUMBERS.items():
+        actual = number_capability(listing, name)
+        if actual != expected:
+            raise CheckError(f"system ncurses reads {name}={actual}, not {expected}")
+    if run(["/usr/bin/tput", "colors"], env).stdout.strip() != b"256":
+        raise CheckError("system tput does not report 256 colors")
+    if run(["/usr/bin/tput", "cup", "2", "3"], env).stdout != b"\x1b[3;4H":
+        raise CheckError("system tput expands cup unexpectedly")
+    print("ok system ncurses reads the entry")
+    (temp / "less.txt").write_text("terminfo acceptance\n" * 200, encoding="utf-8")
+    for name, command, input_bytes in [
+        ("vim", ["/usr/bin/vim", "-Nu", "NONE", "-i", "NONE", "-n"], b"\x1b:qa!\r"),
+        ("less", ["/usr/bin/less", "--no-init", str(temp / "less.txt")], b"q"),
+    ]:
+        if not Path(command[0]).exists():
+            if require_apps:
+                raise CheckError(f"required system application is unavailable: {command[0]}")
+            print(f"skip system {name}: unavailable")
+            continue
+        run_interactive(command, env, input_bytes, f"system {name}")
+        print(f"ok system {name}")
 
 
 def require_tool(name: str) -> str:
@@ -103,11 +163,14 @@ def check_database(compiled: Path, env: dict[str, str]) -> None:
     if normalized(listing) != normalized(checked_listing):
         raise CheckError(
             "checked compiled entry is stale; run "
-            "tic -x -o assets/terminfo assets/terminfo/xterm-termeric.terminfo"
+            "tic -x -o assets/terminfo assets/terminfo/xterm-termeric.terminfo "
+            "and copy assets/terminfo/x/xterm-termeric to assets/terminfo/78/"
         )
+    for name, expected in REQUIRED_NUMBERS.items():
+        actual = number_capability(listing, name)
+        if actual != expected:
+            raise CheckError(f"compiled entry has {name}={actual}, not {expected}")
     required = [
-        "colors#0x100",
-        "pairs#0x10000",
         "Rect,",
         "Tc",
         "setrgbf=",
@@ -290,10 +353,21 @@ def main() -> int:
         action="store_true",
         help="fail instead of skipping when vim, less, or tmux is unavailable",
     )
+    parser.add_argument(
+        "--macos-system",
+        action="store_true",
+        help="check the committed entry with macOS's own ncurses, vim, and less instead of compiling it",
+    )
     args = parser.parse_args()
 
     if not SOURCE.is_file():
         raise CheckError(f"terminfo source is missing: {SOURCE}")
+    check_layouts_match()
+    if args.macos_system:
+        with tempfile.TemporaryDirectory(prefix="termeric-terminfo-") as directory:
+            check_macos_system(args.require_apps, Path(directory))
+        print("terminfo acceptance passed")
+        return 0
 
     tic = require_tool("tic")
     # tic compiles an entry it only warns about, such as a %; without a %?.

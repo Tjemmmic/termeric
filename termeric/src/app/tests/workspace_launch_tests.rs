@@ -540,7 +540,8 @@ fn terminal_profile_cli_launch_applies_env_cwd_title_and_workspace_identity() {
             program: "/bin/sh".into(),
             args: vec![
                 "-c".into(),
-                "printf 'PROFILE_MARK=%s PWD=%s\\n' \"$PROFILE_MARK\" \"$PWD\"; sleep 2".into(),
+                // One line each, so a long directory doesn't wrap the mark.
+                "printf 'PROFILE_MARK=%s\\nPWD=%s\\n' \"$PROFILE_MARK\" \"$PWD\"; sleep 2".into(),
             ],
             cwd: Some(temp.path().to_path_buf()),
             title: Some("Development".into()),

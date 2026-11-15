@@ -476,6 +476,11 @@ mod tests {
             std::env::var(TERMINAL_ID_VARIABLE).unwrap()
         );
         println!("ENVIRONMENT_POLICY_PROBE_OK");
+        // Stay until the parent has read that. When a terminal's session
+        // leader exits, macOS waits for its output to drain only as long as
+        // nothing interrupts the wait, then revokes the terminal and discards
+        // what is left, so output still unread at exit can be lost.
+        std::io::stdin().read_line(&mut String::new()).unwrap();
     }
 
     #[test]
@@ -533,10 +538,11 @@ mod tests {
             )
             .unwrap();
             let observer = pty.child_observer();
-            let (handle, reader) = pty.take_reader();
+            let (mut handle, reader) = pty.take_reader();
             let rx = spawn_reader_thread(reader);
             let deadline = std::time::Instant::now() + Duration::from_secs(5);
             let mut output = Vec::new();
+            let mut released = false;
             loop {
                 let timeout = deadline.saturating_duration_since(std::time::Instant::now());
                 match rx
@@ -546,6 +552,14 @@ mod tests {
                     PtyEvent::Output(bytes) => {
                         output.extend(bytes);
                         assert!(output.len() < 16384);
+                        if !released
+                            && String::from_utf8_lossy(&output)
+                                .contains("ENVIRONMENT_POLICY_PROBE_OK")
+                        {
+                            // The probe waits for this line before it exits.
+                            handle.write_all(b"\n").unwrap();
+                            released = true;
+                        }
                     }
                     PtyEvent::Closed | PtyEvent::Error(_) => break,
                 }
@@ -560,7 +574,7 @@ mod tests {
                 String::from_utf8_lossy(&output)
             );
             let output = String::from_utf8_lossy(&output);
-            assert!(output.contains("ENVIRONMENT_POLICY_PROBE_OK"));
+            assert!(output.contains("ENVIRONMENT_POLICY_PROBE_OK"), "{output:?}");
             let id = handle.terminal_id().expect("a terminal identity");
             assert!(id.starts_with(&format!("{}.", std::process::id())));
             assert!(
@@ -625,7 +639,7 @@ mod tests {
             let error = Pty::spawn(
                 default_pty_size(80, 24),
                 PtyCommand {
-                    program: Some("/bin/true"),
+                    program: Some("/usr/bin/true"),
                     cwd: Some(&cwd),
                     ..PtyCommand::default()
                 },
@@ -646,7 +660,7 @@ mod tests {
         let error = Pty::spawn(
             default_pty_size(80, 24),
             PtyCommand {
-                program: Some("/bin/true"),
+                program: Some("/usr/bin/true"),
                 env: &env,
                 ..PtyCommand::default()
             },
@@ -667,7 +681,7 @@ mod tests {
                 "-c".into(),
                 format!("printf FINAL_CHILD_OUTPUT; exit {code}"),
             ];
-            let mut pty = Pty::spawn(
+            let pty = Pty::spawn(
                 default_pty_size(80, 24),
                 PtyCommand {
                     program: Some("/bin/sh"),
@@ -677,23 +691,50 @@ mod tests {
             )
             .unwrap();
             let observer = pty.child_observer();
-            assert_eq!(pty.wait().unwrap().exit_code(), code);
-            assert!(!pty.is_running());
             let expected = ChildExitStatus {
                 exit_code: code,
                 success: code == 0,
             };
-            assert_eq!(observer.poll().unwrap().exit, Some(expected));
-            let (handle, reader) = pty.take_reader();
-            let rx = spawn_reader_thread(reader);
-            let mut output = Vec::new();
-            loop {
-                match rx.recv_timeout(Duration::from_secs(2)) {
-                    Ok(PtyEvent::Output(bytes)) => output.extend(bytes),
-                    Ok(PtyEvent::Closed | PtyEvent::Error(_)) => break,
-                    other => panic!("reader did not finish: {other:?}"),
+            let drain = |reader| {
+                let rx = spawn_reader_thread(reader);
+                let mut output = Vec::new();
+                loop {
+                    match rx.recv_timeout(Duration::from_secs(2)) {
+                        Ok(PtyEvent::Output(bytes)) => output.extend(bytes),
+                        Ok(PtyEvent::Closed | PtyEvent::Error(_)) => break,
+                        other => panic!("reader did not finish: {other:?}"),
+                    }
                 }
-            }
+                output
+            };
+            // Linux lets the child exit with its output unread, so it is waited
+            // for first. A BSD terminal (macOS's) keeps an exiting child until
+            // its output is read, so there the output is drained first.
+            #[cfg(target_os = "linux")]
+            let (handle, output) = {
+                let mut pty = pty;
+                assert_eq!(pty.wait().unwrap().exit_code(), code);
+                assert!(!pty.is_running());
+                assert_eq!(observer.poll().unwrap().exit, Some(expected));
+                let (handle, reader) = pty.take_reader();
+                (handle, drain(reader))
+            };
+            #[cfg(target_os = "macos")]
+            let (handle, output) = {
+                let (mut handle, reader) = pty.take_reader();
+                let output = drain(reader);
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                while observer.poll().unwrap().exit.is_none() {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "the child never exited"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                assert!(!handle.is_running());
+                assert_eq!(observer.poll().unwrap().exit, Some(expected));
+                (handle, output)
+            };
             assert_eq!(output, b"FINAL_CHILD_OUTPUT");
             assert!(!observer.poll().unwrap().terminal_closed);
             drop(handle);
@@ -967,7 +1008,9 @@ mod tests {
         let (mut handle, reader) = pty.take_reader();
         let rx = spawn_reader_thread(reader);
         let mut output = String::new();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        // Starting the interpreter can take seconds: macOS's /usr/bin/python3
+        // goes through xcrun first, and the suite runs tests in parallel.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         while !output.contains("startup=(27, 83, 913, 513)") && std::time::Instant::now() < deadline
         {
             match rx.recv_timeout(std::time::Duration::from_millis(20)) {

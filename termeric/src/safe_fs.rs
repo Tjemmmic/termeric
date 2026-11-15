@@ -163,6 +163,7 @@ pub(crate) fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
     let to = CString::new(to.as_os_str().as_bytes())?;
     // SAFETY: both arguments are NUL-terminated C strings that outlive the
     // call. RENAME_NOREPLACE makes the no-overwrite check part of the rename.
+    #[cfg(target_os = "linux")]
     let result = unsafe {
         libc::renameat2(
             libc::AT_FDCWD,
@@ -170,6 +171,19 @@ pub(crate) fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
             libc::AT_FDCWD,
             to.as_ptr(),
             libc::RENAME_NOREPLACE,
+        )
+    };
+    // SAFETY: as above; RENAME_EXCL is macOS's spelling of the same check. A
+    // volume that can't make it part of the rename refuses with ENOTSUP, so
+    // nothing is ever replaced.
+    #[cfg(target_os = "macos")]
+    let result = unsafe {
+        libc::renameatx_np(
+            libc::AT_FDCWD,
+            from.as_ptr(),
+            libc::AT_FDCWD,
+            to.as_ptr(),
+            libc::RENAME_EXCL,
         )
     };
     if result != 0 {

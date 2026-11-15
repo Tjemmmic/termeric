@@ -229,6 +229,7 @@ struct ProcessResources {
 }
 
 impl ProcessResources {
+    #[cfg(target_os = "linux")]
     fn sample() -> Self {
         let status = std::fs::read_to_string("/proc/self/status").unwrap();
         let rss_kib = status
@@ -260,6 +261,48 @@ impl ProcessResources {
             threads: count("/proc/self/task"),
             fds: count("/proc/self/fd"),
             children,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn sample() -> Self {
+        let pid = libc::c_int::try_from(std::process::id()).unwrap();
+        // SAFETY: proc_taskinfo is plain old data, for which zeroes are valid.
+        let mut task = unsafe { std::mem::zeroed::<libc::proc_taskinfo>() };
+        let size = std::mem::size_of::<libc::proc_taskinfo>() as libc::c_int;
+        // SAFETY: the buffer is writable for exactly `size` bytes.
+        let written = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDTASKINFO,
+                0,
+                (&mut task as *mut libc::proc_taskinfo).cast(),
+                size,
+            )
+        };
+        assert_eq!(written, size, "proc_pidinfo(PROC_PIDTASKINFO) failed");
+        let mut children = [0 as libc::pid_t; 4096];
+        // SAFETY: the buffer is writable for its whole size.
+        let listed = unsafe {
+            libc::proc_listchildpids(
+                pid,
+                children.as_mut_ptr().cast(),
+                std::mem::size_of_val(&children) as libc::c_int,
+            )
+        };
+        assert!(listed >= 0, "proc_listchildpids failed");
+        // `/dev/fd` lists this process's own descriptors, plus the one
+        // reading the listing.
+        let fds = std::fs::read_dir("/dev/fd")
+            .unwrap()
+            .count()
+            .saturating_sub(1);
+        Self {
+            rss_kib: task.pti_resident_size / 1024,
+            threads: usize::try_from(task.pti_threadnum).unwrap(),
+            fds,
+            // The buffer starts zeroed and no child is process 0.
+            children: children.iter().filter(|child| **child > 0).count(),
         }
     }
 }
