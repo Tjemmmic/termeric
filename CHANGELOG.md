@@ -18,6 +18,7 @@ Notable changes to Termeric, by release. The project follows [Keep a Changelog](
 ### Fixed
 
 - On light themes, toasts, cards, and text fields no longer turn a muddy gray, and faint text and an unfocused window fade toward the background instead of growing darker.
+- A font family without a face at the configured weight (one with only a Medium face, say, or no Bold) draws with its nearest weight instead of being replaced by a proportional system font, and its bold text is emboldened.
 
 ## [0.1.0] - 2026-11-01
 

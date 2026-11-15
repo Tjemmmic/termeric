@@ -1097,12 +1097,7 @@ fn headless_ligature_render_smoke(device: &Device, queue: &Queue) -> Result<()> 
     anyhow::ensure!(
         enabled != disabled,
         "ligature setting did not change rendered pixels (glyphs with ligatures: \
-         {glyphs_with_ligatures:?}, without: {glyphs_without:?}; Fira families installed: {:?})",
-        glyph_cache
-            .get_font_families()
-            .into_iter()
-            .filter(|family| family.contains("Fira"))
-            .collect::<Vec<_>>()
+         {glyphs_with_ligatures:?}, without: {glyphs_without:?})"
     );
     let toggled_metrics = glyph_cache.shaping_cache_metrics();
     anyhow::ensure!(toggled_metrics.misses == 2 && toggled_metrics.entries == 1);

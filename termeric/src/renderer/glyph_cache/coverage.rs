@@ -244,15 +244,12 @@ pub(super) fn platform_fallback_route(
     default_family: &str,
     grapheme: &str,
 ) -> FontCoverageRoute {
+    let family = family_for(default_family);
+    let weight = matched_family_weight(font_system, family, font_weight, false);
     let mut buffer = Buffer::new(font_system, metrics);
     buffer.set_text(
         grapheme,
-        &font_attrs(
-            family_for(default_family),
-            FontStyle::default(),
-            font_weight,
-            font_weight,
-        ),
+        &font_attrs(family, FontStyle::default(), weight),
         Shaping::Advanced,
         None,
     );
