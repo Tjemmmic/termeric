@@ -8,6 +8,8 @@ use termeric_core::term::{
 use winit::event::{ElementState, KeyEvent};
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, NativeKey, PhysicalKey};
 
+use crate::input::platform::System;
+
 /// One terminal's negotiated xterm keyboard state. The default is xterm's
 /// startup profile, which sends the familiar VT/xterm sequences.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -75,10 +77,12 @@ impl KeyboardProtocol {
         modifiers: ModifiersState,
         alt_graph_active: bool,
         mode: TerminalMode,
+        system: System,
     ) -> Option<Vec<u8>> {
         match self {
             Self::Xterm(profile) => (event.state == ElementState::Pressed).then(|| {
                 encode_xterm(
+                    system,
                     &event.logical_key,
                     event.physical_key,
                     event.text.as_deref(),
@@ -110,7 +114,13 @@ pub fn key_to_bytes_for_terminal(
         terminal.kitty_keyboard_flags(),
         XtermKeyProfile::of(terminal),
     )
-    .encode(event, modifiers, alt_graph_active, terminal.mode())
+    .encode(
+        event,
+        modifiers,
+        alt_graph_active,
+        terminal.mode(),
+        System::CURRENT,
+    )
 }
 
 fn encode_xterm_user_defined_key(
@@ -608,8 +618,10 @@ fn kitty_named_code(named: NamedKey) -> Option<u32> {
     })
 }
 
-/// Xterm's conventional sequences: everything but a `modifyOtherKeys` report.
+/// Xterm's conventional sequences: everything but a `modifyOtherKeys`
+/// report, under `system`'s own conventions for them.
 fn encode_legacy_xterm(
+    system: System,
     logical_key: &Key,
     physical_key: PhysicalKey,
     text: Option<&str>,
@@ -618,6 +630,11 @@ fn encode_legacy_xterm(
     mode: TerminalMode,
     profile: XtermKeyProfile,
 ) -> Option<Vec<u8>> {
+    match system_convention(system, logical_key, physical_key, modifiers, profile) {
+        Some(SystemConvention::Withhold) => return None,
+        Some(SystemConvention::Send(bytes)) => return Some(bytes.to_vec()),
+        None => {}
+    }
     if let Some(keypad) = KeypadKey::from_physical(physical_key) {
         let (keypad, modifiers) = keypad.profile_mapping(profile.keyboard_type, modifiers);
         return Some(keypad.encode_xterm(
@@ -657,9 +674,75 @@ fn encode_legacy_xterm(
     }
 }
 
+/// What `system` itself sends in xterm's conventional encoding, where its
+/// conventions differ from xterm's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SystemConvention {
+    /// Nothing reaches the terminal.
+    Withhold,
+    /// These bytes do.
+    Send(&'static [u8]),
+}
+
+/// On macOS ⌘ is the system's and Termeric's, never the terminal's, so a ⌘
+/// chord no shortcut took sends nothing rather than its bare key, and ⌥←
+/// and ⌥→ send `ESC b` and `ESC f`, the word motions of shells and readline,
+/// as Terminal.app, iTerm2, and Ghostty do. A key whose xterm resource is in
+/// mode 4, which reports every modifier, keeps its report.
+fn system_convention(
+    system: System,
+    logical_key: &Key,
+    physical_key: PhysicalKey,
+    modifiers: ModifiersState,
+    profile: XtermKeyProfile,
+) -> Option<SystemConvention> {
+    if reports_every_modifier(logical_key, physical_key, modifiers, profile) {
+        return None;
+    }
+    if modifiers.super_key() && system.withholds_super_from_terminals() {
+        return Some(SystemConvention::Withhold);
+    }
+    if modifiers == ModifiersState::ALT && system.alt_arrows_move_by_word() {
+        return match logical_key {
+            Key::Named(NamedKey::ArrowLeft) => Some(SystemConvention::Send(b"\x1bb")),
+            Key::Named(NamedKey::ArrowRight) => Some(SystemConvention::Send(b"\x1bf")),
+            _ => None,
+        };
+    }
+    None
+}
+
+/// Whether the xterm resource that owns this key is in mode 4 (extended),
+/// where its report carries every modifier.
+fn reports_every_modifier(
+    logical_key: &Key,
+    physical_key: PhysicalKey,
+    modifiers: ModifiersState,
+    profile: XtermKeyProfile,
+) -> bool {
+    let extended = |resource| profile.resource(resource).mode() == XtermKeyMode::Extended;
+    if KeypadKey::from_physical(physical_key).is_some() {
+        return extended(XtermKeyResource::Keypad);
+    }
+    if extended(XtermKeyResource::Special)
+        && xterm_special_code(logical_key, physical_key, modifiers).is_some()
+    {
+        return true;
+    }
+    let Key::Named(named) = logical_key else {
+        return false;
+    };
+    (extended(XtermKeyResource::Modifier) && xterm_modifier_code(*named, physical_key).is_some())
+        || (extended(XtermKeyResource::Function)
+            && (xterm_function_number(*named).is_some()
+                || matches!(named, NamedKey::Help | NamedKey::ContextMenu)))
+        || (extended(XtermKeyResource::Cursor) && XtermCursorKey::from_named(*named).is_some())
+}
+
 /// The xterm encoder: a `modifyOtherKeys` report when the profile asks for
 /// one, otherwise the conventional sequences.
 fn encode_xterm(
+    system: System,
     logical_key: &Key,
     physical_key: PhysicalKey,
     text: Option<&str>,
@@ -672,6 +755,7 @@ fn encode_xterm(
     // produced Unicode text exactly as in the legacy path.
     if alt_graph_active && text.is_some_and(|produced| !produced.is_empty()) {
         return encode_legacy_xterm(
+            system,
             logical_key,
             physical_key,
             text,
@@ -726,6 +810,7 @@ fn encode_xterm(
     }
 
     encode_legacy_xterm(
+        system,
         logical_key,
         physical_key,
         text,
@@ -1711,6 +1796,7 @@ mod tests {
         mode: TerminalMode,
     ) -> Option<Vec<u8>> {
         encode_legacy_xterm(
+            System::Linux,
             logical,
             UNIDENTIFIED,
             text,
@@ -1730,6 +1816,7 @@ mod tests {
 
     fn named(key: NamedKey, modifiers: ModifiersState, mode: TerminalMode) -> Vec<u8> {
         encode_legacy_xterm(
+            System::Linux,
             &Key::Named(key),
             PhysicalKey::Code(KeyCode::F24),
             None,
@@ -1749,6 +1836,7 @@ mod tests {
         mask: u8,
     ) -> Vec<u8> {
         encode_xterm(
+            System::Linux,
             logical,
             UNIDENTIFIED,
             text,
@@ -1767,6 +1855,7 @@ mod tests {
         policy: XtermKeySetting,
     ) -> Vec<u8> {
         encode_legacy_xterm(
+            System::Linux,
             &Key::Named(key),
             PhysicalKey::Code(KeyCode::F24),
             None,
@@ -1787,6 +1876,7 @@ mod tests {
         policy: XtermKeySetting,
     ) -> Vec<u8> {
         encode_legacy_xterm(
+            System::Linux,
             &Key::Named(key),
             PhysicalKey::Code(KeyCode::F24),
             None,
@@ -1824,6 +1914,7 @@ mod tests {
         policy: XtermKeySetting,
     ) -> Vec<u8> {
         encode_legacy_xterm(
+            System::Linux,
             &logical,
             PhysicalKey::Code(key),
             None,
@@ -1845,6 +1936,7 @@ mod tests {
         policy: XtermKeySetting,
     ) -> Option<Vec<u8>> {
         encode_legacy_xterm(
+            System::Linux,
             &logical,
             physical,
             None,
@@ -1867,6 +1959,7 @@ mod tests {
         modify_keyboard: u16,
     ) -> Vec<u8> {
         encode_xterm(
+            System::Linux,
             &Key::Named(logical),
             PhysicalKey::Code(physical),
             None,
@@ -2131,6 +2224,215 @@ mod tests {
         );
     }
 
+    /// A key as `system` encodes it under `profile`, the way a key event's
+    /// xterm path does.
+    fn on(
+        system: System,
+        logical: Key,
+        physical: PhysicalKey,
+        text: Option<&str>,
+        modifiers: ModifiersState,
+        profile: XtermKeyProfile,
+    ) -> Option<Vec<u8>> {
+        encode_xterm(
+            system,
+            &logical,
+            physical,
+            text,
+            modifiers,
+            false,
+            TerminalMode::default(),
+            profile,
+        )
+    }
+
+    #[test]
+    fn a_command_chord_no_shortcut_took_sends_nothing_on_a_mac() {
+        let command = ModifiersState::SUPER;
+        let default = XtermKeyProfile::default();
+        for (logical, physical, text) in [
+            (ch("k"), PhysicalKey::Code(KeyCode::KeyK), Some("k")),
+            (
+                Key::Named(NamedKey::ArrowUp),
+                PhysicalKey::Code(KeyCode::ArrowUp),
+                None,
+            ),
+            (
+                Key::Named(NamedKey::F1),
+                PhysicalKey::Code(KeyCode::F1),
+                None,
+            ),
+            (
+                Key::Named(NamedKey::Enter),
+                PhysicalKey::Code(KeyCode::Enter),
+                Some("\r"),
+            ),
+            (
+                Key::Named(NamedKey::Backspace),
+                PhysicalKey::Code(KeyCode::Backspace),
+                None,
+            ),
+            (ch("1"), PhysicalKey::Code(KeyCode::Numpad1), Some("1")),
+        ] {
+            for modifiers in [command, command | mods(true, true, true)] {
+                assert_eq!(
+                    on(
+                        System::Mac,
+                        logical.clone(),
+                        physical,
+                        text,
+                        modifiers,
+                        default
+                    ),
+                    None,
+                    "{logical:?} {modifiers:?}"
+                );
+            }
+        }
+        // Linux keeps Super's conventional encodings: the bare character,
+        // and Super in a cursor key's modifier.
+        assert_eq!(
+            on(
+                System::Linux,
+                ch("k"),
+                UNIDENTIFIED,
+                Some("k"),
+                command,
+                default
+            ),
+            Some(b"k".to_vec())
+        );
+        assert_eq!(
+            on(
+                System::Linux,
+                Key::Named(NamedKey::ArrowUp),
+                PhysicalKey::Code(KeyCode::ArrowUp),
+                None,
+                command,
+                default
+            ),
+            Some(b"\x1b[1;9A".to_vec())
+        );
+    }
+
+    #[test]
+    fn programs_that_ask_for_every_modifier_still_get_command_on_a_mac() {
+        let command = ModifiersState::SUPER;
+        // modifyOtherKeys reports ⌘ as xterm's Meta bit.
+        assert_eq!(
+            on(
+                System::Mac,
+                ch("x"),
+                UNIDENTIFIED,
+                Some("x"),
+                command,
+                other_keys(XtermModifyOtherKeys::new(2, 0).unwrap()),
+            ),
+            Some(b"\x1b[27;9;120~".to_vec())
+        );
+        // So do resources in mode 4.
+        let extended = XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU);
+        let mut shift_command = mods(true, false, false);
+        shift_command.insert(command);
+        for (resource, logical, physical, expected) in [
+            (
+                XtermKeyResource::Cursor,
+                Key::Named(NamedKey::Home),
+                PhysicalKey::Code(KeyCode::Home),
+                b"\x1b[57936;10u".as_slice(),
+            ),
+            (
+                XtermKeyResource::Function,
+                Key::Named(NamedKey::F13),
+                PhysicalKey::Code(KeyCode::F13),
+                b"\x1b[58058;10u",
+            ),
+            (
+                XtermKeyResource::Modifier,
+                Key::Named(NamedKey::Super),
+                PhysicalKey::Code(KeyCode::SuperRight),
+                b"\x1b[58092;10u",
+            ),
+        ] {
+            let profile = XtermKeyProfile {
+                resources: XtermKeyResources::default().with(resource, extended),
+                ..XtermKeyProfile::default()
+            };
+            assert_eq!(
+                on(System::Mac, logical, physical, None, shift_command, profile),
+                Some(expected.to_vec()),
+                "{resource:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn option_left_and_right_move_by_word_on_a_mac() {
+        let alt = mods(false, true, false);
+        let default = XtermKeyProfile::default();
+        let arrow = |system, named, modifiers, mode| {
+            encode_legacy_xterm(
+                system,
+                &Key::Named(named),
+                PhysicalKey::Code(KeyCode::F24),
+                None,
+                modifiers,
+                false,
+                mode,
+                default,
+            )
+        };
+        for mode in [
+            TerminalMode::default(),
+            TerminalMode::CURSOR_KEYS_APPLICATION,
+        ] {
+            assert_eq!(
+                arrow(System::Mac, NamedKey::ArrowLeft, alt, mode),
+                Some(b"\x1bb".to_vec())
+            );
+            assert_eq!(
+                arrow(System::Mac, NamedKey::ArrowRight, alt, mode),
+                Some(b"\x1bf".to_vec())
+            );
+        }
+        let normal = TerminalMode::default();
+        // Other arrows, and Option with other modifiers, stay xterm's.
+        assert_eq!(
+            arrow(System::Mac, NamedKey::ArrowUp, alt, normal),
+            Some(b"\x1b[1;3A".to_vec())
+        );
+        assert_eq!(
+            arrow(
+                System::Mac,
+                NamedKey::ArrowLeft,
+                mods(true, true, false),
+                normal
+            ),
+            Some(b"\x1b[1;4D".to_vec())
+        );
+        assert_eq!(
+            arrow(System::Linux, NamedKey::ArrowLeft, alt, normal),
+            Some(b"\x1b[1;3D".to_vec())
+        );
+        // A cursor resource in mode 4 keeps its report.
+        let extended = XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU);
+        let profile = XtermKeyProfile {
+            resources: XtermKeyResources::default().with(XtermKeyResource::Cursor, extended),
+            ..XtermKeyProfile::default()
+        };
+        assert_eq!(
+            on(
+                System::Mac,
+                Key::Named(NamedKey::ArrowLeft),
+                PhysicalKey::Code(KeyCode::ArrowLeft),
+                None,
+                alt,
+                profile
+            ),
+            Some(b"\x1b[57937;3u".to_vec())
+        );
+    }
+
     #[test]
     fn xterm_cursor_key_modes_formats_and_codes_match_xterm() {
         use XtermKeyMode::{Control, Disabled, Original, Parameter, Private};
@@ -2261,6 +2563,7 @@ mod tests {
         }
 
         let altgr = encode_xterm(
+            System::Linux,
             &ch("€"),
             UNIDENTIFIED,
             Some("€"),
@@ -2276,6 +2579,7 @@ mod tests {
         // as layout composition there too, not as Control+Alt.
         for level in [0, 1] {
             let unproduced = encode_xterm(
+                System::Linux,
                 &ch("e"),
                 UNIDENTIFIED,
                 None,
@@ -2324,6 +2628,7 @@ mod tests {
                 .with_format(XtermKeyFormat::CsiU);
             assert_eq!(
                 encode_xterm(
+                    System::Linux,
                     &logical,
                     physical,
                     text,
@@ -2608,6 +2913,7 @@ mod tests {
         }
 
         let encoded = encode_xterm(
+            System::Linux,
             &Key::Named(NamedKey::Backspace),
             PhysicalKey::Code(KeyCode::Backspace),
             None,
@@ -3096,6 +3402,7 @@ mod tests {
             crate::tabs::Tab::new_with_command(0, 80, 24, &launch, 1_000, 8 * 1024 * 1024).unwrap();
         let home = |mode| {
             encode_legacy_xterm(
+                System::Linux,
                 &Key::Named(NamedKey::Home),
                 PhysicalKey::Code(KeyCode::Home),
                 None,

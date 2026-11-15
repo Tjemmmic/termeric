@@ -114,6 +114,21 @@ impl System {
         }
     }
 
+    /// Whether ⌘ (Super) belongs to the system and Termeric alone, so that
+    /// in a terminal's conventional key encoding a chord with it sends
+    /// nothing: on macOS. Programs that ask for every modifier (the kitty
+    /// keyboard protocol, `modifyOtherKeys`) still get it reported.
+    pub const fn withholds_super_from_terminals(self) -> bool {
+        matches!(self, Self::Mac)
+    }
+
+    /// Whether Alt+Left and Alt+Right send `ESC b` and `ESC f` in a
+    /// terminal's conventional key encoding, as Mac terminals do, rather than
+    /// xterm's modified cursor keys.
+    pub const fn alt_arrows_move_by_word(self) -> bool {
+        matches!(self, Self::Mac)
+    }
+
     /// How a key press with `modifiers` held is read, given whether the
     /// held Option key is Alt (`[keyboard] macos_option_as_alt`), the key and
     /// text winit reported, and the key without any modifier.
