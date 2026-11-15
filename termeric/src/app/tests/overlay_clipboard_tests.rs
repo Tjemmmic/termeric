@@ -62,7 +62,7 @@ fn app_mediated_clipboard_reply_returns_to_requesting_pane_not_focus() {
         "stty raw -echo; ",
         "reply=$(dd bs=1 count=9 2>/dev/null); ",
         "printf '\\rreply='; ",
-        "printf '%s' \"$reply\" | od -An -tx1; ",
+        "printf '%s' \"$reply\" | od -An -tx1 | tr -s ' '; ",
         "printf '\\r\\n'"
     );
     let shell = ShellConfig {

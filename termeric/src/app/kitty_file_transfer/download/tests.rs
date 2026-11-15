@@ -630,8 +630,10 @@ fn directory_rollback_does_not_change_replacement_permissions() {
         let target = root.path().join("target");
         let mut created = Vec::new();
         create_directory(&path, &mut created).unwrap();
-        fs::set_permissions(&path, Permissions::from_mode(0o000)).unwrap();
+        // Moved before its permissions go: BSD refuses to move a directory
+        // its owner can't write, since that rewrites its `..`.
         fs::rename(&path, &moved).unwrap();
+        fs::set_permissions(&moved, Permissions::from_mode(0o000)).unwrap();
         let replacement = if symlink_replacement { &target } else { &path };
         fs::create_dir(replacement).unwrap();
         fs::set_permissions(replacement, Permissions::from_mode(0o555)).unwrap();
@@ -953,18 +955,26 @@ fn excessive_implicit_tree_is_rejected_before_any_destination_creation() {
     }
     let cancellation = AtomicBool::new(false);
     let mut transaction = DownloadTransaction::new("session".into());
-    transaction
-        .handle(
-            command(
-                KittyFileTransferAction::File,
-                "d",
-                Some(&path),
-                KittyFileTransferType::Directory,
-                b"",
-            ),
-            &cancellation,
-        )
-        .unwrap();
+    let handled = transaction.handle(
+        command(
+            KittyFileTransferAction::File,
+            "d",
+            Some(&path),
+            KittyFileTransferType::Directory,
+            b"",
+        ),
+        &cancellation,
+    );
+    // macOS's paths end at 1024 bytes, so it refuses this one when it
+    // arrives, before the count limit is reached; nothing is created either
+    // way.
+    #[cfg(target_os = "macos")]
+    if let Err(error) = &handled {
+        assert!(error.message.contains("too long"), "{error:?}");
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+        return;
+    }
+    handled.unwrap();
     let result = transaction.handle(
         command(
             KittyFileTransferAction::Finish,

@@ -625,7 +625,7 @@ mod tests {
             let error = Pty::spawn(
                 default_pty_size(80, 24),
                 PtyCommand {
-                    program: Some("/bin/true"),
+                    program: Some("/usr/bin/true"),
                     cwd: Some(&cwd),
                     ..PtyCommand::default()
                 },
@@ -646,7 +646,7 @@ mod tests {
         let error = Pty::spawn(
             default_pty_size(80, 24),
             PtyCommand {
-                program: Some("/bin/true"),
+                program: Some("/usr/bin/true"),
                 env: &env,
                 ..PtyCommand::default()
             },

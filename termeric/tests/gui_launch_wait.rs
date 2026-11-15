@@ -211,7 +211,7 @@ fn stdin_environment_reaches_both_launch_targets_without_argv_or_output_exposure
                 if wait {
                     options.extend(["--wait", "--timeout", "2"]);
                 }
-                options.extend(["--", "/bin/true", "--env-stdin"]);
+                options.extend(["--", "/usr/bin/true", "--env-stdin"]);
                 let output = fixture.run_with_input(verb, &options, input, |fixture| {
                     let (stream, request) = fixture.read_request();
                     assert_launch(&request, verb);
@@ -272,7 +272,7 @@ fn invalid_stdin_environment_is_redacted_and_never_sent() {
             let fixture = Fixture::new();
             let output = fixture.run_with_input(
                 verb,
-                &["--env-stdin", "--wait", "--json", "--", "/bin/true"],
+                &["--env-stdin", "--wait", "--json", "--", "/usr/bin/true"],
                 input_file(document),
                 |_| {},
             );
@@ -288,7 +288,7 @@ fn invalid_stdin_environment_is_redacted_and_never_sent() {
         ] {
             let fixture = Fixture::new();
             let mut options = flags;
-            options.extend(["--", "/bin/true"]);
+            options.extend(["--", "/usr/bin/true"]);
             let output = fixture.run_with_input(
                 verb,
                 &options,
@@ -310,7 +310,14 @@ fn stdin_environment_requires_eof_and_times_out_before_contact() {
     let start = Instant::now();
     let output = fixture.run_with_input(
         "launch-tab",
-        &["--env-stdin", "--wait", "--timeout", "1", "--", "/bin/true"],
+        &[
+            "--env-stdin",
+            "--wait",
+            "--timeout",
+            "1",
+            "--",
+            "/usr/bin/true",
+        ],
         reader.into(),
         |_| {},
     );
@@ -332,7 +339,7 @@ fn assert_launch(request: &Value, verb: &str) {
         "source_window"
     };
     assert_eq!(request["request"][target], 7);
-    assert_eq!(request["request"]["program"], "/bin/true");
+    assert_eq!(request["request"]["program"], "/usr/bin/true");
     if verb == "launch-tab" {
         assert!(request["request"]["background"].is_boolean());
     }
@@ -346,7 +353,7 @@ fn background_tab_launch_preserves_wire_mode_and_wait_behavior() {
         if wait {
             options.extend(["--wait", "--timeout", "2"]);
         }
-        options.extend(["--", "/bin/true", "--background"]);
+        options.extend(["--", "/usr/bin/true", "--background"]);
         let output = fixture.run("launch-tab", &options, |fixture| {
             let (stream, request) = fixture.read_request();
             assert_launch(&request, "launch-tab");
@@ -375,7 +382,7 @@ fn background_tab_launch_preserves_wire_mode_and_wait_behavior() {
     ] {
         let fixture = Fixture::new();
         let mut options = flags;
-        options.extend(["--", "/bin/true"]);
+        options.extend(["--", "/usr/bin/true"]);
         let output = fixture.run(verb, &options, |_| {});
         assert!(!output.status.success());
         fixture.nothing_requested();
@@ -399,7 +406,7 @@ fn combined_launch_wait_preserves_exit_and_final_only_output() {
                     "--env",
                     "MODE=two words",
                     "--",
-                    "/bin/true",
+                    "/usr/bin/true",
                     "--wait",
                 ],
                 |fixture| {
@@ -443,15 +450,19 @@ fn combined_wait_lost_ack_keeps_generated_recovery_id_without_retry() {
     for verb in ["launch-tab", "launch-window"] {
         let fixture = Fixture::new();
         let captured = std::sync::Mutex::new(String::new());
-        let output = fixture.run(verb, &["--wait", "--json", "--", "/bin/true"], |fixture| {
-            let (stream, request) = fixture.read_request();
-            assert_launch(&request, verb);
-            *captured.lock().unwrap() = request["request"]["request_id"]
-                .as_str()
-                .unwrap()
-                .to_owned();
-            drop(stream);
-        });
+        let output = fixture.run(
+            verb,
+            &["--wait", "--json", "--", "/usr/bin/true"],
+            |fixture| {
+                let (stream, request) = fixture.read_request();
+                assert_launch(&request, verb);
+                *captured.lock().unwrap() = request["request"]["request_id"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned();
+                drop(stream);
+            },
+        );
         let id = captured.into_inner().unwrap();
         assert_eq!(id.len(), 32);
         assert!(
@@ -475,7 +486,7 @@ fn combined_wait_preserves_generated_id_through_success() {
     let fixture = Fixture::new();
     let output = fixture.run(
         "launch-tab",
-        &["--wait", "--json", "--", "/bin/true"],
+        &["--wait", "--json", "--", "/usr/bin/true"],
         |fixture| {
             let (stream, request) = fixture.read_request();
             assert_launch(&request, "launch-tab");
@@ -515,7 +526,7 @@ fn combined_wait_invalid_options_never_contact_endpoint() {
         ] {
             let fixture = Fixture::new();
             let mut options = flags;
-            options.extend(["--", "/bin/true"]);
+            options.extend(["--", "/usr/bin/true"]);
             let output = fixture.run(verb, &options, |_| {});
             assert!(!output.status.success());
             assert!(output.stdout.is_empty());
@@ -545,7 +556,14 @@ fn combined_wait_refuses_wrong_acknowledgement_before_polling() {
             let fixture = Fixture::new();
             let output = fixture.run(
                 verb,
-                &["--wait", "--json", "--request-id", ID, "--", "/bin/true"],
+                &[
+                    "--wait",
+                    "--json",
+                    "--request-id",
+                    ID,
+                    "--",
+                    "/usr/bin/true",
+                ],
                 |fixture| {
                     let (stream, request) = fixture.read_request();
                     assert_launch(&request, verb);
@@ -575,7 +593,7 @@ fn combined_deadline_covers_launch_and_observation_without_cancellation() {
                 "--request-id",
                 ID,
                 "--",
-                "/bin/true",
+                "/usr/bin/true",
             ],
             |fixture| {
                 let (mut stream, request) = fixture.read_request();
@@ -605,7 +623,7 @@ fn combined_deadline_covers_launch_and_observation_without_cancellation() {
 fn combined_wait_pins_endpoint_across_launch_acknowledgement() {
     for replace_socket in [false, true] {
         let fixture = Fixture::new();
-        let output = fixture.run("launch-window", &["--wait", "--json", "--request-id", ID, "--", "/bin/true"], |fixture| {
+        let output = fixture.run("launch-window", &["--wait", "--json", "--request-id", ID, "--", "/usr/bin/true"], |fixture| {
             let (stream, request) = fixture.read_request();
             assert_launch(&request, "launch-window");
             let replacement = if replace_socket {
@@ -638,7 +656,7 @@ fn non_wait_launches_keep_their_original_output() {
         let fixture = Fixture::new();
         let output = fixture.run(
             verb,
-            &["--json", "--request-id", ID, "--", "/bin/true"],
+            &["--json", "--request-id", ID, "--", "/usr/bin/true"],
             |fixture| {
                 let (stream, request) = fixture.read_request();
                 assert_launch(&request, verb);
@@ -742,7 +760,7 @@ fn wait_refuses_invalid_or_unavailable_results() {
                     "--request-id",
                     ID,
                     "--",
-                    "/bin/true",
+                    "/usr/bin/true",
                 ]
             };
             let output = fixture.run(verb, &options, |fixture| {

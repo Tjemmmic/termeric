@@ -3786,7 +3786,8 @@ mod tests {
     #[test]
     fn the_keyboard_page_chooses_which_option_keys_are_alt() {
         use crate::config::MacosOptionAsAlt;
-        let panel = SettingsPanel::new();
+        let mut panel = SettingsPanel::new();
+        panel.page = SettingsSection::Keyboard.page();
         let mut config = Config::default();
         config.keyboard.macos_option_as_alt = MacosOptionAsAlt::Right;
         let entries = panel.build_entries(&config, &default_registry());

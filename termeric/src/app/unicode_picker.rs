@@ -101,7 +101,7 @@ mod tests {
     #[test]
     fn selection_writes_the_exact_utf8_bytes_to_the_captured_terminal() {
         let script = "stty raw -echo; printf '\rREADY\r\n'; \
-                      bytes=$(dd bs=1 count=3 2>/dev/null | od -An -tx1); \
+                      bytes=$(dd bs=1 count=3 2>/dev/null | od -An -tx1 | tr -s ' '); \
                       printf '\runicode=%s\r\n' \"$bytes\"; sleep 1";
         let mut app = shell_app(script);
         app.wait_for_screen_text("READY");
@@ -123,7 +123,7 @@ mod tests {
             .collect::<String>();
         let script = format!(
             "stty raw -echo; printf '\rREADY\r\n'; \
-             bytes=$(dd bs=1 count={} 2>/dev/null | od -An -v -tx1 | tr -d '\n'); \
+             bytes=$(dd bs=1 count={} 2>/dev/null | od -An -v -tx1 | tr -s ' ' | tr -d '\n'); \
              printf '\runicode=%s\r\n' \"$bytes\"; sleep 1",
             expected.len()
         );

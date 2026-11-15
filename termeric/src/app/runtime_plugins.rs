@@ -1413,7 +1413,7 @@ program = "termeric-test-fixture-must-not-run"
             "local-tool".into(),
             crate::agents::AgentConfig {
                 name: Some("Local Agent".into()),
-                program: Some("/bin/true".into()),
+                program: Some("/usr/bin/true".into()),
                 ..Default::default()
             },
         );

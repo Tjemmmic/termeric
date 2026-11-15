@@ -525,7 +525,7 @@ mod tests {
             args: vec![
                 "-c".into(),
                 "stty raw -echo; printf 'READY\r\n'; \
-                 dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 1"
+                 dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -s ' '; sleep 1"
                     .into(),
             ],
             env: Default::default(),

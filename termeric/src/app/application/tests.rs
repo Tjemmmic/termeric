@@ -825,7 +825,7 @@ fn control_launch_window_prepares_one_exact_local_command_and_real_pty() {
     let missing_cwd = application
         .prepare_control_launch_window(
             7,
-            "/bin/true",
+            "/usr/bin/true",
             &[],
             Some("/definitely/missing/termeric-launch-window-cwd"),
             None,
@@ -957,7 +957,7 @@ fn control_launch_window_preparation_is_atomic_for_stale_and_spawn_failures() {
     let error = application
         .prepare_control_launch_window(
             7,
-            "/bin/true",
+            "/usr/bin/true",
             &[],
             temp.path().to_str(),
             None,
@@ -971,7 +971,7 @@ fn control_launch_window_preparation_is_atomic_for_stale_and_spawn_failures() {
     let error = application
         .prepare_control_launch_window(
             8,
-            "/bin/true",
+            "/usr/bin/true",
             &[],
             temp.path().to_str(),
             None,
@@ -1122,7 +1122,7 @@ fn live_domain_creation_completion_returns_authoritative_gui_ids_and_replays() {
         |active_tab, tabs| DomainSnapshot::fixture("domain-control-ack", active_tab, tabs);
 
     let initial = snapshot(10, vec![tab(10, 100)]);
-    let relay = crate::domain::DomainRelayCommand::local("/bin/true");
+    let relay = crate::domain::DomainRelayCommand::local("/usr/bin/true");
     let mut tabs = TabManager::new(80, 24, Config::default().shell, 1_000, 1024 * 1024);
     tabs.attach_domain(&initial, &relay).unwrap();
     let mut window = App::new_headless(Config::default()).unwrap();
@@ -1136,7 +1136,7 @@ fn live_domain_creation_completion_returns_authoritative_gui_ids_and_replays() {
     let local_launch = window
         .launch_control_tab(
             false,
-            "/bin/true",
+            "/usr/bin/true",
             &[],
             None,
             Some("must not launch"),

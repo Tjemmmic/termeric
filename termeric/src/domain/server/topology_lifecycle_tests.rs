@@ -37,7 +37,8 @@ fn authenticated_client_must_send_a_complete_initial_request_before_setup_deadli
     ));
     let completed = receiver.recv_timeout(Duration::from_secs(2));
     // Even a regressed server must be released/joined before the assertion.
-    client.shutdown(std::net::Shutdown::Both).unwrap();
+    // macOS reports ENOTCONN when the other end has already gone.
+    let _ = client.shutdown(std::net::Shutdown::Both);
     worker.join().unwrap();
     assert_eq!(clients.taken(), 0);
     let error = completed
@@ -149,7 +150,8 @@ fn established_subscription_does_not_inherit_the_setup_idle_timeout() {
     } else {
         None
     };
-    client.shutdown(std::net::Shutdown::Both).unwrap();
+    // macOS reports ENOTCONN when the other end has already gone.
+    let _ = client.shutdown(std::net::Shutdown::Both);
     worker.join().unwrap();
     assert!(
         matches!(
@@ -166,7 +168,8 @@ fn failed_topology_initial_snapshot_releases_registration_without_a_later_publis
     let state = state();
     for _ in 0..MAX_TOPOLOGY_SUBSCRIBERS_PER_DOMAIN * 2 {
         let (server, client) = UnixStream::pair().unwrap();
-        client.shutdown(std::net::Shutdown::Both).unwrap();
+        // macOS reports ENOTCONN when the other end has already gone.
+        let _ = client.shutdown(std::net::Shutdown::Both);
         drop(client);
         let error =
             serve_topology_subscription(server, Arc::clone(&state), DOMAIN.into()).unwrap_err();

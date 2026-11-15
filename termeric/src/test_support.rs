@@ -17,10 +17,12 @@ mod soak;
 /// An `sh -c` script that shows what input reached its terminal: with no
 /// echo or line editing it prints `READY`, then the first `count` bytes it
 /// reads, in hex, and stays a moment so its output is read before it exits.
+/// The hex goes through `tr -s ' '` because BSD `od` (macOS) pads its columns
+/// wider than GNU `od`; squeezed, both read ` 1b 5b 41`.
 /// Write to it only once it shows `READY`.
 pub(crate) fn byte_probe(count: usize) -> String {
     format!(
-        "stty raw -echo; printf READY; dd bs=1 count={count} 2>/dev/null | od -An -tx1 -v; sleep 0.2"
+        "stty raw -echo; printf READY; dd bs=1 count={count} 2>/dev/null | od -An -tx1 -v | tr -s ' '; sleep 0.2"
     )
 }
 
@@ -93,8 +95,7 @@ pub(crate) fn unsupported_field_modifiers() -> Vec<winit::keyboard::ModifiersSta
 /// [`byte_probe`] for one byte, which shows whether input reached its
 /// terminal at all. `App::assert_pty_untouched` writes the byte it expects
 /// first.
-pub(crate) const FIRST_BYTE_PROBE: &str =
-    "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1 -v; sleep 0.2";
+pub(crate) const FIRST_BYTE_PROBE: &str = "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1 -v | tr -s ' '; sleep 0.2";
 
 /// `sh -c` arguments for a child that stays alive through a test without
 /// printing anything: a real PTY whose process is still running when the

@@ -347,7 +347,7 @@ fn release_benchmark_suite() {
         None,
     );
 
-    if std::path::Path::new("/bin/true").exists() {
+    if std::path::Path::new("/usr/bin/true").exists() {
         let mut samples = Vec::with_capacity(5);
         for _ in 0..5 {
             let mut tabs = TabManager::new(
@@ -360,7 +360,7 @@ fn release_benchmark_suite() {
             let started = Instant::now();
             for index in 0..8 {
                 tabs.new_tab_with_command(
-                    "/bin/true",
+                    "/usr/bin/true",
                     &[],
                     None,
                     Some(&format!("benchmark-{index}")),

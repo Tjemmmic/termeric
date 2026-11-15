@@ -174,7 +174,7 @@ mod tests {
 
         // Starting a player is not enough: one that plays through clears
         // the failure, so the next one is shown again.
-        bell.set_audio_command_for_test("/bin/true", &[]);
+        bell.set_audio_command_for_test("/usr/bin/true", &[]);
         assert!(bell.ring().is_none());
         wait_for_player(&bell);
         bell.set_audio_command_for_test("/definitely/missing/termeric-audio-helper", &[]);

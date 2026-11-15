@@ -113,10 +113,14 @@ mod tests {
             ledger.query(&"0".repeat(32)).unwrap(),
             (LaunchState::Running {}, false)
         );
-        handle.write_all(b"\n").unwrap();
+        // macOS drops input written before the shell has the terminal, so
+        // the line is offered until the shell reads one.
         assert!(crate::test_support::poll_until(
-            std::time::Duration::from_secs(2),
-            || observer.poll().unwrap().exit.is_some()
+            std::time::Duration::from_secs(5),
+            || {
+                let _ = handle.write_all(b"\n");
+                observer.poll().unwrap().exit.is_some()
+            }
         ));
         ledger.prepare(&"f".repeat(32)).unwrap();
         ledger.record(&"f".repeat(32), observer);

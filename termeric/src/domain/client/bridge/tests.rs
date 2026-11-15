@@ -209,7 +209,8 @@ fn input_read_failure_and_panic_wake_output_and_are_reported() {
         });
         let result = rx.recv_timeout(Duration::from_secs(2));
         // Release even a regressed output reader before joining/asserting.
-        daemon.shutdown(Shutdown::Both).unwrap();
+        // macOS reports ENOTCONN when the other end has already gone.
+        let _ = daemon.shutdown(Shutdown::Both);
         worker.join().unwrap();
         let error = result
             .expect("input failure left output blocked")

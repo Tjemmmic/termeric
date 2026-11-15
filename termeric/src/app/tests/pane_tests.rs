@@ -265,7 +265,7 @@ fn mouse_focus_and_bracketed_paste_reach_the_focused_pane_in_order() {
     let script = concat!(
         "stty raw -echo; ",
         "printf '\rREADY\r\n'; ",
-        "bytes=$(dd bs=1 count=38 2>/dev/null | od -An -tx1); ",
+        "bytes=$(dd bs=1 count=38 2>/dev/null | od -An -tx1 | tr -s ' '); ",
         "printf '\rprotocol=%s\r\n' \"$bytes\"; ",
         "sleep 0.1"
     );

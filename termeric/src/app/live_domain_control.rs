@@ -1156,7 +1156,7 @@ mod tests {
         );
         tabs.attach_domain(
             &snapshot,
-            &crate::domain::DomainRelayCommand::local("/bin/true"),
+            &crate::domain::DomainRelayCommand::local("/usr/bin/true"),
         )
         .unwrap();
         let local_tab_id = tabs
@@ -1175,7 +1175,8 @@ mod tests {
         };
         // A control can become pending after a drag starts. Interruption must
         // restore its rejected preview without canceling the earlier request.
-        app.live_domain_relay_command = Some(crate::domain::DomainRelayCommand::local("/bin/true"));
+        app.live_domain_relay_command =
+            Some(crate::domain::DomainRelayCommand::local("/usr/bin/true"));
         app.live_domain_topologies
             .insert(snapshot.id.clone(), (&snapshot).into());
         let dragged_id = app.tabs.as_ref().unwrap().active_tab().unwrap().id;
@@ -1401,13 +1402,14 @@ mod tests {
         );
         tabs.attach_domain(
             &initial,
-            &crate::domain::DomainRelayCommand::local("/bin/true"),
+            &crate::domain::DomainRelayCommand::local("/usr/bin/true"),
         )
         .unwrap();
         let mut app = App::new_headless(crate::config::Config::default()).unwrap();
         app.tabs = Some(tabs);
         app.live_domain_authority = Some(crate::domain::DomainAuthority::Local);
-        app.live_domain_relay_command = Some(crate::domain::DomainRelayCommand::local("/bin/true"));
+        app.live_domain_relay_command =
+            Some(crate::domain::DomainRelayCommand::local("/usr/bin/true"));
 
         let mut revision_two = initial.clone();
         revision_two.active_tab = 20;

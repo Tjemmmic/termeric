@@ -198,7 +198,7 @@ fn delayed_notification_reply_returns_to_requesting_pane_without_a_focus_fallbac
     let data = b"\x1b]99;i=build;2\x1b\\".to_vec();
     let script = format!(
         "stty raw -echo; reply=$(dd bs=1 count={} 2>/dev/null); \
-         printf '\\rnotification='; printf '%s' \"$reply\" | od -An -tx1; printf '\\r\\n'",
+         printf '\\rnotification='; printf '%s' \"$reply\" | od -An -tx1 | tr -s ' '; printf '\\r\\n'",
         data.len()
     );
     let shell = ShellConfig {
