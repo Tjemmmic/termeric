@@ -12,7 +12,7 @@ mod terminal_protocol;
 pub use actions::Action;
 pub use keybindings::ShortcutRegistry;
 pub use keyboard::{encode_ime_text, key_to_bytes_for_terminal};
-pub use mouse::{DoubleClick, MouseState};
+pub use mouse::{DoubleClick, MouseState, PixelScroll};
 pub(crate) use terminal_protocol::{
     BRACKETED_PASTE_OVERHEAD, MouseReportButton, MouseReportKind, WheelDirection,
     encode_focus_report, encode_mouse_report, encode_paste, encode_wheel_as_cursor_key,

@@ -330,7 +330,7 @@ mod tests {
             "pointer-input"
         );
         app.handle_mouse_wheel(MouseScrollDelta::PixelDelta(PhysicalPosition::new(
-            0.0, 21.0,
+            0.0, 41.0,
         )));
         assert_eq!(app.commands_panel_layout().scroll_offset, 1);
         for delta in [

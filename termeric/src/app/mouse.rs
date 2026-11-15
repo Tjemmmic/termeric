@@ -8,6 +8,10 @@ use crate::ui::geometry::Bounds;
 /// How long a hovered tab bar control takes to fade in.
 const TAB_BAR_HOVER_FADE_SECONDS: f32 = 0.1;
 
+/// The most reports or arrow keys one wheel event sends a program, so a
+/// runaway pixel delta cannot flood its input.
+const MAX_WHEEL_STEPS: usize = 256;
+
 impl DividerDrag {
     fn owns_tab(&self, tab: &crate::tabs::Tab) -> bool {
         tab.id == self.tab_id
@@ -1014,11 +1018,25 @@ impl App {
         }
     }
 
-    /// One wheel step for `target`, or for the focused pane when the pointer
-    /// is over no pane: a report when its program asks for mouse input, arrow
-    /// keys when its alternate screen asks for them, otherwise its scrollback.
-    /// Modes come from the same terminal that receives the bytes.
+    /// One mouse-wheel step of `delta` lines (`scrollback.scroll_speed`
+    /// applied, positive up) for `target`: one report or arrow key, or at
+    /// least one line of scrollback.
     fn scroll_terminal(&mut self, delta: f64, target: Option<WheelTarget>) {
+        self.scroll_terminal_by(delta > 0.0, 1, delta.abs().max(1.0) as usize, target);
+    }
+
+    /// One wheel movement over `target`, or over the focused pane when the
+    /// pointer is over no pane, `up` or down: `steps` reports when its
+    /// program asks for mouse input, as many arrow keys when its alternate
+    /// screen asks for them, otherwise `lines` lines of its scrollback.
+    /// Modes come from the same terminal that receives the bytes.
+    fn scroll_terminal_by(
+        &mut self,
+        up: bool,
+        steps: usize,
+        lines: usize,
+        target: Option<WheelTarget>,
+    ) {
         let focused = self
             .tabs
             .as_ref()
@@ -1034,42 +1052,107 @@ impl App {
                 .active_terminal()
                 .map(|terminal| terminal.grid().rows())
                 .unwrap_or(0);
-            self.search.scroll_filter(delta, viewport_rows);
+            let lines = lines as f64;
+            self.search
+                .scroll_filter(if up { lines } else { -lines }, viewport_rows);
             self.request_redraw(RedrawReason::PointerInput);
             return;
         }
 
-        let direction = if delta > 0.0 {
+        let direction = if up {
             crate::input::WheelDirection::Up
         } else {
             crate::input::WheelDirection::Down
         };
+        let steps = steps.min(MAX_WHEEL_STEPS);
         if let Some(cell) = target.and_then(|target| target.cell) {
             if self.report_wheel(identity, cell, direction) {
+                for _ in 1..steps {
+                    self.report_wheel(identity, cell, direction);
+                }
                 return;
             }
             let mode = self.pointer_terminal_mode(identity);
             if !self.modifiers.shift_key()
                 && let Some(bytes) = crate::input::encode_wheel_as_cursor_key(mode, direction)
-                && self.write_pointer_protocol_input(identity, bytes)
+                && self.write_pointer_protocol_input(identity, &bytes.repeat(steps))
             {
                 return;
             }
         }
 
         if let Some(terminal) = self.pointer_terminal_mut(identity) {
-            let lines = delta.abs().max(1.0) as usize;
             let offset = terminal.grid().scroll_offset();
-
-            let new_offset = if delta > 0.0 {
-                offset + lines
+            let new_offset = if up {
+                offset.saturating_add(lines)
             } else {
                 offset.saturating_sub(lines)
             };
-
             terminal.grid_mut().set_scroll_offset(new_offset);
-
             self.request_redraw(RedrawReason::PointerInput);
+        }
+    }
+
+    /// A trackpad's pixel delta over the terminals, `x` and `y` pixels with
+    /// the wheel's signs. Its larger axis scrolls the pane under the pointer
+    /// (or the focused pane) by whole lines of that pane's cells, what is
+    /// left of a line waiting for the next delta: each line is one report or
+    /// arrow key for a program that takes the wheel, and otherwise one line
+    /// of scrollback. Sideways, whole columns become sideways reports. Over
+    /// chrome nothing scrolls.
+    pub(super) fn handle_pixel_scroll(&mut self, x: f64, y: f64) {
+        let WheelRoute::Terminal(target) = self.wheel_route() else {
+            return;
+        };
+        let cell_size = self.pointer_metrics().cell_size;
+        self.scroll_terminal_pixels((x, y), target, cell_size);
+    }
+
+    /// `delta` pixels of a trackpad for `target` (see `handle_pixel_scroll`),
+    /// whose cells are `cell_size` pixels.
+    fn scroll_terminal_pixels(
+        &mut self,
+        (x, y): (f64, f64),
+        target: Option<WheelTarget>,
+        (cell_width, cell_height): (f32, f32),
+    ) {
+        let focused = self
+            .tabs
+            .as_ref()
+            .and_then(TabManager::active_tab)
+            .map(crate::tabs::Tab::focused_terminal_identity);
+        let Some(identity) = target.map(|target| target.identity).or(focused) else {
+            return;
+        };
+        let delta = if x.abs() > y.abs() {
+            (x, 0.0)
+        } else {
+            (0.0, y)
+        };
+        let (columns, rows) = self.terminal_pixel_scroll.add(
+            identity,
+            delta,
+            (f64::from(cell_width), f64::from(cell_height)),
+        );
+        if rows != 0 {
+            let lines = usize::try_from(rows.unsigned_abs()).unwrap_or(usize::MAX);
+            self.scroll_terminal_by(rows > 0, lines, lines, target);
+        }
+        if columns != 0
+            && let Some(target) = target
+            && let Some(cell) = target.cell
+        {
+            let direction = if columns > 0 {
+                crate::input::WheelDirection::Left
+            } else {
+                crate::input::WheelDirection::Right
+            };
+            let steps = usize::try_from(columns.unsigned_abs()).unwrap_or(usize::MAX);
+            for _ in 0..steps.min(MAX_WHEEL_STEPS) {
+                if !self.report_wheel(target.identity, cell, direction) {
+                    break;
+                }
+            }
         }
     }
 
@@ -2312,6 +2395,72 @@ mod tests {
                 b""
             };
             assert_eq!(bytes, expected, "{:?}", origin.pane_id);
+        }
+    }
+
+    #[test]
+    fn trackpad_pixels_scroll_whole_lines_of_the_pane_under_the_pointer() {
+        use crate::app::tests::{fenced_harvest_capture, harvest_rerun_capture_fixture_in};
+        use termeric_core::term::TerminalMode;
+        let (mut app, _directory, _, captures) = harvest_rerun_capture_fixture_in(true);
+        let focused = app.active_panes().focused_id();
+        let others: Vec<_> = app
+            .active_panes()
+            .pane_ids()
+            .into_iter()
+            .filter(|pane| *pane != focused)
+            .collect();
+        let (reporting, scrolling) = (others[0], others[1]);
+        let panes = app.active_panes_mut();
+        panes.get_pane_mut(reporting).unwrap().terminal.set_mode(
+            TerminalMode::MOUSE_BUTTON_EVENT | TerminalMode::MOUSE_SGR,
+            true,
+        );
+        panes.get_pane_mut(scrolling).unwrap().terminal.set_mode(
+            TerminalMode::ALT_SCREEN | TerminalMode::ALTERNATE_SCROLL,
+            true,
+        );
+        panes
+            .get_pane_mut(focused)
+            .unwrap()
+            .terminal
+            .process(b"history\r\n".repeat(80).as_slice());
+        let cell = TEST_METRICS.cell_size;
+
+        // Cells are 20 px tall: 15 px is no line yet, 10 more make one and
+        // leave 5; then 55 make three.
+        let reporting_target = terminal_wheel_target(&app, pane_position(&app, reporting));
+        for pixels in [15.0, 10.0, 55.0] {
+            app.scroll_terminal_pixels((0.0, pixels), reporting_target, cell);
+        }
+        // Another pane starts from nothing, scrolling down: 45 px is two
+        // lines, two arrow keys.
+        let scrolling_target = terminal_wheel_target(&app, pane_position(&app, scrolling));
+        app.scroll_terminal_pixels((0.0, -45.0), scrolling_target, cell);
+        // A sideways swipe is sideways reports, by whole columns of 10 px.
+        app.scroll_terminal_pixels((25.0, 3.0), reporting_target, cell);
+        // Over no pane, the focused pane's scrollback moves by whole lines.
+        app.terminal_pixel_scroll.begin_gesture();
+        app.scroll_terminal_pixels((0.0, 70.0), None, cell);
+        assert_eq!(pane_scroll_offset(&app, focused), 3);
+
+        let bytes = fenced_harvest_capture(&mut app, &captures);
+        let up = b"\x1b[<64;2;2M";
+        let left = b"\x1b[<66;2;2M";
+        for ((origin, _), bytes) in captures.iter().zip(bytes) {
+            let expected: Vec<u8> = if origin.pane_id == reporting {
+                [up.repeat(4), left.repeat(2)].concat()
+            } else if origin.pane_id == scrolling {
+                b"\x1b[B".repeat(2)
+            } else {
+                Vec::new()
+            };
+            assert_eq!(
+                String::from_utf8_lossy(&bytes),
+                String::from_utf8_lossy(&expected),
+                "{:?}",
+                origin.pane_id
+            );
         }
     }
 

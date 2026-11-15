@@ -40,6 +40,64 @@ impl<T: PartialEq> DoubleClick<T> {
     }
 }
 
+/// Pixel scrolling, as trackpads and touchpads report it, in whole steps.
+///
+/// Pixel deltas add up in units of one step, such as a terminal line or a
+/// list row, and what does not make a whole step waits for the next delta,
+/// so a slow swipe scrolls as far as a fast one over the same distance and a
+/// small one does not jump a whole step. The sum starts over when a gesture
+/// begins and when the deltas go to another target.
+#[derive(Debug)]
+pub struct PixelScroll<T> {
+    target: Option<T>,
+    /// Pixels that have not made a whole step yet, as (x, y).
+    pending: (f64, f64),
+}
+
+impl<T> Default for PixelScroll<T> {
+    fn default() -> Self {
+        Self {
+            target: None,
+            pending: (0.0, 0.0),
+        }
+    }
+}
+
+impl<T: PartialEq> PixelScroll<T> {
+    /// Start over: a new gesture began.
+    pub fn begin_gesture(&mut self) {
+        self.target = None;
+        self.pending = (0.0, 0.0);
+    }
+
+    /// Add `delta` pixels (x, y) going to `target`, where one step is `step`
+    /// pixels (width, height), and return the whole steps it completes, with
+    /// the delta's signs. A delta or step that is not a finite number, or a
+    /// step that is not positive, adds nothing on its axis.
+    pub fn add(&mut self, target: T, delta: (f64, f64), step: (f64, f64)) -> (i64, i64) {
+        if self.target.as_ref() != Some(&target) {
+            self.begin_gesture();
+            self.target = Some(target);
+        }
+        // Pixels are kept rather than fractions of a step: whole pixel counts
+        // add up exactly, so a step's worth of them is a whole step.
+        let whole = |pending: &mut f64, delta: f64, step: f64| {
+            if !(delta.is_finite() && step.is_finite() && step > 0.0) {
+                return 0;
+            }
+            *pending += delta;
+            let steps = (*pending / step).trunc();
+            *pending -= steps * step;
+            // Bounded by the deltas winit reports; saturates beyond.
+            steps as i64
+        };
+        (
+            whole(&mut self.pending.0, delta.0, step.0),
+            whole(&mut self.pending.1, delta.1, step.1),
+        )
+    }
+}
+
 /// Mouse input state tracker
 pub struct MouseState {
     /// Current selection being made
@@ -155,6 +213,50 @@ impl MouseState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pixel_deltas_scroll_whole_steps_and_keep_the_rest() {
+        let mut scroll = PixelScroll::default();
+        let line = (8.0, 20.0);
+        // Small deltas add up to a step instead of each taking one.
+        for _ in 0..3 {
+            assert_eq!(scroll.add("pane", (0.0, 6.0), line), (0, 0));
+        }
+        assert_eq!(scroll.add("pane", (0.0, 6.0), line), (0, 1));
+        // What is left (4 px) counts toward the next step, either way.
+        assert_eq!(scroll.add("pane", (0.0, 36.0), line), (0, 2));
+        assert_eq!(scroll.add("pane", (0.0, -10.0), line), (0, 0));
+        assert_eq!(scroll.add("pane", (0.0, -10.0), line), (0, -1));
+        assert_eq!(scroll.add("pane", (17.0, 0.0), line), (2, 0));
+        assert_eq!(scroll.add("pane", (-0.5, 0.0), line), (0, 0));
+        assert_eq!(scroll.add("pane", (-1.0, 0.0), line), (0, 0));
+    }
+
+    #[test]
+    fn a_new_gesture_or_target_starts_the_sum_over() {
+        let line = (8.0, 20.0);
+        let mut scroll = PixelScroll::default();
+        assert_eq!(scroll.add("left", (0.0, 15.0), line), (0, 0));
+        // Another pane does not inherit the left pane's 15 px.
+        assert_eq!(scroll.add("right", (0.0, 15.0), line), (0, 0));
+        assert_eq!(scroll.add("right", (0.0, 5.0), line), (0, 1));
+        assert_eq!(scroll.add("right", (0.0, 15.0), line), (0, 0));
+        scroll.begin_gesture();
+        assert_eq!(scroll.add("right", (0.0, 5.0), line), (0, 0));
+    }
+
+    #[test]
+    fn unusable_deltas_and_steps_scroll_nothing() {
+        let mut scroll = PixelScroll::default();
+        for (delta, step) in [
+            ((f64::NAN, f64::INFINITY), (8.0, 20.0)),
+            ((40.0, 40.0), (0.0, -1.0)),
+            ((40.0, 40.0), (f64::NAN, f64::INFINITY)),
+        ] {
+            assert_eq!(scroll.add((), delta, step), (0, 0));
+        }
+        assert_eq!(scroll.add((), (0.0, 20.0), (8.0, 20.0)), (0, 1));
+    }
 
     #[test]
     fn a_double_click_is_two_presses_on_one_target_within_the_interval() {

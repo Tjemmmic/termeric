@@ -326,7 +326,12 @@ impl App {
                 self.tab_drag_scroll = None;
             }
 
-            WindowEvent::MouseWheel { delta, .. } => {
+            WindowEvent::MouseWheel { delta, phase, .. } => {
+                // A trackpad gesture's pixels add up from its first delta.
+                if phase == winit::event::TouchPhase::Started {
+                    self.terminal_pixel_scroll.begin_gesture();
+                    self.modal_pixel_scroll.begin_gesture();
+                }
                 self.handle_mouse_wheel(delta);
             }
 
@@ -776,32 +781,54 @@ impl App {
     }
 }
 
-/// Whole columns and rows a modal surface scrolls for one wheel event,
-/// positive toward the end; a pixel delta counts 20 pixels to a line. The
-/// terminal's own scrolling follows `scrollback.scroll_speed` instead.
-pub(super) fn modal_wheel_steps(delta: winit::event::MouseScrollDelta) -> (isize, isize) {
-    let (x, y) = match delta {
-        winit::event::MouseScrollDelta::LineDelta(x, y) => (f64::from(x), f64::from(y)),
-        winit::event::MouseScrollDelta::PixelDelta(position) => {
-            (position.x / 20.0, position.y / 20.0)
-        }
-    };
-    // A turn away from the person (positive) moves toward the start.
-    let steps = |lines: f64| {
-        if lines.is_finite() && lines != 0.0 {
-            -(lines.signum() * lines.abs().ceil()) as isize
-        } else {
-            0
-        }
-    };
-    (steps(x), steps(y))
+/// Logical pixels of a trackpad swipe that scroll a modal surface one step.
+const MODAL_PIXELS_PER_STEP: f64 = 20.0;
+
+/// Whole steps a line delta (a mouse wheel's notches) scrolls a modal
+/// surface on one axis, positive toward the end: at least one per notch. A
+/// turn away from the person (positive) moves toward the start.
+fn modal_line_steps(lines: f32) -> isize {
+    let lines = f64::from(lines);
+    if lines.is_finite() && lines != 0.0 {
+        -(lines.signum() * lines.abs().ceil()) as isize
+    } else {
+        0
+    }
 }
 
 impl App {
+    /// Whole columns and rows the modal surface `layer` scrolls for one
+    /// wheel event, positive toward the end. A trackpad's pixel deltas count
+    /// `MODAL_PIXELS_PER_STEP` logical pixels to a step, what is left
+    /// waiting for the next delta. The terminal's own scrolling follows
+    /// `scrollback.scroll_speed` and its cell height instead.
+    fn modal_wheel_steps(
+        &mut self,
+        layer: ModalLayer,
+        delta: winit::event::MouseScrollDelta,
+    ) -> (isize, isize) {
+        match delta {
+            winit::event::MouseScrollDelta::LineDelta(x, y) => {
+                (modal_line_steps(x), modal_line_steps(y))
+            }
+            winit::event::MouseScrollDelta::PixelDelta(position) => {
+                let step = MODAL_PIXELS_PER_STEP * f64::from(self.ui_metrics().scale_factor);
+                let (columns, rows) =
+                    self.modal_pixel_scroll
+                        .add(layer, (position.x, position.y), (step, step));
+                (-columns as isize, -rows as isize)
+            }
+        }
+    }
+
     /// Scroll whatever owns the wheel: the frontmost modal surface, a
     /// side panel, the agent view, or the terminal.
     pub(super) fn handle_mouse_wheel(&mut self, delta: winit::event::MouseScrollDelta) {
-        let (columns, rows) = modal_wheel_steps(delta);
+        let Some(layer) = self.top_modal_layer() else {
+            self.scroll_beneath_modal_layers(delta);
+            return;
+        };
+        let (columns, rows) = self.modal_wheel_steps(layer, delta);
         // Shift turns a vertical wheel sideways, but only in the views that
         // scroll both ways; every other surface keeps scrolling vertically.
         let (two_axis_columns, two_axis_rows) = if self.modifiers.shift_key() && columns == 0 {
@@ -810,16 +837,16 @@ impl App {
             (columns, rows)
         };
         let sideways = two_axis_columns.abs() > two_axis_rows.abs();
-        match self.top_modal_layer() {
+        match layer {
             // Only the dialog's body scrolls, and only up and down.
-            Some(ModalLayer::Dialog) => {
+            ModalLayer::Dialog => {
                 let request_id = self.dialog.request_id();
                 self.apply_dialog_action(crate::ui::dialog::DialogAction::Scroll {
                     request_id,
                     by: crate::ui::dialog::DialogScroll::Lines(rows),
                 });
             }
-            Some(ModalLayer::DiffReview) => {
+            ModalLayer::DiffReview => {
                 use crate::ui::diff_review::DiffReviewAction;
                 let request_id = self.diff_review.request_id();
                 self.apply_diff_review_action(if sideways {
@@ -834,37 +861,33 @@ impl App {
                     }
                 });
             }
-            Some(ModalLayer::ContextPicker) => self.apply_context_picker_action(
+            ModalLayer::ContextPicker => self.apply_context_picker_action(
                 crate::ui::context_picker::ContextPickerAction::Scroll {
                     request_id: self.context_picker.request_id(),
                     delta: rows,
                 },
             ),
-            Some(ModalLayer::WorkspacePanel) if rows < 0 => {
+            ModalLayer::WorkspacePanel if rows < 0 => {
                 self.workspace_panel.scroll_up(rows.unsigned_abs());
             }
-            Some(ModalLayer::WorkspacePanel) => {
-                self.workspace_panel.scroll_down(rows.unsigned_abs())
-            }
-            Some(ModalLayer::Settings) if rows < 0 => {
+            ModalLayer::WorkspacePanel => self.workspace_panel.scroll_down(rows.unsigned_abs()),
+            ModalLayer::Settings if rows < 0 => {
                 self.settings_panel.scroll_up(rows.unsigned_abs());
             }
-            Some(ModalLayer::Settings) => {
+            ModalLayer::Settings => {
                 let total = self
                     .settings_panel
                     .build_entries(&self.config, &self.shortcut_registry)
                     .len();
                 self.settings_panel.scroll_down(rows.unsigned_abs(), total);
             }
-            Some(ModalLayer::ShortcutsPanel) if rows < 0 => {
+            ModalLayer::ShortcutsPanel if rows < 0 => {
                 self.shortcuts_panel.scroll_up(rows.unsigned_abs());
             }
-            Some(ModalLayer::ShortcutsPanel) => self
+            ModalLayer::ShortcutsPanel => self
                 .shortcuts_panel
                 .scroll_down(rows.unsigned_abs(), &self.shortcut_registry),
-            Some(
-                ModalLayer::DomainPicker | ModalLayer::UnicodePicker | ModalLayer::CommandPalette,
-            ) => {
+            ModalLayer::DomainPicker | ModalLayer::UnicodePicker | ModalLayer::CommandPalette => {
                 if let Some(modal) = self.open_palette_modal() {
                     let palette = self.palette_owner_mut(modal).palette_mut();
                     if rows < 0 {
@@ -874,20 +897,16 @@ impl App {
                     }
                 }
             }
-            Some(ModalLayer::Cellar) => {
+            ModalLayer::Cellar => {
                 if let Some(harvest) = &mut self.harvest {
                     harvest.cellar.scroll_by(rows);
                 }
             }
-            Some(ModalLayer::CommandsPanel) => self.scroll_commands_panel(rows),
-            Some(ModalLayer::AgentsPanel) => self.scroll_agents_panel(rows),
+            ModalLayer::CommandsPanel => self.scroll_commands_panel(rows),
+            ModalLayer::AgentsPanel => self.scroll_agents_panel(rows),
             // Every other layer owns the wheel while on top, even with no
             // scroll action of its own.
-            Some(ModalLayer::Guardrail | ModalLayer::SproutMenu | ModalLayer::WorkspaceMenu) => {}
-            None => {
-                self.scroll_beneath_modal_layers(delta);
-                return;
-            }
+            ModalLayer::Guardrail | ModalLayer::SproutMenu | ModalLayer::WorkspaceMenu => {}
         }
         self.request_redraw(RedrawReason::PointerInput);
     }
@@ -899,17 +918,19 @@ impl App {
         {
             return;
         }
-        let scroll_speed = self.config.scrollback.scroll_speed;
-        let (x_delta, y_delta) = match delta {
+        match delta {
             winit::event::MouseScrollDelta::LineDelta(x, y) => {
-                (x as f64 * scroll_speed, y as f64 * scroll_speed)
+                let scroll_speed = self.config.scrollback.scroll_speed;
+                let (x_delta, y_delta) = (x as f64 * scroll_speed, y as f64 * scroll_speed);
+                if x_delta.abs() > y_delta.abs() {
+                    self.handle_horizontal_scroll(x_delta);
+                } else {
+                    self.handle_scroll(y_delta);
+                }
             }
-            winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.x / 10.0, pos.y / 10.0),
-        };
-        if x_delta.abs() > y_delta.abs() {
-            self.handle_horizontal_scroll(x_delta);
-        } else {
-            self.handle_scroll(y_delta);
+            winit::event::MouseScrollDelta::PixelDelta(position) => {
+                self.handle_pixel_scroll(position.x, position.y);
+            }
         }
     }
 }
@@ -1070,6 +1091,32 @@ mod wheel_tests {
         let before = offset(&app);
         app.handle_mouse_wheel(MouseScrollDelta::LineDelta(0.0, -3.0));
         assert!(offset(&app) > before);
+    }
+
+    #[test]
+    fn trackpad_pixels_scroll_modal_lists_by_whole_rows() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.settings_panel.toggle();
+        let offset = |app: &mut App| {
+            app.settings_panel
+                .build_info(&app.config, &app.shortcut_registry)
+                .scroll_offset
+        };
+        let swipe = |pixels: f64| {
+            MouseScrollDelta::PixelDelta(winit::dpi::PhysicalPosition::new(0.0, pixels))
+        };
+        // A row is 20 px: half a row each time scrolls one row on the second.
+        app.handle_mouse_wheel(swipe(-10.0));
+        assert_eq!(offset(&mut app), 0);
+        app.handle_mouse_wheel(swipe(-10.0));
+        assert_eq!(offset(&mut app), 1);
+        // A new gesture forgets what was left over.
+        app.handle_mouse_wheel(swipe(-15.0));
+        app.modal_pixel_scroll.begin_gesture();
+        app.handle_mouse_wheel(swipe(-15.0));
+        assert_eq!(offset(&mut app), 1);
+        app.handle_mouse_wheel(swipe(-5.0));
+        assert_eq!(offset(&mut app), 2);
     }
 
     #[test]

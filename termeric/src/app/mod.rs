@@ -750,6 +750,11 @@ pub struct App {
     last_cursor_terminal: Option<crate::tabs::TerminalIdentity>,
     /// Mouse input state
     mouse_state: MouseState,
+    /// Trackpad scrolling over the terminals, in whole lines of the pane
+    /// it scrolls.
+    terminal_pixel_scroll: crate::input::PixelScroll<crate::tabs::TerminalIdentity>,
+    /// Trackpad scrolling of the modal surface on top, in whole rows.
+    modal_pixel_scroll: crate::input::PixelScroll<crate::ui::modal::ModalLayer>,
     /// The keyboard modifiers in effect: the ones held, except while a key
     /// press whose Option key composed text is handled, when typing reads
     /// them without Alt (see `System::read_key_press`).
@@ -1135,6 +1140,8 @@ impl App {
             max_seen_tab_id: None,
             last_cursor_terminal: None,
             mouse_state: MouseState::new(),
+            terminal_pixel_scroll: crate::input::PixelScroll::default(),
+            modal_pixel_scroll: crate::input::PixelScroll::default(),
             modifiers: ModifiersState::empty(),
             held_modifiers: winit::event::Modifiers::default(),
             option_chord_key: None,

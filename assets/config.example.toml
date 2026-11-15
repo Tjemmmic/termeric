@@ -96,7 +96,8 @@ bold_is_bright = false    # bold also brightens ANSI colors 0 to 7
 [scrollback]
 lines = 10000             # per terminal, 100 to 1000000
 max_memory_mib = 128      # per terminal, 8 to 4096; the oldest lines go first
-scroll_speed = 6.0        # lines per wheel step, 0.1 to 100
+scroll_speed = 6.0        # lines per mouse wheel step, 0.1 to 100; trackpads
+                          # scroll a line per cell height of swipe
 
 [panes]
 # Where a new split starts: the focused pane's directory (focused), the tab's
