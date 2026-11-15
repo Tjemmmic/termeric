@@ -2641,12 +2641,13 @@ impl App {
     }
 
     /// Run a menu-bar command as its shortcut would run with the terminals
-    /// holding the keyboard. Under a modal layer, the layer in front owns
-    /// input, as it does for keys, so the command does nothing; a paste
-    /// still goes where any paste goes (`text_target`).
+    /// holding the keyboard. While anything else holds it (a modal layer,
+    /// tab rename, the agent view, the find box), that surface owns input,
+    /// as it does for keys, so the command does nothing; a paste still goes
+    /// where any paste goes (`text_target`).
     #[cfg(target_os = "macos")]
     pub(super) fn perform_menu_command(&mut self, action: Action) {
-        if self.top_modal_layer().is_some() && !matches!(action, Action::Paste) {
+        if !self.terminal_has_keyboard() && !matches!(action, Action::Paste) {
             return;
         }
         self.handle_action(action);

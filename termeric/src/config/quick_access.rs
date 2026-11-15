@@ -51,7 +51,12 @@ impl QuickAccessConfig {
         }
         // A plain key would stop working everywhere else; function keys
         // alone are the usual exception.
-        if !(hotkey.ctrl || hotkey.alt || hotkey.super_key) && !hotkey.key.starts_with('f') {
+        let key = hotkey.key.to_ascii_lowercase();
+        let function_key = key
+            .strip_prefix('f')
+            .and_then(|number| number.parse::<u8>().ok())
+            .is_some_and(|number| (1..=20).contains(&number));
+        if !(hotkey.ctrl || hotkey.alt || hotkey.super_key) && !function_key {
             bail!("quick_access.macos_hotkey needs ctrl, alt, or super unless its key is F1–F20");
         }
         Ok(())
@@ -165,6 +170,8 @@ mod tests {
         assert!(hotkey("`", true).validate().is_ok());
         assert!(hotkey("Space", true).validate().is_ok());
         assert!(hotkey("f12", false).validate().is_ok());
+        assert!(hotkey("F5", false).validate().is_ok());
+        assert!(hotkey("f", false).validate().is_err());
         assert!(hotkey("a", false).validate().is_err());
         assert!(hotkey("enter", true).validate().is_err());
     }

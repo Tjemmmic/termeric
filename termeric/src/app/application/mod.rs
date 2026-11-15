@@ -1127,7 +1127,8 @@ impl ApplicationHandler<AppEvent> for Application {
     /// The last thing the event loop runs, and on macOS the last thing the
     /// process runs at all: quitting from the menu, the Dock, logging out, or
     /// shutting down ends the process as soon as this returns, so `run_app`
-    /// never returns there. Everything that must happen at exit happens here.
+    /// never returns there (it does when the last window closes).
+    /// Everything that must happen at exit happens here.
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         // The drop listener reads from winit's connection, which closes as
         // the event loop ends, right after this.
