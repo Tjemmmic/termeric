@@ -17,6 +17,16 @@ impl RawTerminal {
     /// Puts the terminal on `descriptor`, which must stay open while the
     /// guard lives, into raw mode.
     pub(crate) fn enter(descriptor: RawFd) -> io::Result<Self> {
+        // Asked first: what `tcgetattr` fails with on other kinds of input
+        // differs by system (ENOTTY on Linux; macOS answers a socket with
+        // another error).
+        // SAFETY: isatty only inspects the open descriptor.
+        if unsafe { libc::isatty(descriptor) } == 0 {
+            return Ok(Self {
+                descriptor,
+                original: None,
+            });
+        }
         // SAFETY: zeroed termios is valid output storage for tcgetattr.
         let mut original = unsafe { std::mem::zeroed::<libc::termios>() };
         // SAFETY: descriptor is open and original is writable storage.
@@ -101,7 +111,12 @@ mod tests {
             0
         );
         drop(raw);
-        assert_eq!(local_flags(slave.as_raw_fd()), cooked);
+        // BSD terminals, macOS's among them, set PENDIN themselves when they
+        // turn canonical again, to retype pending input; that one is theirs.
+        assert_eq!(
+            local_flags(slave.as_raw_fd()) & !libc::PENDIN,
+            cooked & !libc::PENDIN
+        );
     }
 
     #[test]
