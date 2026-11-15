@@ -296,6 +296,7 @@ impl Write for SocketWriter<'_> {
 /// `MSG_DONTWAIT` applies to this call only: setting `O_NONBLOCK` would change
 /// the concurrent reader's clone too, and a blocking send can keep making
 /// progress past `SO_SNDTIMEO`.
+#[cfg(target_os = "linux")]
 pub(crate) fn send_nonblocking(socket: &UnixStream, bytes: &[u8]) -> io::Result<usize> {
     // SAFETY: the borrowed socket and byte slice stay live for this call;
     // send reads at most bytes.len() bytes and retains no pointer.
@@ -312,6 +313,49 @@ pub(crate) fn send_nonblocking(socket: &UnixStream, bytes: &[u8]) -> io::Result<
     } else {
         Ok(sent as usize)
     }
+}
+
+/// One nonblocking send on a socket whose descriptor other threads share.
+/// macOS's `send` ignores `MSG_DONTWAIT` (its manual names only `MSG_OOB` and
+/// `MSG_DONTROUTE`) and would block on a full socket, so the descriptor is
+/// made nonblocking for this one call and then put back as it was. A reader
+/// sharing it only reads after `ready_to_read` says it can (`PollReader`), so
+/// the moment doesn't change what it sees. A full Unix socket may also refuse
+/// with `ENOBUFS`, which is the same as would-block here. SIGPIPE needs no
+/// flag: Rust's runtime ignores it, so a closed peer is `EPIPE`.
+#[cfg(target_os = "macos")]
+pub(crate) fn send_nonblocking(socket: &UnixStream, bytes: &[u8]) -> io::Result<usize> {
+    let descriptor = socket.as_raw_fd();
+    // SAFETY: F_GETFL reads the flags of the live borrowed descriptor.
+    let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let was_blocking = flags & libc::O_NONBLOCK == 0;
+    // SAFETY: as above, setting flags on the same live descriptor.
+    if was_blocking
+        && unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: the borrowed socket and byte slice stay live for this call;
+    // send reads at most bytes.len() bytes and retains no pointer.
+    let sent = unsafe { libc::send(descriptor, bytes.as_ptr().cast(), bytes.len(), 0) };
+    let result = if sent < 0 {
+        let error = io::Error::last_os_error();
+        Err(if error.raw_os_error() == Some(libc::ENOBUFS) {
+            io::Error::from(io::ErrorKind::WouldBlock)
+        } else {
+            error
+        })
+    } else {
+        Ok(sent as usize)
+    };
+    // SAFETY: as above; the flags read before the send are put back.
+    if was_blocking && unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    result
 }
 
 /// Runs a nonblocking `attempt` to write to `descriptor` until it makes
