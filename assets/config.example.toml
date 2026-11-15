@@ -2,8 +2,9 @@
 #
 # Copy this file to ~/.config/termeric/config.toml (or
 # $XDG_CONFIG_HOME/termeric/config.toml; the same place on macOS) and change
-# what you like. It lists every setting: the values that aren't commented out
-# are the defaults, and the commented entries show settings that have none. Every key is optional; a
+# what you like. It lists every setting: the values that aren't commented
+# out are the defaults, and the commented entries show settings that have
+# none. Every key is optional; a
 # key you leave out keeps its default, and Termeric runs fine with no file.
 #
 # Termeric reloads the file within a second of a save. A key it doesn't know,
@@ -18,8 +19,9 @@
 
 [shell]
 # The program new tabs and panes run. Unset, it is $SHELL, or your account's
-# login shell; on macOS it then starts as a login shell, as in Terminal.app.
-# A program set here runs with exactly the `args` set here. Changes apply to
+# login shell; on macOS it then starts as a login shell, as in Terminal.app,
+# unless `args` are set here, which replace that. A program set here runs
+# with exactly the `args` set here. Changes apply to
 # tabs and panes opened afterwards.
 # program = "/bin/zsh"
 # args = ["-l"]
@@ -144,7 +146,9 @@ name = "turmeric"
 
 [renderer]
 # auto tries the GPU, then software rendering; gpu and software insist on one.
-# Applies the next time Termeric starts; `termeric --renderer` overrides it.
+# macOS has no software renderer (Metal is always there), so software can't
+# start there. Applies the next time Termeric starts; `termeric --renderer`
+# overrides it.
 backend = "auto"
 
 [accessibility]
@@ -192,9 +196,10 @@ visual_duration_ms = 100  # 10 to 5000
 # macOS only: a system-wide key that shows and hides the quick-access
 # terminal (`termeric --quick-access`) while it runs, whichever app is in
 # front. The key is the one at that place on a US keyboard: a letter, a
-# digit, ` - = [ ] \\ ; ' , . /, space, return, tab, escape, or f1 to f20;
-# it needs ctrl, alt, or super unless it is a function key. On Linux, bind
-# `termeric --quick-access` to a desktop shortcut instead.
+# digit, one of ` - = [ ] ; ' , . /, a backslash (written "\\" here), space,
+# return, tab, escape, or f1 to f20; it needs ctrl, alt, or super unless it
+# is a function key. It takes effect when the quick-access terminal starts.
+# On Linux, bind `termeric --quick-access` to a desktop shortcut instead.
 # macos_hotkey = { key = "`", ctrl = true }
 
 [splash]

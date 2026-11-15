@@ -86,6 +86,7 @@ cd termeric
 cargo build --release --locked
 python3 scripts/bundle_macos.py --binary target/release/termeric --out target/Termeric.app --sign
 mv target/Termeric.app /Applications/
+sudo mkdir -p /usr/local/bin
 sudo ln -sf /Applications/Termeric.app/Contents/MacOS/termeric /usr/local/bin/termeric
 ```
 
@@ -192,6 +193,7 @@ For `sudo`, install the entry system-wide or run `sudo env TERM=xterm-256color c
 - **Option types characters instead of acting as Alt (Meta).** That is the default, so layouts that type `@`, `|`, or `[` with Option keep working. Set `macos_option_as_alt` under `[keyboard]` to `"left"`, `"right"`, or `"both"` to make Option act as Alt for programs such as Emacs and readline.
 - **No notifications.** They need Termeric.app (not a binary run from `target/`) and your permission, which macOS asks for the first time a program sends one; **System Settings → Notifications → Termeric** changes it.
 - **Programs or agents aren't found.** Started from the Finder or the Dock, Termeric takes `PATH` from your login shell (including `~/.zprofile` and `~/.zshrc`). Its own shells start as login shells, as in Terminal.app.
+- **`termeric` commands don't reach the running app.** If your shell sets `XDG_RUNTIME_DIR` (some Linux dotfiles do), a Termeric started from the Finder, which doesn't have it, listens elsewhere; unset it on macOS.
 - **It won't start.** Termeric draws with Metal, which every supported Mac has; there is no software renderer on macOS, so leave `backend` under `[renderer]` unset or `"gpu"`.
 
 **A mistake in `config.toml`.** Termeric still starts, with the defaults or the settings it had, and shows a notice naming the key and line until the file loads. It never saves over a file with an error. **Reset Configuration to Defaults** in the palette starts over and keeps the old file beside the new one.

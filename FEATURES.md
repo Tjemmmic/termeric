@@ -61,7 +61,7 @@ What Termeric supports today, and what is planned. Termeric runs on Linux, on bo
 | Read-only panes | Partial | A locked pane keeps showing output. Restoring a workspace unlocks every pane. |
 | Quick-access terminal | Partial | A drop-down terminal: `termeric --quick-access` starts it, then shows or hides it, and its shells keep running while it's hidden. Bound to a desktop shortcut, it takes focus when shown. Wayland compositors may ignore its placement; a compositor rule for its `org.termeric.Termeric.QuickAccess` app ID fixes that. |
 | Always on top or bottom | Partial | Your desktop decides the final order, and many Wayland compositors ignore the request. |
-| Fullscreen | Partial | F11. Not remembered between launches. |
+| Fullscreen | Partial | F11 (⌃⌘F on macOS). Not remembered between launches. |
 
 ## Input, selection, and search
 
@@ -103,7 +103,7 @@ Everything here is off until you turn on **Agent Features** on the **Agents** pa
 | --- | --- | --- |
 | Recognizing agents in terminals | Experimental | Claude Code, Codex, Gemini CLI, OpenCode, and agents you add. Status reports work for Claude Code and Codex, after **Set Up Agent Status…**. |
 | Change review | Experimental | Reviewing, staging, and reverting an agent's changes to a Git repository. |
-| Agent view | Experimental | A docked panel that runs Claude Code, Codex, or OpenCode as a conversation. Tab moves between its controls, the arrow keys move the choice of agent, PageUp and PageDown scroll, and Ctrl+Home and Ctrl+End go to the start and end (in the composer, while it is empty). |
+| Agent view | Experimental | A docked panel that runs Claude Code, Codex, or OpenCode as a conversation. Tab moves between its controls, the arrow keys move the choice of agent, PageUp and PageDown scroll, and Ctrl+Home and Ctrl+End (⌥Home and ⌥End on macOS) go to the start and end (in the composer, while it is empty). |
 | Supervisor | Experimental | |
 | Transcripts | Experimental | Recording and exporting an agent's session. Removing secrets from exports is best effort. |
 | `termeric mcp` | Experimental | Termeric's tools for a coding agent, over MCP. |
@@ -125,7 +125,7 @@ macOS is built and tested on Apple silicon in CI, including a run of the app its
 | --- | --- | --- |
 | Keyboard shortcuts | Supported | The defaults use ⌘ as Mac apps do (⌘C, ⌘V, ⌘T, ⌘W, ⌘N, ⌘1–⌘9, ⇧⌘] and ⇧⌘[ for tabs, ⌘D and ⇧⌘D to split, ⌥⌘ arrows between panes); the Keyboard Shortcuts panel shows them with ⌃⌥⇧⌘. An unbound ⌘ chord sends nothing to the program, and ⌥← and ⌥→ move by word in the shell. |
 | Option key | Supported | Option types characters by default; `macos_option_as_alt` under `[keyboard]` makes the left, right, or both Option keys act as Alt. |
-| Menu bar | Supported | Every menu command runs as its shortcut does. Menus show only the system's own shortcuts (Hide, Quit, Minimize): macOS would otherwise take those keys before Termeric's own input handling. |
+| Menu bar | Supported | Menu commands run in the focused window as their shortcuts do; while a dialog, panel, the find box, tab rename, or the agent view has the keyboard, they do nothing, except Paste, which pastes there. Menus show only the system's own shortcuts (Hide, Quit, Minimize): macOS would otherwise take those keys before Termeric's own input handling. |
 | Quitting | Supported | ⌘Q, the Dock's Quit, logging out, and shutting down keep every open window's workspace for the next start. |
 | Shells | Supported | Your shell starts as a login shell, as in Terminal.app. macOS's own Bash 3.2 has no command-start marks (`PS0`); a newer Bash from Homebrew has them. Started from the Finder or the Dock, Termeric takes `PATH` from your login shell and sets `LANG` from your language and region when nothing else does. |
 | Fonts | Supported | `monospace` is Menlo, and chrome uses the system font. A font size is in the Mac's points (one logical pixel), so `size = 12` looks as 12 pt does in other Mac apps. |
@@ -136,7 +136,7 @@ macOS is built and tested on Apple silicon in CI, including a run of the app its
 | File chooser | Supported | Settings and the context picker open the Mac's own chooser as a sheet. |
 | Reduced motion and contrast | Supported | Termeric follows **Reduce motion** and **Increase contrast** in **System Settings → Accessibility → Display**. |
 | Quick-access terminal | Partial | `termeric --quick-access` starts it and toggles it, as on Linux. Set `macos_hotkey` under `[quick_access]` for a system-wide key that shows and hides it while it runs: macOS lets a key press bring it forward, but may refuse a request from another program (such as a Shortcuts automation). |
-| Kitty file transfer | Supported | Paths that go through a symbolic link are refused, as everywhere; on macOS that includes `/tmp`, `/var`, and `/etc`, which are links into `/private`. |
+| Kitty file transfer | Partial | As on Linux, with two differences. Paths that go through a symbolic link are refused, as everywhere, and on macOS that includes `/tmp`, `/var`, and `/etc`, which are links into `/private`. Downloads to volumes that can't rename without replacing (exFAT, FAT, and some network volumes) are refused rather than risk replacing a file. |
 | Serial terminals | Partial | Rates above 230400 baud depend on the adapter's driver; use the `/dev/cu.*` device. Not tested on hardware. |
 | Software rendering | Not supported | Metal has no software renderer, so `--renderer software` can't start on macOS. |
 | Dock menu, Linux-only identity | Not supported | The Linux desktop entry's New Window action has no Dock menu counterpart yet; `--app-id`, activation tokens, and the desktop entries are Linux only. |

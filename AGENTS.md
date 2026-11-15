@@ -81,7 +81,7 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `ui/filter_field.rs`, `ui/focus_step.rs`, `ui/text.rs` | Filter-field text placement, keyboard focus steps through a panel's controls, and shared wording (`plural`) |
 | `ui/geometry.rs`, `ui/color.rs`, `ui/icon.rs` | `Bounds`, the one rectangle type (half-open `contains`) for layout, hit tests, drawing, and accessibility; color alpha/mix/brightness helpers; the icon set drawn from `renderer/icons.rs` |
 | `config/` | TOML config loading, theme definitions |
-| `input/` | Shortcut registry, focused mode-aware keyboard encoder, mouse state |
+| `input/` | Shortcut registry (defaults per system), focused mode-aware keyboard encoder, mouse state; `platform.rs` holds each system's conventions (the command, word, and hyperlink modifiers, line motion, chord labels, which Option key composes text) as methods of `System`, and input code asks `System::CURRENT` rather than testing the target itself |
 | `tabs/` | Tab management |
 | `panes/` | Each tab's pane tree (one leaf until it is split), its layout over the tab's `TerminalArea`, and pane/divider ID history |
 | `session/` | Per-terminal agent state, transcripts and their export, and what the workspace panel lists |
@@ -102,7 +102,7 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `raw_terminal.rs` | Raw mode for the terminal the domain relay and the serial bridge run in; input that is not a terminal is left alone |
 | `test_support/` | Test builds only: shared fixtures (`sleeping_shell`, `poll_until`, …), the release benchmark suite (`benchmarks.rs`), and soaks (`soak.rs`) |
 | `paths.rs` | Configuration and data directories, the XDG ones on both systems (test builds resolve them under a per-process temporary directory), Termeric's own executable, and whether macOS runs it from App Translocation |
-| `process_info.rs` | Another process's working directory, parent, newest child, name, and arguments: `/proc` on Linux, libproc and `sysctl` on macOS |
+| `process_info/` | Another process's working directory, parent, newest child, name, and arguments: `/proc` on Linux, libproc and `sysctl` on macOS |
 | `launch_environment.rs` | macOS: completing the environment of a launch from the Finder or the Dock (`LANG`, the login shell's `PATH`, the home directory) before any thread starts, and starting the quick-access terminal through LaunchServices |
 | `safe_fs.rs` | Hardened reads (no symlinks, FIFOs, or unbounded reads) and atomic private-staging writes for Termeric's own files |
 | `line_reader.rs` | Reading newline-delimited input from other processes with bounded memory; callers decide what an oversized or unterminated line means |
@@ -198,7 +198,7 @@ When adding a component that blocks input, trace its whole lifecycle — open, i
 
 ### Modal Layers
 
-`ModalLayer::INPUT_PRIORITY` (`ui/modal.rs`) is the one stacking order: guardrail → dialog → diff review → context picker → Harvest sprout menu → Harvest cellar → domain picker → Unicode picker → command palette → shortcuts panel → Settings → Workspaces menu → workspace panel → Commands panel → Agents panel. Only `App::top_modal_layer()` owns input: keys, clicks, wheel, hover, IME, paste, and accessibility actions and snapshots all gate on it, and the renderer draws the layers in the reverse order, so the surface in front is the one that answers. A consumer with nothing to do for the top layer swallows the input rather than passing it beneath.
+`ModalLayer::INPUT_PRIORITY` (`ui/modal.rs`) is the one stacking order: guardrail → dialog → diff review → context picker → Harvest sprout menu → Harvest cellar → domain picker → Unicode picker → command palette → shortcuts panel → Settings → Workspaces menu → workspace panel → Commands panel → Agents panel. Only `App::top_modal_layer()` owns input: keys, clicks, wheel, hover, IME, paste, and accessibility actions and snapshots all gate on it, and the renderer draws the layers in the reverse order, so the surface in front is the one that answers. A consumer with nothing to do for the top layer swallows the input rather than passing it beneath. macOS menu commands follow the same rule: while anything other than the terminals holds the keyboard (`terminal_has_keyboard()`), a menu command does nothing, except Paste, which goes where any paste goes.
 
 ### Mouse Click Dispatch Priority
 
@@ -213,7 +213,7 @@ In `app/mouse.rs` (`handle_mouse_input`): 0. The docked agent view claims presse
 2. Global Settings button (preserves direct panel-to-Settings switching)
 3. The top panel layer (Settings, Workspaces menu, workspace, Commands, or Agents panel) intercepts its clicks, including outside-click dismissal, before background controls
 4. Tab bar, then any press on chrome floating over the panes (`press_floating_chrome`: the find box works it, a scrollbar swallows other buttons), then toggling a pane in or out of an armed broadcast target set
-5. Pane focus, Ctrl+Click hyperlink, and terminal mouse reporting when requested; Shift bypasses to native selection
+5. Pane focus, a hyperlink click with the system's link modifier (Ctrl, ⌘ on macOS), and terminal mouse reporting when requested; Shift bypasses to native selection
 6. Terminal selection (default)
 
 The same panel-ownership predicate blocks background divider hover from returning before panel hover handling. Non-primary panel presses are consumed; terminal-protocol releases keep their separate completion path. Native gestures are finalized on window focus loss or modal takeover, before dismissal/animation cleanup can discard that ownership. Terminal-geometry synchronization also finalizes gestures for resize, scale, font/configuration, and topology paths; never clear divider state directly and orphan a live-domain preview. Scrollbar capture is an optional stable terminal identity, not a boolean. Revalidate it at the scroll mutation boundary and on focus-surface refresh so a held gesture cannot scroll a newly selected tab or pane. Divider drags likewise require their original open tab to remain selected and their exact divider to remain visible. Finish invalid drags through the shared control path; never silently discard an unacknowledged live-domain preview.
@@ -232,7 +232,7 @@ In `app/event_loop.rs` (KeyboardInput handler), after AltGraph tracking and quer
 4. Search, then copy mode/quick select
 5. Normal input: broadcast cancel on Escape, F6 chrome focus, Git completion keys, broadcast arming, application shortcuts, plugin/custom keybindings, broadcast writes, then `input/keyboard.rs` encoding
 
-Snapshot DECCKM/DECKPAM from `active_terminal()` immediately before encoding, then write through `Tab::write()` so the mode and PTY always belong to the same focused pane. AltGraph state is explicit and is cleared on focus loss.
+Snapshot DECCKM/DECKPAM from `active_terminal()` immediately before encoding, then write through `Tab::write()` so the mode and PTY always belong to the same focused pane. AltGraph state is explicit and is cleared on focus loss. On macOS, a key typed with an Option key that isn't configured as Alt (`[keyboard] macos_option_as_alt`) is decided per event (`System::read_key_press`): chords see the physical key with Alt, and the terminal and fields see the composed text without it.
 
 While anything above the terminals holds the keyboard (a modal layer, tab rename, the agent view, or the find box), `App::terminal_has_keyboard()` is false and every terminal cursor rests dim and steady, so it is always clear where typing goes.
 
@@ -373,7 +373,7 @@ Chrome geometry lands on whole physical pixels. Rendering, hit testing, keyboard
 
 ### Typography
 
-- **Terminal text** uses the configured monospace font (default `monospace`, 12pt). `font.size` is in points at 96/72 logical pixels per point, from 8pt to 72pt. The Settings stepper moves 1pt; the zoom shortcuts move 2pt. Terminal text keeps the monospace grid: no custom letter-spacing or squeezed advances.
+- **Terminal text** uses the configured monospace font (default `monospace`, 12pt). `font.size` is in points, from 8pt to 72pt: 96/72 logical pixels per point on Linux, and one logical pixel per point on macOS, as in other Mac apps (`TERMINAL_PIXELS_PER_POINT`). The Settings stepper moves 1pt; the zoom shortcuts move 2pt. Terminal text keeps the monospace grid: no custom letter-spacing or squeezed advances.
 - **UI text** (tabs, Settings, the palette, panels, menus, dialogs, toasts, the find box) uses the desktop's sans-serif face at 10pt, resolved through fontconfig on Linux and the system font on macOS, so chrome reads like the rest of the desktop. Draw it with `Renderer::push_ui_label`, which measures proportionally, centres on the face's own metrics, and shortens with an ellipsis.
 - **Emoji** render inline when a font supports them and fall back gracefully.
 

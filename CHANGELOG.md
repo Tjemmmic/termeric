@@ -9,6 +9,12 @@ Notable changes to Termeric, by release. The project follows [Keep a Changelog](
 - A light theme for every root theme, named after its dark partner with "Light" ("Turmeric Light").
 - macOS 11 and later, on Apple silicon and Intel, built from source as Termeric.app: Mac shortcuts with ⌘, a menu bar, an Option-as-Alt setting, login shells with your `PATH` and locale, notifications, the Mac file chooser, reduce motion and increase contrast, a quick-access hotkey, and quitting that keeps every window's workspace. [FEATURES.md](FEATURES.md#macos) lists what differs there.
 
+### Changed
+
+- Trackpad and other pixel-precise scrolling moves by the distance scrolled, one line per line height, and sends programs one report or arrow key per line, instead of at least one line per small movement (Wayland touchpads too).
+- The `xterm-termeric` terminfo entry declares 32767 color pairs instead of 65536, so older ncurses (such as macOS's own) can read it.
+- **New Window** has a bindable shortcut action, `new_window` (unbound on Linux, ⌘N on macOS).
+
 ### Fixed
 
 - On light themes, toasts, cards, and text fields no longer turn a muddy gray, and faint text and an unfocused window fade toward the background instead of growing darker.
