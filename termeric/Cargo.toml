@@ -49,8 +49,8 @@ tempfile = "3"
 # OSC 52 clipboard-read replies
 base64 = "0.22"
 
-# Clipboard (wayland-data-control needed for Wayland support)
-arboard = { version = "3.4", features = ["wayland-data-control"] }
+# Clipboard (Linux adds Wayland's data-control protocol below)
+arboard = "3.4"
 
 # Configuration
 serde.workspace = true
@@ -93,6 +93,8 @@ libc = "0.2"
 # versions winit itself uses, on its own connection (`client_system`).
 wayland-client = "0.31"
 wayland-backend = { version = "0.3", features = ["client_system"] }
+# The clipboard on Wayland compositors with the data-control protocol.
+arboard = { version = "3.4", features = ["wayland-data-control"] }
 # The XDG desktop portal (accessibility preferences, the file chooser) and
 # desktop notifications, over D-Bus.
 zbus = "5.19"
