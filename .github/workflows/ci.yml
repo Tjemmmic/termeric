@@ -1,4 +1,5 @@
-# Fast checks for every pull request and every push to main.
+# Checks for every pull request and every push to main: format, lint, and test
+# on Linux, and on macOS also the GPU and GUI smokes and the app for testers.
 name: CI
 
 on:
@@ -79,8 +80,12 @@ jobs:
           targets: x86_64-apple-darwin
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          # The cache quota is shared with the Linux job; only main saves.
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Keep the compiled dependencies when a check fails, as the Linux job does.
+          cache-on-failure: true
+      - name: Resolve the temporary directory
+        # macOS's lies under the /var link; the tests compare the paths they
+        # create with the ones the kernel reports, which have links resolved.
+        run: echo "TMPDIR=$(cd "$TMPDIR" && pwd -P)/" >> "$GITHUB_ENV"
       - name: Install the shells and tools the tests drive
         timeout-minutes: 10
         # Bash 5 for the prompt tests (macOS's /bin/bash is 3.2), fish, tmux.

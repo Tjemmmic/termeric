@@ -158,16 +158,25 @@ class Smoke:
 
     def quit(self, process_id: int, window_id: int) -> None:
         assert self.process is not None
-        quit_by_apple_event = subprocess.run(
-            ["osascript", "-e", f'tell application id "{BUNDLE_ID}" to quit'],
-            capture_output=True,
-            timeout=30,
-        )
-        if quit_by_apple_event.returncode == 0:
+        try:
+            quit_by_apple_event = subprocess.run(
+                ["osascript", "-e", f'tell application id "{BUNDLE_ID}" to quit'],
+                capture_output=True,
+                timeout=30,
+            )
+            refusal = (
+                None
+                if quit_by_apple_event.returncode == 0
+                else quit_by_apple_event.stderr.decode(errors="replace").strip()
+            )
+        except subprocess.TimeoutExpired:
+            refusal = "osascript did not answer within 30 seconds"
+        if refusal is None:
             how = "an Apple Event (terminate:)"
         else:
-            reason = quit_by_apple_event.stderr.decode(errors="replace").strip()
-            print(f"note: the Apple Event quit was refused ({reason}); closing the window instead")
+            # Quitting through terminate: went untested; say so where CI shows
+            # it, then end the app the other way so the rest still runs.
+            print(f"::warning::the GUI smoke could not quit through Apple Events ({refusal}); terminate: is untested in this run")
             self.control("close-window", str(process_id), str(window_id))
             how = "closing its last window"
         try:

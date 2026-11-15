@@ -6,9 +6,9 @@
 # It records the macOS and hardware versions, the app's signature and
 # quarantine state, what a Termeric shell's environment and terminfo lookup
 # look like, and a debug log of one short launch (the window opens for about
-# fifteen seconds and closes itself). Read the file before sharing it: the
-# log can contain text from your terminal, and the environment section lists
-# variable names (not values) of your shell.
+# fifteen seconds and closes itself, with throwaway settings). Read the file
+# before sharing it: the log can contain text from your terminal, and the
+# environment section shows PATH, the locale, and your variables' names.
 
 set -u
 app=${1:-/Applications/Termeric.app}
@@ -37,15 +37,19 @@ section() { printf '\n===== %s =====\n' "$1"; }
     codesign --display --verbose=2 "$app" 2>&1
     codesign --verify --deep --strict "$app" 2>&1 && echo "signature verifies"
     echo "Quarantine: $(xattr -p com.apple.quarantine "$app" 2>/dev/null || echo none)"
-    case "$("$binary" --version >/dev/null 2>&1; echo "$PWD")" in *AppTranslocation*) echo "Translocated";; esac
+    case "$(cd "$app" && pwd -P)" in
+      *AppTranslocation*) echo "Translocated: macOS runs a temporary copy; move the app to Applications" ;;
+      *) echo "Not translocated" ;;
+    esac
   fi
 
-  section "Shell and environment (names only)"
+  section "Shell and environment"
   echo "Login shell: $(dscl . -read "/Users/$USER" UserShell 2>/dev/null | awk '{print $2}')"
   echo "SHELL=$SHELL"
   echo "LANG=${LANG-unset} LC_ALL=${LC_ALL-unset} LC_CTYPE=${LC_CTYPE-unset}"
   echo "TERM=${TERM-unset} TERM_PROGRAM=${TERM_PROGRAM-unset}"
   echo "PATH=$PATH"
+  echo "Variable names (not values):"
   env | cut -d= -f1 | sort | tr '\n' ' '
   echo
   for tool in git brew python3 node claude codex opencode; do
@@ -70,12 +74,18 @@ section() { printf '\n===== %s =====\n' "$1"; }
   if [ -x "$binary" ]; then "$binary" control list 2>&1 | head -40; fi
 
   section "Debug log of one launch"
+  # With throwaway configuration, data, and runtime directories, so your own
+  # settings and saved windows are neither used nor changed.
   if [ -x "$binary" ]; then
-    RUST_LOG=warn,termeric=debug "$binary" --separate-process 2>&1 &
+    scratch=$(mktemp -d /tmp/termeric-diagnostics.XXXXXX)
+    mkdir -m 700 "$scratch/run"
+    XDG_CONFIG_HOME="$scratch/config" XDG_DATA_HOME="$scratch/data" XDG_RUNTIME_DIR="$scratch/run" \
+      RUST_LOG=warn,termeric=debug "$binary" --separate-process 2>&1 &
     pid=$!
     sleep 15
     kill "$pid" 2>/dev/null
     wait "$pid" 2>/dev/null
+    rm -rf "$scratch"
   fi
 } > "$out" 2>&1
 
