@@ -124,12 +124,20 @@ pub(super) struct PinnedDirectory {
 
 impl PinnedDirectory {
     pub(super) fn open(path: &Path) -> io::Result<Self> {
+        let open = |flags| {
+            fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(flags | libc::O_NOFOLLOW_ANY)
+                .open(path)
+        };
         // O_SEARCH works in a directory that can be traversed but not read.
-        let handle = fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_SEARCH | libc::O_NOFOLLOW_ANY)
-            .open(path)
-            .map_err(explain_symbolic_link)?;
+        // A macOS that predates it refuses the flag; a readable directory
+        // still pins with the same no-link guarantee.
+        let handle = match open(libc::O_SEARCH) {
+            Err(error) if error.raw_os_error() == Some(libc::EINVAL) => open(libc::O_DIRECTORY),
+            opened => opened,
+        }
+        .map_err(explain_symbolic_link)?;
         Ok(Self { handle })
     }
 

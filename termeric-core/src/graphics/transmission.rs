@@ -422,10 +422,20 @@ fn read_shared_memory_range(
         ));
     }
     let mapping = Mapping { address, length };
-    // SAFETY: the mapping is `length` readable bytes and outlives this slice,
-    // which is copied out before `mapping` drops.
-    let mapped = unsafe { std::slice::from_raw_parts(mapping.address.cast::<u8>(), length) };
-    Ok(mapped[start..].to_vec())
+    // The program that made the object may still write to it, so its bytes
+    // are copied out through raw pointers rather than borrowed as a slice,
+    // which would promise Rust they can't change.
+    let mut copied = vec![0u8; length - start];
+    // SAFETY: the mapping is `length` readable bytes and outlives the copy;
+    // `start <= length`, and the destination holds `length - start` bytes.
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            mapping.address.cast::<u8>().add(start),
+            copied.as_mut_ptr(),
+            length - start,
+        );
+    }
+    Ok(copied)
 }
 
 pub(super) fn unlink_shared_memory_if_unchanged(

@@ -33,7 +33,8 @@ unsafe extern "C" {
     fn InstallEventHandler(
         target: EventTargetRef,
         handler: EventHandlerProc,
-        type_count: u32,
+        // ItemCount, an unsigned long.
+        type_count: std::ffi::c_ulong,
         types: *const EventTypeSpec,
         user_data: *mut c_void,
         installed: *mut EventHandlerRef,

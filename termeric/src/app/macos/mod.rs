@@ -131,7 +131,8 @@ fn native_view(window: &winit::window::Window) -> Option<Retained<NSView>> {
 }
 
 /// The CAMetalLayer wgpu draws into: the view's own layer when it is one,
-/// else (wgpu's usual arrangement) a sublayer of it.
+/// else (wgpu's usual arrangement) a sublayer of it, the last one: a renderer
+/// recreated after a lost device adds a new sublayer beside the old one.
 fn metal_layer(view: &NSView) -> Option<Retained<CAMetalLayer>> {
     let root: Retained<CALayer> = view.layer()?;
     if let Ok(layer) = root.clone().downcast::<CAMetalLayer>() {
@@ -142,5 +143,6 @@ fn metal_layer(view: &NSView) -> Option<Retained<CAMetalLayer>> {
     let sublayers = unsafe { root.sublayers() }?;
     sublayers
         .iter()
-        .find_map(|layer| layer.downcast::<CAMetalLayer>().ok())
+        .filter_map(|layer| layer.downcast::<CAMetalLayer>().ok())
+        .last()
 }

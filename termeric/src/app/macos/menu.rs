@@ -163,10 +163,10 @@ define_class!(
     impl MenuTarget {
         // SAFETY: the signature is AppKit's action signature.
         #[unsafe(method(performCommand:))]
-        fn perform_command(&self, sender: &NSMenuItem) {
+        fn perform_command(&self, sender: Option<&NSMenuItem>) {
             let commands = commands();
-            if let Some(action) = usize::try_from(sender.tag())
-                .ok()
+            if let Some(action) = sender
+                .and_then(|sender| usize::try_from(sender.tag()).ok())
                 .and_then(|index| commands.get(index))
             {
                 super::super::post_menu_command(action.clone());
