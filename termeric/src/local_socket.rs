@@ -82,11 +82,25 @@ pub(crate) fn runtime_directory() -> PathBuf {
     std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .filter(safe)
-        .or_else(|| darwin_user_directory().filter(safe))
+        .or_else(|| darwin_user_directory().filter(|path| darwin_parent_is_safe(path, uid)))
         .map_or_else(
             || PathBuf::from(format!("/tmp/termeric-{uid}")),
             |base| base.join("termeric"),
         )
+}
+
+/// Whether the user's Darwin directory may hold the runtime directory: the
+/// system makes it the user's own and readable by others (0755), but
+/// writable only by them, so nobody else can put or replace anything there;
+/// the `termeric` directory inside it is made private (0700) before use.
+#[cfg(target_os = "macos")]
+fn darwin_parent_is_safe(path: &Path, uid: u32) -> bool {
+    path.is_absolute()
+        && fs::symlink_metadata(path).is_ok_and(|metadata| {
+            metadata.file_type().is_dir()
+                && metadata.uid() == uid
+                && metadata.permissions().mode() & 0o022 == 0
+        })
 }
 
 /// The user's private per-user directory (`confstr(_CS_DARWIN_USER_DIR)`),
@@ -508,14 +522,14 @@ mod tests {
     /// user's own private directory, which the system makes on demand.
     #[cfg(target_os = "macos")]
     #[test]
-    fn the_darwin_user_directory_is_private_to_this_user() {
+    fn the_darwin_user_directory_is_this_users_alone_to_change() {
         let directory = darwin_user_directory().expect("confstr(_CS_DARWIN_USER_DIR)");
         assert!(
             directory.starts_with("/var/folders") || directory.starts_with("/private/var/folders")
         );
         let metadata = fs::symlink_metadata(&directory).unwrap();
         assert!(
-            runtime_parent_is_safe(&directory, effective_uid()),
+            darwin_parent_is_safe(&directory, effective_uid()),
             "{} has owner {} and mode {:o}",
             directory.display(),
             metadata.uid(),
