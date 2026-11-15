@@ -229,6 +229,7 @@ impl App {
 
     /// Files dropped on this window under Wayland, each handled as X11's
     /// `DroppedFile` is.
+    #[cfg(target_os = "linux")]
     pub(super) fn handle_files_dropped(
         &mut self,
         result: std::result::Result<Vec<PathBuf>, String>,

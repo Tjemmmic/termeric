@@ -166,6 +166,7 @@ impl Application {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
     use crate::app::WindowResult;
     use crate::cli::LaunchPlan;
     use crate::config::Config;
@@ -205,12 +206,18 @@ mod tests {
         assert!(listed.quick_access && !listed.visible && !listed.focused);
         assert_eq!(application.next_live_window(first), Some(last));
 
-        let key = application.windows[&hidden].window_key();
-        application.deliver_window_result(
-            key,
-            WindowResult::FilesDropped(Err("only files on this computer can be dropped".into())),
-        );
-        assert_eq!(application.windows[&hidden].toasts.iter().count(), 1);
+        // A Wayland drop on the hidden window still reaches it.
+        #[cfg(target_os = "linux")]
+        {
+            let key = application.windows[&hidden].window_key();
+            application.deliver_window_result(
+                key,
+                WindowResult::FilesDropped(
+                    Err("only files on this computer can be dropped".into()),
+                ),
+            );
+            assert_eq!(application.windows[&hidden].toasts.iter().count(), 1);
+        }
     }
 
     #[test]

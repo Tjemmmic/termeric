@@ -923,7 +923,7 @@ mod quick_access_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod app_id_tests {
     use crate::app::{APP_ID, QUICK_ACCESS_APP_ID};
 

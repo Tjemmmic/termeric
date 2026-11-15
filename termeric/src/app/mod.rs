@@ -132,11 +132,14 @@ pub(crate) use application::HeldForExit;
 
 /// The Wayland app ID and X11 `WM_CLASS` of ordinary windows. Desktops match
 /// it to the installed desktop entry of the same name for the window's icon
-/// and taskbar grouping, so it never changes once released.
+/// and taskbar grouping, so it never changes once released. macOS names the
+/// app by the same identifier in its bundle instead.
+#[cfg(target_os = "linux")]
 pub const APP_ID: &str = "org.termeric.Termeric";
 /// The quick-access window's identity, separate so compositor rules can treat
 /// it apart from ordinary windows. A hidden desktop entry of the same name
 /// gives it the icon.
+#[cfg(target_os = "linux")]
 pub const QUICK_ACCESS_APP_ID: &str = "org.termeric.Termeric.QuickAccess";
 
 /// Window and cell sizes for laying out UI outside a frame. Before a
@@ -226,8 +229,9 @@ pub(crate) enum WindowResult {
         path: PathBuf,
         result: std::result::Result<crate::renderer::DecodedBackgroundImage, String>,
     },
-    /// Files were dropped on this window under Wayland (on X11, winit
-    /// reports them as `WindowEvent::DroppedFile`).
+    /// Files were dropped on this window under Wayland (on X11 and macOS,
+    /// winit reports them as `WindowEvent::DroppedFile`).
+    #[cfg(target_os = "linux")]
     FilesDropped(std::result::Result<Vec<PathBuf>, String>),
     /// The desktop's file chooser this window opened closed.
     FileChosen {
@@ -272,8 +276,9 @@ impl WindowResult {
     fn redraw_reason(&self) -> RedrawReason {
         match self {
             Self::RendererDeviceLost { .. } => RedrawReason::SurfaceRecovery,
+            #[cfg(target_os = "linux")]
+            Self::FilesDropped(_) => RedrawReason::BackgroundTask,
             Self::BackgroundImageLoaded { .. }
-            | Self::FilesDropped(_)
             | Self::FileChosen { .. }
             | Self::LiveDomainTopology { .. }
             | Self::DomainPickerLoaded { .. }
@@ -307,6 +312,7 @@ impl App {
                 path,
                 result,
             } => self.handle_background_image_loaded(generation, path, result),
+            #[cfg(target_os = "linux")]
             WindowResult::FilesDropped(result) => self.handle_files_dropped(result),
             WindowResult::FileChosen { purpose, result } => {
                 self.handle_file_chosen(purpose, result)

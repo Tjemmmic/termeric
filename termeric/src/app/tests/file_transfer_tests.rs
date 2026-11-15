@@ -50,6 +50,7 @@ fn local_file_drop_is_quoted_and_refuses_unsafe_terminal_routes() {
     );
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn a_wayland_drop_handles_each_file_and_says_why_one_was_refused() {
     let config = Config {
