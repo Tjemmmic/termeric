@@ -38,6 +38,20 @@ class SmokeError(RuntimeError):
     pass
 
 
+def find_key(value, key):
+    """The first value named `key` anywhere in decoded JSON."""
+    if isinstance(value, dict):
+        if key in value:
+            return value[key]
+        value = list(value.values())
+    if isinstance(value, list):
+        for item in value:
+            found = find_key(item, key)
+            if found is not None:
+                return found
+    return None
+
+
 def wait_for(description: str, timeout: float, attempt):
     deadline = time.monotonic() + timeout
     last_error = None
@@ -128,28 +142,40 @@ class Smoke:
         )
         print("ok the shell tab shows a prompt")
 
-        self.control(
-            "launch-tab",
-            str(process_id),
-            str(window["id"]),
-            "--title",
-            "smoke",
-            "--",
-            "/bin/sh",
-            "-c",
-            f"echo {MARKER}; sleep 60",
+        launched = json.loads(
+            self.control(
+                "launch-tab",
+                str(process_id),
+                str(window["id"]),
+                "--title",
+                "smoke",
+                "--json",
+                "--",
+                "/bin/sh",
+                "-c",
+                f"echo {MARKER}; sleep 60",
+            )
         )
+        tab_id = find_key(launched, "tab_id")
+        if tab_id is None:
+            raise SmokeError(f"launch-tab named no tab: {launched}")
+        seen = {}
 
         def launched_output():
             for tab in self.inventory()["processes"][0]["windows"][0]["tabs"]:
-                if tab["title"] == "smoke":
-                    text = self.pane_text(
+                if tab["id"] == tab_id and tab["panes"]:
+                    seen["tab"] = tab
+                    seen["text"] = self.pane_text(
                         process_id, window["id"], tab["id"], tab["panes"][0]["id"]
                     )
-                    return MARKER in text
+                    return MARKER in seen["text"]
+            seen["tabs"] = self.inventory()
             return False
 
-        wait_for("the launched tab's output", 30, launched_output)
+        try:
+            wait_for("the launched tab's output", 30, launched_output)
+        except SmokeError as error:
+            raise SmokeError(f"{error}; saw {seen}") from None
         print("ok a launched tab shows its program's output")
 
         self.quit(process_id, window["id"])
