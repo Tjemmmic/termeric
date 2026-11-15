@@ -476,6 +476,11 @@ mod tests {
             std::env::var(TERMINAL_ID_VARIABLE).unwrap()
         );
         println!("ENVIRONMENT_POLICY_PROBE_OK");
+        // Stay until the parent has read that. When a terminal's session
+        // leader exits, macOS waits for its output to drain only as long as
+        // nothing interrupts the wait, then revokes the terminal and discards
+        // what is left, so output still unread at exit can be lost.
+        std::io::stdin().read_line(&mut String::new()).unwrap();
     }
 
     #[test]
@@ -533,10 +538,11 @@ mod tests {
             )
             .unwrap();
             let observer = pty.child_observer();
-            let (handle, reader) = pty.take_reader();
+            let (mut handle, reader) = pty.take_reader();
             let rx = spawn_reader_thread(reader);
             let deadline = std::time::Instant::now() + Duration::from_secs(5);
             let mut output = Vec::new();
+            let mut released = false;
             loop {
                 let timeout = deadline.saturating_duration_since(std::time::Instant::now());
                 match rx
@@ -546,6 +552,14 @@ mod tests {
                     PtyEvent::Output(bytes) => {
                         output.extend(bytes);
                         assert!(output.len() < 16384);
+                        if !released
+                            && String::from_utf8_lossy(&output)
+                                .contains("ENVIRONMENT_POLICY_PROBE_OK")
+                        {
+                            // The probe waits for this line before it exits.
+                            handle.write_all(b"\n").unwrap();
+                            released = true;
+                        }
                     }
                     PtyEvent::Closed | PtyEvent::Error(_) => break,
                 }
@@ -560,7 +574,7 @@ mod tests {
                 String::from_utf8_lossy(&output)
             );
             let output = String::from_utf8_lossy(&output);
-            assert!(output.contains("ENVIRONMENT_POLICY_PROBE_OK"));
+            assert!(output.contains("ENVIRONMENT_POLICY_PROBE_OK"), "{output:?}");
             let id = handle.terminal_id().expect("a terminal identity");
             assert!(id.starts_with(&format!("{}.", std::process::id())));
             assert!(
