@@ -101,23 +101,32 @@ jobs:
         # Every test binary runs, so one run reports every failure.
         run: cargo test --workspace --locked --no-fail-fast
       - name: GPU smokes on Metal
+        # Runs even after an earlier check failed, so one run reports them all.
+        if: ${{ !cancelled() }}
         timeout-minutes: 10
         env:
           WGPU_BACKEND: metal
           TERMERIC_GPU_SMOKE_HARDWARE: "1"
         run: cargo test -p termeric --locked -- --ignored gpu_render_smoke
       - name: Check the terminfo entry with macOS's own ncurses, vim, and less
+        # Runs even after an earlier check failed, so one run reports them all.
+        if: ${{ !cancelled() }}
         timeout-minutes: 5
         run: python3 scripts/check_terminfo.py --macos-system --require-apps
       - name: Test the helper scripts
+        # Runs even after an earlier check failed, so one run reports them all.
+        if: ${{ !cancelled() }}
         timeout-minutes: 5
         run: python3 -m unittest scripts.test_bundle_macos
       - name: Build the app with debug assertions, for the GUI smoke
+        # Runs even after an earlier check failed, so one run reports them all.
+        if: ${{ !cancelled() }}
         timeout-minutes: 15
         run: |
           cargo build -p termeric --locked
           python3 scripts/bundle_macos.py --binary target/debug/termeric --out target/smoke/Termeric.app --sign
       - name: GUI smoke
+        if: ${{ !cancelled() }}
         timeout-minutes: 5
         run: python3 scripts/macos_gui_smoke.py --app target/smoke/Termeric.app --keep-log target/smoke/termeric.log
       - name: Keep the GUI smoke's log
@@ -129,18 +138,23 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
       - name: Build Termeric.app for testers
+        # Runs even after an earlier check failed, so one run reports them all.
+        if: ${{ !cancelled() }}
         timeout-minutes: 30
         run: |
           cargo build --release --locked
           python3 scripts/bundle_macos.py --binary target/release/termeric --out target/bundle/Termeric.app --sign
           ditto -c -k --keepParent target/bundle/Termeric.app target/bundle/Termeric-macos-arm64.zip
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
         with:
           name: Termeric-macos-arm64
           path: target/bundle/Termeric-macos-arm64.zip
           if-no-files-found: error
           retention-days: 14
       - name: Build for Intel and run it under Rosetta
+        # Runs even after an earlier check failed, so one run reports them all.
+        if: ${{ !cancelled() }}
         timeout-minutes: 20
         run: |
           cargo test --workspace --locked --target x86_64-apple-darwin --no-run

@@ -1086,11 +1086,18 @@ fn headless_ligature_render_smoke(device: &Device, queue: &Queue) -> Result<()> 
     let warm_metrics = glyph_cache.shaping_cache_metrics();
     anyhow::ensure!(warm_metrics.misses == 1 && warm_metrics.hits >= 1);
 
+    let glyphs_with_ligatures = glyph_cache
+        .shape_run_styled("ffi", glyph_cache::FontStyle::default(), queue)
+        .map(|run| run.glyphs.len());
     glyph_cache.set_ligatures(false);
     let disabled = render_text_snapshot(device, queue, &mut text, &mut glyph_cache, "ffi")?;
+    let glyphs_without = glyph_cache
+        .shape_run_styled("ffi", glyph_cache::FontStyle::default(), queue)
+        .map(|run| run.glyphs.len());
     anyhow::ensure!(
         enabled != disabled,
-        "ligature setting did not change rendered pixels"
+        "ligature setting did not change rendered pixels (glyphs with ligatures: \
+         {glyphs_with_ligatures:?}, without: {glyphs_without:?})"
     );
     let toggled_metrics = glyph_cache.shaping_cache_metrics();
     anyhow::ensure!(toggled_metrics.misses == 2 && toggled_metrics.entries == 1);
