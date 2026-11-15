@@ -525,7 +525,7 @@ mod tests {
             args: vec![
                 "-c".into(),
                 "stty raw -echo; printf 'READY\r\n'; \
-                 dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -s ' '; sleep 1"
+                 dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -s ' '; sleep 10"
                     .into(),
             ],
             env: Default::default(),
@@ -640,7 +640,29 @@ mod tests {
                 .iter()
                 .all(|id| first_byte_read(&app, *id).as_deref() == Some("78"))
         });
-        assert!(reached, "the broadcast byte did not reach every target");
+        assert!(
+            reached,
+            "the broadcast byte did not reach every target: {:?}",
+            {
+                let manager = &app.tabs.as_ref().unwrap().active_tab().unwrap().panes;
+                targets
+                    .iter()
+                    .map(|id| {
+                        let pane = manager.get_pane(*id);
+                        (
+                            *id,
+                            pane.map(|pane| pane.terminal.rows_text(0, 7)),
+                            pane.map(|pane| {
+                                pane.pty
+                                    .child_observer()
+                                    .poll()
+                                    .map(|observed| observed.exit)
+                            }),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            }
+        );
         // Only now write the excluded pane's own marker: had anything earlier
         // reached it, the marker would not be the first byte it read.
         app.tabs

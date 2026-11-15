@@ -4225,9 +4225,8 @@ mod tests {
                 .windows(CLOSURE_MARKER.len())
                 .any(|bytes| bytes == CLOSURE_MARKER.as_bytes())
         );
-        closing_attachment
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
+        // As above: macOS refuses the option once the other end has shut down.
+        let _ = closing_attachment.set_read_timeout(Some(Duration::from_secs(2)));
         assert_eq!(closing_attachment.read(&mut [0; 1]).unwrap(), 0);
         for request in [
             Request::SwapPaneNext {
