@@ -91,7 +91,13 @@ mod tests {
             },
         )
         .unwrap();
-        let (mut handle, reader) = pty.take_reader();
+        let (mut handle, mut reader) = pty.take_reader();
+        // Echoes nobody reads would fill macOS's small output queue, after
+        // which its line discipline takes no more input.
+        let drain = std::thread::spawn(move || {
+            let mut sink = [0u8; 1024];
+            while reader.read(&mut sink).is_ok_and(|read| read > 0) {}
+        });
         let observer = handle.child_observer();
         let mut ledger = LaunchLedger::default();
         // Duplicate observers exercise the record budget without spawning 256
@@ -119,6 +125,7 @@ mod tests {
             std::time::Duration::from_secs(5),
             || {
                 let _ = handle.write_all(b"\n");
+                std::thread::sleep(std::time::Duration::from_millis(50));
                 observer.poll().unwrap().exit.is_some()
             }
         ));
@@ -128,7 +135,8 @@ mod tests {
         assert!(!ledger.contains(&"0".repeat(32)));
         assert!(ledger.contains(&format!("{:032x}", 1)));
         drop(handle);
-        drop(reader);
+        // The program has ended, so its output ends and the reader with it.
+        drain.join().unwrap();
         assert_eq!(
             ledger.query(&"f".repeat(32)).unwrap(),
             (

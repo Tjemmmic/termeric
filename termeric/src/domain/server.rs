@@ -4203,9 +4203,9 @@ mod tests {
             let remaining = deadline
                 .checked_duration_since(std::time::Instant::now())
                 .expect("attachment did not close before the deadline");
-            closing_attachment
-                .set_read_timeout(Some(remaining))
-                .unwrap();
+            // macOS refuses socket options once the other end has shut
+            // down; what it sent is still there to read.
+            let _ = closing_attachment.set_read_timeout(Some(remaining));
             match protocol::read_frame::<ServerFrame>(&mut closing_attachment).unwrap() {
                 ServerFrame::Output { sequence, data } => {
                     assert_eq!(sequence, next_sequence, "output must remain ordered");

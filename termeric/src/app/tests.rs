@@ -33,7 +33,23 @@ impl App {
                 });
             output.contains(expected)
         });
-        assert!(shown, "{identity:?} is missing {expected}: {output}");
+        // Whether the terminal is still there and its program still runs
+        // tells a slow program from one that ended or never started.
+        let child = self
+            .tabs
+            .as_ref()
+            .and_then(|tabs| tabs.tab_by_id(identity.tab_id))
+            .and_then(|tab| tab.pane(identity.pane_id))
+            .map(|pane| {
+                pane.pty
+                    .child_observer()
+                    .poll()
+                    .map(|observed| observed.exit)
+            });
+        assert!(
+            shown,
+            "{identity:?} is missing {expected:?} (program: {child:?}): {output}"
+        );
     }
 }
 

@@ -572,7 +572,7 @@ mod tests {
         // hex of the first byte it reads, and nothing else.
         let first_byte_read = |app: &App, id: PaneId| {
             let manager = &app.tabs.as_ref().unwrap().active_tab().unwrap().panes;
-            let output = manager.get_pane(id).unwrap().terminal.rows_text(0, 7);
+            let output = manager.get_pane(id)?.terminal.rows_text(0, 7);
             let mut words = output.split_whitespace();
             (words.next() == Some("READY")).then(|| words.collect::<Vec<_>>().join(" "))
         };
@@ -582,7 +582,25 @@ mod tests {
                 .iter()
                 .all(|id| first_byte_read(&app, *id).is_some())
         });
-        assert!(ready, "every pane should be reading raw input");
+        assert!(ready, "every pane should be reading raw input: {:?}", {
+            let manager = &app.tabs.as_ref().unwrap().active_tab().unwrap().panes;
+            pane_ids
+                .iter()
+                .map(|id| {
+                    let pane = manager.get_pane(*id);
+                    (
+                        *id,
+                        pane.map(|pane| pane.terminal.rows_text(0, 7)),
+                        pane.map(|pane| {
+                            pane.pty
+                                .child_observer()
+                                .poll()
+                                .map(|observed| observed.exit)
+                        }),
+                    )
+                })
+                .collect::<Vec<_>>()
+        });
 
         app.toggle_broadcast();
         assert!(matches!(app.broadcast, BroadcastState::Armed { .. }));
