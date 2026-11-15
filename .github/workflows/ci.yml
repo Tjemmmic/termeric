@@ -97,7 +97,8 @@ jobs:
         timeout-minutes: 30
         env:
           TERMERIC_REQUIRE_SHELL_ACCEPTANCE: "1"
-        run: cargo test --workspace --locked
+        # Every test binary runs, so one run reports every failure.
+        run: cargo test --workspace --locked --no-fail-fast
       - name: GPU smokes on Metal
         timeout-minutes: 10
         env:

@@ -160,5 +160,10 @@ fn executable_bridge_configures_a_pseudoterminal_and_relays_exact_bytes() {
     assert_eq!(restored.c_iflag, original_device_attributes.c_iflag);
     assert_eq!(restored.c_oflag, original_device_attributes.c_oflag);
     assert_eq!(restored.c_cflag, original_device_attributes.c_cflag);
-    assert_eq!(restored.c_lflag, original_device_attributes.c_lflag);
+    // BSD terminals, macOS's among them, set PENDIN themselves when they turn
+    // canonical again, to retype pending input; that one is theirs.
+    assert_eq!(
+        restored.c_lflag & !libc::PENDIN,
+        original_device_attributes.c_lflag & !libc::PENDIN
+    );
 }
