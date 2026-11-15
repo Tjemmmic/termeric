@@ -1,6 +1,7 @@
+use super::super::canonical_tempdir;
 use super::*;
 use flate2::{Compression, write::ZlibEncoder};
-use tempfile::tempdir;
+use tempfile::NamedTempFile;
 
 #[test]
 fn worker_shutdown_cleans_staging_and_does_not_process_queued_finish() {
@@ -22,7 +23,7 @@ fn worker_shutdown_cleans_staging_and_does_not_process_queued_finish() {
         Exit::Commit,
     ] {
         for payload in [b"".as_slice(), b"staged payload"] {
-            let temp = tempdir().unwrap();
+            let temp = canonical_tempdir();
             let destination = temp.path().join("received.bin");
             let unrelated = temp.path().join("keep.bin");
             fs::write(&unrelated, b"keep").unwrap();
@@ -89,7 +90,10 @@ fn worker_shutdown_cleans_staging_and_does_not_process_queued_finish() {
                             .collect();
                         assert_eq!(staged.len(), 1, "{exit:?}");
                         assert_ne!(staged[0], destination);
-                        assert_eq!(fs::read(&staged[0]).unwrap(), payload);
+                        assert_eq!(
+                            fs::read(platform::staged_data_path(&staged[0])).unwrap(),
+                            payload
+                        );
                         assert!(!destination.exists());
                         if exit == Exit::Cancel {
                             cancellation.store(true, Ordering::Release);
@@ -254,7 +258,7 @@ fn completed_filesystem_fixture(root: &Path) -> (DownloadTransaction, Vec<Create
 
 #[test]
 fn cancellation_after_filesystem_commit_rolls_back_instead_of_finishing() {
-    let root = tempdir().unwrap();
+    let root = canonical_tempdir();
     let existing = root.path().join("existing");
     fs::write(&existing, b"keep").unwrap();
     let (transaction, created) = completed_filesystem_fixture(root.path());
@@ -270,7 +274,7 @@ fn cancellation_after_filesystem_commit_rolls_back_instead_of_finishing() {
 
 #[test]
 fn commit_completion_preserves_success_and_does_not_revoke_it_later() {
-    let root = tempdir().unwrap();
+    let root = canonical_tempdir();
     let (transaction, created) = completed_filesystem_fixture(root.path());
     let cancellation = AtomicBool::new(false);
     let result = transaction
@@ -303,7 +307,7 @@ fn commit_completion_preserves_success_and_does_not_revoke_it_later() {
 #[test]
 fn commit_failure_preserves_original_error_and_rolls_back_when_canceled() {
     for canceled in [false, true] {
-        let root = tempdir().unwrap();
+        let root = canonical_tempdir();
         let (transaction, created) = completed_filesystem_fixture(root.path());
         let cancellation = AtomicBool::new(canceled);
         let result = transaction.complete_commit(
@@ -325,7 +329,7 @@ fn commit_failure_preserves_original_error_and_rolls_back_when_canceled() {
 #[test]
 fn directory_final_permissions_do_not_retain_assembly_access() {
     for requested in [0o000, 0o055, 0o555, 0o2750] {
-        let root = tempdir().unwrap();
+        let root = canonical_tempdir();
         let directory = root.path().join("tree");
         let child = directory.join("child");
         let file = child.join("file");
@@ -388,7 +392,7 @@ fn directory_final_permissions_do_not_retain_assembly_access() {
 
 #[test]
 fn rollback_restores_owned_directory_access_before_removing_children() {
-    let root = tempdir().unwrap();
+    let root = canonical_tempdir();
     let parent = root.path().join("parent");
     let child = parent.join("child");
     let file = child.join("file");
@@ -420,7 +424,7 @@ fn rollback_restores_owned_directory_access_before_removing_children() {
 #[test]
 fn unverified_directory_handle_never_changes_replacement_permissions() {
     for symbolic in [false, true] {
-        let root = tempdir().unwrap();
+        let root = canonical_tempdir();
         let path = root.path().join("owned");
         let moved = root.path().join("moved");
         let target = root.path().join("target");
@@ -448,10 +452,16 @@ fn unverified_directory_handle_never_changes_replacement_permissions() {
     }
 }
 
+/// Linux pins an inaccessible directory with O_PATH and recovers it through
+/// procfs; macOS restores access by name as it opens one it just created
+/// (`directory_assembly_access_survives_restrictive_umask`).
+#[cfg(target_os = "linux")]
 #[test]
 fn opath_directory_access_recovery_ignores_replaced_paths() {
+    use std::os::unix::fs::OpenOptionsExt;
+
     for symbolic in [false, true] {
-        let root = tempdir().unwrap();
+        let root = canonical_tempdir();
         let path = root.path().join("owned");
         let moved = root.path().join("moved");
         let target = root.path().join("target");
@@ -513,7 +523,7 @@ fn directory_assembly_access_survives_restrictive_umask() {
         );
         return;
     }
-    let root = tempdir().unwrap();
+    let root = canonical_tempdir();
     // Change the process-wide umask only in this isolated test process.
     // SAFETY: umask has no pointer arguments; no sibling test runs here.
     let previous = unsafe { libc::umask(0o777) };
@@ -535,7 +545,7 @@ fn directory_assembly_access_survives_restrictive_umask() {
 #[test]
 fn directory_finalization_never_changes_a_replacement_path() {
     for symlink_replacement in [false, true] {
-        let root = tempdir().unwrap();
+        let root = canonical_tempdir();
         let path = root.path().join("owned");
         let moved = root.path().join("moved");
         let target = root.path().join("target");
@@ -576,7 +586,7 @@ fn directory_finalization_never_changes_a_replacement_path() {
 #[test]
 fn directory_finalization_requires_its_recorded_handle() {
     for invalid in ["unrecorded", "missing", "mismatched", "wrong-kind"] {
-        let root = tempdir().unwrap();
+        let root = canonical_tempdir();
         let path = root.path().join("owned");
         let other = root.path().join("other");
         let mut created = Vec::new();
@@ -614,7 +624,7 @@ fn directory_finalization_requires_its_recorded_handle() {
 #[test]
 fn directory_rollback_does_not_change_replacement_permissions() {
     for symlink_replacement in [false, true] {
-        let root = tempdir().unwrap();
+        let root = canonical_tempdir();
         let path = root.path().join("owned");
         let moved = root.path().join("moved");
         let target = root.path().join("target");
@@ -644,7 +654,7 @@ fn directory_rollback_does_not_change_replacement_permissions() {
 
 #[test]
 fn directory_symlinks_resolve_forward_relative_and_absolute_targets() {
-    let root = tempdir().unwrap();
+    let root = canonical_tempdir();
     let directory = root.path().join("tree");
     let file = directory.join("file");
     let relative = root.path().join("links/relative");
@@ -759,7 +769,7 @@ fn directory_hardlinks_and_unknown_symlink_ids_fail_with_rollback() {
             b"fid_abs:unknown".as_slice(),
         ),
     ] {
-        let root = tempdir().unwrap();
+        let root = canonical_tempdir();
         let directory = root.path().join("tree");
         let link = root.path().join("link");
         let cancel = AtomicBool::new(false);
@@ -811,7 +821,7 @@ fn directory_hardlinks_and_unknown_symlink_ids_fail_with_rollback() {
 #[test]
 fn signed_modification_times_survive_transaction_commit() {
     for mtime_ns in [-1_i64, -1_000_000_001, 0, 1_700_000_000_123_456_789] {
-        let root = tempdir().unwrap();
+        let root = canonical_tempdir();
         let directory = root.path().join("tree");
         let file = directory.join("file");
         let hardlink = directory.join("hard");
@@ -911,7 +921,7 @@ fn signed_modification_times_survive_transaction_commit() {
 
 #[test]
 fn expanded_creation_budget_counts_implicit_parents_once() {
-    let root = tempdir().unwrap();
+    let root = canonical_tempdir();
     let parent = root.path().join("missing-parent");
     let mut paths: HashSet<_> = (0..MAX_KITTY_DOWNLOAD_FILES - 1)
         .map(|index| parent.join(format!("file-{index}")))
@@ -936,7 +946,7 @@ fn expanded_creation_budget_counts_implicit_parents_once() {
 
 #[test]
 fn excessive_implicit_tree_is_rejected_before_any_destination_creation() {
-    let root = tempdir().unwrap();
+    let root = canonical_tempdir();
     let mut path = root.path().to_owned();
     for _ in 0..=MAX_KITTY_DOWNLOAD_FILES {
         path.push("d");
@@ -973,7 +983,7 @@ fn excessive_implicit_tree_is_rejected_before_any_destination_creation() {
 
 #[test]
 fn runtime_creation_budget_bounds_growth_and_preserves_existing_state() {
-    let root = tempdir().unwrap();
+    let root = canonical_tempdir();
     // Synthetic bookkeeping exercises the boundary without creating a
     // thousand files or relying on the test runner's descriptor limit.
     let mut created: Vec<_> = (0..MAX_KITTY_DOWNLOAD_FILES - 1)
@@ -1028,7 +1038,7 @@ fn runtime_creation_budget_bounds_growth_and_preserves_existing_state() {
 
 #[test]
 fn staging_rejects_symlink_ancestors_and_uses_nearest_existing_parent() {
-    let root = tempdir().unwrap();
+    let root = canonical_tempdir();
     let real = root.path().join("real");
     fs::create_dir_all(real.join("nested")).unwrap();
     let link = root.path().join("link");
@@ -1040,7 +1050,7 @@ fn staging_rejects_symlink_ancestors_and_uses_nearest_existing_parent() {
     assert_eq!(fs::read_dir(&real).unwrap().count(), 1);
     assert_eq!(fs::read_dir(real.join("nested")).unwrap().count(), 0);
     let staged = stage_file(&real.join("missing/deeper/file")).unwrap();
-    let parent = staged._parent.as_ref().unwrap().metadata().unwrap();
+    let parent = staged.staging_parent().unwrap().metadata().unwrap();
     let expected = fs::metadata(&real).unwrap();
     assert_eq!(
         (parent.dev(), parent.ino()),
@@ -1054,7 +1064,7 @@ fn staging_rejects_symlink_ancestors_and_uses_nearest_existing_parent() {
 #[test]
 fn pinned_staging_cleanup_runs_after_publication_success_and_failure() {
     for collision in [false, true] {
-        let root = tempdir().unwrap();
+        let root = canonical_tempdir();
         let parent = root.path().join("parent");
         let moved = root.path().join("moved");
         fs::create_dir(&parent).unwrap();
@@ -1062,7 +1072,7 @@ fn pinned_staging_cleanup_runs_after_publication_success_and_failure() {
         staged.as_file_mut().write_all(b"approved payload").unwrap();
         prepare_staged_file(staged.as_file(), 0o400, Some(-1)).unwrap();
         let identity = staged.as_file().metadata().unwrap();
-        let name = staged.path.file_name().unwrap().to_owned();
+        let name = staged.entry_name().to_owned();
         fs::rename(&parent, &moved).unwrap();
         fs::create_dir(&parent).unwrap();
         let replacement = parent.join(&name);
@@ -1142,7 +1152,7 @@ fn staging_creation_and_cleanup_retain_replaced_ancestors() {
     for symbolic in [false, true] {
         for replace_ancestor in [false, true] {
             for replace_before_creation in [false, true] {
-                let root = tempdir().unwrap();
+                let root = canonical_tempdir();
                 let parent = nested_parent(root.path());
                 let mut directory = Some(StagingDirectory::open(&parent).unwrap());
                 let staged = if replace_before_creation {
@@ -1156,7 +1166,8 @@ fn staging_creation_and_cleanup_retain_replaced_ancestors() {
                 } = replace_parent(root.path(), replace_ancestor, symbolic);
                 let mut staged =
                     staged.unwrap_or_else(|| directory.take().unwrap().create_file().unwrap());
-                let original_file = moved_parent.join(staged.path.file_name().unwrap());
+                let original_file =
+                    platform::staged_data_path(&moved_parent.join(staged.entry_name()));
                 assert!(
                     original_file.is_file(),
                     "staging must stay in pinned directory"
@@ -1164,7 +1175,7 @@ fn staging_creation_and_cleanup_retain_replaced_ancestors() {
                 assert_eq!(fs::read_dir(&replacement_parent).unwrap().count(), 0);
                 staged.as_file_mut().write_all(b"approved payload").unwrap();
                 assert_eq!(fs::read(&original_file).unwrap(), b"approved payload");
-                let replacement_file = replacement_parent.join(staged.path.file_name().unwrap());
+                let replacement_file = replacement_parent.join(staged.entry_name());
                 fs::write(&replacement_file, b"keep").unwrap();
                 let before = fs::metadata(&replacement_file).unwrap();
                 drop(staged);
@@ -1183,7 +1194,7 @@ fn staging_creation_and_cleanup_retain_replaced_ancestors() {
 #[test]
 fn directory_creation_rejects_existing_entries_and_symlink_ancestors() {
     for kind in ["file", "directory", "symlink", "ancestor"] {
-        let root = tempdir().unwrap();
+        let root = canonical_tempdir();
         let path = root.path().join("destination");
         let outside = root.path().join("outside");
         fs::create_dir(&outside).unwrap();
@@ -1225,7 +1236,7 @@ fn directory_creation_rejects_existing_entries_and_symlink_ancestors() {
 
 #[test]
 fn implicit_directories_keep_logical_rollback_keys_and_private_modes() {
-    let root = tempdir().unwrap();
+    let root = canonical_tempdir();
     let existing = root.path().join("existing");
     fs::create_dir(&existing).unwrap();
     fs::set_permissions(&existing, Permissions::from_mode(0o750)).unwrap();
@@ -1256,7 +1267,7 @@ fn implicit_directories_keep_logical_rollback_keys_and_private_modes() {
 fn directory_creation_retains_parent_after_ancestor_replacement() {
     for symbolic in [false, true] {
         for replace_ancestor in [false, true] {
-            let root = tempdir().unwrap();
+            let root = canonical_tempdir();
             let parent = nested_parent(root.path());
             let path = parent.join("new-directory");
             let destination = PublicationTarget::open(&path).unwrap();
@@ -1303,7 +1314,7 @@ fn directory_creation_retains_parent_after_ancestor_replacement() {
 
 #[test]
 fn symbolic_link_publication_preserves_literal_targets_and_rollback_keys() {
-    let root = tempdir().unwrap();
+    let root = canonical_tempdir();
     for target in [
         PathBuf::from("missing-relative"),
         PathBuf::from("../outside"),
@@ -1335,7 +1346,7 @@ fn symbolic_link_publication_preserves_literal_targets_and_rollback_keys() {
 #[test]
 fn symbolic_link_publication_never_replaces_existing_entries() {
     for directory in [false, true] {
-        let root = tempdir().unwrap();
+        let root = canonical_tempdir();
         let path = root.path().join("existing");
         if directory {
             fs::create_dir(&path).unwrap();
@@ -1363,7 +1374,7 @@ fn symbolic_link_publication_never_replaces_existing_entries() {
 fn symbolic_link_creation_retains_parent_after_ancestor_replacement() {
     for symbolic in [false, true] {
         for replace_ancestor in [false, true] {
-            let root = tempdir().unwrap();
+            let root = canonical_tempdir();
             let parent = nested_parent(root.path());
             let path = parent.join("link");
             let destination = PublicationTarget::open(&path).unwrap();
@@ -1417,7 +1428,7 @@ fn hard_link_refuses_invalid_source_authority() {
         "type",
         "unlinked",
     ] {
-        let root = tempdir().unwrap();
+        let root = canonical_tempdir();
         let source = root.path().join("source");
         let other = root.path().join("other");
         let destination = root.path().join("destination");
@@ -1468,7 +1479,7 @@ fn hard_link_refuses_invalid_source_authority() {
 #[test]
 fn hard_link_refuses_existing_destinations_and_symlink_ancestors() {
     for fault in ["file", "symlink", "ancestor"] {
-        let root = tempdir().unwrap();
+        let root = canonical_tempdir();
         let source = root.path().join("source");
         let outside = root.path().join("outside");
         fs::write(&source, b"source").unwrap();
@@ -1505,10 +1516,13 @@ fn hard_link_refuses_existing_destinations_and_symlink_ancestors() {
     }
 }
 
+/// Linux links the recorded inode itself, so a swapped source name changes
+/// nothing. macOS links only names: `hard_link_refuses_a_replaced_source_name`.
+#[cfg(target_os = "linux")]
 #[test]
 fn hard_link_uses_recorded_source_after_name_replacement() {
     for symbolic in [false, true] {
-        let root = tempdir().unwrap();
+        let root = canonical_tempdir();
         let source = root.path().join("source");
         let moved = root.path().join("moved");
         let destination = root.path().join("hardlink");
@@ -1549,14 +1563,52 @@ fn hard_link_uses_recorded_source_after_name_replacement() {
     }
 }
 
+/// macOS hard-links the source's name, so a name swapped after publication
+/// must be noticed and nothing linked.
+#[cfg(target_os = "macos")]
+#[test]
+fn hard_link_refuses_a_replaced_source_name() {
+    for symbolic in [false, true] {
+        let root = canonical_tempdir();
+        let source = root.path().join("source");
+        let moved = root.path().join("moved");
+        let destination = root.path().join("hardlink");
+        let victim = root.path().join("victim");
+        fs::write(&source, b"approved payload").unwrap();
+        let mut created = Vec::new();
+        record_created(&source, CreatedKind::File, &mut created).unwrap();
+        fs::rename(&source, &moved).unwrap();
+        let replacement = if symbolic { &victim } else { &source };
+        fs::write(replacement, b"keep").unwrap();
+        apply_mtime(replacement, Some(1_700_000_000_123_456_789), false).unwrap();
+        let before = fs::metadata(replacement).unwrap();
+        if symbolic {
+            std::os::unix::fs::symlink(&victim, &source).unwrap();
+        }
+        let error = create_hard_link(&source, &destination, &mut created).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+        assert_eq!(created.len(), 1, "failure must not grant cleanup authority");
+        assert!(fs::symlink_metadata(&destination).is_err());
+        let after = fs::metadata(replacement).unwrap();
+        assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+        assert_eq!(after.nlink(), 1);
+        assert_eq!(
+            (after.mtime(), after.mtime_nsec()),
+            (before.mtime(), before.mtime_nsec())
+        );
+        assert_eq!(fs::read(replacement).unwrap(), b"keep");
+        assert_eq!(fs::read(&moved).unwrap(), b"approved payload");
+    }
+}
+
 #[test]
 fn staging_cleanup_preserves_replacements_before_publication() {
     for replacement_kind in ["file", "link", "directory", "none"] {
-        let root = tempdir().unwrap();
+        let root = canonical_tempdir();
         let staged = stage_file(&root.path().join("destination")).unwrap();
-        // The procfs path intentionally expires with the retained
-        // parent descriptor. Inspect the real entry after drop.
-        let source = root.path().join(staged.path.file_name().unwrap());
+        // Cleanup works through the retained parent descriptor, not this
+        // path. Inspect the real entry after drop.
+        let source = root.path().join(staged.entry_name());
         if replacement_kind == "none" {
             drop(staged);
             assert!(!source.exists());
@@ -1578,11 +1630,14 @@ fn staging_cleanup_preserves_replacements_before_publication() {
     }
 }
 
+/// Linux links the staged inode itself, so a swapped staging name changes
+/// nothing. macOS renames the name: `publication_refuses_a_replaced_staging_name`.
+#[cfg(target_os = "linux")]
 #[test]
 fn publication_uses_staging_inode_not_replacement_name() {
     for symbolic in [false, true] {
         for remove_original in [false, true] {
-            let root = tempdir().unwrap();
+            let root = canonical_tempdir();
             let mut staged = NamedTempFile::new_in(root.path()).unwrap();
             staged.write_all(b"approved payload").unwrap();
             prepare_staged_file(staged.as_file(), 0o400, Some(-1)).unwrap();
@@ -1639,11 +1694,101 @@ fn publication_uses_staging_inode_not_replacement_name() {
     }
 }
 
+/// macOS publishes by renaming the staged name, so an entry swapped in under
+/// that name is what arrives: publication must notice, take it back out of
+/// the destination, and fail.
+#[cfg(target_os = "macos")]
+#[test]
+fn publication_refuses_a_replaced_staging_name() {
+    for symbolic in [false, true] {
+        for remove_original in [false, true] {
+            let root = canonical_tempdir();
+            let mut staged = NamedTempFile::new_in(root.path()).unwrap();
+            staged.write_all(b"approved payload").unwrap();
+            let source = staged.path().to_owned();
+            let moved = root.path().join("moved");
+            if remove_original {
+                fs::remove_file(&source).unwrap();
+            } else {
+                fs::rename(&source, &moved).unwrap();
+            }
+            let victim = root.path().join("victim");
+            if symbolic {
+                fs::write(&victim, b"keep victim").unwrap();
+                std::os::unix::fs::symlink(&victim, &source).unwrap();
+            } else {
+                fs::write(&source, b"replacement payload").unwrap();
+            }
+            let destination = root.path().join("published");
+            let error = PublicationTarget::open(&destination)
+                .unwrap()
+                .publish(StagedFile::from(staged))
+                .unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+            assert!(
+                fs::symlink_metadata(&destination).is_err(),
+                "an unapproved entry stayed published"
+            );
+            assert!(
+                fs::symlink_metadata(&source).is_err(),
+                "the swapped-in entry was renamed away and removed"
+            );
+            if symbolic {
+                assert_eq!(fs::read(&victim).unwrap(), b"keep victim");
+            }
+            if !remove_original {
+                assert_eq!(fs::read(&moved).unwrap(), b"approved payload");
+            }
+        }
+    }
+}
+
+/// macOS stages each file in a fresh directory only this user can enter, and
+/// publication leaves nothing of it behind.
+#[cfg(target_os = "macos")]
+#[test]
+fn staging_directory_is_private_and_removed_after_publication() {
+    let root = canonical_tempdir();
+    let destination = root.path().join("published");
+    let mut staged = stage_file(&destination).unwrap();
+    staged.as_file_mut().write_all(b"payload").unwrap();
+    let private = root.path().join(staged.entry_name());
+    let metadata = fs::symlink_metadata(&private).unwrap();
+    assert!(metadata.is_dir());
+    assert_eq!(metadata.permissions().mode() & 0o777, 0o700);
+    assert_eq!(
+        fs::read(platform::staged_data_path(&private)).unwrap(),
+        b"payload"
+    );
+    assert_eq!(fs::read_dir(&private).unwrap().count(), 1);
+    PublicationTarget::open(&destination)
+        .unwrap()
+        .publish(staged)
+        .unwrap();
+    assert_eq!(fs::read(&destination).unwrap(), b"payload");
+    assert!(fs::symlink_metadata(&private).is_err());
+    assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+}
+
+/// On macOS `/etc`, `/tmp`, and `/var` are links into `/private`, so a
+/// destination under them is refused, saying why.
+#[cfg(target_os = "macos")]
+#[test]
+fn destination_through_a_system_link_says_it_goes_through_a_symbolic_link() {
+    let error =
+        validate_destination(Path::new("/tmp/termeric-transfer-test/received")).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(
+        error.to_string(),
+        "destination path goes through a symbolic link"
+    );
+}
+
 #[test]
 fn publication_retains_parent_after_ancestor_replacement() {
     for symbolic in [false, true] {
         for replace_ancestor in [false, true] {
-            let root = tempdir().unwrap();
+            let root = canonical_tempdir();
             let parent = nested_parent(root.path());
             let target = PublicationTarget::open(&parent.join("published")).unwrap();
             let mut staged = NamedTempFile::new_in(root.path()).unwrap();
@@ -1679,7 +1824,7 @@ fn publication_retains_parent_after_ancestor_replacement() {
 
 #[test]
 fn publication_refuses_symlink_parents_and_invalid_destinations() {
-    let root = tempdir().unwrap();
+    let root = canonical_tempdir();
     let directory = root.path().join("directory");
     fs::create_dir_all(directory.join("nested")).unwrap();
     let link = root.path().join("link");
@@ -1701,7 +1846,7 @@ fn publication_refuses_symlink_parents_and_invalid_destinations() {
 #[test]
 fn publication_never_overwrites_existing_symlinks() {
     for dangling in [false, true] {
-        let root = tempdir().unwrap();
+        let root = canonical_tempdir();
         let victim = root.path().join("victim");
         if !dangling {
             fs::write(&victim, b"keep").unwrap();
@@ -1732,7 +1877,7 @@ fn publication_never_overwrites_existing_symlinks() {
 fn staged_file_metadata_is_complete_before_publication() {
     for mtime in [None, Some(-1), Some(0), Some(1_700_000_000_123_456_789)] {
         for mode in [0o000, 0o400, 0o640] {
-            let root = tempdir().unwrap();
+            let root = canonical_tempdir();
             let destination = root.path().join("published");
             let mut staged = NamedTempFile::new_in(root.path()).unwrap();
             staged.write_all(b"payload").unwrap();
@@ -1763,7 +1908,7 @@ fn staged_file_metadata_is_complete_before_publication() {
 #[test]
 fn staged_file_metadata_never_changes_a_replacement_path() {
     for symlink_replacement in [false, true] {
-        let root = tempdir().unwrap();
+        let root = canonical_tempdir();
         let path = root.path().join("staged");
         let moved = root.path().join("moved");
         let target = root.path().join("target");
@@ -1795,7 +1940,7 @@ fn staged_file_metadata_never_changes_a_replacement_path() {
 
 #[test]
 fn prepared_file_does_not_change_an_existing_destination() {
-    let root = tempdir().unwrap();
+    let root = canonical_tempdir();
     let destination = root.path().join("existing");
     fs::write(&destination, b"keep").unwrap();
     apply_mtime(&destination, Some(1_700_000_000_123_456_789), false).unwrap();
@@ -1825,7 +1970,7 @@ fn prepared_file_does_not_change_an_existing_destination() {
 fn link_timestamps_use_the_retained_inode_after_path_replacement() {
     for symbolic in [false, true] {
         for replacement_symbolic in [false, true] {
-            let root = tempdir().unwrap();
+            let root = canonical_tempdir();
             let source = root.path().join("source");
             let path = root.path().join("link");
             let moved = root.path().join("moved");
@@ -1878,7 +2023,7 @@ fn link_timestamps_use_the_retained_inode_after_path_replacement() {
 #[test]
 fn link_timestamp_updates_require_the_recorded_identity() {
     for invalid in ["missing", "foreign-link", "wrong-kind", "wrong-inode"] {
-        let root = tempdir().unwrap();
+        let root = canonical_tempdir();
         let source = root.path().join("source");
         let first = root.path().join("first");
         let second = root.path().join("second");
@@ -1928,7 +2073,7 @@ fn link_timestamp_updates_require_the_recorded_identity() {
 
 #[test]
 fn dangling_link_timestamps_survive_unlink_without_path_recovery() {
-    let root = tempdir().unwrap();
+    let root = canonical_tempdir();
     let path = root.path().join("link");
     std::os::unix::fs::symlink("missing", &path).unwrap();
     let mut created = Vec::new();
@@ -1949,7 +2094,7 @@ fn dangling_link_timestamps_survive_unlink_without_path_recovery() {
 
 #[test]
 fn regular_file_is_staged_and_published_only_on_finish() {
-    let root = tempdir().unwrap();
+    let root = canonical_tempdir();
     let path = root.path().join("nested/file.txt");
     let cancel = AtomicBool::new(false);
     let mut transaction = DownloadTransaction::new("session".into());
@@ -2003,7 +2148,7 @@ fn zlib_stream_boundaries_are_independent_of_transfer_packets() {
         assert!(compressed.len() < 4096);
         for split in 0..=compressed.len() {
             for separate_end in [false, true] {
-                let root = tempdir().unwrap();
+                let root = canonical_tempdir();
                 let path = root.path().join("file");
                 let cancel = AtomicBool::new(false);
                 let mut transaction = compressed_transaction(&path, payload.len());
@@ -2157,7 +2302,7 @@ fn invalid_zlib_framing_never_publishes_or_retains_staging() {
             vec![(Data, compressed.clone()), (EndData, Vec::new())],
         ),
     ] {
-        let root = tempdir().unwrap();
+        let root = canonical_tempdir();
         let path = root.path().join("file");
         let cancel = AtomicBool::new(false);
         let mut transaction = compressed_transaction(&path, size);
@@ -2202,7 +2347,7 @@ fn invalid_zlib_framing_never_publishes_or_retains_staging() {
 
 #[test]
 fn zlib_directory_and_internal_links_commit_together() {
-    let root = tempdir().unwrap();
+    let root = canonical_tempdir();
     let directory = root.path().join("tree");
     let file = directory.join("file.txt");
     let symlink = directory.join("alias.txt");
@@ -2283,7 +2428,7 @@ fn zlib_directory_and_internal_links_commit_together() {
 
 #[test]
 fn traversal_existing_targets_and_size_mismatch_fail_closed() {
-    let root = tempdir().unwrap();
+    let root = canonical_tempdir();
     let existing = root.path().join("existing");
     fs::write(&existing, b"keep").unwrap();
     let cancel = AtomicBool::new(false);
@@ -2336,7 +2481,7 @@ fn traversal_existing_targets_and_size_mismatch_fail_closed() {
 
 #[test]
 fn cancellation_decompression_limits_and_symlink_races_leave_no_payload() {
-    let root = tempdir().unwrap();
+    let root = canonical_tempdir();
     let cancel = AtomicBool::new(false);
 
     let canceled_path = root.path().join("canceled.bin");
@@ -2413,7 +2558,7 @@ fn cancellation_decompression_limits_and_symlink_races_leave_no_payload() {
     assert!(bomb.handle(bomb_data, &AtomicBool::new(false)).is_err());
     assert!(!bomb_path.exists());
 
-    let outside = tempdir().unwrap();
+    let outside = canonical_tempdir();
     let raced_parent = root.path().join("raced");
     let raced_path = raced_parent.join("file");
     let mut raced = DownloadTransaction::new("race".into());
@@ -2460,7 +2605,7 @@ fn cancellation_decompression_limits_and_symlink_races_leave_no_payload() {
 
 #[test]
 fn duplicate_ids_paths_oversized_declarations_and_external_symlinks_are_bounded() {
-    let root = tempdir().unwrap();
+    let root = canonical_tempdir();
     let first = root.path().join("first");
     let second = root.path().join("second");
     let cancel = AtomicBool::new(false);
@@ -2553,7 +2698,7 @@ fn duplicate_ids_paths_oversized_declarations_and_external_symlinks_are_bounded(
 fn fifo_symlink_commit_does_not_wait_for_a_target_writer() {
     use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
 
-    let root = tempdir().unwrap();
+    let root = canonical_tempdir();
     let fifo = root.path().join("pipe");
     let link = root.path().join("link");
     let fifo_name = CString::new(fifo.as_os_str().as_bytes()).unwrap();
@@ -2642,7 +2787,7 @@ fn fifo_symlink_commit_does_not_wait_for_a_target_writer() {
 
 #[test]
 fn rollback_identity_guard_pins_the_symlink_not_its_target() {
-    let root = tempdir().unwrap();
+    let root = canonical_tempdir();
     let target = root.path().join("target");
     let link = root.path().join("link");
     fs::write(&target, b"keep").unwrap();
@@ -2683,7 +2828,7 @@ fn failed_created_path_inspection_never_deletes_a_replacement() {
         CreatedKind::Directory,
         CreatedKind::Symlink,
     ] {
-        let root = tempdir().unwrap();
+        let root = canonical_tempdir();
         let path = root.path().join("entry");
         let moved = root.path().join("original");
         let target = root.path().join("target");
@@ -2695,16 +2840,24 @@ fn failed_created_path_inspection_never_deletes_a_replacement() {
         };
         create(&path).unwrap();
         let mut created = Vec::new();
-        let error = record_created_with(&path, kind, &mut created, |observed| {
-            // Model a failed metadata observation while another actor
-            // moves the original and replaces its pathname.
-            fs::rename(observed, &moved).unwrap();
-            create(observed).unwrap();
-            Err(io::Error::new(
-                io::ErrorKind::Interrupted,
-                "injected inspection failure",
-            ))
-        })
+        let directory = PinnedDirectory::open(root.path()).unwrap();
+        let error = record_created_with(
+            &directory,
+            OsStr::new("entry"),
+            &path,
+            kind,
+            &mut created,
+            |_, _| {
+                // Model a failed metadata observation while another actor
+                // moves the original and replaces its pathname.
+                fs::rename(&path, &moved).unwrap();
+                create(&path).unwrap();
+                Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "injected inspection failure",
+                ))
+            },
+        )
         .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::Interrupted);
         assert!(created.is_empty());
@@ -2727,7 +2880,7 @@ fn created_path_type_mismatches_never_gain_rollback_authority() {
         CreatedKind::Symlink,
     ];
     for actual in kinds {
-        let root = tempdir().unwrap();
+        let root = canonical_tempdir();
         let path = root.path().join("entry");
         let target = root.path().join("target");
         fs::write(&target, b"keep target").unwrap();
@@ -2759,7 +2912,7 @@ fn created_path_type_mismatches_never_gain_rollback_authority() {
 
 #[test]
 fn rollback_does_not_remove_a_replaced_path() {
-    let root = tempdir().unwrap();
+    let root = canonical_tempdir();
     let path = root.path().join("published");
     fs::write(&path, b"ours").unwrap();
     let mut created = Vec::new();

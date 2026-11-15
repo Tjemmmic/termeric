@@ -15,12 +15,14 @@ fn upload_read_handle_stays_on_the_pinned_regular_inode() {
     use std::os::unix::fs::MetadataExt;
 
     for symbolic in [false, true] {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let path = root.path().join("approved");
         let moved = root.path().join("moved");
         let victim = root.path().join("victim");
         std::fs::write(&path, b"approved bytes").unwrap();
-        let pinned = openat2_no_symlinks(&path, libc::O_PATH).unwrap();
+        let pinned = platform::pin_upload_source(&path)
+            .unwrap()
+            .expect("a single-link regular file is pinned");
         let identity = pinned.metadata().unwrap();
         std::fs::rename(&path, &moved).unwrap();
         if symbolic {
@@ -29,7 +31,7 @@ fn upload_read_handle_stays_on_the_pinned_regular_inode() {
         } else {
             std::fs::write(&path, b"must not read").unwrap();
         }
-        let mut file = reopen_upload_regular_file(&pinned).unwrap();
+        let mut file = upload_read_handle(&pinned).unwrap();
         let opened = file.metadata().unwrap();
         assert_eq!(
             (opened.dev(), opened.ino()),
@@ -41,10 +43,43 @@ fn upload_read_handle_stays_on_the_pinned_regular_inode() {
     }
 }
 
+/// Linux pins anything with O_PATH, which never opens its data, and the
+/// read handle then refuses it.
+#[cfg(target_os = "linux")]
+fn assert_source_is_never_opened_for_data(path: &std::path::Path, kind: &str) {
+    use std::os::fd::AsRawFd;
+
+    let pinned = platform::pin_upload_source(path)
+        .unwrap()
+        .expect("Linux pins every entry");
+    // SAFETY: pinned owns a live descriptor; F_GETFL has no third argument.
+    let flags = unsafe { libc::fcntl(pinned.as_raw_fd(), libc::F_GETFL) };
+    assert!(flags >= 0);
+    assert_ne!(
+        flags & libc::O_PATH,
+        0,
+        "{kind} must not receive a data open"
+    );
+    assert_eq!(
+        upload_read_handle(&pinned).unwrap_err().kind(),
+        std::io::ErrorKind::InvalidInput
+    );
+}
+
+/// macOS pins only by opening, so it looks first and never opens anything
+/// but a single-link regular file.
+#[cfg(target_os = "macos")]
+fn assert_source_is_never_opened_for_data(path: &std::path::Path, kind: &str) {
+    assert!(
+        platform::pin_upload_source(path).unwrap().is_none(),
+        "{kind} must not be opened"
+    );
+}
+
 #[test]
 fn upload_worker_rejects_nonregular_and_multiply_linked_sources_before_metadata() {
     for kind in ["directory", "socket", "device", "hardlink"] {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let local = root.path().join("source");
         let mut socket = None;
         let path = match kind {
@@ -64,20 +99,7 @@ fn upload_worker_rejects_nonregular_and_multiply_linked_sources_before_metadata(
             }
             _ => unreachable!(),
         };
-        let pinned = openat2_no_symlinks(&path, libc::O_PATH).unwrap();
-        use std::os::fd::AsRawFd;
-        // SAFETY: pinned owns a live descriptor; F_GETFL has no third argument.
-        let flags = unsafe { libc::fcntl(pinned.as_raw_fd(), libc::F_GETFL) };
-        assert!(flags >= 0);
-        assert_ne!(
-            flags & libc::O_PATH,
-            0,
-            "{kind} must not receive a data open"
-        );
-        assert_eq!(
-            reopen_upload_regular_file(&pinned).unwrap_err().kind(),
-            std::io::ErrorKind::InvalidInput
-        );
+        assert_source_is_never_opened_for_data(&path, kind);
         let (_sender, receiver) = sync_channel(1);
         let mut completions = Vec::new();
         run_upload_worker(
@@ -122,7 +144,7 @@ fn upload_worker_rejects_fifo_without_waiting_for_a_writer() {
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::OpenOptionsExt;
 
-    let root = tempfile::tempdir().unwrap();
+    let root = canonical_tempdir();
     let fifo = root.path().join("fifo");
     let name = CString::new(fifo.as_os_str().as_bytes()).unwrap();
     // SAFETY: name is a live NUL-terminated path in our private tempdir.
@@ -191,7 +213,7 @@ fn upload_worker_rejects_fifo_without_waiting_for_a_writer() {
 
 #[test]
 fn upload_worker_opens_after_consent_and_streams_bounded_canonical_frames() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = canonical_tempdir();
     let path = temp.path().join("approved.txt");
     std::fs::write(&path, b"approved contents").unwrap();
     let path_name = path.to_str().unwrap().to_string();
@@ -239,7 +261,7 @@ fn upload_worker_opens_after_consent_and_streams_bounded_canonical_frames() {
 fn upload_worker_stops_when_a_completion_is_dropped_unanswered() {
     // A completion for a window that has closed is dropped with its
     // acknowledgement sender; the worker must stop rather than wait forever.
-    let temp = tempfile::tempdir().unwrap();
+    let temp = canonical_tempdir();
     let path = temp.path().join("approved.txt");
     std::fs::write(&path, b"never sent").unwrap();
     let path_name = path.to_str().unwrap().to_string();
@@ -278,7 +300,7 @@ fn upload_worker_stops_when_a_completion_is_dropped_unanswered() {
 fn upload_worker_refuses_symlinks_without_reading_their_targets() {
     use std::os::unix::fs::symlink;
 
-    let temp = tempfile::tempdir().unwrap();
+    let temp = canonical_tempdir();
     let target = temp.path().join("target.txt");
     let link = temp.path().join("link.txt");
     std::fs::write(&target, b"must not leak").unwrap();
@@ -340,11 +362,27 @@ fn upload_worker_refuses_symlinks_without_reading_their_targets() {
     let error = String::from_utf8(ancestor_completions[0].frames[0].clone()).unwrap();
     assert!(error.contains(";ac=status;id=ancestor-test;fid=f2;"));
     assert!(!error.contains("also must not leak"));
+    #[cfg(target_os = "macos")]
+    for completion in [&completions[0], &ancestor_completions[0]] {
+        assert_eq!(
+            completion.error.as_deref(),
+            Some("could not open approved regular file: the path goes through a symbolic link")
+        );
+    }
+}
+
+/// On macOS `/etc`, `/tmp`, and `/var` are links into `/private`, so a file
+/// named through them is refused, saying why.
+#[cfg(target_os = "macos")]
+#[test]
+fn upload_through_a_system_link_says_it_goes_through_a_symbolic_link() {
+    let error = platform::pin_upload_source(std::path::Path::new("/etc/hosts")).unwrap_err();
+    assert_eq!(error.to_string(), "the path goes through a symbolic link");
 }
 
 #[test]
 fn upload_worker_rejects_aggregate_size_before_emitting_metadata() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = canonical_tempdir();
     let path = temp.path().join("oversized.bin");
     let file = std::fs::File::create(&path).unwrap();
     file.set_len(MAX_KITTY_UPLOAD_BYTES + 1).unwrap();
@@ -379,7 +417,7 @@ fn upload_worker_rejects_aggregate_size_before_emitting_metadata() {
 
 #[test]
 fn upload_worker_completes_empty_files_in_mixed_batches() {
-    let root = tempfile::tempdir().unwrap();
+    let root = canonical_tempdir();
     let payloads: [&[u8]; 3] = [b"", b"payload", b""];
     let (sender, receiver) = sync_channel(payloads.len());
     let mut paths = Vec::new();
@@ -443,7 +481,7 @@ fn upload_worker_completes_empty_files_in_mixed_batches() {
 #[test]
 fn upload_worker_stops_after_unacknowledged_or_canceled_empty_completion() {
     for cancel_on_empty in [false, true] {
-        let root = tempfile::tempdir().unwrap();
+        let root = canonical_tempdir();
         let (sender, receiver) = sync_channel(2);
         let mut paths = Vec::new();
         for (file_id, payload) in [
@@ -502,7 +540,7 @@ fn upload_worker_stops_after_unacknowledged_or_canceled_empty_completion() {
 
 #[test]
 fn upload_worker_emits_empty_completion_once_before_rejecting_duplicate() {
-    let root = tempfile::tempdir().unwrap();
+    let root = canonical_tempdir();
     let path = root.path().join("empty");
     std::fs::write(&path, b"").unwrap();
     let name = path.to_str().unwrap().to_string();
@@ -560,7 +598,7 @@ fn upload_worker_emits_empty_completion_once_before_rejecting_duplicate() {
 
 #[test]
 fn upload_worker_batches_large_files_behind_acknowledgements() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = canonical_tempdir();
     let path = temp.path().join("multi-chunk.bin");
     let size = termeric_core::MAX_KITTY_TRANSFER_DATA_BYTES * 9 + 1;
     std::fs::write(&path, vec![0x5a; size]).unwrap();
@@ -609,7 +647,7 @@ fn upload_worker_truncation_retains_only_acknowledged_progress() {
     for prior_size in [0, 7] {
         for acknowledged_batches in [0, 1, 2] {
             for buffered_bytes in [0, 17] {
-                let temp = tempfile::tempdir().unwrap();
+                let temp = canonical_tempdir();
                 let prior = temp.path().join("prior.bin");
                 let path = temp.path().join("truncated.bin");
                 std::fs::write(&prior, vec![0x41; prior_size]).unwrap();

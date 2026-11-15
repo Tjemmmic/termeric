@@ -34,8 +34,50 @@ const PENDING_UPLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 mod download;
 mod upload;
 
+// The filesystem leaf operations both directions are built from: pinning a
+// directory or file without following a symbolic link, and creating,
+// publishing, and timestamping entries through what was pinned.
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+use linux as platform;
+
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+use macos as platform;
+
 #[cfg(test)]
 mod routing_tests;
+
+/// A temporary directory named by its canonical path. On macOS the default
+/// temporary directory is under `/var`, a symbolic link to `/private/var`
+/// that every transfer rightly refuses to go through.
+#[cfg(test)]
+pub(super) struct CanonicalTempDir {
+    path: PathBuf,
+    _directory: tempfile::TempDir,
+}
+
+#[cfg(test)]
+impl CanonicalTempDir {
+    pub(super) fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+#[cfg(test)]
+pub(super) fn canonical_tempdir() -> CanonicalTempDir {
+    let directory = tempfile::tempdir().expect("create a temporary directory");
+    let path = directory
+        .path()
+        .canonicalize()
+        .expect("resolve the temporary directory");
+    CanonicalTempDir {
+        path,
+        _directory: directory,
+    }
+}
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(super) struct TransferKey {
@@ -1336,51 +1378,6 @@ fn resolve_home_relative_path(name: &str) -> Result<PathBuf, String> {
         return Err("path cannot be a filesystem root".into());
     }
     Ok(path)
-}
-
-/// Open `path` with `flags` (plus close-on-exec) through `openat2`, refusing
-/// a symbolic link anywhere along it, so the descriptor pins exactly the
-/// inode the path named when it was checked.
-fn openat2_no_symlinks(
-    path: &std::path::Path,
-    flags: libc::c_int,
-) -> std::io::Result<std::fs::File> {
-    use std::os::fd::FromRawFd;
-    use std::os::unix::ffi::OsStrExt;
-
-    #[repr(C)]
-    struct OpenHow {
-        flags: u64,
-        mode: u64,
-        resolve: u64,
-    }
-
-    let path = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|_| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "path contains a NUL byte")
-    })?;
-    let how = OpenHow {
-        flags: (flags | libc::O_CLOEXEC) as u64,
-        mode: 0,
-        resolve: libc::RESOLVE_NO_SYMLINKS,
-    };
-    // SAFETY: `path` is a live NUL-terminated CString, `how` points to a
-    // fully initialized `open_how` for the supplied size, and a successful
-    // syscall transfers ownership of one new descriptor to this function.
-    let descriptor = unsafe {
-        libc::syscall(
-            libc::SYS_openat2,
-            libc::AT_FDCWD,
-            path.as_ptr(),
-            &how,
-            std::mem::size_of::<OpenHow>(),
-        )
-    };
-    if descriptor < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: `openat2` returned a new owned descriptor and it has not been
-    // wrapped or closed elsewhere.
-    Ok(unsafe { std::fs::File::from_raw_fd(descriptor as libc::c_int) })
 }
 
 fn start_upload_worker(
