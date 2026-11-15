@@ -677,23 +677,49 @@ mod tests {
             )
             .unwrap();
             let observer = pty.child_observer();
-            assert_eq!(pty.wait().unwrap().exit_code(), code);
-            assert!(!pty.is_running());
             let expected = ChildExitStatus {
                 exit_code: code,
                 success: code == 0,
             };
-            assert_eq!(observer.poll().unwrap().exit, Some(expected));
-            let (handle, reader) = pty.take_reader();
-            let rx = spawn_reader_thread(reader);
-            let mut output = Vec::new();
-            loop {
-                match rx.recv_timeout(Duration::from_secs(2)) {
-                    Ok(PtyEvent::Output(bytes)) => output.extend(bytes),
-                    Ok(PtyEvent::Closed | PtyEvent::Error(_)) => break,
-                    other => panic!("reader did not finish: {other:?}"),
+            let drain = |reader| {
+                let rx = spawn_reader_thread(reader);
+                let mut output = Vec::new();
+                loop {
+                    match rx.recv_timeout(Duration::from_secs(2)) {
+                        Ok(PtyEvent::Output(bytes)) => output.extend(bytes),
+                        Ok(PtyEvent::Closed | PtyEvent::Error(_)) => break,
+                        other => panic!("reader did not finish: {other:?}"),
+                    }
                 }
-            }
+                output
+            };
+            // Linux lets the child exit with its output unread, so it is waited
+            // for first. A BSD terminal (macOS's) keeps an exiting child until
+            // its output is read, so there the output is drained first.
+            #[cfg(target_os = "linux")]
+            let (handle, output) = {
+                assert_eq!(pty.wait().unwrap().exit_code(), code);
+                assert!(!pty.is_running());
+                assert_eq!(observer.poll().unwrap().exit, Some(expected));
+                let (handle, reader) = pty.take_reader();
+                (handle, drain(reader))
+            };
+            #[cfg(target_os = "macos")]
+            let (handle, output) = {
+                let (mut handle, reader) = pty.take_reader();
+                let output = drain(reader);
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                while observer.poll().unwrap().exit.is_none() {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "the child never exited"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                assert!(!handle.is_running());
+                assert_eq!(observer.poll().unwrap().exit, Some(expected));
+                (handle, output)
+            };
             assert_eq!(output, b"FINAL_CHILD_OUTPUT");
             assert!(!observer.poll().unwrap().terminal_closed);
             drop(handle);

@@ -94,7 +94,8 @@ jobs:
         timeout-minutes: 20
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Test
-        timeout-minutes: 30
+        # About eight minutes with a warm cache; a hung test fails sooner.
+        timeout-minutes: 15
         env:
           TERMERIC_REQUIRE_SHELL_ACCEPTANCE: "1"
         # Every test binary runs, so one run reports every failure.
