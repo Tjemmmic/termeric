@@ -1,6 +1,8 @@
 # Termeric
 
-Termeric is a GPU-accelerated terminal emulator for Linux, written in Rust and themed around roots and rhizomes. It uses wgpu for rendering, winit for windowing, cosmic-text for font shaping, and vte for escape-sequence parsing.
+Termeric is a GPU-accelerated terminal emulator for Linux and macOS, written in Rust and themed around roots and rhizomes. It uses wgpu for rendering, winit for windowing, cosmic-text for font shaping, and vte for escape-sequence parsing.
+
+Platform code names its system: `#[cfg(target_os = "linux")]` and `#[cfg(target_os = "macos")]`, never a `cfg(not(...))` that would quietly cover a system nobody builds. Where one implementation keeps the same guarantees on both, it serves both, so Linux CI exercises it too. CI builds and tests both (`.github/workflows/ci.yml`); `cargo clippy --target aarch64-apple-darwin` type-checks the macOS code from Linux when a C compiler for macOS is available.
 
 This file guides coding agents and contributors working in this repository. Read the [Style Guide](#style-guide) at the end before writing any UI, theme, or user-facing code.
 
@@ -62,6 +64,8 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | Module | Purpose |
 |--------|---------|
 | `app/` | `Application` (multi-window handler), per-window `App`, event handlers, input routing, and action handlers split by feature |
+| `app/macos/` | macOS: the menu bar (`menu.rs`; items run commands in the focused window and carry no key equivalents of their own, so keys stay in the one input chain), the defaults registered at launch, each window's colour space, and the quick-access hotkey (`hotkey.rs`, Carbon) and placement |
+| `app/system_accessibility/` | Reduced motion and increased contrast from the XDG portal on Linux and `NSWorkspace` on macOS |
 | `app/accessibility/` | The AccessKit tree: node IDs, registries, updates, action dispatch, and the ordinary tree in `mod.rs`; F6 chrome focus (`chrome.rs`), terminal text (`terminal.rs`), and each group of surfaces' nodes beside its action handlers (`dialogs.rs`, `panels.rs`, `palette.rs`, `harvest.rs`, `overlays.rs`) |
 | `renderer/` | wgpu rendering (see below) |
 | `ui/` | UI component state: animation, command palette, settings, panels, pickers, popup menus, toasts, text input and layout |
@@ -91,19 +95,21 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `terminal/` | Search, copy mode, URL detection, diff detection, shell integration, shared terminal-event draining (`events.rs`), and guardrails for automated (control-protocol and plugin) input |
 | `git/` | Branch detection, Git completion, and repository watching |
 | `harvest/` | Experimental Harvest mode: command history cellar, growth indicators, sprout actions |
-| `notifications/` | Bell and desktop notifications |
+| `notifications/` | Bell and desktop notifications: the tracking state in `tracked.rs` with a backend per system (D-Bus on Linux, UserNotifications on macOS) |
 | `cli.rs` | Command-line parsing into window-local startup plans |
 | `mcp.rs` | `termeric mcp`, an MCP server over stdio backed by the control protocol |
 | `serial.rs` | Serial transport for serial terminal profiles |
 | `raw_terminal.rs` | Raw mode for the terminal the domain relay and the serial bridge run in; input that is not a terminal is left alone |
 | `test_support/` | Test builds only: shared fixtures (`sleeping_shell`, `poll_until`, …), the release benchmark suite (`benchmarks.rs`), and soaks (`soak.rs`) |
-| `paths.rs` | Configuration and data directories (test builds resolve them under a per-process temporary directory) and Termeric's own executable |
+| `paths.rs` | Configuration and data directories, the XDG ones on both systems (test builds resolve them under a per-process temporary directory), Termeric's own executable, and whether macOS runs it from App Translocation |
+| `process_info.rs` | Another process's working directory, parent, newest child, name, and arguments: `/proc` on Linux, libproc and `sysctl` on macOS |
+| `launch_environment.rs` | macOS: completing the environment of a launch from the Finder or the Dock (`LANG`, the login shell's `PATH`, the home directory) before any thread starts, and starting the quick-access terminal through LaunchServices |
 | `safe_fs.rs` | Hardened reads (no symlinks, FIFOs, or unbounded reads) and atomic private-staging writes for Termeric's own files |
 | `line_reader.rs` | Reading newline-delimited input from other processes with bounded memory; callers decide what an oversized or unterminated line means |
 | `deadline_io.rs` | Frame reads and writes bounded by one deadline that trickled bytes cannot renew: the time left (`remaining`), a readiness poll (`readable`), `PollReader` for sockets and pipes (optionally idle without limit until input starts, and cancellable), and `SocketWriter` |
 | `local_socket.rs` | What the domain daemon and the control socket share: the private runtime directory, socket and token paths, same-user peer checks, version-and-token authentication, the bounded accept loop, and stale-socket removal |
 | `safe_text.rs` | Bounding untrusted text shown in chrome or sent over protocols (character classes come from termeric-core) |
-| `portal.rs` | The desktop's own file chooser through the XDG desktop portal (`choose_file`, `choose_folder`), used by Settings to pick a background image and a plugin to install; `app/file_chooser.rs` opens it off the event loop and routes the answer back |
+| `file_chooser/` | The system's own file chooser for a `FileRequest`: the XDG desktop portal on Linux (`portal.rs`, asked off the event loop), an `NSOpenPanel` sheet on macOS (`open_panel.rs`, shown from it), used by Settings and the context picker; `app/file_chooser.rs` opens it for a window and routes the answer back |
 | `process_group.rs` | Starting, reaping, and signalling a child that leads its own process group with piped stdio (agent view agents, plugin handlers): its group is signalled only while it is unreaped |
 | `stderr_capture.rs` | Keeping the end of a child's stderr on a thread of its own, waiting a bounded time for it to close (agent view agents, plugin handlers) |
 
@@ -368,7 +374,7 @@ Chrome geometry lands on whole physical pixels. Rendering, hit testing, keyboard
 ### Typography
 
 - **Terminal text** uses the configured monospace font (default `monospace`, 12pt). `font.size` is in points at 96/72 logical pixels per point, from 8pt to 72pt. The Settings stepper moves 1pt; the zoom shortcuts move 2pt. Terminal text keeps the monospace grid: no custom letter-spacing or squeezed advances.
-- **UI text** (tabs, Settings, the palette, panels, menus, dialogs, toasts, the find box) uses the desktop's sans-serif face at 10pt, resolved through fontconfig, so chrome reads like the rest of the desktop. Draw it with `Renderer::push_ui_label`, which measures proportionally, centres on the face's own metrics, and shortens with an ellipsis.
+- **UI text** (tabs, Settings, the palette, panels, menus, dialogs, toasts, the find box) uses the desktop's sans-serif face at 10pt, resolved through fontconfig on Linux and the system font on macOS, so chrome reads like the rest of the desktop. Draw it with `Renderer::push_ui_label`, which measures proportionally, centres on the face's own metrics, and shortens with an ellipsis.
 - **Emoji** render inline when a font supports them and fall back gracefully.
 
 ### Accessibility
