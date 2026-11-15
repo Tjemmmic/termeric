@@ -318,7 +318,7 @@ mod tests {
         app.shortcuts_panel.open();
         assert!(app.shortcuts_panel.insert_filter_text("copy paste"));
         app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
-        app.modifiers = ModifiersState::CONTROL;
+        app.modifiers = crate::input::platform::System::CURRENT.word();
         assert!(app.handle_shortcuts_filter_key(&key(NamedKey::ArrowLeft)));
         assert_eq!(
             app.shortcuts_panel
@@ -342,12 +342,7 @@ mod tests {
                 .filter,
             "copy "
         );
-        for modifier in [
-            ModifiersState::SHIFT,
-            ModifiersState::ALT,
-            ModifiersState::SUPER,
-            ModifiersState::CONTROL | ModifiersState::SHIFT,
-        ] {
+        for modifier in crate::test_support::unsupported_field_modifiers() {
             app.modifiers = modifier;
             for named in [
                 NamedKey::ArrowLeft,

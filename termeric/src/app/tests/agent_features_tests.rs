@@ -92,6 +92,7 @@ fn a_fresh_configuration_offers_no_agent_features() {
     assert_eq!(app.next_agent_scan_deadline(), None);
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn agent_shortcuts_reach_the_terminal_while_agent_features_are_off() {
     let mut app = App::new_headless_running(&crate::test_support::byte_probe(2), "agent-chords");

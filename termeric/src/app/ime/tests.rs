@@ -919,7 +919,7 @@ fn modal_atomic_commits_never_fall_through_to_a_live_pty() {
         app.workspace_panel.build_info().rename_text.as_deref(),
         Some("ae\u{301}Q👩\u{200d}💻z")
     );
-    app.modifiers = ModifiersState::CONTROL;
+    app.modifiers = crate::input::platform::System::CURRENT.word();
     assert!(app.handle_workspace_rename_key(&Key::Named(NamedKey::Delete)));
     assert_eq!(
         app.workspace_panel.build_info().rename_text.as_deref(),

@@ -476,6 +476,7 @@ mod tests {
         assert_command_bytes(&mut app, expected);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn completion_popup_does_not_steal_control_tab_or_write_edits() {
         use winit::keyboard::{Key, NamedKey};

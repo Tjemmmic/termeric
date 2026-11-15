@@ -24,6 +24,72 @@ pub(crate) fn byte_probe(count: usize) -> String {
     )
 }
 
+/// The key and modifiers that press `action`'s default shortcut on this
+/// system, as winit reports them: a letter typed with Shift comes in upper
+/// case, and named keys come by name. Tests press shortcuts through it so
+/// they hold on every system.
+pub(crate) fn default_shortcut_press(
+    action: crate::input::keybindings::BindableAction,
+) -> (winit::keyboard::Key, winit::keyboard::ModifiersState) {
+    use winit::keyboard::{Key, NamedKey};
+    let chord = action
+        .meta()
+        .default_binding
+        .unwrap_or_else(|| panic!("{action:?} has a default shortcut"));
+    let named = match chord.key.as_str() {
+        "tab" => Some(NamedKey::Tab),
+        "enter" => Some(NamedKey::Enter),
+        "escape" => Some(NamedKey::Escape),
+        "space" => Some(NamedKey::Space),
+        "backspace" => Some(NamedKey::Backspace),
+        "delete" => Some(NamedKey::Delete),
+        "home" => Some(NamedKey::Home),
+        "end" => Some(NamedKey::End),
+        "pageup" => Some(NamedKey::PageUp),
+        "pagedown" => Some(NamedKey::PageDown),
+        "up" => Some(NamedKey::ArrowUp),
+        "down" => Some(NamedKey::ArrowDown),
+        "left" => Some(NamedKey::ArrowLeft),
+        "right" => Some(NamedKey::ArrowRight),
+        "f11" => Some(NamedKey::F11),
+        _ => None,
+    };
+    let key = match named {
+        Some(named) => Key::Named(named),
+        None if chord.shift => Key::Character(chord.key.to_uppercase().into()),
+        None => Key::Character(chord.key.as_str().into()),
+    };
+    let press = (key, chord.modifiers());
+    assert_eq!(
+        crate::input::keybindings::KeyChord::from_key_event(&press.0, press.1),
+        Some(chord),
+        "{action:?}'s default is pressed as it is bound"
+    );
+    press
+}
+
+/// Modifiers no text field edits with on this system (its word and line
+/// modifiers aside) and that no default shortcut uses with an editing key,
+/// for tests that check fields swallow them.
+pub(crate) fn unsupported_field_modifiers() -> Vec<winit::keyboard::ModifiersState> {
+    use winit::keyboard::ModifiersState as M;
+    [
+        M::SHIFT,
+        M::CONTROL,
+        M::ALT,
+        M::SUPER,
+        M::CONTROL | M::SHIFT,
+        M::CONTROL | M::ALT,
+    ]
+    .into_iter()
+    .filter(|modifiers| {
+        crate::input::platform::System::CURRENT
+            .reach(*modifiers)
+            .is_none()
+    })
+    .collect()
+}
+
 /// [`byte_probe`] for one byte, which shows whether input reached its
 /// terminal at all. `App::assert_pty_untouched` writes the byte it expects
 /// first.

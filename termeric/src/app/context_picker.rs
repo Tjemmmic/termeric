@@ -379,7 +379,7 @@ mod tests {
         press(&mut app, NamedKey::Backspace);
         press(&mut app, NamedKey::Home);
         type_text(&mut app, "docs/");
-        app.modifiers = ModifiersState::CONTROL;
+        app.modifiers = crate::input::platform::System::CURRENT.word();
         press(&mut app, NamedKey::ArrowRight);
         app.handle_context_picker_key(&Key::Character("a".into()), false);
         app.handle_context_picker_key(&Key::Named(NamedKey::Space), false);
@@ -388,7 +388,7 @@ mod tests {
         assert_eq!(
             app.context_picker.snapshot().file_input,
             "docs/my🌱 notes.md",
-            "Ctrl moves by word and types nothing"
+            "the word modifier moves by word and types nothing"
         );
         press(&mut app, NamedKey::Backspace);
         press(&mut app, NamedKey::Delete);

@@ -947,6 +947,7 @@ fn character(text: &str) -> winit::keyboard::Key {
     winit::keyboard::Key::Character(text.into())
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn copy_mode_runs_app_shortcuts_for_keys_it_does_not_use() {
     use winit::keyboard::{Key, NamedKey};

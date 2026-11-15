@@ -328,7 +328,7 @@ mod tests {
         assert!(at(&app).0 > 1);
         app.handle_diff_review_key(&Key::Named(NamedKey::End), false);
         assert_eq!(at(&app).1, app.diff_review.viewport().max_column());
-        app.modifiers = ModifiersState::CONTROL;
+        app.modifiers = System::CURRENT.command();
         app.handle_diff_review_key(&Key::Named(NamedKey::Home), false);
         app.modifiers = ModifiersState::empty();
         assert_eq!(at(&app).0, 0);

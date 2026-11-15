@@ -2370,6 +2370,7 @@ key = \"z\"
         Config::from_toml(&fixed, path).unwrap();
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn two_actions_given_one_shortcut_are_refused_naming_both() {
         let path = std::path::Path::new("config.toml");

@@ -582,6 +582,7 @@ fn unicode_picker_tracks_only_the_same_focused_owner_through_topology_changes() 
     }
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn shortcuts_outrank_plugin_keybindings_and_both_outrank_the_terminal() {
     use crate::input::keybindings::{KeyAction, KeyBinding};

@@ -163,6 +163,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input::platform::System;
 
     #[test]
     fn tab_rename_text_is_single_line_control_free_and_strictly_bounded() {
@@ -294,9 +295,9 @@ mod tests {
             ModifiersState::CONTROL | ModifiersState::ALT,
         ] {
             app.modifiers = modifiers;
-            // Ctrl turns deletions into word edits, as in every field; the
-            // other chords leave the draft alone.
-            let edit_keys: &[NamedKey] = if modifiers == ModifiersState::CONTROL {
+            // The word and line modifiers edit, as in every field; the other
+            // chords leave the draft alone.
+            let edit_keys: &[NamedKey] = if System::CURRENT.reach(modifiers).is_some() {
                 &[]
             } else {
                 &[NamedKey::Backspace, NamedKey::ArrowLeft, NamedKey::Delete]
@@ -313,7 +314,7 @@ mod tests {
                 assert!(app.ime.preedit().is_some());
             }
         }
-        app.modifiers = ModifiersState::CONTROL;
+        app.modifiers = System::CURRENT.word();
         assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::Backspace)));
         assert_eq!(app.tab_rename.as_ref().unwrap().input.text(), "");
         assert!(app.tab_rename.as_mut().unwrap().input.insert("Roots"));

@@ -352,15 +352,16 @@ fn select_first_word(app: &mut App) {
 
 #[test]
 fn a_copy_the_clipboard_refuses_keeps_its_key_and_says_why() {
-    use winit::keyboard::Key;
     let mut app = scrollbar_owner_fixture();
     app.active_terminal_mut()
         .unwrap()
         .process(b"\x1b[H\x1b[2Jcopied text");
-    app.modifiers = ModifiersState::CONTROL | ModifiersState::SHIFT;
-    let copy = Key::Character("C".into());
+    let (copy, modifiers) = crate::test_support::default_shortcut_press(
+        crate::input::keybindings::BindableAction::Copy,
+    );
+    app.modifiers = modifiers;
 
-    // With nothing selected, Ctrl+Shift+C still reaches the program.
+    // With nothing selected, the copy shortcut still reaches the program.
     assert!(!app.handle_bound_key(&copy));
 
     // The headless clipboard cannot be reached: the key must not become ^C.

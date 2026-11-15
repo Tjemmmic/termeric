@@ -149,7 +149,7 @@ mod tests {
         ] {
             app.modifiers = modifier;
             assert!(app.handle_settings_filter_key(&Key::Character("x".into())));
-            if modifier != ModifiersState::CONTROL {
+            if System::CURRENT.reach(modifier).is_none() {
                 assert!(app.handle_settings_filter_key(&Key::Named(NamedKey::Backspace)));
             }
         }

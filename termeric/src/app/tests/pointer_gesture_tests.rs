@@ -1132,10 +1132,13 @@ fn a_double_click_on_a_tab_renames_it_and_a_single_press_still_drags_it() {
 }
 
 #[test]
-fn ctrl_alt_shift_t_renames_the_active_tab() {
+fn the_rename_shortcut_renames_the_active_tab() {
     let mut app = scrollbar_owner_fixture();
-    app.modifiers = ModifiersState::CONTROL | ModifiersState::ALT | ModifiersState::SHIFT;
-    assert!(app.handle_bound_key(&winit::keyboard::Key::Character("T".into())));
+    let (rename, modifiers) = crate::test_support::default_shortcut_press(
+        crate::input::keybindings::BindableAction::RenameTab,
+    );
+    app.modifiers = modifiers;
+    assert!(app.handle_bound_key(&rename));
     let active = app.tabs.as_ref().unwrap().active_tab_id();
     assert_eq!(app.tab_rename.as_ref().map(|rename| rename.tab_id), active);
 }

@@ -1265,6 +1265,7 @@ mod tests {
         }));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn command_shortcut_hints_follow_user_overrides() {
         let split_shortcut = |registry: &ShortcutRegistry| {
@@ -1569,6 +1570,7 @@ mod tests {
         assert!(info.entries.iter().any(|e| e.category == "Config"));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn test_shortcut_search() {
         let mut palette = test_palette();
