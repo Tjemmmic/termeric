@@ -195,7 +195,9 @@ impl DomainStream {
 impl Read for DomainReader {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
         match self {
-            Self::Local(stream) => stream.read(buffer),
+            // The writer's clone may make the socket nonblocking for a
+            // moment (`deadline_io::send_nonblocking`).
+            Self::Local(stream) => crate::deadline_io::read_waiting(stream, buffer),
             Self::Ssh(stream) => stream.read(buffer),
         }
     }

@@ -40,6 +40,14 @@ pub(crate) fn ready_to_read<const N: usize>(
     descriptors: [RawFd; N],
     timeout_millis: libc::c_int,
 ) -> io::Result<[bool; N]> {
+    poll_ready(descriptors, timeout_millis)
+}
+
+/// [`ready_to_read`] with `poll`.
+fn poll_ready<const N: usize>(
+    descriptors: [RawFd; N],
+    timeout_millis: libc::c_int,
+) -> io::Result<[bool; N]> {
     let mut polls = descriptors.map(|fd| libc::pollfd {
         fd,
         events: libc::POLLIN,
@@ -62,11 +70,32 @@ pub(crate) fn ready_to_read<const N: usize>(
 
 /// Which of `descriptors` a read would not block on within `timeout_millis`.
 /// macOS's `poll` does not support devices, and terminals and serial ports
-/// are devices, so this waits with `select`, which supports every kind of
-/// descriptor (and reports a hangup or an error as readable, for the read to
-/// tell).
+/// are devices, so a wait that includes one uses `select`, which supports
+/// every kind of descriptor (and reports a hangup or an error as readable,
+/// for the read to tell). Everything else uses `poll`, which, unlike
+/// `select`, takes descriptors beyond `FD_SETSIZE`.
 #[cfg(target_os = "macos")]
 pub(crate) fn ready_to_read<const N: usize>(
+    descriptors: [RawFd; N],
+    timeout_millis: libc::c_int,
+) -> io::Result<[bool; N]> {
+    let is_device = |descriptor: RawFd| {
+        // SAFETY: an all-zero stat is valid output storage for fstat.
+        let mut status = unsafe { std::mem::zeroed::<libc::stat>() };
+        // SAFETY: fstat writes the status of the open descriptor.
+        let result = unsafe { libc::fstat(descriptor, &mut status) };
+        result == 0 && status.st_mode & libc::S_IFMT == libc::S_IFCHR
+    };
+    if descriptors.iter().copied().any(is_device) {
+        select_ready(descriptors, timeout_millis)
+    } else {
+        poll_ready(descriptors, timeout_millis)
+    }
+}
+
+/// [`ready_to_read`] with `select`, for terminals and devices on macOS.
+#[cfg(target_os = "macos")]
+fn select_ready<const N: usize>(
     descriptors: [RawFd; N],
     timeout_millis: libc::c_int,
 ) -> io::Result<[bool; N]> {
@@ -257,8 +286,10 @@ impl<R: Read + AsRawFd> Read for PollReader<'_, R> {
 
 /// Writes to a socket before one deadline that covers every write and the
 /// final flush, so a peer draining slowly cannot stretch a frame. It never
-/// changes the socket's own timeouts or flags, which other threads holding a
-/// clone of the descriptor would see.
+/// changes the socket's own timeouts, which other threads holding a clone of
+/// the descriptor would see; on macOS it makes the socket nonblocking for
+/// the length of each send ([`send_nonblocking`]), so a thread reading a
+/// clone reads through [`WaitingReader`] or [`PollReader`].
 pub(crate) struct SocketWriter<'a> {
     socket: &'a UnixStream,
     deadline: Instant,
@@ -356,6 +387,33 @@ pub(crate) fn send_nonblocking(socket: &UnixStream, bytes: &[u8]) -> io::Result<
         return Err(io::Error::last_os_error());
     }
     result
+}
+
+/// Blocking reads that stay blocking while another thread's
+/// [`send_nonblocking`] has, on macOS, made the shared socket nonblocking for
+/// a moment: a read that would block waits until there is something to read
+/// and reads again, instead of failing.
+pub(crate) struct WaitingReader<'a, R: Read + AsRawFd>(pub(crate) &'a mut R);
+
+impl<R: Read + AsRawFd> Read for WaitingReader<'_, R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        read_waiting(self.0, buffer)
+    }
+}
+
+/// One [`WaitingReader`] read.
+pub(crate) fn read_waiting(
+    reader: &mut (impl Read + AsRawFd),
+    buffer: &mut [u8],
+) -> io::Result<usize> {
+    loop {
+        match reader.read(buffer) {
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                ready_to_read([reader.as_raw_fd()], -1)?;
+            }
+            result => return result,
+        }
+    }
 }
 
 /// Runs a nonblocking `attempt` to write to `descriptor` until it makes
