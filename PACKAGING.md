@@ -1,6 +1,6 @@
 # Packaging Termeric
 
-Notes for people packaging Termeric for a Linux distribution. Termeric's own packages (the release tarball, the `.deb`, and the two AUR recipes in `packaging/arch/`: `termeric`, built from a release's source, and `termeric-git`, built from the latest commit) are built exactly as described here; use them as references.
+Notes for people packaging Termeric for a Linux distribution, and how Termeric.app is assembled on macOS ([macOS](#macos), at the end). Termeric's own packages (the release tarball, the `.deb`, and the two AUR recipes in `packaging/arch/`: `termeric`, built from a release's source, and `termeric-git`, built from the latest commit) are built exactly as described here; use them as references.
 
 ## Identity
 
@@ -127,3 +127,8 @@ cp ../aur-termeric/PKGBUILD ../aur-termeric/.SRCINFO packaging/arch/termeric/
 `makepkg` there downloads the tag's archive, checks it against the pinned checksum, builds, and runs the tests. Commit the pinned recipe here, then commit `PKGBUILD` and `.SRCINFO` in `../aur-termeric` and push. `termeric-git` is published the same way from `ssh://aur@aur.archlinux.org/termeric-git.git`, without `updpkgsums`.
 
 To package a checkout that isn't on GitHub yet, `scripts/build_arch_package.py --package termeric` (or `termeric-git`) builds a recipe from the local checkout: for `termeric`, an archive of the committed `HEAD`, without checking its checksum; for `termeric-git`, the working tree. [Packages](CONTRIBUTING.md#packages) has the commands.
+
+## macOS
+
+`scripts/bundle_macos.py --binary target/release/termeric --out Termeric.app --sign` assembles the app from a release build: `Contents/MacOS/termeric`, an `Info.plist` with the bundle identifier `org.termeric.Termeric`, the version from `Cargo.toml`, `LSMinimumSystemVersion` 11.0, and a usage description for every protected resource a program run in a terminal may ask for (macOS holds the terminal responsible for its shells), `Resources/Termeric.icns` written from the committed icon PNGs, and the terminfo entry in `Resources/terminfo/` under both `x/` and `78/` (macOS's ncurses reads only the second). Build with `MACOSX_DEPLOYMENT_TARGET=11.0` so an Intel build runs on macOS 11 too. `--sign` signs the bundle ad hoc, which Apple silicon requires; releases signed with a developer ID and notarized need an Apple Developer account and aren't produced yet.
+

@@ -1,23 +1,26 @@
 # Termeric configuration example.
 #
 # Copy this file to ~/.config/termeric/config.toml (or
-# $XDG_CONFIG_HOME/termeric/config.toml) and change what you like. It lists
-# every setting: the values that aren't commented out are the defaults, and
-# the commented entries show settings that have none. Every key is optional; a
+# $XDG_CONFIG_HOME/termeric/config.toml; the same place on macOS) and change
+# what you like. It lists every setting: the values that aren't commented out
+# are the defaults, and the commented entries show settings that have none. Every key is optional; a
 # key you leave out keeps its default, and Termeric runs fine with no file.
 #
 # Termeric reloads the file within a second of a save. A key it doesn't know,
 # a value outside its range, or a file over 1 MiB (the limit for theme files
 # too) is an error that names the key and its line, or the file:
 # Termeric keeps the settings it had (or starts with the defaults), shows a
-# notice until the file loads, and never saves over it. Settings (Ctrl+,)
-# changes most of these too, and keeps your comments and layout when it saves.
-# Reset Configuration to Defaults in the command palette (Ctrl+Shift+P) keeps
-# the old file beside the new one as config.toml.<seconds>.bak.
+# notice until the file loads, and never saves over it. Settings (Ctrl+,, or
+# ⌘, on macOS) changes most of these too, and keeps your comments and layout
+# when it saves. Reset Configuration to Defaults in the command palette
+# (Ctrl+Shift+P, or ⇧⌘P) keeps the old file beside the new one as
+# config.toml.<seconds>.bak.
 
 [shell]
 # The program new tabs and panes run. Unset, it is $SHELL, or your account's
-# login shell. Changes here apply to tabs and panes opened afterwards.
+# login shell; on macOS it then starts as a login shell, as in Terminal.app.
+# A program set here runs with exactly the `args` set here. Changes apply to
+# tabs and panes opened afterwards.
 # program = "/bin/zsh"
 # args = ["-l"]
 # Extra environment variables for new shells. TERM, COLORTERM, TERMINFO,
@@ -57,11 +60,13 @@
 # flow_control = "none"   # none, software (XON/XOFF), hardware (RTS/CTS)
 
 [font]
-# The main font family, as fontconfig names it; `fc-list :spacing=mono family`
-# lists them. "monospace" is the system's default monospace font. The main font
-# sets the cell size, so choose a true monospace font.
+# The main font family, as fontconfig names it (`fc-list :spacing=mono family`
+# lists them) or, on macOS, as Font Book does. "monospace" is the system's
+# default monospace font (Menlo on macOS). The main font sets the cell size,
+# so choose a true monospace font. On macOS a point of `size` is one logical
+# pixel, as in other Mac apps.
 family = "monospace"
-size = 12.0               # points, 8 to 72; Ctrl+= and Ctrl+- zoom one window
+size = 12.0               # points, 8 to 72; Ctrl+= and Ctrl+- (⌘= and ⌘-) zoom one window
 weight = 400              # 1 to 1000
 bold_weight = 700         # 1 to 1000, at least `weight`
 line_height = 1.2         # a multiple of the font size, 0.8 to 3.0
@@ -138,8 +143,9 @@ name = "turmeric"
 backend = "auto"
 
 [accessibility]
-# "system" follows the desktop's setting through the XDG desktop portal, and
-# is off when the desktop publishes none. High contrast changes Termeric's own
+# "system" follows the desktop's setting (through the XDG desktop portal on
+# Linux, and System Settings → Accessibility → Display on macOS), and is off
+# when the desktop publishes none. High contrast changes Termeric's own
 # interface, not the terminal's colors.
 reduce_motion = "system"  # system, on, off
 high_contrast = "system"  # system, on, off
@@ -147,13 +153,14 @@ high_contrast = "system"  # system, on, off
 [window]
 width = 800               # pixels, 320 to 16384; windows opened later
 height = 600              # pixels, 200 to 16384; windows opened later
-opacity = 1.0             # 0.1 to 1.0; needs a compositor with transparency
+opacity = 1.0             # 0.1 to 1.0; on Linux, needs a compositor with transparency
 padding = 8               # pixels around the terminal, 0 to 256
 decorations = true        # the desktop's title bar and borders
 level = "normal"          # normal, always_on_top, always_on_bottom (a request)
 tab_bar_position = "top"  # top, or left for a vertical rail
-# New windows open in the Termeric already running on this display, so tabs
-# can move between them. Applies to windows opened later.
+# New windows open in the Termeric already running on this display (on macOS,
+# in this login session), so tabs can move between them. Applies to windows
+# opened later.
 share_process = true
 
 # A static PNG or JPEG behind the terminal text, at most 16 MiB and 8192
@@ -173,8 +180,17 @@ blink_rate = 530          # milliseconds on, then off, 100 to 5000
 
 [bell]
 visual = true             # flash the terminal
-audio = false             # play a sound through paplay
+audio = false             # play a sound: through paplay on Linux, your alert sound on macOS
 visual_duration_ms = 100  # 10 to 5000
+
+[quick_access]
+# macOS only: a system-wide key that shows and hides the quick-access
+# terminal (`termeric --quick-access`) while it runs, whichever app is in
+# front. The key is the one at that place on a US keyboard: a letter, a
+# digit, ` - = [ ] \\ ; ' , . /, space, return, tab, escape, or f1 to f20;
+# it needs ctrl, alt, or super unless it is a function key. On Linux, bind
+# `termeric --quick-access` to a desktop shortcut instead.
+# macos_hotkey = { key = "`", ctrl = true }
 
 [splash]
 mode = "firstboot"        # never, firstboot (the first launch ever), newwindow, newtab

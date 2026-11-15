@@ -25,7 +25,8 @@ const RENDERING: &str = "Rendering";
 fn joining_a_running_termeric() -> String {
     let [identity @ .., last] = crate::control::TERMINAL_IDENTITY_VARIABLES;
     format!(
-        "A plain launch opens its window in the Termeric already running on this display, so \
+        "A plain launch opens its window in the Termeric already running on this display (on \
+         macOS, in this login session at the screen), so \
          tabs can move between its windows; the window uses that process's settings and \
          environment. A launch starts a process of its own instead when it passes \
          --separate-process, opens two or more windows, or uses any option besides --new-window, \
@@ -252,7 +253,8 @@ fn identity_and_size() -> [Arg; 2] {
         option(
             "app-id",
             "NAME",
-            "Set the X11 WM_CLASS and Wayland application ID",
+            "Set the X11 WM_CLASS and Wayland application ID; macOS names the app by its bundle \
+             identifier instead",
             IDENTITY_AND_SIZE,
         )
         .visible_alias("class"),
@@ -284,8 +286,9 @@ mod tests {
         ),
         (
             "WGPU_BACKEND",
-            "The graphics API to render with: vulkan or gl. With --renderer software, gl and \
-             LIBGL_ALWAYS_SOFTWARE=true use Mesa's software OpenGL.",
+            "The graphics API to render with: vulkan or gl on Linux, metal on macOS. On Linux, \
+             with --renderer software, gl and LIBGL_ALWAYS_SOFTWARE=true use Mesa's software \
+             OpenGL; macOS has no software renderer.",
         ),
         (
             "RUST_LOG",
@@ -295,7 +298,7 @@ mod tests {
             "XDG_CONFIG_HOME, XDG_DATA_HOME",
             "Where Termeric keeps its configuration (termeric/config.toml, custom themes, \
              plugins) and its data (workspaces, tab snapshots, agent transcripts), by default \
-             ~/.config and ~/.local/share.",
+             ~/.config and ~/.local/share, on macOS too.",
         ),
     ];
 

@@ -19,7 +19,7 @@ Termeric keeps your shells in tabs, panes, and windows, draws them with your GPU
 
 ## Status
 
-Termeric is a **developer preview for Linux**, on Wayland and X11. Expect rough edges. Configuration and saved workspaces may change between previews without migration, and only the latest preview receives fixes. Please report problems in [GitHub issues](https://github.com/Tjemmmic/termeric/issues).
+Termeric is a **developer preview for Linux**, on Wayland and X11, and **for macOS** 11 or later, which you build from source for now. Expect rough edges. Configuration and saved workspaces may change between previews without migration, and only the latest preview receives fixes. Please report problems in [GitHub issues](https://github.com/Tjemmmic/termeric/issues).
 
 Some features are experimental and may change between previews: coding agents and Harvest, which stay off until you turn them on in Settings, and scripting a running Termeric, live domains, and third-party plugins. [FEATURES.md](FEATURES.md) lists what works, what partly works, and what is planned.
 
@@ -33,13 +33,13 @@ Termeric has one install method for each platform it supports, and you can alway
 | Arch Linux | x86_64, arm64 | [AUR package](#arch-linux) | Developer preview |
 | Other Linux with glibc 2.35 or later | x86_64, arm64 | [Tarball](#other-linux) | Developer preview |
 | Windows Subsystem for Linux | x86_64, arm64 | The Linux packages, under WSLg | Planned |
-| macOS | — | Chosen with the port | Planned |
+| macOS 11 and later | Apple silicon, Intel | [Build from source](#macos) | Developer preview |
 | Windows | — | Chosen with the port | Planned |
 | FreeBSD and other BSDs | — | Chosen with the port | Planned |
 
-Wayland and X11 both work; [FEATURES.md](FEATURES.md) notes where they differ. This preview is tested by hand on KDE Plasma, on Wayland and X11; GNOME and screen readers aren't tested yet. The arm64 packages are built by the release workflow but haven't been tested on arm64 hardware yet.
+Wayland and X11 both work; [FEATURES.md](FEATURES.md) notes where they differ, and where macOS does. This preview is tested by hand on KDE Plasma, on Wayland and X11; GNOME, macOS, and screen readers aren't tested by hand yet (macOS is built and tested on Apple silicon in CI). The arm64 packages are built by the release workflow but haven't been tested on arm64 hardware yet.
 
-Every package installs the program, its desktop entry and icons, the `xterm-termeric` terminfo entry, the manual page, and Bash, Zsh, and Fish completions. Termeric also needs a Vulkan driver for your GPU, or Mesa, whose software renderer it uses when the GPU can't be used.
+Every Linux package installs the program, its desktop entry and icons, the `xterm-termeric` terminfo entry, the manual page, and Bash, Zsh, and Fish completions. Termeric also needs a Vulkan driver for your GPU, or Mesa, whose software renderer it uses when the GPU can't be used.
 
 ### Debian and Ubuntu
 
@@ -76,9 +76,26 @@ termeric-*-x86_64-linux/install.sh
 
 On arm64, the file names say `aarch64` instead of `x86_64`. To install for everyone instead, run `sudo termeric-*-x86_64-linux/install.sh --prefix /usr/local`. To upgrade, run a newer tarball's `install.sh` with the same `--prefix`; it removes the previous version's files first. To uninstall, run `install.sh --uninstall` with the same `--prefix`.
 
+### macOS
+
+Signed downloads for macOS will come with an Apple developer ID; until then, build Termeric.app yourself. You need the Xcode Command Line Tools (`xcode-select --install`) and Rust 1.95 or newer from [rustup](https://rustup.rs). Then build the app, put it in Applications, and link its command line where your shell finds it:
+
+```bash
+git clone https://github.com/Tjemmmic/termeric.git
+cd termeric
+cargo build --release --locked
+python3 scripts/bundle_macos.py --binary target/release/termeric --out target/Termeric.app --sign
+mv target/Termeric.app /Applications/
+sudo ln -sf /Applications/Termeric.app/Contents/MacOS/termeric /usr/local/bin/termeric
+```
+
+The app carries the `xterm-termeric` terminfo entry. To upgrade, build again, quit Termeric, and replace the app. To uninstall, move Termeric.app to the Trash and remove the link.
+
+A `Termeric-macos-arm64.zip` from a CI run (for testers) isn't signed by a developer, so macOS stops it the first time: move Termeric.app to Applications, then either run `xattr -dr com.apple.quarantine /Applications/Termeric.app` or open it once and choose **Open Anyway** under **System Settings → Privacy & Security**.
+
 ### Build from source
 
-You need Rust 1.95 or newer, a C compiler, Python 3 (to stage the install tree), and the development files for fontconfig, Wayland, xkbcommon, XCB, and Vulkan. On Debian or Ubuntu, install Rust with [rustup](https://rustup.rs) if the distribution's is older, then:
+On Linux you need Rust 1.95 or newer, a C compiler, Python 3 (to stage the install tree), and the development files for fontconfig, Wayland, xkbcommon, XCB, and Vulkan. On Debian or Ubuntu, install Rust with [rustup](https://rustup.rs) if the distribution's is older, then:
 
 ```bash
 sudo apt install build-essential git pkg-config libfontconfig1-dev libwayland-dev \
@@ -121,10 +138,12 @@ Uninstalling never removes your settings or saved data. They live in two folders
 | `~/.config/termeric/` | `config.toml` (your settings), `themes/` (custom themes), `plugins.toml` and `plugins/` (installed plugins), `supervisor.md` (agent supervisor rules), `shell-integration/` (generated shell hooks) |
 | `~/.local/share/termeric/` | Saved workspaces and tab snapshots, and agent transcripts and exports |
 
+macOS uses the same two folders, so a `config.toml` you keep with your dotfiles works on both.
+
 ## Getting started
 
-- **Ctrl+Shift+P** opens the command palette, which lists every command with its shortcut. If you remember one key, make it this one.
-- **Ctrl+,** opens Settings. Changes apply as you make them and stay when you close it; **Ctrl+S** saves them to `~/.config/termeric/config.toml`, and **Discard…** goes back to the saved file.
+- **Ctrl+Shift+P** (**⇧⌘P** on macOS) opens the command palette, which lists every command with its shortcut. If you remember one key, make it this one.
+- **Ctrl+,** (**⌘,**) opens Settings. Changes apply as you make them and stay when you close it; **Ctrl+S** (**⌘S**) saves them to `~/.config/termeric/config.toml`, and **Discard…** goes back to the saved file.
 - **Change Theme…** in the palette previews each theme as you move through the list.
 - **Keyboard Shortcuts** in the palette lists and rebinds every shortcut.
 - **F6** moves keyboard focus to the tab bar and toolbar, and **Escape** returns it to the terminal.
@@ -166,7 +185,14 @@ For `sudo`, install the entry system-wide or run `sudo env TERM=xterm-256color c
 
 **Boxes instead of characters.** None of your fonts has them. Install fonts that cover them (such as Noto Sans Mono, Noto Color Emoji, and Noto Sans CJK), and add them as fallbacks on the **Font** page of Settings or with `fallback` under `[font]`.
 
-**Copy and paste.** Use **Ctrl+Shift+C** and **Ctrl+Shift+V**; plain Ctrl+C interrupts the program. When a program uses the mouse, hold **Shift** to select. On a Wayland compositor without the data-control protocol, Termeric reaches the clipboard through XWayland, which must be running. A failed copy shows a notice with the reason.
+**Copy and paste.** Use **Ctrl+Shift+C** and **Ctrl+Shift+V** (**⌘C** and **⌘V** on macOS); plain Ctrl+C interrupts the program. When a program uses the mouse, hold **Shift** to select. On a Wayland compositor without the data-control protocol, Termeric reaches the clipboard through XWayland, which must be running. A failed copy shows a notice with the reason.
+
+**macOS.**
+
+- **Option types characters instead of acting as Alt (Meta).** That is the default, so layouts that type `@`, `|`, or `[` with Option keep working. Set `macos_option_as_alt` under `[keyboard]` to `"left"`, `"right"`, or `"both"` to make Option act as Alt for programs such as Emacs and readline.
+- **No notifications.** They need Termeric.app (not a binary run from `target/`) and your permission, which macOS asks for the first time a program sends one; **System Settings → Notifications → Termeric** changes it.
+- **Programs or agents aren't found.** Started from the Finder or the Dock, Termeric takes `PATH` from your login shell (including `~/.zprofile` and `~/.zshrc`). Its own shells start as login shells, as in Terminal.app.
+- **It won't start.** Termeric draws with Metal, which every supported Mac has; there is no software renderer on macOS, so leave `backend` under `[renderer]` unset or `"gpu"`.
 
 **A mistake in `config.toml`.** Termeric still starts, with the defaults or the settings it had, and shows a notice naming the key and line until the file loads. It never saves over a file with an error. **Reset Configuration to Defaults** in the palette starts over and keeps the old file beside the new one.
 

@@ -7,6 +7,7 @@ Notable changes to Termeric, by release. The project follows [Keep a Changelog](
 ### Added
 
 - A light theme for every root theme, named after its dark partner with "Light" ("Turmeric Light").
+- macOS 11 and later, on Apple silicon and Intel, built from source as Termeric.app: Mac shortcuts with ⌘, a menu bar, an Option-as-Alt setting, login shells with your `PATH` and locale, notifications, the Mac file chooser, reduce motion and increase contrast, a quick-access hotkey, and quitting that keeps every window's workspace. [FEATURES.md](FEATURES.md#macos) lists what differs there.
 
 ### Fixed
 

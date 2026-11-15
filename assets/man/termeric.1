@@ -78,7 +78,7 @@ Run COMMAND in the current tab with every remaining argument exactly
 Initial physical\-pixel window size
 .TP
 \fB\-\-app\-id\fR \fI<NAME>\fR
-Set the X11 WM_CLASS and Wayland application ID [alias: \-\-class]
+Set the X11 WM_CLASS and Wayland application ID; macOS names the app by its bundle identifier instead [alias: \-\-class]
 .SH RENDERING
 .TP
 \fB\-\-renderer\fR \fI<BACKEND>\fR
@@ -114,7 +114,7 @@ List saved workspaces. Run \fBtermeric workspace \-\-help\fR for its commands an
 \fBtermeric mcp\fR
 Serve Termeric\*(Aqs agent tools to a coding agent over MCP (experimental). Run \fBtermeric mcp \-\-help\fR for its commands and options.
 .SH "JOINING A RUNNING TERMERIC"
-A plain launch opens its window in the Termeric already running on this display, so tabs can move between its windows; the window uses that process\*(Aqs settings and environment. A launch starts a process of its own instead when it passes \-\-separate\-process, opens two or more windows, or uses any option besides \-\-new\-window, \-\-tab, \-\-working\-directory, \-\-title, \-\-command, and a COMMAND; when [window] share_process is false; when the termeric executable differs from the running one; when any of these variables differs from the running process\*(Aqs: RUST_LOG, WGPU_BACKEND, WGPU_ADAPTER_NAME, WGPU_POWER_PREF, LIBGL_ALWAYS_SOFTWARE, HOME, XDG_CONFIG_HOME, XDG_DATA_HOME; or when TERMERIC_TERM, TERMERIC_TERMINFO_DIR, TERMINFO, and TERMINFO_DIRS select a different terminal identity (TERM and its terminfo entry) from the running process\*(Aqs.
+A plain launch opens its window in the Termeric already running on this display (on macOS, in this login session at the screen), so tabs can move between its windows; the window uses that process\*(Aqs settings and environment. A launch starts a process of its own instead when it passes \-\-separate\-process, opens two or more windows, or uses any option besides \-\-new\-window, \-\-tab, \-\-working\-directory, \-\-title, \-\-command, and a COMMAND; when [window] share_process is false; when the termeric executable differs from the running one; when any of these variables differs from the running process\*(Aqs: RUST_LOG, WGPU_BACKEND, WGPU_ADAPTER_NAME, WGPU_POWER_PREF, LIBGL_ALWAYS_SOFTWARE, HOME, XDG_CONFIG_HOME, XDG_DATA_HOME; or when TERMERIC_TERM, TERMERIC_TERMINFO_DIR, TERMINFO, and TERMINFO_DIRS select a different terminal identity (TERM and its terminfo entry) from the running process\*(Aqs.
 .SH ENVIRONMENT
 .TP
 \fBTERMERIC_TERM\fR
@@ -124,13 +124,13 @@ The TERM programs in Termeric see: auto (the default) uses xterm\-termeric when 
 A directory searched first for the compiled xterm\-termeric entry, before TERMINFO, ~/.terminfo, $XDG_DATA_HOME/terminfo, TERMINFO_DIRS, the install prefix\*(Aqs share/terminfo, and the system directories.
 .TP
 \fBWGPU_BACKEND\fR
-The graphics API to render with: vulkan or gl. With \-\-renderer software, gl and LIBGL_ALWAYS_SOFTWARE=true use Mesa\*(Aqs software OpenGL.
+The graphics API to render with: vulkan or gl on Linux, metal on macOS. On Linux, with \-\-renderer software, gl and LIBGL_ALWAYS_SOFTWARE=true use Mesa\*(Aqs software OpenGL; macOS has no software renderer.
 .TP
 \fBRUST_LOG\fR
 What Termeric logs to standard error, for example warn,termeric=debug.
 .TP
 \fBXDG_CONFIG_HOME, XDG_DATA_HOME\fR
-Where Termeric keeps its configuration (termeric/config.toml, custom themes, plugins) and its data (workspaces, tab snapshots, agent transcripts), by default ~/.config and ~/.local/share.
+Where Termeric keeps its configuration (termeric/config.toml, custom themes, plugins) and its data (workspaces, tab snapshots, agent transcripts), by default ~/.config and ~/.local/share, on macOS too.
 .SH FILES
 .TP
 \fB~/.config/termeric/config.toml\fR

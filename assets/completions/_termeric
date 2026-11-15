@@ -25,8 +25,8 @@ vertical\:"Add a shell pane to the right"))' \
 '*--workspace=[Restore one complete workspace into this window]:ID:_default' \
 '*--title=[Set the current tab title]:TITLE:_default' \
 '*--geometry=[Initial physical-pixel window size]:WIDTHxHEIGHT:_default' \
-'*--app-id=[Set the X11 WM_CLASS and Wayland application ID]:NAME:_default' \
-'*--class=[Set the X11 WM_CLASS and Wayland application ID]:NAME:_default' \
+'*--app-id=[Set the X11 WM_CLASS and Wayland application ID; macOS names the app by its bundle identifier instead]:NAME:_default' \
+'*--class=[Set the X11 WM_CLASS and Wayland application ID; macOS names the app by its bundle identifier instead]:NAME:_default' \
 '--renderer=[Choose the renderer for every window of this process]:BACKEND:((auto\:"Try the GPU, then software rendering"
 gpu\:"Insist on the GPU"
 software\:"Insist on software rendering"))' \

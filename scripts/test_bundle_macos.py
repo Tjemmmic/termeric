@@ -41,6 +41,8 @@ class BundleTests(unittest.TestCase):
                     (bundle_macos.ROOT / "assets/terminfo/x/xterm-termeric").read_bytes(),
                 )
             self.assertEqual((contents / "PkgInfo").read_bytes(), b"APPL????")
+            for notice in ("LICENSE", "THIRD_PARTY_NOTICES.md"):
+                self.assertTrue((contents / "Resources" / notice).is_file(), notice)
 
     def test_the_icon_has_every_slot_at_its_size(self) -> None:
         data = bundle_macos.icns()

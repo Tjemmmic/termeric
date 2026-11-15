@@ -148,6 +148,14 @@ def bundle(binary: Path, output: Path, repository: Path = ROOT) -> Path:
     entry = repository / "assets/terminfo/x" / TERMINFO
     for layout in ("x", f"{ord('x'):x}"):
         copy_file(entry, resources / "terminfo" / layout / TERMINFO, DATA_MODE)
+    # The licenses of Termeric and of everything compiled into it travel
+    # with the app.
+    copy_file(repository / "LICENSE", resources / "LICENSE", DATA_MODE)
+    copy_file(
+        repository / "termeric/THIRD_PARTY_NOTICES.md",
+        resources / "THIRD_PARTY_NOTICES.md",
+        DATA_MODE,
+    )
     with (contents / "Info.plist").open("wb") as plist:
         plistlib.dump(info_plist(workspace_version(repository)), plist)
     (contents / "PkgInfo").write_bytes(b"APPL????")
