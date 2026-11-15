@@ -25,6 +25,11 @@ const LOGIN_SHELL_TIMEOUT: Duration = Duration::from_secs(3);
 /// No other thread may exist: this changes the process environment, which
 /// another thread could be reading.
 pub(crate) unsafe fn complete() -> Vec<String> {
+    debug_assert_eq!(
+        thread_count(),
+        Some(1),
+        "the environment changes before any thread"
+    );
     let mut changes = Vec::new();
     if let Some((name, value)) = missing_locale() {
         // SAFETY: the caller guarantees this is the only thread.
@@ -49,6 +54,28 @@ pub(crate) unsafe fn complete() -> Vec<String> {
     changes
 }
 
+/// Raise the soft limit on open files: launchd starts apps with 256, which
+/// many tabs, their terminals, and agents' pipes can use up. macOS refuses a
+/// soft limit above `OPEN_MAX` (10240), whatever the hard limit says.
+pub(crate) fn raise_open_file_limit() -> Option<String> {
+    const OPEN_MAX: libc::rlim_t = 10240;
+    // SAFETY: an all-zero rlimit is valid output storage.
+    let mut limit = unsafe { std::mem::zeroed::<libc::rlimit>() };
+    // SAFETY: getrlimit writes the limit it was given.
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } != 0 {
+        return None;
+    }
+    let wanted = limit.rlim_max.min(OPEN_MAX);
+    if limit.rlim_cur >= wanted {
+        return None;
+    }
+    let previous = limit.rlim_cur;
+    limit.rlim_cur = wanted;
+    // SAFETY: setrlimit reads the limit it was given.
+    (unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) } == 0)
+        .then(|| format!("raised the open-file limit from {previous} to {wanted}"))
+}
+
 /// The locale variable to set when none is: `LANG` for the system's
 /// language and region when macOS has that locale, else `en_US.UTF-8`, so
 /// text is UTF-8 either way. Only `LANG` is ever set: `ssh` sends `LC_*`
@@ -59,11 +86,46 @@ fn missing_locale() -> Option<(&'static str, String)> {
     if ["LC_ALL", "LC_CTYPE", "LANG"].into_iter().any(set) {
         return None;
     }
-    let locale = sys_locale::get_locale()
+    let locale = system_locale()
         .and_then(|tag| posix_locale(&tag))
         .filter(|locale| Path::new("/usr/share/locale").join(locale).is_dir())
         .unwrap_or_else(|| "en_US.UTF-8".to_owned());
     Some(("LANG", locale))
+}
+
+/// The system's language and region (`AppleLocale`, such as `en_US` or
+/// `de_DE@currency=EUR`), read by the `defaults` tool rather than in this
+/// process: CoreFoundation's preferences start threads of their own, and the
+/// environment must change before there are any.
+fn system_locale() -> Option<String> {
+    let output = Command::new("/usr/bin/defaults")
+        .args(["read", "-g", "AppleLocale"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    let locale = String::from_utf8(output.stdout).ok()?;
+    let locale = locale.trim().split('@').next()?.to_owned();
+    (output.status.success() && !locale.is_empty()).then_some(locale)
+}
+
+/// How many threads this process has.
+fn thread_count() -> Option<i32> {
+    let pid = libc::c_int::try_from(std::process::id()).ok()?;
+    // SAFETY: proc_taskinfo is plain old data, for which zeroes are valid.
+    let mut info = unsafe { std::mem::zeroed::<libc::proc_taskinfo>() };
+    let size = libc::c_int::try_from(std::mem::size_of::<libc::proc_taskinfo>()).ok()?;
+    // SAFETY: the buffer is writable for exactly `size` bytes.
+    let written = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTASKINFO,
+            0,
+            (&mut info as *mut libc::proc_taskinfo).cast(),
+            size,
+        )
+    };
+    (written == size).then_some(info.pti_threadnum)
 }
 
 /// A POSIX locale name for a BCP 47 tag such as `en-US` or `zh-Hans-CN`:
@@ -130,8 +192,12 @@ fn started_by_launchd() -> bool {
 /// The `PATH` the person's login shell sets up, asked for without starting a
 /// thread (see [`complete`]).
 fn login_shell_path() -> Option<OsString> {
+    login_path_of(&crate::terminal::shell_integration::default_shell_program()?)
+}
+
+/// The `PATH` `shell` sets up as an interactive login shell.
+fn login_path_of(shell: &str) -> Option<OsString> {
     use std::os::unix::process::CommandExt;
-    let shell = crate::terminal::shell_integration::default_shell_program()?;
     let mut child = Command::new(shell)
         // Interactive too, so what `~/.zshrc` adds (nvm, pyenv) counts, as
         // in the editors that do the same.
@@ -201,6 +267,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_system_locale_reads_as_a_posix_locale() {
+        // A fresh account may have no AppleLocale yet; then en_US.UTF-8 is
+        // used, which the other tests cover.
+        if let Some(locale) = system_locale() {
+            assert!(posix_locale(&locale).is_some(), "{locale}");
+        }
+    }
+
+    #[test]
     fn locale_tags_become_utf8_posix_locales() {
         assert_eq!(posix_locale("en-US").as_deref(), Some("en_US.UTF-8"));
         assert_eq!(posix_locale("de_DE").as_deref(), Some("de_DE.UTF-8"));
@@ -220,8 +295,10 @@ mod tests {
     }
 
     #[test]
-    fn the_login_shell_reports_a_path() {
-        let path = login_shell_path().expect("the test user's login shell reports PATH");
+    fn a_login_shell_reports_its_path() {
+        // The system's own sh, whose profile (`path_helper`) every Mac has,
+        // rather than the test user's shell and its dotfiles.
+        let path = login_path_of("/bin/sh").expect("a login sh reports PATH");
         assert!(
             path.to_str()
                 .unwrap()

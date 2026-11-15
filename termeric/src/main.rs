@@ -68,7 +68,9 @@ fn main() -> Result<std::process::ExitCode> {
     let completed_environment = match outcome {
         cli::ParseOutcome::Run(_) | cli::ParseOutcome::QuickAccess(_) => {
             // SAFETY: parsing starts no threads, and nothing else has run.
-            unsafe { launch_environment::complete() }
+            let mut changes = unsafe { launch_environment::complete() };
+            changes.extend(launch_environment::raise_open_file_limit());
+            changes
         }
         _ => Vec::new(),
     };
