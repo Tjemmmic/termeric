@@ -667,7 +667,7 @@ mod tests {
                 "-c".into(),
                 format!("printf FINAL_CHILD_OUTPUT; exit {code}"),
             ];
-            let mut pty = Pty::spawn(
+            let pty = Pty::spawn(
                 default_pty_size(80, 24),
                 PtyCommand {
                     program: Some("/bin/sh"),
@@ -698,6 +698,7 @@ mod tests {
             // its output is read, so there the output is drained first.
             #[cfg(target_os = "linux")]
             let (handle, output) = {
+                let mut pty = pty;
                 assert_eq!(pty.wait().unwrap().exit_code(), code);
                 assert!(!pty.is_running());
                 assert_eq!(observer.poll().unwrap().exit, Some(expected));
