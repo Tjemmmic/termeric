@@ -570,17 +570,27 @@ mod tests {
         };
         // Each pane shows READY once its input is raw and unechoed, then the
         // hex of the first byte it reads, and nothing else.
-        let first_byte_read = |app: &App, id: PaneId| {
+        // READY may scroll out of a small pane once the hex follows it, so
+        // what a pane read is everything else on its screen.
+        let screen = |app: &App, id: PaneId| {
             let manager = &app.tabs.as_ref().unwrap().active_tab().unwrap().panes;
-            let output = manager.get_pane(id)?.terminal.rows_text(0, 7);
-            let mut words = output.split_whitespace();
-            (words.next() == Some("READY")).then(|| words.collect::<Vec<_>>().join(" "))
+            Some(manager.get_pane(id)?.terminal.rows_text(0, 7))
+        };
+        let first_byte_read = |app: &App, id: PaneId| {
+            screen(app, id).map(|output| {
+                output
+                    .split_whitespace()
+                    .filter(|word| *word != "READY")
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
         };
         let ready = crate::test_support::poll_until(Duration::from_secs(2), || {
             app.process_pty_events();
-            pane_ids
-                .iter()
-                .all(|id| first_byte_read(&app, *id).is_some())
+            pane_ids.iter().all(|id| {
+                screen(&app, *id)
+                    .is_some_and(|output| output.split_whitespace().next() == Some("READY"))
+            })
         });
         assert!(ready, "every pane should be reading raw input: {:?}", {
             let manager = &app.tabs.as_ref().unwrap().active_tab().unwrap().panes;
