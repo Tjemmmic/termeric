@@ -513,10 +513,13 @@ mod tests {
         assert!(
             directory.starts_with("/var/folders") || directory.starts_with("/private/var/folders")
         );
+        let metadata = fs::symlink_metadata(&directory).unwrap();
         assert!(
             runtime_parent_is_safe(&directory, effective_uid()),
-            "{}",
-            directory.display()
+            "{} has owner {} and mode {:o}",
+            directory.display(),
+            metadata.uid(),
+            metadata.permissions().mode()
         );
     }
 

@@ -154,6 +154,11 @@ fn output_eof_failure_and_panic_join_idle_input_before_return() {
     }
 }
 
+/// The daemon end's `shutdown(SHUT_RD)` makes the bridge's writes fail with
+/// `EPIPE` on Linux. macOS, like the BSDs, keeps accepting them, so the
+/// failure this stands for (the daemon going away) can't be staged this way
+/// there; it gives `EPIPE` on both.
+#[cfg(target_os = "linux")]
 #[test]
 fn input_write_failure_stops_the_other_direction() {
     let (bridge, daemon) = UnixStream::pair().unwrap();

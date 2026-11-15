@@ -409,3 +409,19 @@ fn plugin_quick_exit_crosses_pty_tab_and_diagnostic_capture() {
 fn the_first_byte_probe_is_the_one_byte_probe() {
     assert_eq!(FIRST_BYTE_PROBE, byte_probe(1));
 }
+
+/// A new directory under `parent` whose name is not valid UTF-8, or `None`
+/// where the file system refuses such names (macOS's APFS only stores valid
+/// UTF-8), so a test of what Termeric does with one skips where none can
+/// exist.
+pub(crate) fn non_utf8_directory(parent: &std::path::Path) -> Option<std::path::PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+    let path = parent.join(std::ffi::OsString::from_vec(b"not-utf8-\xff".to_vec()));
+    match std::fs::create_dir(&path) {
+        Ok(()) => Some(path),
+        Err(error) if cfg!(target_os = "macos") && error.raw_os_error() == Some(libc::EILSEQ) => {
+            None
+        }
+        Err(error) => panic!("cannot create {}: {error}", path.display()),
+    }
+}

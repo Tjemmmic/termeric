@@ -3325,13 +3325,10 @@ fn cli_cwds_and_terminal_profiles_are_validated_before_windows_are_queued() {
 
 #[test]
 fn non_utf8_cli_cwd_fails_before_windows_are_queued() {
-    use std::os::unix::ffi::OsStringExt;
-
     let temp = tempfile::tempdir().unwrap();
-    let path = temp
-        .path()
-        .join(std::ffi::OsString::from_vec(vec![b'c', b'w', b'd', 0xff]));
-    std::fs::create_dir(&path).unwrap();
+    let Some(path) = crate::test_support::non_utf8_directory(temp.path()) else {
+        return;
+    };
     let mut launch = LaunchPlan::default();
     launch.windows[0].tabs[0].working_directory = Some(path);
     let error = Application::from_config(Config::default(), None, launch)
