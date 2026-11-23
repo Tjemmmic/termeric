@@ -54,8 +54,9 @@ optdepends=(
   'mesa: OpenGL backend and llvmpipe software rendering'
 )
 source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
-# A tag's archive can't contain its own checksum, so this one is pinned after
-# tagging, with updpkgsums, before the recipe goes to the AUR (PACKAGING.md).
+# A tag's archive can't contain its own checksum, so this stays a placeholder,
+# which makepkg rejects. The publish workflow pins it, with updpkgsums, in the
+# copy it pushes to the AUR (PACKAGING.md).
 sha256sums=('PLACEHOLDER')
 # Current Rust links x86_64 Linux binaries with rust-lld. Arch's global GCC LTO
 # flags produce bundled libgit2 objects that rust-lld cannot consume, so keep
