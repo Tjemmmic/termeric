@@ -8,6 +8,7 @@ Notable changes to Termeric, by release. The project follows [Keep a Changelog](
 
 - A light theme for every root theme, named after its dark partner with "Light" ("Turmeric Light").
 - A signed apt repository for Debian and Ubuntu, so `apt upgrade` brings new releases.
+- The `termeric-bin` AUR package, which installs the release as built and tested by the release workflow, in seconds rather than a long build.
 
 ### Fixed
 

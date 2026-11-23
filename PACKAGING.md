@@ -1,6 +1,6 @@
 # Packaging Termeric
 
-Notes for people packaging Termeric for a Linux distribution. Termeric's own packages (the release tarball, the `.deb`, and the two AUR recipes in `packaging/arch/`: `termeric`, built from a release's source, and `termeric-git`, built from the latest commit) are built exactly as described here; use them as references.
+Notes for people packaging Termeric for a Linux distribution. Termeric's own packages (the release tarball, the `.deb`, and the three AUR recipes in `packaging/arch/`: `termeric`, built from a release's source, `termeric-bin`, the release's tarball, and `termeric-git`, built from the latest commit) are built exactly as described here; use them as references.
 
 ## Identity
 
@@ -128,13 +128,13 @@ People who added the repository trust its signing key and its URL, so keep both.
 
 ### The AUR
 
-Each directory in `packaging/arch/` holds what one AUR repository holds: a `PKGBUILD` and its `.SRCINFO`. `termeric` downloads GitHub's archive of the release tag, whose checksum can't be in the tag itself, so the recipe here always carries a placeholder, which makepkg rejects. The workflow pins the checksum in a copy, builds, tests, installs, and removes the package on a clean Arch Linux, and pushes the copy to the AUR. `termeric-git` always builds the newest commit, so it only changes there when its recipe does, or with a release's version.
+Each directory in `packaging/arch/` holds what one AUR repository holds: a `PKGBUILD` and its `.SRCINFO`. `termeric` downloads GitHub's archive of the release tag, whose checksum can't be in the tag itself, and `termeric-bin` the release's tarballs, which don't exist until the release is built, so the recipes here always carry placeholders, which makepkg rejects. The workflow pins `termeric` with `updpkgsums` and `termeric-bin` from the release's attested `SHA256SUMS`, builds both on a clean Arch Linux (`termeric` with its tests), installs and removes each, and pushes the copies to the AUR. `termeric-git` always builds the newest commit, so it only changes there when its recipe does, or with a release's version.
 
 The recipes run the tests with `setsid`, in a session of their own. Some tests start interactive shells, which take over the terminal they start from; run from a person's terminal by an AUR helper, they would stop the build.
 
 To fix the recipe of a released version, raise its `pkgrel` here and in its `.SRCINFO`, merge, and run the workflow by hand from `main` with that release's tag, before `main` moves to the next version.
 
-To package a checkout that isn't on GitHub yet, `scripts/build_arch_package.py --package termeric` (or `termeric-git`) builds a recipe from the local checkout: for `termeric`, an archive of the committed `HEAD`, without checking its checksum; for `termeric-git`, the working tree. [Packages](CONTRIBUTING.md#packages) has the commands.
+To package a checkout that isn't on GitHub yet, `scripts/build_arch_package.py --package termeric` (or `termeric-git`) builds a recipe from the local checkout (`termeric-bin` needs a release's tarballs, so only the workflow builds it): for `termeric`, an archive of the committed `HEAD`, without checking its checksum; for `termeric-git`, the working tree. [Packages](CONTRIBUTING.md#packages) has the commands.
 
 ### Setting up publishing
 

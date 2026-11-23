@@ -57,15 +57,17 @@ The repository holds only the latest release. The `.deb` files of every release 
 
 ### Arch Linux
 
-Install [`termeric`](https://aur.archlinux.org/packages/termeric) (the latest release) or [`termeric-git`](https://aur.archlinux.org/packages/termeric-git) (the latest commit) from the AUR, with an AUR helper or by hand:
+Install [`termeric-bin`](https://aur.archlinux.org/packages/termeric-bin), the latest release as built and tested by the release workflow, from the AUR with an AUR helper or by hand. It takes a few seconds:
 
 ```bash
-git clone https://aur.archlinux.org/termeric.git
-cd termeric
+git clone https://aur.archlinux.org/termeric-bin.git
+cd termeric-bin
 makepkg -si
 ```
 
-Also install the Vulkan driver for your GPU (`vulkan-radeon`, `vulkan-intel`, or `nvidia-utils`) if you don't have it. To uninstall, run `sudo pacman -R termeric` (or `termeric-git`).
+To build it yourself instead, install [`termeric`](https://aur.archlinux.org/packages/termeric) (the latest release) or [`termeric-git`](https://aur.archlinux.org/packages/termeric-git) (the latest commit). Each compiles Termeric and runs its tests, which takes a while; `--nocheck` skips the tests. The three install the same files, so only one can be installed.
+
+Also install the Vulkan driver for your GPU (`vulkan-radeon`, `vulkan-intel`, or `nvidia-utils`) if you don't have it. To uninstall, run `sudo pacman -R termeric-bin` (or `termeric` or `termeric-git`).
 
 ### Other Linux
 
