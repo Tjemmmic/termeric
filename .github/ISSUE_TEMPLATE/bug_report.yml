@@ -38,6 +38,7 @@ body:
     attributes:
       label: How you installed it
       options:
+        - apt repository
         - .deb package
         - AUR (termeric)
         - AUR (termeric-git)

@@ -42,9 +42,9 @@ Most of Termeric's tests are ordinary Rust unit and integration tests that run a
 
 `.github/workflows/fuzz.yml` runs the three fuzz targets (see [Fuzzing](#fuzzing)) every Monday against `main`, and whenever it's started from the Actions tab.
 
-`.github/workflows/release.yml` runs for each `v*` tag: it builds the tarball and `.deb` for x86_64 and arm64, runs `check_debian_package.py` on each `.deb`, and drafts the GitHub release (see [PACKAGING.md](PACKAGING.md#releases)).
+`.github/workflows/release.yml` runs for each `v*` tag: it builds the tarball and `.deb` for x86_64 and arm64, runs `check_debian_package.py` on each `.deb`, installs and removes it on every supported Debian and Ubuntu, and drafts the GitHub release. `.github/workflows/publish.yml` runs when that draft is published and updates the apt repository and the AUR (see [PACKAGING.md](PACKAGING.md#releases)).
 
-The GPU smoke, the soak, benchmarks, the Arch package check, and the packages' `--system-lifecycle` checks don't run in CI. Run them by hand before a release.
+The GPU smoke, the soak, and benchmarks don't run in any workflow, and the Arch package check runs only while publishing, after the release is out. Run them by hand before a release.
 
 Every action the workflows use is pinned to a commit SHA, with its release in a comment (`# v7.0.1`), so a moved tag can't change what runs. To update one, take the commit of the new release's tag (`git ls-remote --tags https://github.com/OWNER/ACTION`) and change the SHA and the comment together. `dtolnay/rust-toolchain` has no releases: it is pinned to the head of its `stable` or `nightly` branch, which selects the toolchain.
 
@@ -138,7 +138,7 @@ The checkers inspect a package without installing it. Their `--system-lifecycle`
 - **Commits:** use [Conventional Commits](https://www.conventionalcommits.org/) (`feat(scope): …`, `fix(scope): …`, `docs: …`, `refactor(scope): …`, `test(scope): …`, `ci: …`, `chore(scope): …`). Keep each commit to one logical change.
 - **Markdown:** write each paragraph and list item on one line; don't hard-wrap prose.
 - **Documentation:** there is no separate user guide. When you change behavior a person can see, update what describes it: the [README](README.md), [`assets/config.example.toml`](assets/config.example.toml) (every new setting, shortcut action, and built-in theme goes there), the command-line help in `termeric/src/cli/`, or [`examples/plugins/README.md`](examples/plugins/README.md). When a feature's support level changes, update [FEATURES.md](FEATURES.md); when a platform or install method is added or planned, update the README's [Install](README.md#install) table.
-- **Changelog:** [CHANGELOG.md](CHANGELOG.md) summarizes what each release ships for the people using it, not every commit. Until 0.1.0 is released, update its `[0.1.0]` section only when a feature is added or removed or its support level changes; after that, add user-visible changes under `[Unreleased]`. Leave out internal changes such as refactors, tests, tooling, and protocol version bumps.
+- **Changelog:** [CHANGELOG.md](CHANGELOG.md) summarizes what each release ships for the people using it, not every commit. Add user-visible changes under `[Unreleased]`. Leave out internal changes such as refactors, tests, tooling, and protocol version bumps.
 
 ## Dependencies
 

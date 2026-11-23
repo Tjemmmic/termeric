@@ -87,7 +87,7 @@ Termeric doesn't load libXrandr. It reads the fontconfig configuration files its
 
 For rendering it also needs a Vulkan driver for the GPU, or Mesa: Mesa's llvmpipe and lavapipe are the software fallback Termeric uses when no GPU can be used. Termeric's packages make these optional (the PKGBUILDs' `optdepends` on `vulkan-driver` and `mesa`; the `.deb` recommends `mesa-vulkan-drivers`).
 
-The Debian and Ubuntu names in `termeric/Cargo.toml` exist on Ubuntu 22.04 and 24.04 and Debian 12 and 13: the release `.deb` installs and removes cleanly on each with `check_debian_package.py --system-lifecycle`. cargo-deb's `$auto` adds `libc6 (>= 2.35)` and `zlib1g`; `libgcc-s1` comes with `libc6`, which depends on it.
+The Debian and Ubuntu names in `termeric/Cargo.toml` exist on Ubuntu 22.04, 24.04, and 26.04 and Debian 12 and 13: the release workflow installs and removes the `.deb` on each with `check_debian_package.py --system-lifecycle`. cargo-deb's `$auto` adds `libc6 (>= 2.35)` and `zlib1g`; `libgcc-s1` comes with `libc6`, which depends on it.
 
 `scripts/check_debian_package.py` and `scripts/check_arch_package.py` fail a package that misses any of them.
 
@@ -108,22 +108,62 @@ The manual page and completions under `assets/man/` and `assets/completions/` ar
 
 ## Releases
 
-Pushing a `v*` tag runs `.github/workflows/release.yml`. It checks that the tag is `v` plus the workspace version, that `CHANGELOG.md` has a dated section for that version, the AppStream metadata a `<release>` with the same version and date, and the `termeric` PKGBUILD the same `pkgver`, and that CI passed on the tagged commit. It then builds for x86_64 and arm64 inside an Ubuntu 22.04 container, so the binaries need glibc 2.35 or newer, and produces for each architecture a tarball of the install tree and a `.deb` that `check_debian_package.py` has passed. It also checks that each PKGBUILD's `.SRCINFO` matches it. Finally it writes `SHA256SUMS`, attests the build provenance of each file, and drafts a GitHub release with the changelog section as its notes.
+To release a version, with its changes under `[Unreleased]` in `CHANGELOG.md`:
 
-To cut a release: set the version in `Cargo.toml` and as `pkgver` in `packaging/arch/termeric/PKGBUILD` and its `.SRCINFO` (with the version's `CHANGELOG.md` section and AppStream `<release>` entry in place), run `python3 scripts/check_release.py --stamp today` to give the changelog section and the AppStream release the same date, commit, wait for CI on that commit, then tag it. Running the workflow by hand without `publish` builds and checks everything without drafting a release. Attestations need a public repository.
+1. From an up-to-date `main`, run `python3 scripts/prepare_release.py 0.2.0 --pull-request`. It sets the version everywhere, dates the changelog section and the AppStream release, and opens a pull request. Merge it. If it waits, `python3 scripts/check_release.py --stamp today` moves the date.
+2. Once CI passes on `main`, tag that commit: `git tag v0.2.0 && git push origin v0.2.0`. `release.yml` builds and checks the packages and drafts a GitHub release.
+3. Read the draft and publish it. `publish.yml` updates the apt repository and the AUR.
+
+Versions are always `X.Y.Z`, with no suffix.
+
+`release.yml` checks that the tag is `v` plus the workspace version, that `CHANGELOG.md` has a dated section for that version, the AppStream metadata a `<release>` with the same version and date, and the `termeric` PKGBUILD the same `pkgver`, that each PKGBUILD's `.SRCINFO` matches it, and that CI passed on the tagged commit. It builds for x86_64 and arm64 inside an Ubuntu 22.04 container, so the binaries need glibc 2.35 or newer, and produces for each architecture a tarball of the install tree and a `.deb`, which it inspects, then installs and removes on every supported Debian and Ubuntu. Finally it writes `SHA256SUMS`, attests the build provenance of each file, and drafts the release with the changelog section as its notes. Running it by hand without `publish` builds and checks everything without drafting a release. Attestations need a public repository.
+
+`publish.yml` takes the newest published release only, checks its files against `SHA256SUMS` and their attestations, and then publishes to each place on its own, so one failing doesn't stop the other. To publish again, after a failure or a fixed recipe, run it by hand from the Actions tab with the release's tag; what is already published stays as it is.
+
+### The apt repository
+
+`scripts/build_apt_repository.py` writes the repository from nothing for each release, signs it, and includes `termeric.sources`, which carries the public key. The workflow installs from it on every supported Debian and Ubuntu, upgrading from the previous release when there is one, and then deploys it to GitHub Pages under `/apt`. It holds only the latest release, to stay small.
+
+People who added the repository trust its signing key and its URL, so keep both. With a new key, everyone has to download `termeric.sources` again.
 
 ### The AUR
 
-Each directory in `packaging/arch/` holds what one AUR repository holds: a `PKGBUILD` and its `.SRCINFO`. `termeric-git` always builds the newest commit, so it only needs publishing when its recipe changes. `termeric` downloads GitHub's archive of the release tag, whose checksum can't be in the tag itself, so it is pinned after the release is published. Until then the recipe carries a checksum that doesn't match (a placeholder before the first release, then the previous release's), which makepkg rejects, so an unpinned recipe can't be installed by mistake. From the repository root, with an AUR account and its SSH key:
+Each directory in `packaging/arch/` holds what one AUR repository holds: a `PKGBUILD` and its `.SRCINFO`. `termeric` downloads GitHub's archive of the release tag, whose checksum can't be in the tag itself, so the recipe here always carries a placeholder, which makepkg rejects. The workflow pins the checksum in a copy, builds, tests, installs, and removes the package on a clean Arch Linux, and pushes the copy to the AUR. `termeric-git` always builds the newest commit, so it only changes there when its recipe does, or with a release's version.
 
-```bash
-git clone ssh://aur@aur.archlinux.org/termeric.git ../aur-termeric
-cp packaging/arch/termeric/PKGBUILD ../aur-termeric/
-(cd ../aur-termeric && updpkgsums && makepkg --printsrcinfo > .SRCINFO && makepkg --force)
-python3 scripts/check_arch_package.py ../aur-termeric/termeric-*.pkg.tar.zst
-cp ../aur-termeric/PKGBUILD ../aur-termeric/.SRCINFO packaging/arch/termeric/
-```
-
-`makepkg` there downloads the tag's archive, checks it against the pinned checksum, builds, and runs the tests. Commit the pinned recipe here, then commit `PKGBUILD` and `.SRCINFO` in `../aur-termeric` and push. `termeric-git` is published the same way from `ssh://aur@aur.archlinux.org/termeric-git.git`, without `updpkgsums`.
+To fix the recipe of a released version, raise its `pkgrel` here and in its `.SRCINFO`, merge, and run the workflow by hand from `main` with that release's tag, before `main` moves to the next version.
 
 To package a checkout that isn't on GitHub yet, `scripts/build_arch_package.py --package termeric` (or `termeric-git`) builds a recipe from the local checkout: for `termeric`, an archive of the committed `HEAD`, without checking its checksum; for `termeric-git`, the working tree. [Packages](CONTRIBUTING.md#packages) has the commands.
+
+### Setting up publishing
+
+This is done once, by the repository's owner. Each secret belongs to an environment that only `v*` tags and `main` can use. Pages has to allow tags as well, since publishing a release runs the workflow on its tag:
+
+```bash
+repository=repos/Tjemmmic/termeric
+gh api -X POST $repository/pages -f build_type=workflow
+for environment in apt aur github-pages; do
+  gh api -X PUT $repository/environments/$environment \
+    -F 'deployment_branch_policy[protected_branches]=false' \
+    -F 'deployment_branch_policy[custom_branch_policies]=true'
+  gh api -X POST $repository/environments/$environment/deployment-branch-policies -f name='v*' -f type=tag
+  gh api -X POST $repository/environments/$environment/deployment-branch-policies -f name=main -f type=branch
+done
+```
+
+The apt signing key is made for this and nothing else, in a keyring of its own. Keep a private backup of that keyring: GitHub never shows a secret again.
+
+```bash
+export GNUPGHOME=~/termeric-signing-key
+install -d -m 700 "$GNUPGHOME"
+gpg --batch --passphrase '' --quick-generate-key 'Termeric package signing' ed25519 sign never
+gpg --armor --export-secret-keys | gh secret set APT_SIGNING_KEY --env apt --repo Tjemmmic/termeric
+unset GNUPGHOME
+```
+
+The AUR key is also made for this, so it can be removed without touching anyone's own key. Add the public half to the AUR account's SSH keys (one per line):
+
+```bash
+ssh-keygen -t ed25519 -N '' -C 'termeric publish workflow' -f ~/termeric-aur-key
+gh secret set AUR_SSH_KEY --env aur --repo Tjemmmic/termeric < ~/termeric-aur-key
+cat ~/termeric-aur-key.pub
+```
