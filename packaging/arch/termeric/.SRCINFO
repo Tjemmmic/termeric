@@ -19,6 +19,7 @@ pkgbase = termeric
 	license = Unicode-3.0
 	license = Unicode-DFS-2016
 	license = Zlib
+	checkdepends = git
 	makedepends = cargo
 	makedepends = ncurses
 	makedepends = pkgconf

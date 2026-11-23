@@ -48,6 +48,7 @@ depends=(
   'zlib'
 )
 makedepends=('cargo' 'ncurses' 'pkgconf' 'python')
+checkdepends=('git')
 optdepends=(
   'vulkan-driver: Vulkan rendering (vulkan-radeon, vulkan-intel, nvidia-utils, or vulkan-swrast for the CPU fallback)'
   'mesa: OpenGL backend and llvmpipe software rendering'

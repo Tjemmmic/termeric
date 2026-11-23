@@ -34,7 +34,7 @@ Don't let your build system inject cross-language LTO flags (`-flto` in `CFLAGS`
 cargo test --workspace --locked
 ```
 
-The suite needs no display, GPU, network, session bus, or installed fonts, so it runs in a clean build chroot. The GPU render smoke and the resource soak are ignored by default. The Bash, Zsh, and Fish integration tests skip when a shell is missing unless `TERMERIC_REQUIRE_SHELL_ACCEPTANCE=1` is set. [Testing](CONTRIBUTING.md#testing) covers the rest.
+The suite needs `git`, but no display, GPU, network, session bus, or installed fonts, so it runs in a clean build chroot. The GPU render smoke and the resource soak are ignored by default. The Bash, Zsh, and Fish integration tests skip when a shell is missing unless `TERMERIC_REQUIRE_SHELL_ACCEPTANCE=1` is set. [Testing](CONTRIBUTING.md#testing) covers the rest.
 
 ## The install tree
 
