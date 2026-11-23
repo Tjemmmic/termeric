@@ -165,7 +165,7 @@ jobs:
       - name: Compare each .SRCINFO with makepkg --printsrcinfo
         run: |
           useradd --create-home builder
-          for package in termeric termeric-git; do
+          for package in termeric termeric-bin termeric-git; do
             install -d -o builder "/home/builder/$package"
             install -o builder "packaging/arch/$package/PKGBUILD" "/home/builder/$package/PKGBUILD"
             (cd "/home/builder/$package" && runuser -u builder -- makepkg --printsrcinfo) > "/tmp/$package.SRCINFO"

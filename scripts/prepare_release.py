@@ -3,8 +3,8 @@
 
 Moves CHANGELOG.md's [Unreleased] notes under the new version, adds its
 AppStream release, and sets the version in the Cargo manifest and lock files,
-the manual page, and the AUR recipes. `--pull-request` also commits the result
-on a branch and opens a pull request for it.
+the manual page, and the three AUR recipes. `--pull-request` also commits the
+result on a branch and opens a pull request for it.
 """
 
 from __future__ import annotations
@@ -30,13 +30,15 @@ MANUAL_PAGE = "assets/man/termeric.1"
 LOCK_FILES = {"Cargo.lock": ("termeric", "termeric-core"), "fuzz/Cargo.lock": ("termeric-core",)}
 RELEASE_RECIPE = "packaging/arch/termeric"
 DEVELOPMENT_RECIPE = "packaging/arch/termeric-git"
+BINARY_RECIPE = "packaging/arch/termeric-bin"
+RECIPES = (RELEASE_RECIPE, DEVELOPMENT_RECIPE, BINARY_RECIPE)
 FILES = [
     CARGO_TOML,
     CHANGELOG,
     METAINFO,
     MANUAL_PAGE,
     *LOCK_FILES,
-    *(f"{recipe}/{name}" for recipe in (RELEASE_RECIPE, DEVELOPMENT_RECIPE) for name in ("PKGBUILD", ".SRCINFO")),
+    *(f"{recipe}/{name}" for recipe in RECIPES for name in ("PKGBUILD", ".SRCINFO")),
 ]
 
 
@@ -105,6 +107,7 @@ def prepare(files: dict[str, str], version: str, date: str) -> dict[str, str]:
     for recipe, package_version in {
         RELEASE_RECIPE: version,
         DEVELOPMENT_RECIPE: f"{version}.r0.g0000000",
+        BINARY_RECIPE: version,
     }.items():
         edit(f"{recipe}/PKGBUILD", r"^pkgver=.*$", f"pkgver={package_version}")
         edit(f"{recipe}/PKGBUILD", r"^pkgrel=.*$", "pkgrel=1")
@@ -115,6 +118,13 @@ def prepare(files: dict[str, str], version: str, date: str) -> dict[str, str]:
         r"^\tsource = .*$",
         f"\tsource = termeric-{version}.tar.gz::{repository}/archive/refs/tags/v{version}.tar.gz",
     )
+    for architecture in ("x86_64", "aarch64"):
+        tarball = f"termeric-{version}-{architecture}-linux.tar.gz"
+        edit(
+            f"{BINARY_RECIPE}/.SRCINFO",
+            rf"^\tsource_{architecture} = .*$",
+            f"\tsource_{architecture} = {tarball}::{repository}/releases/download/v{version}/{tarball}",
+        )
     prepared[CHANGELOG] = date_changelog(prepared[CHANGELOG], version, date)
     prepared[METAINFO] = add_metainfo_release(prepared[METAINFO], version, date, repository)
     # What the release workflow will check on the tag.

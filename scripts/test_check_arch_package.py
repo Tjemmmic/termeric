@@ -147,7 +147,7 @@ class ArchPackageCheckTests(unittest.TestCase):
             validate_package_metadata(fields)
         fields = valid_metadata()
         fields["pkgname"] = ["wrong"]
-        with self.assertRaisesRegex(CheckError, "expected 'termeric' or 'termeric-git'"):
+        with self.assertRaisesRegex(CheckError, "expected one of 'termeric', 'termeric-git', 'termeric-bin'"):
             validate_package_metadata(fields)
 
     def test_release_package_needs_no_provides_or_conflicts(self):

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Inspect a Termeric Arch package, and optionally install and remove it.
 
-Both AUR packages are checked: termeric, built from a release's source, and
-termeric-git, built from the latest commit. They install the same files.
+All three AUR packages are checked: termeric, built from a release's source,
+termeric-bin, the release's prebuilt tarball, and termeric-git, built from the
+latest commit. They install the same files.
 
 Inspection is read-only. --system-lifecycle changes the host's packages, so it
 needs root on a disposable Arch machine without Termeric installed.
@@ -49,7 +50,8 @@ else:
 
 RELEASE_PACKAGE_NAME = "termeric"
 DEVELOPMENT_PACKAGE_NAME = "termeric-git"
-PACKAGE_NAMES = (RELEASE_PACKAGE_NAME, DEVELOPMENT_PACKAGE_NAME)
+BINARY_PACKAGE_NAME = "termeric-bin"
+PACKAGE_NAMES = (RELEASE_PACKAGE_NAME, DEVELOPMENT_PACKAGE_NAME, BINARY_PACKAGE_NAME)
 TERMINFO_NAME = "xterm-termeric"
 METADATA_FILES = {".BUILDINFO", ".MTREE", ".PKGINFO"}
 # The depends array of both PKGBUILDs in packaging/arch/. Most are libraries
@@ -206,8 +208,8 @@ def validate_package_metadata(fields: dict[str, list[str]]) -> dict[str, object]
     version = one_field(fields, "pkgver")
     architecture = one_field(fields, "arch")
     if name not in PACKAGE_NAMES:
-        expected = " or ".join(repr(name) for name in PACKAGE_NAMES)
-        raise CheckError(f"package name is {name!r}, expected {expected}")
+        expected = ", ".join(repr(name) for name in PACKAGE_NAMES)
+        raise CheckError(f"package name is {name!r}, expected one of {expected}")
     if not re.fullmatch(r"[0-9][0-9A-Za-z.+_:-]*", version):
         raise CheckError(f"package version is invalid: {version!r}")
     if architecture not in SUPPORTED_ARCHITECTURES:
@@ -219,9 +221,10 @@ def validate_package_metadata(fields: dict[str, list[str]]) -> dict[str, object]
         raise CheckError(
             "package metadata is missing dependencies: " + ", ".join(missing_dependencies)
         )
-    # The development package stands in for the release package; pacman
-    # checks conflicts both ways, so only one side needs to declare it.
-    if name == DEVELOPMENT_PACKAGE_NAME:
+    # The other packages stand in for the release package; pacman checks
+    # conflicts both ways, and against what each provides, so only they need
+    # to declare it.
+    if name != RELEASE_PACKAGE_NAME:
         provided = {dependency_name(value) for value in fields.get("provides", [])}
         if RELEASE_PACKAGE_NAME not in provided:
             raise CheckError(f"package does not provide {RELEASE_PACKAGE_NAME}")
