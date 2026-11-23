@@ -1,4 +1,4 @@
-# Builds the release files for a v* tag and drafts a GitHub pre-release from them.
+# Builds the release files for a v* tag and drafts a GitHub release from them.
 # Run it by hand to rehearse the build: with publish off it stops before the release.
 name: Release
 
@@ -172,7 +172,7 @@ jobs:
           subject-path: |
             dist/*.tar.gz
             dist/*.deb
-      - name: Create the draft pre-release
+      - name: Create the draft release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
@@ -180,4 +180,4 @@ jobs:
         run: |
           python3 scripts/check_release.py --tag "$TAG" --publish --notes release-notes.md
           gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag \
-            --draft --prerelease --title "Termeric $VERSION" --notes-file release-notes.md
+            --draft --title "Termeric $VERSION" --notes-file release-notes.md
