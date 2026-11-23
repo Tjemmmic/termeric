@@ -168,22 +168,22 @@ elif whence -w __termeric_precmd >/dev/null; then
     exit 43
 fi
 "#;
-            let output = Command::new(&program)
-                .args(&launch.args)
-                .args(["-c", script])
-                .env_clear()
-                .envs(env.iter().cloned())
-                .env(
-                    "TEST_EXPECT_HOOK",
-                    if integrated && !matches!(case, "env-stop" | "profile-stop" | "readonly") {
-                        "yes"
-                    } else {
-                        "no"
-                    },
-                )
-                .current_dir(&home)
-                .output()
-                .unwrap();
+            let output =
+                crate::test_support::without_terminal(Command::new(&program).args(&launch.args))
+                    .args(["-c", script])
+                    .env_clear()
+                    .envs(env.iter().cloned())
+                    .env(
+                        "TEST_EXPECT_HOOK",
+                        if integrated && !matches!(case, "env-stop" | "profile-stop" | "readonly") {
+                            "yes"
+                        } else {
+                            "no"
+                        },
+                    )
+                    .current_dir(&home)
+                    .output()
+                    .unwrap();
             assert!(
                 output.status.success(),
                 "{case} integrated={integrated}: {:?}",
@@ -341,14 +341,14 @@ print -r -- "MARKERS:${+TERMERIC_ORIGINAL_ZDOTDIR}:${+TERMERIC_ZSH_HAD_ZDOTDIR}:
 "$TEST_ZSH" -d -i -c 'print -r -- "CHILD:${ZDOTDIR-UNSET}"'
 "#;
         let run = |env: &[(String, String)]| {
-            let output = Command::new(&program)
-                .args(&launch.args)
-                .args(["-c", script])
-                .env_clear()
-                .envs(env.iter().cloned())
-                .current_dir(&home)
-                .output()
-                .unwrap();
+            let output =
+                crate::test_support::without_terminal(Command::new(&program).args(&launch.args))
+                    .args(["-c", script])
+                    .env_clear()
+                    .envs(env.iter().cloned())
+                    .current_dir(&home)
+                    .output()
+                    .unwrap();
             assert!(output.status.success(), "{case}: {:?}", output.stderr);
             assert!(output.stderr.is_empty(), "{case}: {:?}", output.stderr);
             output.stdout

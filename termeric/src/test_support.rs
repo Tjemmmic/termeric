@@ -8,6 +8,8 @@ use crate::tabs::{TabManager, TabType};
 use crate::ui::geometry::Bounds;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::os::unix::process::CommandExt;
+use std::process::Command;
 use std::time::{Duration, Instant};
 use termeric_core::{CellFlags, Terminal};
 
@@ -135,6 +137,43 @@ pub(crate) fn hook_counter(
         counted,
         seen: std::sync::Arc::clone(seen),
     })
+}
+
+/// `command`, set to start in a session of its own, without a controlling
+/// terminal, as CI starts everything.
+///
+/// An interactive shell takes over the terminal it was started from, and one
+/// that finds the terminal already taken stops its whole process group, every
+/// test in this process, with SIGTTIN. Run from a person's terminal (`cargo
+/// test`, or an AUR helper running the package's tests), shells that tests
+/// start in parallel stopped the run. Start every interactive or login shell
+/// through this.
+pub(crate) fn without_terminal(command: &mut Command) -> &mut Command {
+    // SAFETY: setsid is async-signal-safe, and the closure touches nothing it
+    // shares with the parent.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        })
+    }
+}
+
+#[test]
+fn a_command_without_terminal_leads_a_session_of_its_own() {
+    let mut child = without_terminal(Command::new("sleep").arg("30"))
+        .spawn()
+        .unwrap();
+    let id = libc::pid_t::try_from(child.id()).unwrap();
+    // SAFETY: getsid only reads.
+    let session = unsafe { libc::getsid(id) };
+    child.kill().unwrap();
+    child.wait().unwrap();
+    // A new session has no controlling terminal until it opens one.
+    assert_eq!(session, id);
 }
 
 /// Whether a process with `process_id` exists; signal 0 only checks.

@@ -12,7 +12,7 @@ fn bash_login_bootstrap_ignores_unprepared_manual_sources() {
         vec!["--noprofile", "--norc"],
         vec!["--noprofile", "--norc", "--login", "-i"],
     ] {
-        let output = std::process::Command::new(&program).args(args)
+        let output = crate::test_support::without_terminal(std::process::Command::new(&program).args(args))
             .args(["-c", "builtin source \"$TEST_BOOTSTRAP\"; declare -F __termeric_after_prompt >/dev/null && exit 91; printf 'UNCHANGED\\n'"])
             .env_clear().env("HOME", temp.path()).env("TEST_BOOTSTRAP", &path).output().unwrap();
         assert!(output.status.success(), "{:?}", output.stderr);
@@ -86,16 +86,17 @@ fn bash_login_preserves_exported_history_and_inherited_errexit_option() {
         }
         let launch = prepare_shell_launch_in(&config, &temp.path().join("generated")).unwrap();
         let run = |args: &[String], env: &[(String, String)]| {
-            let output = std::process::Command::new(&program)
-                .args(args)
-                .args([
-                    "-c",
-                    "declare -p HISTFILE; shopt -p inherit_errexit; exit 0",
-                ])
-                .env_clear()
-                .envs(env.iter().cloned())
-                .output()
-                .unwrap();
+            let output = crate::test_support::without_terminal(
+                std::process::Command::new(&program).args(args),
+            )
+            .args([
+                "-c",
+                "declare -p HISTFILE; shopt -p inherit_errexit; exit 0",
+            ])
+            .env_clear()
+            .envs(env.iter().cloned())
+            .output()
+            .unwrap();
             assert!(output.status.success());
             output
         };
@@ -171,14 +172,15 @@ shopt -q login_shell || exit 91
             let inspect =
                 format!("{snapshot}\nprintf 'GLOBAL:%s\\n' \"${{LOGIN_GLOBAL-unset}}\"\nexit 0\n");
             let run = |args: &[String], env: &[(String, String)]| {
-                let output = std::process::Command::new(&program)
-                    .args(args)
-                    .args(["-c", &inspect])
-                    .env_clear()
-                    .envs(env.iter().cloned())
-                    .current_dir(&home)
-                    .output()
-                    .unwrap();
+                let output = crate::test_support::without_terminal(
+                    std::process::Command::new(&program).args(args),
+                )
+                .args(["-c", &inspect])
+                .env_clear()
+                .envs(env.iter().cloned())
+                .current_dir(&home)
+                .output()
+                .unwrap();
                 assert!(
                     output.status.success(),
                     "{profile}/{no_profile}/{original_env:?}: {}",
