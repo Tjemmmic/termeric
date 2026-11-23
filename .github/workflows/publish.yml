@@ -181,7 +181,11 @@ jobs:
     name: Pin, build, and check the AUR recipe
     needs: release
     runs-on: ubuntu-24.04
-    container: archlinux:base-devel
+    # The tests check that processes they kill are gone. Without an init,
+    # the container's PID 1 is tail, which never reaps them.
+    container:
+      image: archlinux:base-devel
+      options: --init
     timeout-minutes: 90
     steps:
       # The image skips documentation, which the package check looks for.
