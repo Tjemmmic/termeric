@@ -1,4 +1,4 @@
-# Builds the release files for a v* tag and drafts a GitHub pre-release from them.
+# Builds the release files for a v* tag and drafts a GitHub release from them.
 # Run it by hand to rehearse the build: with publish off it stops before the release.
 name: Release
 
@@ -127,6 +127,33 @@ jobs:
             target/dist/*.deb
           if-no-files-found: error
 
+  lifecycle:
+    name: Install and remove the .deb on ${{ matrix.image }} (${{ matrix.arch }})
+    needs: build
+    strategy:
+      matrix:
+        arch: [x86_64, aarch64]
+        image: ["ubuntu:22.04", "ubuntu:24.04", "ubuntu:26.04", "debian:12", "debian:13"]
+    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    container: ${{ matrix.image }}
+    timeout-minutes: 15
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      # Ubuntu's image skips documentation, which the check looks for.
+      - name: Install what the check uses
+        run: |
+          rm -f /etc/dpkg/dpkg.cfg.d/excludes
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git \
+            desktop-file-utils dpkg-dev ncurses-bin python3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist-${{ matrix.arch }}
+          path: dist
+      - run: python3 scripts/check_debian_package.py --system-lifecycle dist/termeric_*.deb
+
   srcinfo:
     name: Check the AUR recipes' .SRCINFO
     runs-on: ubuntu-24.04
@@ -147,7 +174,7 @@ jobs:
 
   publish:
     name: Draft the GitHub release
-    needs: [verify, build, srcinfo]
+    needs: [verify, build, lifecycle, srcinfo]
     if: needs.verify.outputs.publish == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -172,7 +199,7 @@ jobs:
           subject-path: |
             dist/*.tar.gz
             dist/*.deb
-      - name: Create the draft pre-release
+      - name: Create the draft release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
@@ -180,4 +207,4 @@ jobs:
         run: |
           python3 scripts/check_release.py --tag "$TAG" --publish --notes release-notes.md
           gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag \
-            --draft --prerelease --title "Termeric $VERSION" --notes-file release-notes.md
+            --draft --title "Termeric $VERSION" --notes-file release-notes.md

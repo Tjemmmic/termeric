@@ -29,7 +29,7 @@ Termeric has one install method for each platform it supports, and you can alway
 
 | Platform | Architectures | Install with | Status |
 | --- | --- | --- | --- |
-| Debian 12 and later, Ubuntu 22.04 and later | x86_64, arm64 | [`.deb` package](#debian-and-ubuntu) | Developer preview |
+| Debian 12 and later, Ubuntu 22.04 and later | x86_64, arm64 | [apt repository](#debian-and-ubuntu) | Developer preview |
 | Arch Linux | x86_64, arm64 | [AUR package](#arch-linux) | Developer preview |
 | Other Linux with glibc 2.35 or later | x86_64, arm64 | [Tarball](#other-linux) | Developer preview |
 | Windows Subsystem for Linux | x86_64, arm64 | The Linux packages, under WSLg | Planned |
@@ -43,13 +43,17 @@ Every package installs the program, its desktop entry and icons, the `xterm-term
 
 ### Debian and Ubuntu
 
-For Ubuntu 22.04, Debian 12, and later. Download the `.deb` for your machine from the [releases page](https://github.com/Tjemmmic/termeric/releases) and install it with apt, which also installs the libraries it needs:
+For Ubuntu 22.04, Debian 12, and later. Add Termeric's signed apt repository, then install the package:
 
 ```bash
-sudo apt install ./termeric_*_amd64.deb
+sudo wget -O /etc/apt/sources.list.d/termeric.sources https://tjemmmic.github.io/termeric/apt/termeric.sources
+sudo apt update
+sudo apt install termeric
 ```
 
-On arm64, the file name ends in `_arm64.deb`. To upgrade, install a newer `.deb` the same way. To uninstall, run `sudo apt remove termeric`.
+`apt upgrade` then brings new releases with the rest of your system. To uninstall, run `sudo apt remove termeric` and remove `/etc/apt/sources.list.d/termeric.sources`.
+
+The repository holds only the latest release. The `.deb` files of every release are on the [releases page](https://github.com/Tjemmmic/termeric/releases); one you download and install yourself isn't upgraded until you add the repository.
 
 ### Arch Linux
 

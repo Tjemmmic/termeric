@@ -18,7 +18,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Internal crates
-termeric-core = { version = "0.1.0", path = "../termeric-core" }
+termeric-core = { path = "../termeric-core" }
 
 # Windowing
 winit = "0.30"
