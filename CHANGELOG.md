@@ -11,6 +11,7 @@ Notable changes to Termeric, by release. The project follows [Keep a Changelog](
 
 ### Fixed
 
+- The `termeric` and `termeric-git` AUR packages no longer stop partway through their tests when an AUR helper builds them in a terminal.
 - On light themes, toasts, cards, and text fields no longer turn a muddy gray, and faint text and an unfocused window fade toward the background instead of growing darker.
 
 ## [0.1.0] - 2026-11-01
