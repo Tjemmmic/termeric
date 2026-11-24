@@ -40,6 +40,7 @@ body:
       options:
         - apt repository
         - .deb package
+        - AUR (termeric-bin)
         - AUR (termeric)
         - AUR (termeric-git)
         - Release tarball

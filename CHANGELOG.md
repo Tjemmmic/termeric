@@ -8,9 +8,11 @@ Notable changes to Termeric, by release. The project follows [Keep a Changelog](
 
 - A light theme for every root theme, named after its dark partner with "Light" ("Turmeric Light").
 - A signed apt repository for Debian and Ubuntu, so `apt upgrade` brings new releases.
+- The `termeric-bin` AUR package, which installs the release as built and tested by the release workflow, in seconds rather than a long build.
 
 ### Fixed
 
+- The `termeric` and `termeric-git` AUR packages no longer stop partway through their tests when an AUR helper builds them in a terminal.
 - On light themes, toasts, cards, and text fields no longer turn a muddy gray, and faint text and an unfocused window fade toward the background instead of growing darker.
 
 ## [0.1.0] - 2026-11-01
