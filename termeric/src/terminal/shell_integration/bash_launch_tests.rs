@@ -105,15 +105,16 @@ if [[ $TEST_EXPECT_HOOK == yes ]]; then declare -F __termeric_after_prompt >/dev
 "$TEST_BASH" --noprofile -i +m -c 'printf "CHILD:%s\n" "${USER_RC_MARK-unset}"'
 "#;
         let run = |args: &[String], env: &[(String, String)], integrated| {
-            let output = std::process::Command::new(&program)
-                .args(args)
-                .args(["-c", script])
-                .env_clear()
-                .envs(env.iter().cloned())
-                .env("TEST_EXPECT_HOOK", if integrated { "yes" } else { "no" })
-                .current_dir(&cwd)
-                .output()
-                .unwrap();
+            let output = crate::test_support::without_terminal(
+                std::process::Command::new(&program).args(args),
+            )
+            .args(["-c", script])
+            .env_clear()
+            .envs(env.iter().cloned())
+            .env("TEST_EXPECT_HOOK", if integrated { "yes" } else { "no" })
+            .current_dir(&cwd)
+            .output()
+            .unwrap();
             assert!(
                 output.status.success(),
                 "{requested:?}: {:?}",
