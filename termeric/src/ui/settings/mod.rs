@@ -80,6 +80,8 @@ pub struct SettingsModalLayout {
     pub header_height: f32,
     pub close_button: Bounds,
     pub sidebar: Bounds,
+    /// Top of the first page in the sidebar.
+    pub pages_y: f32,
     pub page_height: f32,
     /// Left edge and width of the rows' text column.
     pub content_x: f32,
@@ -131,6 +133,11 @@ impl SettingsModalLayout {
 
     /// Compute the dialog geometry. The dialog keeps one size while pages
     /// and results change, so nothing it shows enters into it.
+    ///
+    /// Everything inside is measured in cells, so the dialog is too: limits
+    /// in pixels would hold it at one size while its contents grow with the
+    /// display scale and font size. It is tall enough to list every page in
+    /// the sidebar unless the window itself is shorter.
     pub fn calculate(
         window_width: f32,
         window_height: f32,
@@ -138,12 +145,21 @@ impl SettingsModalLayout {
         cell_height: f32,
         animation: f32,
     ) -> Self {
-        let panel_width = (cell_width * 100.0)
-            .clamp(560.0, 900.0)
-            .min((window_width - cell_width * 4.0).max(0.0));
+        let padding = cell_width * 1.5;
+        let header_height = cell_height * 3.0;
+        let footer_height = cell_height * 2.8;
+        let full_page_height = cell_height * 2.0;
+        let page_count = SettingsPage::all().len() as f32;
+        let lists_every_page =
+            header_height + padding + page_count * full_page_height + footer_height;
+
+        // 94 by 34 cells: about 900 by 640 pixels with the default font at 1x.
+        let panel_width = (cell_width * 94.0).min((window_width - cell_width * 4.0).max(0.0));
         let panel_height = (window_height * 0.82)
-            .clamp(320.0, 640.0)
-            .min((window_height - cell_height * 2.0).max(0.0));
+            .min(cell_height * 34.0)
+            .round()
+            .max(lists_every_page.ceil())
+            .min((window_height - cell_height * 2.0).max(0.0).floor());
         let panel = Bounds::new(
             ((window_width - panel_width) / 2.0).round(),
             ((window_height - panel_height) * 0.4 + (1.0 - animation) * -30.0).round(),
@@ -156,10 +172,8 @@ impl SettingsModalLayout {
             width: panel_width,
             height: panel_height,
         } = panel;
-        let padding = cell_width * 1.5;
         let control = cell_height * 1.5;
 
-        let header_height = cell_height * 3.0;
         let close_button = Bounds {
             x: panel_x + panel_width - padding * 0.5 - control,
             y: panel_y + (header_height - control) / 2.0,
@@ -175,15 +189,18 @@ impl SettingsModalLayout {
             height: input_height,
         };
 
-        let footer_height = cell_height * 2.8;
         let footer_y = panel_y + panel_height - footer_height;
         let body_y = panel_y + header_height;
         let sidebar = Bounds {
             x: panel_x,
             y: body_y,
-            width: (cell_width * 22.0).clamp(150.0, 220.0),
+            width: cell_width * 22.0,
             height: (footer_y - body_y).max(0.0),
         };
+        // In a window too short for the whole list, the pages close up so
+        // that every one stays inside the sidebar.
+        let pages_inset = (padding * 0.5).min(sidebar.height * 0.5);
+        let page_height = ((sidebar.height - pages_inset * 2.0) / page_count).min(full_page_height);
         let content_x = sidebar.x + sidebar.width + padding;
         let content_width = (panel_x + panel_width - padding - content_x).max(0.0);
         let content_title_y = body_y + padding * 0.5;
@@ -209,7 +226,8 @@ impl SettingsModalLayout {
             header_height,
             close_button,
             sidebar,
-            page_height: cell_height * 2.0,
+            pages_y: sidebar.y + pages_inset,
+            page_height,
             content_x,
             content_width,
             content_title_y,
@@ -286,7 +304,7 @@ impl SettingsModalLayout {
     pub fn page_rect(&self, index: usize) -> Bounds {
         Bounds {
             x: self.sidebar.x + self.padding * 0.5,
-            y: self.sidebar.y + self.padding * 0.5 + index as f32 * self.page_height,
+            y: self.pages_y + index as f32 * self.page_height,
             width: self.sidebar.width - self.padding,
             height: self.page_height,
         }
@@ -4146,6 +4164,76 @@ mod tests {
                 Some(index)
             );
         }
+    }
+
+    #[test]
+    fn every_sidebar_page_stays_inside_the_dialog_at_any_scale() {
+        // Physical pixels at 1x, 2x, and 3x: a 12pt font's cells, and at 1x
+        // a 24pt one's, in windows from the smallest Termeric allows up.
+        let fonts = [
+            (1.0, 9.6, 19.0),
+            (2.0, 19.2, 38.0),
+            (3.0, 28.8, 57.0),
+            (1.0, 19.2, 38.0),
+        ];
+        for (scale, cell_width, cell_height) in fonts {
+            for (logical_width, logical_height) in [
+                (800.0, 600.0),
+                (1920.0, 1080.0),
+                (800.0, 400.0),
+                (320.0, 200.0),
+            ] {
+                let (window_width, window_height) = (logical_width * scale, logical_height * scale);
+                let layout = SettingsModalLayout::calculate(
+                    window_width,
+                    window_height,
+                    cell_width,
+                    cell_height,
+                    1.0,
+                );
+                let sidebar = layout.sidebar;
+                for index in 0..SettingsPage::all().len() {
+                    let page = layout.page_rect(index);
+                    assert!(
+                        page.y >= sidebar.y && page.bottom() <= sidebar.bottom() + 0.001,
+                        "page {index} {page:?} leaves the sidebar {sidebar:?} in a \
+                         {window_width}x{window_height} window with {cell_width}x{cell_height} cells"
+                    );
+                }
+                // Pages close up only when the window is too short for them.
+                let room = window_height - cell_height * 2.0;
+                let needed = layout.header_height
+                    + layout.padding
+                    + SettingsPage::all().len() as f32 * cell_height * 2.0
+                    + layout.footer_height;
+                if room >= needed {
+                    assert_eq!(layout.page_height, cell_height * 2.0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_dialog_scales_with_its_cells() {
+        let single = SettingsModalLayout::calculate(800.0, 600.0, 9.6, 19.0, 1.0);
+        let double = SettingsModalLayout::calculate(1600.0, 1200.0, 19.2, 38.0, 1.0);
+        for (one, two) in [
+            (single.panel, double.panel),
+            (single.sidebar, double.sidebar),
+            (single.input, double.input),
+            (single.save_button, double.save_button),
+            (single.page_rect(8), double.page_rect(8)),
+        ] {
+            for (a, b) in [
+                (one.x, two.x),
+                (one.y, two.y),
+                (one.width, two.width),
+                (one.height, two.height),
+            ] {
+                assert!((a * 2.0 - b).abs() <= 2.0, "{one:?} doubled is not {two:?}");
+            }
+        }
+        assert_eq!(single.rows_that_fit, double.rows_that_fit);
     }
 
     #[test]
